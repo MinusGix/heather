@@ -248,6 +248,75 @@ theorem loop_runs_over_weaken(pass, weaker: Valuation() → Buffers() → Buffer
     }
 }
 
+// `UntilRuns` with the file carried from pass to pass.
+fn UntilRunsOver(pass: Valuation() → Buffers() → Buffers() → Type, parameters: List<Nat>, exit: Nat, next: List<Nat>, passes: Nat) →
+    List<BitVec(64)> → List<BitVec(64)> → Buffers() → Buffers() → Type {
+    match passes {
+        Zero => λ state final before after => False,
+        Succ(rest) => λ state final before after => Exists<Valuation()>(λ values => Exists<Buffers()>(λ mid =>
+            (words_of(values, parameters) = state) ∧ (pass(values, before, mid) ∧
+                match values(1, exit).head_bit() {
+                    False => UntilRunsOver(pass, parameters, exit, next, rest, words_of(values, next), final, mid, after),
+                    True => (final = words_of(values, next)) ∧ (after = mid),
+                }))),
+    }
+}
+
+theorem until_runs_over_quiet(pass: Valuation() → Type, over: Valuation() → Buffers() → Buffers() → Type, file: Buffers(),
+    lifts: (values: Valuation()) → pass(values) → over(values, file, file), parameters: List<Nat>, exit: Nat, next: List<Nat>, passes: Nat):
+    (state, final: List<BitVec(64)>) → UntilRuns(pass, parameters, exit, next, passes, state, final) →
+    UntilRunsOver(over, parameters, exit, next, passes, state, final, file, file) {
+    match passes {
+        Zero => λ state final never => never,
+        Succ(rest) => λ state final ran => {
+            let values = ran.witness;
+            Exists(values, Exists(file, ⟨ran.proof.left, ⟨lifts(values, ran.proof.right.left),
+                (match values(1, exit).head_bit() as λ b =>
+                    (match b {
+                        False => UntilRuns(pass, parameters, exit, next, rest, words_of(values, next), final),
+                        True => final = words_of(values, next),
+                    }) →
+                    (match b {
+                        False => UntilRunsOver(over, parameters, exit, next, rest, words_of(values, next), final, file, file),
+                        True => (final = words_of(values, next)) ∧ (file = file),
+                    }) {
+                    False => λ later => until_runs_over_quiet(pass, over, file, lifts, parameters, exit, next, rest, words_of(values, next), final, later),
+                    True => λ done => ⟨done, refl⟩,
+                })(ran.proof.right.right)⟩⟩))
+        },
+    }
+}
+
+theorem until_runs_over_weaken(pass, weaker: Valuation() → Buffers() → Buffers() → Type,
+    implies: (values: Valuation()) → (before, after: Buffers()) → pass(values, before, after) → weaker(values, before, after),
+    parameters: List<Nat>, exit: Nat, next: List<Nat>, passes: Nat):
+    (state, final: List<BitVec(64)>) → (before, after: Buffers()) →
+    UntilRunsOver(pass, parameters, exit, next, passes, state, final, before, after) →
+    UntilRunsOver(weaker, parameters, exit, next, passes, state, final, before, after) {
+    match passes {
+        Zero => λ state final before after never => never,
+        Succ(rest) => λ state final before after ran => {
+            let values = ran.witness;
+            let mid = ran.proof.witness;
+            let held = ran.proof.proof;
+            Exists(values, Exists(mid, ⟨held.left, ⟨implies(values, before, mid, held.right.left),
+                (match values(1, exit).head_bit() as λ b =>
+                    (match b {
+                        False => UntilRunsOver(pass, parameters, exit, next, rest, words_of(values, next), final, mid, after),
+                        True => (final = words_of(values, next)) ∧ (after = mid),
+                    }) →
+                    (match b {
+                        False => UntilRunsOver(weaker, parameters, exit, next, rest, words_of(values, next), final, mid, after),
+                        True => (final = words_of(values, next)) ∧ (after = mid),
+                    }) {
+                    False => λ later => until_runs_over_weaken(pass, weaker, implies, parameters, exit, next, rest,
+                        words_of(values, next), final, mid, after, later),
+                    True => λ done => done,
+                })(held.right.right)⟩⟩))
+        },
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Structured regions
 
@@ -276,6 +345,9 @@ fn StructuredRegionRunsOver(effects: Effects(), values: Valuation(), region: Str
             LoopRunsOver(λ (pass: Valuation()) (from: Buffers()) (to: Buffers()) => StructuredRegionRunsOver(effects, pass, body, from, to),
                 parameters, count, exit, next, values(64, bound).toNat(), words_of(values, inputs), words_of(values, outputs),
                 values(1, exhausted).head_bit(), before, after),
+        Until(inputs, parameters, body, exit, next, outputs, measure_at) => Exists<Nat>(λ n =>
+            UntilRunsOver(λ (pass: Valuation()) (from: Buffers()) (to: Buffers()) => StructuredRegionRunsOver(effects, pass, body, from, to),
+                parameters, exit, next, n, words_of(values, inputs), words_of(values, outputs), before, after)),
     }
 }
 
@@ -298,6 +370,7 @@ fn StructuredRegion::quiet(self region: StructuredRegion) → Bool {
         Lend(_, _, _, _) => False,
         Call(_, _, _, _) => True,
         Loop(_, _, _, _, body, _, _, _, _) => body.quiet(),
+        Until(_, _, body, _, _, _, measure_at) => body.quiet(),
     }
 }
 
@@ -311,6 +384,7 @@ fn StructuredRegion::stores(self region: StructuredRegion, b: Nat) → Bool {
         Lend(views, _, _, _) => views_store(views, b),
         Call(_, _, _, _) => False,
         Loop(_, _, _, _, body, _, _, _, _) => body.stores(b),
+        Until(_, _, body, _, _, _, measure_at) => body.stores(b),
     }
 }
 
@@ -341,6 +415,7 @@ theorem StructuredRegion::quiet_stores(self region: StructuredRegion, b: Nat): r
         Lend(_, _, _, _) => λ never _ => never,
         Call(_, _, _, _) => λ _ never => never,
         Loop(_, _, _, _, body, _, _, _, _) => body.quiet_stores(b),
+        Until(_, _, body, _, _, _, measure_at) => body.quiet_stores(b),
     }
 }
 
@@ -383,6 +458,11 @@ theorem StructuredRegion::runs_quiet(self region: StructuredRegion, callees: Buf
                 λ (pass: Valuation()) (from: Buffers()) (to: Buffers()) => StructuredRegionRunsOver(Effects::keeping(callees), pass, body, from, to),
                 file, λ pass held => body.runs_quiet(callees, file, quiet, pass, held), parameters, count, exit, next,
                 values(64, bound).toNat(), words_of(values, inputs), words_of(values, outputs), values(1, exhausted).head_bit()),
+        Until(inputs, parameters, body, exit, next, outputs, measure_at) => λ quiet values held => Exists(held.witness,
+            until_runs_over_quiet(λ (pass: Valuation()) => StructuredRegionHoldsOver(file, callees(file), pass, body),
+                λ (pass: Valuation()) (from: Buffers()) (to: Buffers()) => StructuredRegionRunsOver(Effects::keeping(callees), pass, body, from, to),
+                file, λ pass h => body.runs_quiet(callees, file, quiet, pass, h), parameters, exit, next, held.witness,
+                words_of(values, inputs), words_of(values, outputs), held.proof)),
     }
 }
 
@@ -425,6 +505,12 @@ theorem StructuredRegion::runs_weaken(self region: StructuredRegion, effects, we
                 λ (pass: Valuation()) (from: Buffers()) (to: Buffers()) => StructuredRegionRunsOver(weaker, pass, body, from, to),
                 λ pass from to held => body.runs_weaken(effects, weaker, implies, pass, from, to, held), parameters, count, exit, next,
                 values(64, bound).toNat(), words_of(values, inputs), words_of(values, outputs), values(1, exhausted).head_bit(), before, after),
+        Until(inputs, parameters, body, exit, next, outputs, measure_at) => λ values before after ran => Exists(ran.witness,
+            until_runs_over_weaken(
+                λ (pass: Valuation()) (from: Buffers()) (to: Buffers()) => StructuredRegionRunsOver(effects, pass, body, from, to),
+                λ (pass: Valuation()) (from: Buffers()) (to: Buffers()) => StructuredRegionRunsOver(weaker, pass, body, from, to),
+                λ pass from to h => body.runs_weaken(effects, weaker, implies, pass, from, to, h), parameters, exit, next, ran.witness,
+                words_of(values, inputs), words_of(values, outputs), before, after, ran.proof)),
     }
 }
 
@@ -686,6 +772,7 @@ fn StructuredRegion::stores_within(self region: StructuredRegion, marks: List<Bo
         Lend(views, _, _, _) => views_within(views, marks),
         Call(_, _, _, _) => True,
         Loop(_, _, _, _, body, _, _, _, _) => body.stores_within(marks),
+        Until(_, _, body, _, _, _, measure_at) => body.stores_within(marks),
     }
 }
 
@@ -717,6 +804,7 @@ theorem StructuredRegion::stores_marked(self region: StructuredRegion, marks: Li
         Lend(views, _, _, _) => views_store_marked(views, marks, b),
         Call(_, _, _, _) => λ _ never => false_elim(never),
         Loop(_, _, _, _, body, _, _, _, _) => body.stores_marked(marks, b),
+        Until(_, _, body, _, _, _, measure_at) => body.stores_marked(marks, b),
     }
 }
 
@@ -730,6 +818,7 @@ fn StructuredRegion::lendless(self region: StructuredRegion) → Bool {
         Lend(_, _, _, _) => False,
         Call(_, _, _, _) => True,
         Loop(_, _, _, _, body, _, _, _, _) => body.lendless(),
+        Until(_, _, body, _, _, _, measure_at) => body.lendless(),
     }
 }
 
@@ -757,6 +846,7 @@ theorem StructuredRegion::quiet_lendless(self region: StructuredRegion): region.
         Lend(_, _, _, _) => λ never => never,
         Call(_, _, _, _) => λ _ => trivial,
         Loop(_, _, _, _, body, _, _, _, _) => body.quiet_lendless(),
+        Until(_, _, body, _, _, _, measure_at) => body.quiet_lendless(),
     }
 }
 
@@ -878,6 +968,7 @@ fn StructuredRegion::Asks(self region: StructuredRegion, needs: Nat → Nat → 
         Lend(views, callee, _, _) => (v: Nat) → needs(callee, v).IsTrue() → marked(views_marks(views), v) = True,
         Call(callee, _, _, _) => (b: Nat) → needs(callee, b).IsTrue() → written(b) = True,
         Loop(_, _, _, _, body, _, _, _, _) => body.Asks(needs, written),
+        Until(_, _, body, _, _, _, measure_at) => body.Asks(needs, written),
     }
 }
 
@@ -894,6 +985,7 @@ theorem StructuredRegion::asks_within(self region: StructuredRegion, needs: Nat 
         Lend(_, _, _, _) => λ asks => asks,
         Call(callee, _, _, _) => λ asks b need => covers(b, Bool::is_true_of_eq(asks(b, need))),
         Loop(_, _, _, _, body, _, _, _, _) => body.asks_within(needs, mine, written, covers),
+        Until(_, _, body, _, _, _, measure_at) => body.asks_within(needs, mine, written, covers),
     }
 }
 
@@ -925,6 +1017,7 @@ theorem StructuredRegion::lendless_asks(self region: StructuredRegion, all: Nat 
         Lend(_, _, _, _) => λ never => false_elim(never),
         Call(_, _, _, _) => λ _ b need => eq_true_of_is_true(all(b), need),
         Loop(_, _, _, _, body, _, _, _, _) => body.lendless_asks(all),
+        Until(_, _, body, _, _, _, measure_at) => body.lendless_asks(all),
     }
 }
 
@@ -992,6 +1085,7 @@ fn StructuredRegion::calls_within(self region: StructuredRegion, tables: List<Li
         Lend(views, callee, _, _) => marks_within(marks_row(tables, callee), views_marks(views)),
         Call(callee, _, _, _) => marks_within(marks_row(tables, callee), mine),
         Loop(_, _, _, _, body, _, _, _, _) => body.calls_within(tables, mine),
+        Until(_, _, body, _, _, _, measure_at) => body.calls_within(tables, mine),
     }
 }
 
@@ -1012,6 +1106,7 @@ theorem StructuredRegion::calls_within_asks(self region: StructuredRegion, table
         Lend(views, callee, _, _) => λ within v need => marks_within_marked(marks_row(tables, callee), views_marks(views), v, within, need),
         Call(callee, _, _, _) => λ within b need => marks_within_marked(marks_row(tables, callee), mine, b, within, need),
         Loop(_, _, _, _, body, _, _, _, _) => body.calls_within_asks(tables, mine),
+        Until(_, _, body, _, _, _, measure_at) => body.calls_within_asks(tables, mine),
     }
 }
 

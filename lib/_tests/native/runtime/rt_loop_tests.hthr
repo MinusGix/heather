@@ -122,3 +122,81 @@ theorem leave_continuation_simplified(w: World, res: Ty, er: res.OneWord(w.tys),
             λ (ys: List<BitVec(64)>) => Tm::out(w.tys, res, Tm::into(w.tys, res, words_of(a, ns).head_or(BitVec::zero())))) {
     simp_only(Tm::out_into(w.tys, res, er), Tm::leave_first)
 }
+
+// ---------------------------------------------------------------------------
+// The same recursion as a loop node (docs/language/loop-combinator-design.md
+// §6.7): the body once, its call of itself a going round, the function's
+// words the loop's state. Its code means what the node means
+// (`Tm::lower_sound`), and the node means the function
+// (`Loop::rounds_agree`), each pass from `count_down::ext` and
+// `count_down::irrel` as `Guarded` is.
+
+// The body over the state `[acc, n]`, going round where it called itself.
+fn count_down_pass() → Tm {
+    Let(Lit(Word(64), 0), Let(Prim(Eq(64), [2, 0]),
+        IfEq(0, Var(2), Let(Lit(Word(64), 1), Let(Prim(Sub(64), [4, 0]), Let(Prim(Add(64), [4, 5]), Again(Word(64), [1, 0])))))))
+}
+
+fn count_down_node() → Tm { Loop([1, 0], count_down_pass()) }
+
+theorem count_down_node_lowers(): rt_loop_lowers(Fun([Word(64), Word(64)], Word(64), count_down_node()).lower(count_down_world())) = True { refl }
+
+// The function on words, as the state reads them (zero past their end).
+fn count_down_words(ys: List<BitVec(64)>) → BitVec(64) { Ty::apply(Table::none(), [Word(64), Word(64)], Word(64), count_down, ys) }
+
+// One pass, its going round answered by anything that agrees with the
+// function below the measure, is the function.
+theorem count_down_node_pass_at(n, acc: BitVec(64), k: List<BitVec(64)> → BitVec(64),
+    agree: (zs: List<BitVec(64)>) → count_down_measure(zs) < n.toNat() → k(zs) = count_down_words(zs)):
+    Tm::loop_body(count_down_world(), [Word(64), Word(64)], count_down_pass(), k, [n, acc]) = count_down(n, acc) {
+    sym(count_down::ext(n.toNat(), n.toNat(),
+        λ (y1: BitVec(64)) (y2: BitVec(64)) (p: nat::Nat::Lt(y1.toNat(), n.toNat())) => count_down::rec(n.toNat(), y1, y2, p),
+        λ (y1: BitVec(64)) (y2: BitVec(64)) _ => k([y1, y2]),
+        λ y1 y2 p q => trans(count_down::irrel(n.toNat(), y1.toNat() + 1, y1, y2, p, nat::Nat::lt_succ_self(y1.toNat())),
+            sym(agree([y1, y2], p))),
+        n, acc, nat::Nat::lt_succ_self(n.toNat()), nat::Nat::lt_succ_self(n.toNat())))
+}
+
+// At any words: those past the state's two are not read, and missing ones
+// are zero, alike on both sides.
+theorem count_down_node_pass(ys: List<BitVec(64)>, k: List<BitVec(64)> → BitVec(64),
+    agree: (zs: List<BitVec(64)>) → count_down_measure(zs) < count_down_measure(ys) → k(zs) = count_down_words(zs)):
+    Tm::loop_body(count_down_world(), [Word(64), Word(64)], count_down_pass(), k, ys) = count_down_words(ys) {
+    match ys as λ l => ((zs: List<BitVec(64)>) → count_down_measure(zs) < count_down_measure(l) → k(zs) = count_down_words(zs)) →
+        Tm::loop_body(count_down_world(), [Word(64), Word(64)], count_down_pass(), k, l) = count_down_words(l) {
+        Nil => λ a => count_down_node_pass_at(BitVec::zero(), BitVec::zero(), k, a),
+        Cons(y1, r1) => match r1 as λ l1 => ((zs: List<BitVec(64)>) → count_down_measure(zs) < count_down_measure(Cons(y1, l1)) → k(zs) = count_down_words(zs)) →
+            Tm::loop_body(count_down_world(), [Word(64), Word(64)], count_down_pass(), k, Cons(y1, l1)) = count_down_words(Cons(y1, l1)) {
+            Nil => λ a => count_down_node_pass_at(y1, BitVec::zero(), k, a),
+            Cons(y2, _) => λ a => count_down_node_pass_at(y1, y2, k, a),
+        },
+    }(agree)
+}
+
+// The node means the function, at every pair of words.
+theorem count_down_node_means(n, acc: BitVec(64)):
+    Tm::sem(count_down_node(), count_down_world(), [Word(64), Word(64)], Pair(acc, Pair(n, trivial))) = count_down(n, acc) {
+    trans(Tm::sem_in_loop([1, 0], count_down_pass(), count_down_world(), Tm::no_label(Table::none()), [Word(64), Word(64)], Pair(acc, Pair(n, trivial))),
+        loop::Loop::rounds_agree(count_down_measure, λ _ => True, count_down_words,
+            λ (k: List<BitVec(64)> → BitVec(64)) (ys: List<BitVec(64)>) => Tm::loop_body(count_down_world(), [Word(64), Word(64)], count_down_pass(), k, ys),
+            λ (ys: List<BitVec(64)>) => Ty::cast(Table::none(), Word(64), Word(64), ys.head_or(BitVec::zero())),
+            λ ys _ k a => count_down_node_pass(ys, k, λ zs lt => a(zs, trivial, lt)), Tm::passes(), [n, acc], trivial, Tm::word_within(n)))
+}
+
+// A wrong pass is refused: `+` read as `-`.
+fn count_down_wrong_pass() → Tm {
+    Let(Lit(Word(64), 0), Let(Prim(Eq(64), [2, 0]),
+        IfEq(0, Var(2), Let(Lit(Word(64), 1), Let(Prim(Sub(64), [4, 0]), Let(Prim(Sub(64), [4, 5]), Again(Word(64), [1, 0])))))))
+}
+
+// expect-error(kernel): NotConvertible
+theorem count_down_wrong_node(n, acc: BitVec(64), k: List<BitVec(64)> → BitVec(64),
+    agree: (zs: List<BitVec(64)>) → count_down_measure(zs) < n.toNat() → k(zs) = count_down_words(zs)):
+    Tm::loop_body(count_down_world(), [Word(64), Word(64)], count_down_wrong_pass(), k, [n, acc]) = count_down(n, acc) {
+    sym(count_down::ext(n.toNat(), n.toNat(),
+        λ (y1: BitVec(64)) (y2: BitVec(64)) (p: nat::Nat::Lt(y1.toNat(), n.toNat())) => count_down::rec(n.toNat(), y1, y2, p),
+        λ (y1: BitVec(64)) (y2: BitVec(64)) _ => k([y1, y2]),
+        λ y1 y2 p q => trans(count_down::irrel(n.toNat(), y1.toNat() + 1, y1, y2, p, nat::Nat::lt_succ_self(y1.toNat())),
+            sym(agree([y1, y2], p))),
+        n, acc, nat::Nat::lt_succ_self(n.toNat()), nat::Nat::lt_succ_self(n.toNat())))
+}

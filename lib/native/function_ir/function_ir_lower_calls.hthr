@@ -607,6 +607,7 @@ fn StructuredRegion::Fits(self region: StructuredRegion, rooms: Nat → Nat, bou
         Conditional(_, _, _, _, when_true, when_false) => when_true.Fits(rooms, bound, avail) ∧ when_false.Fits(rooms, bound, avail),
         Call(callee, _, _, _) => callee + 1 <= bound → rooms(callee) + 24 <= avail,
         Loop(_, _, _, _, body, _, _, _, _) => body.Fits(rooms, bound, avail),
+        Until(_, _, body, _, _, _, measure_at) => body.Fits(rooms, bound, avail),
         Lend(_, callee, _, _) => callee + 1 <= bound → rooms(callee) + 24 <= avail,
     }
 }
@@ -620,6 +621,7 @@ fn StructuredRegion::fits(self region: StructuredRegion, rooms: Nat → Nat, ava
         Conditional(_, _, _, _, when_true, when_false) => when_true.fits(rooms, avail) && when_false.fits(rooms, avail),
         Call(callee, _, _, _) => (rooms(callee) + 24).leb(avail),
         Loop(_, _, _, _, body, _, _, _, _) => body.fits(rooms, avail),
+        Until(_, _, body, _, _, _, measure_at) => body.fits(rooms, avail),
         Lend(_, callee, _, _) => (rooms(callee) + 24).leb(avail),
     }
 }
@@ -639,6 +641,7 @@ theorem StructuredRegion::fits_sound(self region: StructuredRegion, rooms: Nat �
         },
         Call(callee, _, _, _) => λ ok _ => (rooms(callee) + 24).leb_sound(avail, ok),
         Loop(_, _, _, _, body, _, _, _, _) => λ ok => body.fits_sound(rooms, bound, avail, ok),
+        Until(_, _, body, _, _, _, measure_at) => λ ok => body.fits_sound(rooms, bound, avail, ok),
         Lend(_, callee, _, _) => λ ok _ => (rooms(callee) + 24).leb_sound(avail, ok),
     }
 }
@@ -655,6 +658,7 @@ theorem StructuredRegion::fits_index(self region: StructuredRegion, bound, avail
         Conditional(_, _, _, _, when_true, when_false) => ⟨when_true.fits_index(bound, avail, enough), when_false.fits_index(bound, avail, enough)⟩,
         Call(callee, _, _, _) => λ below => { let fit: (136 * (callee + 1) + 24 <= avail) = { omega }; fit },
         Loop(_, _, _, _, body, _, _, _, _) => body.fits_index(bound, avail, enough),
+        Until(_, _, body, _, _, _, measure_at) => body.fits_index(bound, avail, enough),
         Lend(_, callee, _, _) => λ below => { let fit: (136 * (callee + 1) + 24 <= avail) = { omega }; fit },
     }
 }
@@ -676,6 +680,7 @@ fn StructuredRegion::callee_room(self region: StructuredRegion, rooms: Nat → N
         Conditional(_, _, _, _, when_true, when_false) => when_true.callee_room(rooms).max(when_false.callee_room(rooms)),
         Call(callee, _, _, _) => rooms(callee) + 24,
         Loop(_, _, _, _, body, _, _, _, _) => body.callee_room(rooms),
+        Until(_, _, body, _, _, _, measure_at) => body.callee_room(rooms),
         Lend(_, callee, _, _) => rooms(callee) + 24,
     }
 }
@@ -1689,6 +1694,118 @@ fn Emitted::loop_close(self pass: Emitted, saves: Nat, registers: LoopRegisters,
     }
 }
 
+// ---------------------------------------------------------------------------
+// Unbounded loops (docs/language/loop-combinator-design.md §6.9)
+//
+// An `Until`'s code, its three labels the names after `names` (H, C, J):
+//
+//       moves: inputs → state registers
+//   H:  body, its file the state's
+//       TEST exit bit; JE C
+//       moves: next → state registers
+//       JMP J
+//   C:  moves: next → state registers
+//       JMP H
+//   J:
+//
+// No counter and no flag: the loop ends only by its exit, and that it ends
+// is a hypothesis of its meaning (`until_defined`), not code. A pass's body
+// sees only its own valuation, as a counted loop's does, and after the
+// loop the file is the outputs', nothing else.
+
+// One register per parameter; the rest place the body.
+record UntilRegisters { state: List<Gpr>, rest: List<Place> }
+
+fn until_registers(n: Nat, placement: List<Place>) → Option<UntilRegisters> {
+    match n {
+        Zero => Some(UntilRegisters([], placement)),
+        Succ(m) => match placement {
+            Nil => None,
+            Cons(place, after) => match place {
+                Folded => None,
+                Saving(_) => None,
+                CallSlots(_) => None, Short(_) => None,
+                Spilling(_) => None,
+                Into(register) => match until_registers(m, after) {
+                    None => None,
+                    Some(registers) => Some(UntilRegisters(Cons(register, registers.state), registers.rest)),
+                },
+            },
+        },
+    }
+}
+
+// The code into the loop and the head's file.
+record UntilEntry { registers: UntilRegisters, code: List<Instruction>, head: File }
+
+fn until_entry_with(saves: Nat, registers: UntilRegisters, moves: Lowered, inputs, parameters: List<Nat>) → Option<UntilEntry> {
+    match input_file(word_ports(parameters), registers.state) {
+        None => None,
+        Some(head) => match moves.file.outputs_check(word_ports(inputs), registers.state) && leaves_all(moves.code, body_kept(saves)) {
+            False => None,
+            True => Some(UntilEntry(registers, moves.code, head)),
+        },
+    }
+}
+
+fn File::until_entry_at(self file: File, saves: Nat, registers: UntilRegisters, inputs, parameters: List<Nat>) → Option<UntilEntry> {
+    match file.move_outputs(word_ports(inputs), registers.state) {
+        None => None,
+        Some(moves) => until_entry_with(saves, registers, moves, inputs, parameters),
+    }
+}
+
+fn File::until_entry(self file: File, saves: Nat, inputs, parameters: List<Nat>, placement: List<Place>) → Option<UntilEntry> {
+    match until_registers(parameters.len(), placement) {
+        None => None,
+        Some(registers) => file.until_entry_at(saves, registers, inputs, parameters),
+    }
+}
+
+// The code out of a pass: the exit's test, the moves of the next state
+// (the same to leave and to go round), and the file after the loop.
+record UntilExit { test: Test, moves: List<Instruction>, out: File }
+
+fn File::until_exit_out(self file: File, saves: Nat, test: Test, moves: Lowered, registers: UntilRegisters, next, outputs: List<Nat>) →
+    Option<UntilExit> {
+    match input_file(word_ports(outputs), registers.state) {
+        None => None,
+        Some(out) => match moves.file.outputs_check(word_ports(next), registers.state) && leaves_all(moves.code, body_kept(saves)) {
+            False => None,
+            True => Some(UntilExit(test, moves.code, out)),
+        },
+    }
+}
+
+fn File::until_exit(self file: File, saves: Nat, registers: UntilRegisters, exit: Nat, next, outputs: List<Nat>) → Option<UntilExit> {
+    match file.branch_test(exit) {
+        None => None,
+        Some(tested) => match file.move_outputs(word_ports(next), registers.state) {
+            None => None,
+            Some(moves) => file.until_exit_out(saves, tested.test, moves, registers, next, outputs),
+        },
+    }
+}
+
+// The loop's code from the head, each jump in the form `short` says for
+// its label.
+fn until_head(prog: Prog, entry: UntilEntry, names: Nat) → Prog { At(At(prog, 0, Block(entry.code)), names + 1, Block([])) }
+fn until_jumped(pass: Prog, exit: UntilExit, names: Nat, short: List<Nat>) → Prog {
+    At(At(pass.branched_by(exit.test, names + 2, shorts(short, names + 2)), 0, Block(exit.moves)), 0, jmp_item(shorts(short, names + 3), names + 3))
+}
+fn until_again(pass: Prog, exit: UntilExit, names: Nat, short: List<Nat>) → Prog {
+    At(At(At(until_jumped(pass, exit, names, short), names + 2, Block([])), 0, Block(exit.moves)), 0, jmp_item(shorts(short, names + 1), names + 1))
+}
+fn until_done(pass: Prog, exit: UntilExit, names: Nat, short: List<Nat>) → Prog { At(until_again(pass, exit, names, short), names + 3, Block([])) }
+
+fn Emitted::until_close(self pass: Emitted, saves: Nat, registers: UntilRegisters, exit: Nat, next, outputs: List<Nat>, names: Nat,
+    short: List<Nat>) → Option<Emitted> {
+    match pass.file.until_exit(saves, registers, exit, next, outputs) {
+        None => None,
+        Some(out) => Some(Emitted(until_done(pass.prog, out, names, short), out.out, pass.placement, pass.names)),
+    }
+}
+
 // Round 2's `emit` with calls of the functions below `bound`, and loads of
 // the buffers the scope has homes for: `homes` here, the ones a loop
 // carries inside it (`loop_carried`), and what a region leaves after it
@@ -1728,6 +1845,15 @@ fn StructuredRegion::emit_calls(self region: StructuredRegion, saves: Nat, slots
                     names + 4, bound, counts, carried_homes(loop_carried(homes, inputs, parameters, next))) {
                     None => None,
                     Some(pass) => pass.loop_close(saves, entry.registers, count, exit, next, outputs, exhausted, names, short),
+                },
+            },
+        Until(inputs, parameters, body, exit, next, outputs, measure_at) =>
+            match file.until_entry(saves, inputs, parameters, placement) {
+                None => None,
+                Some(entry) => match body.emit_calls(saves, slots, short, until_head(prog, entry, names), entry.head, entry.registers.rest,
+                    names + 3, bound, counts, carried_homes(loop_carried(homes, inputs, parameters, next))) {
+                    None => None,
+                    Some(pass) => pass.until_close(saves, entry.registers, exit, next, outputs, names, short),
                 },
             },
     }
@@ -2092,6 +2218,19 @@ theorem loop_close_grows(saves: Nat, prog: Prog, entry: LoopEntry, names: Nat, s
     }
 }
 
+theorem until_close_grows(saves: Nat, prog: Prog, entry: UntilEntry, names: Nat, short: List<Nat>, pass: Emitted,
+    grown: until_head(prog, entry, names).Within(pass.prog), exit: Nat, next, outputs: List<Nat>):
+    Grows(prog, pass.until_close(saves, entry.registers, exit, next, outputs, names, short)) {
+    let opened: prog.Within(until_head(prog, entry, names)) = Exists(2, refl);
+    match pass.file.until_exit(saves, entry.registers, exit, next, outputs) {
+        None => trivial,
+        Some(out) => {
+            let closed: pass.prog.Within(until_done(pass.prog, out, names, short)) = Exists(8, refl);
+            Prog::within_trans(opened, Prog::within_trans(grown, closed))
+        },
+    }
+}
+
 theorem File::emit_lend_grows(self file: File, saves: Nat, slots: Nat, prog: Prog, views: List<View>, callee: Nat, arguments: List<Nat>, result: Nat,
     placement: List<Place>, names, bound: Nat, counts: List<Nat>, homes: List<Lent>):
     Grows(prog, file.emit_lend(saves, slots, prog, views, callee, arguments, result, placement, names, bound, counts, homes)) {
@@ -2203,6 +2342,21 @@ theorem StructuredRegion::emit_calls_grows(self region: StructuredRegion, saves:
                         Some(pass) => λ grown => loop_close_grows(saves, prog, entry, names, short, pass, grown, count, exit, next, outputs, exhausted),
                     })(body.emit_calls_grows(saves, slots, short, bound, counts, carried_homes(loop_carried(homes, inputs, parameters, next)), loop_tested(prog, entry, names, short), entry.head, entry.registers.rest,
                         names + 4)),
+            },
+        Until(inputs, parameters, body, exit, next, outputs, measure_at) => λ homes prog file placement names =>
+            match file.until_entry(saves, inputs, parameters, placement) {
+                None => trivial,
+                Some(entry) =>
+                    (match body.emit_calls(saves, slots, short, until_head(prog, entry, names), entry.head, entry.registers.rest, names + 3,
+                        bound, counts, carried_homes(loop_carried(homes, inputs, parameters, next))) as λ b => Grows(until_head(prog, entry, names), b) →
+                        Grows(prog, match b {
+                            None => None,
+                            Some(pass) => pass.until_close(saves, entry.registers, exit, next, outputs, names, short),
+                        }) {
+                        None => λ _ => trivial,
+                        Some(pass) => λ grown => until_close_grows(saves, prog, entry, names, short, pass, grown, exit, next, outputs),
+                    })(body.emit_calls_grows(saves, slots, short, bound, counts, carried_homes(loop_carried(homes, inputs, parameters, next)),
+                        until_head(prog, entry, names), entry.head, entry.registers.rest, names + 3)),
             },
     }
 }
@@ -5540,6 +5694,438 @@ theorem loop_close_emits<M>(saves: Nat, site: Site<M>, laid: site.program.laid_o
     })(loop_exit_sound<M>(saves, pass.file, entry.registers, count, exit, next, outputs, exhausted))
 }
 
+// ---------------------------------------------------------------------------
+// Unbounded loops: what the checks give
+
+// The entry's code moves the inputs into the state's registers, and the
+// head's file describes every pass whose parameters are there.
+fn UntilEntryOk<M>(saves: Nat, values: Valuation(), file: File, inputs, parameters: List<Nat>, entry: UntilEntry) → Type {
+    MovesInto<M>(saves, values, file, inputs, entry.registers.state, entry.code) ∧
+    ((pass: Valuation()) → (g: Gprs) → ArgsIn(words_of(pass, parameters), entry.registers.state, g) → entry.head.Represents(pass, g))
+}
+
+fn MayUntilEntry<M>(saves: Nat, values: Valuation(), file: File, inputs, parameters: List<Nat>, out: Option<UntilEntry>) → Type {
+    out.All(λ (entry: UntilEntry) => UntilEntryOk<M>(saves, values, file, inputs, parameters, entry))
+}
+
+theorem until_entry_with_sound<M>(saves: Nat, values: Valuation(), file: File, registers: UntilRegisters, moves: Lowered,
+    keeps: Keeps<M>(values, file, True, moves), inputs, parameters: List<Nat>):
+    MayUntilEntry<M>(saves, values, file, inputs, parameters, until_entry_with(saves, registers, moves, inputs, parameters)) {
+    let placed = moves.file.outputs_check(word_ports(inputs), registers.state);
+    let kept = leaves_all(moves.code, body_kept(saves));
+    (match input_file(word_ports(parameters), registers.state) as λ o =>
+        ((pass: Valuation()) → (g: Gprs) → PortsAt(pass, word_ports(parameters), registers.state, g) →
+            o.All(λ (f: File) => f.Represents(pass, g))) →
+        MayUntilEntry<M>(saves, values, file, inputs, parameters, match o {
+            None => None,
+            Some(head) => match placed && kept {
+                False => None,
+                True => Some(UntilEntry(registers, moves.code, head)),
+            },
+        }) {
+        None => λ _ => trivial,
+        Some(head) => λ head_ok =>
+            match checked: placed && kept {
+                False => trivial,
+                True => {
+                    let both = Bool::is_true_and(placed, kept, is_true_of_eq(placed && kept, checked));
+                    ⟨moves_into<M>(saves, values, file, inputs, registers.state, moves, keeps, both.left, both.right),
+                     λ pass g args => head_ok(pass, g, args_ports(pass, parameters, registers.state, g, args))⟩
+                },
+            },
+    })(λ pass g placed_at => input_file_represents(pass, g, word_ports(parameters), registers.state, placed_at))
+}
+
+theorem until_entry_at_sound<M>(saves: Nat, values: Valuation(), file: File, registers: UntilRegisters, inputs, parameters: List<Nat>):
+    MayUntilEntry<M>(saves, values, file, inputs, parameters, file.until_entry_at(saves, registers, inputs, parameters)) {
+    (match file.move_outputs(word_ports(inputs), registers.state) as λ o =>
+        MayKeep<M>(values, file, True, o) →
+        MayUntilEntry<M>(saves, values, file, inputs, parameters, match o {
+            None => None,
+            Some(moves) => until_entry_with(saves, registers, moves, inputs, parameters),
+        }) {
+        None => λ _ => trivial,
+        Some(moves) => λ keeps => until_entry_with_sound<M>(saves, values, file, registers, moves, keeps, inputs, parameters),
+    })(move_outputs_keeps<M>(values, word_ports(inputs), file, registers.state))
+}
+
+theorem until_entry_sound<M>(saves: Nat, values: Valuation(), file: File, inputs, parameters: List<Nat>, placement: List<Place>):
+    MayUntilEntry<M>(saves, values, file, inputs, parameters, file.until_entry(saves, inputs, parameters, placement)) {
+    match until_registers(parameters.len(), placement) {
+        None => trivial,
+        Some(registers) => until_entry_at_sound<M>(saves, values, file, registers, inputs, parameters),
+    }
+}
+
+// At the exit test the test is taken exactly when the exit bit is clear;
+// the moves put the next state in the state's registers; and the file
+// after the loop describes the outputs there.
+fn UntilExitOk<M>(saves: Nat, file: File, registers: UntilRegisters, exit: Nat, next, outputs: List<Nat>, out: UntilExit) → Type {
+    ((pass: Valuation()) → (g: Gprs) → file.Represents(pass, g) → out.test.taken(g) = !pass(1, exit).head_bit()) ∧
+    (((pass: Valuation()) → MovesInto<M>(saves, pass, file, next, registers.state, out.moves)) ∧
+     ((values: Valuation()) → (g: Gprs) → ArgsIn(words_of(values, outputs), registers.state, g) → out.out.Represents(values, g)))
+}
+
+fn MayUntilExit<M>(saves: Nat, file: File, registers: UntilRegisters, exit: Nat, next, outputs: List<Nat>, out: Option<UntilExit>) → Type {
+    out.All(λ (x: UntilExit) => UntilExitOk<M>(saves, file, registers, exit, next, outputs, x))
+}
+
+theorem until_exit_out_sound<M>(saves: Nat, file: File, exit: Nat, tested: Tested(file, exit), moves: Lowered,
+    keeps: (pass: Valuation()) → Keeps<M>(pass, file, True, moves), registers: UntilRegisters, next, outputs: List<Nat>):
+    MayUntilExit<M>(saves, file, registers, exit, next, outputs, file.until_exit_out(saves, tested.test, moves, registers, next, outputs)) {
+    let placed = moves.file.outputs_check(word_ports(next), registers.state);
+    let kept = leaves_all(moves.code, body_kept(saves));
+    (match input_file(word_ports(outputs), registers.state) as λ o =>
+        ((values: Valuation()) → (g: Gprs) → PortsAt(values, word_ports(outputs), registers.state, g) →
+            o.All(λ (f: File) => f.Represents(values, g))) →
+        MayUntilExit<M>(saves, file, registers, exit, next, outputs, match o {
+            None => None,
+            Some(after) => match placed && kept {
+                False => None,
+                True => Some(UntilExit(tested.test, moves.code, after)),
+            },
+        }) {
+        None => λ _ => trivial,
+        Some(after) => λ after_ok =>
+            match checked: placed && kept {
+                False => trivial,
+                True => {
+                    let both = Bool::is_true_and(placed, kept, is_true_of_eq(placed && kept, checked));
+                    ⟨λ pass g represents => tested.selects(pass, g, represents),
+                     ⟨λ pass => moves_into<M>(saves, pass, file, next, registers.state, moves, keeps(pass), both.left, both.right),
+                      λ values g args => after_ok(values, g, args_ports(values, outputs, registers.state, g, args))⟩⟩
+                },
+            },
+    })(λ values g placed_at => input_file_represents(values, g, word_ports(outputs), registers.state, placed_at))
+}
+
+theorem until_exit_sound<M>(saves: Nat, file: File, registers: UntilRegisters, exit: Nat, next, outputs: List<Nat>):
+    MayUntilExit<M>(saves, file, registers, exit, next, outputs, file.until_exit(saves, registers, exit, next, outputs)) {
+    match file.branch_test(exit) {
+        None => trivial,
+        Some(tested) =>
+            (match file.move_outputs(word_ports(next), registers.state) as λ o =>
+                ((pass: Valuation()) → MayKeep<M>(pass, file, True, o)) →
+                MayUntilExit<M>(saves, file, registers, exit, next, outputs, match o {
+                    None => None,
+                    Some(moves) => file.until_exit_out(saves, tested.test, moves, registers, next, outputs),
+                }) {
+                None => λ _ => trivial,
+                Some(moves) => λ keeps => until_exit_out_sound<M>(saves, file, exit, tested, moves, keeps, registers, next, outputs),
+            })(λ pass => move_outputs_keeps<M>(pass, word_ports(next), file, registers.state)),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Unbounded loops: the passes
+
+// The loop's passes over its code from the head, by induction on the
+// passes its meaning gives (`UntilRunsOver`, which has no run of none): a
+// pass runs and leaves, or goes round to the head. No count bounds them, so
+// there is no case where the loop stops for want of one.
+theorem Site::until_passes_run<M>(self site: Site<M>, writes: ByteWrites<M>, head_at, done_at: Nat,
+    Head, Done: List<BitVec(64)> → Buffers() → MachineState<M> → Type,
+    pass: Valuation() → Buffers() → Buffers() → Type, parameters: List<Nat>, exit: Nat, next: List<Nat>,
+    leave: (values: Valuation()) → (from, to: Buffers()) → pass(values, from, to) → values(1, exit).head_bit() = True →
+        site.Moves(writes, head_at, done_at, Head(words_of(values, parameters), from), Done(words_of(values, next), to)),
+    again: (values: Valuation()) → (from, to: Buffers()) → pass(values, from, to) → values(1, exit).head_bit() = False →
+        site.Moves(writes, head_at, head_at, Head(words_of(values, parameters), from), Head(words_of(values, next), to)),
+    passes: Nat): (state, final: List<BitVec(64)>) → (before, after: Buffers()) →
+    UntilRunsOver(pass, parameters, exit, next, passes, state, final, before, after) →
+    site.Moves(writes, head_at, done_at, Head(state, before), Done(final, after)) {
+    match passes {
+        Zero => λ state final before after never => false_elim(never),
+        Succ(rest) => λ state final before after ran => {
+            let values = ran.witness;
+            let mid = ran.proof.witness;
+            let held = ran.proof.proof;
+            j(held.left, λ st _ => site.Moves(writes, head_at, done_at, Head(st, before), Done(final, after)),
+                (match values(1, exit).head_bit() as λ b => values(1, exit).head_bit() = b →
+                    (match b {
+                        False => UntilRunsOver(pass, parameters, exit, next, rest, words_of(values, next), final, mid, after),
+                        True => (final = words_of(values, next)) ∧ (after = mid),
+                    }) →
+                    site.Moves(writes, head_at, done_at, Head(words_of(values, parameters), before), Done(final, after)) {
+                    False => λ clear later => site.moves_trans(writes, head_at, head_at, done_at,
+                        Head(words_of(values, parameters), before), Head(words_of(values, next), mid), Done(final, after),
+                        again(values, before, mid, held.right.left, clear),
+                        site.until_passes_run(writes, head_at, done_at, Head, Done, pass, parameters, exit, next, leave, again,
+                            rest, words_of(values, next), final, mid, after, later)),
+                    True => λ set ended =>
+                        j(sym(ended.right), λ a _ =>
+                                site.Moves(writes, head_at, done_at, Head(words_of(values, parameters), before), Done(final, a)),
+                            j(sym(ended.left), λ f _ =>
+                                    site.Moves(writes, head_at, done_at, Head(words_of(values, parameters), before), Done(f, mid)),
+                                leave(values, before, mid, held.right.left, set))),
+                })(refl, held.right.right))
+        },
+    }
+}
+
+// At the head, and at the loop's end: the state's words in their
+// registers, and what the frame keeps of memory (`keep`).
+fn Stack::UntilAt<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), saves: Nat, keep: M → Type,
+    s0: MachineState<M>, registers: List<Gpr>, state: List<BitVec(64)>) → Gprs → M → Type {
+    λ g m => ArgsIn(state, registers, g) ∧ (Kept(body_kept(saves), s0.gprs, g) ∧ keep(m))
+}
+
+// A pass's body, from the head's file at the pass's valuation, over the
+// file the pass starts from to the one it leaves.
+theorem until_body_runs<M>(saves: Nat, site: Site<M>, stack: Stack<M>(site.fetch, site.data), lending: Lending,
+    Pass: Valuation() → Buffers() → Buffers() → Type, d: Nat, s0: MachineState<M>, start: Prog, entry: UntilEntry, parameters: List<Nat>,
+    head_ok: (pass: Valuation()) → (g: Gprs) → ArgsIn(words_of(pass, parameters), entry.registers.state, g) → entry.head.Represents(pass, g),
+    values: Valuation(), from, to: Buffers(), pass: Emitted,
+    emits: EmitsOver<M>(saves, site, stack, lending, values, d, s0, start, entry.head, Pass(values, from, to), from, to, pass),
+    pass_in: pass.prog.Within(site.program), passed: Pass(values, from, to)):
+    site.Moves(stack.writes, prog_len(start), prog_len(pass.prog),
+        λ (s: MachineState<M>) => stack.UntilAt(saves, λ (m: M) => stack.Trail(lending, d, s0.memory, from, m), s0, entry.registers.state,
+            words_of(values, parameters))(s.gprs, s.memory),
+        λ (t: MachineState<M>) => stack.LoopPassed(saves, λ (m: M) => stack.Trail(lending, d, s0.memory, to, m), s0, pass.file, values)(t.gprs,
+            t.memory)) {
+    site.moves_weaken(stack.writes, prog_len(start), prog_len(pass.prog),
+        λ (s: MachineState<M>) => (entry.head.Represents(values, s.gprs) ∧ Pass(values, from, to)) ∧
+            stack.Trailed(saves, lending, d, s0, from, s),
+        λ (t: MachineState<M>) => pass.file.Represents(values, t.gprs) ∧ stack.Trailed(saves, lending, d, s0, to, t),
+        λ (s: MachineState<M>) => stack.UntilAt(saves, λ (m: M) => stack.Trail(lending, d, s0.memory, from, m), s0, entry.registers.state,
+            words_of(values, parameters))(s.gprs, s.memory),
+        λ (t: MachineState<M>) => stack.LoopPassed(saves, λ (m: M) => stack.Trail(lending, d, s0.memory, to, m), s0, pass.file, values)(t.gprs,
+            t.memory),
+        emits.right(pass_in),
+        λ s held => ⟨⟨head_ok(values, s.gprs, held.left), passed⟩, held.right⟩,
+        λ t held => held)
+}
+
+// The exit bit set: the next state moved out, JMP J.
+theorem until_leaves<M>(saves: Nat, site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data), keep: M → Type,
+    s0: MachineState<M>, registers: UntilRegisters, pass: Prog, file: File, exit: Nat, next, outputs: List<Nat>, out: UntilExit,
+    out_ok: UntilExitOk<M>(saves, file, registers, exit, next, outputs, out),
+    names: Nat, short: List<Nat>, jumped_in: until_jumped(pass, out, names, short).Within(site.program),
+    c_lands: asm_target(site.program, names + 2) = prog_len(until_jumped(pass, out, names, short)),
+    j_at: Nat, j_lands: asm_target(site.program, names + 3) = j_at,
+    values: Valuation(), set: values(1, exit).head_bit() = True):
+    site.Moves(stack.writes, prog_len(pass), j_at,
+        λ (s: MachineState<M>) => stack.LoopPassed(saves, keep, s0, file, values)(s.gprs, s.memory),
+        λ (t: MachineState<M>) => stack.UntilAt(saves, keep, s0, registers.state, words_of(values, next))(t.gprs, t.memory)) {
+    let program = site.program;
+    let fits = program.laid_out_fits(laid);
+    let lands = program.laid_out_lands(laid);
+    let c_name = names + 2;
+    let j_name = names + 3;
+    let short_c = shorts(short, c_name);
+    let short_j = shorts(short, j_name);
+    let left = pass.branched_by(out.test, c_name, short_c);
+    let moved = At(left, 0, Block(out.moves));
+    let jumped = until_jumped(pass, out, names, short);
+    let moved_in = moved.within_before(0, jmp_item(short_j, j_name), program, jumped_in);
+    let left_in = left.within_before(0, Block(out.moves), program, moved_in);
+    let tested = pass.tested(out.test);
+    let test_in = tested.within_before(0, jcc_item(short_c, out.test.cc(), c_name), program, left_in);
+    let else_lands = j(c_lands, λ target _ => JccLands(asm_labels(program), prog_len(tested), short_c, out.test.cc(), c_name, target),
+        jcc_item_lands(asm_labels(program), left_in.witness, program, tested, 0, short_c, out.test.cc(), c_name, lands, left_in.proof));
+    let jump_lands = j(j_lands, λ target _ => JmpLands(asm_labels(program), prog_len(moved), short_j, j_name, target),
+        jmp_item_lands(asm_labels(program), jumped_in.witness, program, moved, 0, short_j, j_name, lands, jumped_in.proof));
+    let pre = stack.LoopPassed(saves, keep, s0, file, values);
+    let post = stack.UntilAt(saves, keep, s0, registers.state, words_of(values, next));
+    site.moves_test_by(stack.writes, fits, pass, out.test, c_name, short_c, test_in.witness, test_in.proof, left_in.witness, left_in.proof,
+        prog_len(jumped), else_lands, j_at, pre, λ (t: MachineState<M>) => post(t.gprs, t.memory),
+        site.moves_trans(stack.writes, prog_len(left), prog_len(moved), j_at,
+            λ (s: MachineState<M>) => pre(s.gprs, s.memory) ∧ out.test.taken(s.gprs) = False,
+            λ (s: MachineState<M>) => post(s.gprs, s.memory), λ (t: MachineState<M>) => post(t.gprs, t.memory),
+            site.moves_weaken(stack.writes, prog_len(left), prog_len(moved), λ (s: MachineState<M>) => pre(s.gprs, s.memory),
+                λ (t: MachineState<M>) => post(t.gprs, t.memory),
+                λ (s: MachineState<M>) => pre(s.gprs, s.memory) ∧ out.test.taken(s.gprs) = False,
+                λ (t: MachineState<M>) => post(t.gprs, t.memory),
+                site.moves_block(stack.writes, fits, moved_in.witness, left, 0, out.moves, moved_in.proof,
+                    program.block_reads_at(laid, moved_in.witness, left, 0, out.moves, moved_in.proof), pre, post,
+                    λ s memory held => {
+                        let ran = out_ok.right.left(values, s, held.left);
+                        ⟨ran.left, ⟨kept_trans(body_kept(saves), s0.gprs, s.gprs, execute_block_normal(out.moves, s).gprs, held.right.left,
+                            ran.right), held.right.right⟩⟩
+                    }),
+                λ s held => held.left, λ t held => held),
+            site.moves_jump_item(stack.writes, fits, jumped_in.witness, moved, 0, short_j, j_name, jumped_in.proof, j_at, jump_lands, post)),
+        site.moves_absurd(stack.writes, prog_len(jumped), j_at,
+            λ (s: MachineState<M>) => pre(s.gprs, s.memory) ∧ out.test.taken(s.gprs) = True,
+            λ (t: MachineState<M>) => post(t.gprs, t.memory),
+            λ s held => {
+                let bad: (True = False) = trans(sym(held.right), trans(out_ok.left(values, s.gprs, held.left.left),
+                    cong_fn<Bool, Bool>(λ b => !b, set)));
+                absurd(bad)
+            }))
+}
+
+// The exit bit clear: the next state moved round, JMP H.
+theorem until_rounds<M>(saves: Nat, site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data), keep: M → Type,
+    s0: MachineState<M>, registers: UntilRegisters, pass: Prog, file: File, exit: Nat, next, outputs: List<Nat>, out: UntilExit,
+    out_ok: UntilExitOk<M>(saves, file, registers, exit, next, outputs, out),
+    names: Nat, short: List<Nat>, again_in: until_again(pass, out, names, short).Within(site.program),
+    c_lands: asm_target(site.program, names + 2) = prog_len(until_jumped(pass, out, names, short)),
+    h_at: Nat, h_lands: asm_target(site.program, names + 1) = h_at,
+    values: Valuation(), clear: values(1, exit).head_bit() = False):
+    site.Moves(stack.writes, prog_len(pass), h_at,
+        λ (s: MachineState<M>) => stack.LoopPassed(saves, keep, s0, file, values)(s.gprs, s.memory),
+        λ (t: MachineState<M>) => stack.UntilAt(saves, keep, s0, registers.state, words_of(values, next))(t.gprs, t.memory)) {
+    let program = site.program;
+    let fits = program.laid_out_fits(laid);
+    let lands = program.laid_out_lands(laid);
+    let c_name = names + 2;
+    let h_name = names + 1;
+    let short_c = shorts(short, c_name);
+    let short_h = shorts(short, h_name);
+    let jumped = until_jumped(pass, out, names, short);
+    let cont = At(jumped, c_name, Block([]));
+    let back = At(cont, 0, Block(out.moves));
+    let back_in = back.within_before(0, jmp_item(short_h, h_name), program, again_in);
+    let cont_in = cont.within_before(0, Block(out.moves), program, back_in);
+    let jumped_in = jumped.within_before(c_name, Block([]), program, cont_in);
+    let left = pass.branched_by(out.test, c_name, short_c);
+    let into_jumped: left.Within(jumped) = Exists(2, refl);
+    let left_in = Prog::within_trans(into_jumped, jumped_in);
+    let tested = pass.tested(out.test);
+    let test_in = tested.within_before(0, jcc_item(short_c, out.test.cc(), c_name), program, left_in);
+    let else_lands = j(c_lands, λ target _ => JccLands(asm_labels(program), prog_len(tested), short_c, out.test.cc(), c_name, target),
+        jcc_item_lands(asm_labels(program), left_in.witness, program, tested, 0, short_c, out.test.cc(), c_name, lands, left_in.proof));
+    let jump_lands = j(h_lands, λ target _ => JmpLands(asm_labels(program), prog_len(back), short_h, h_name, target),
+        jmp_item_lands(asm_labels(program), again_in.witness, program, back, 0, short_h, h_name, lands, again_in.proof));
+    let pre = stack.LoopPassed(saves, keep, s0, file, values);
+    let post = stack.UntilAt(saves, keep, s0, registers.state, words_of(values, next));
+    site.moves_test_by(stack.writes, fits, pass, out.test, c_name, short_c, test_in.witness, test_in.proof, left_in.witness, left_in.proof,
+        prog_len(jumped), else_lands, h_at, pre, λ (t: MachineState<M>) => post(t.gprs, t.memory),
+        site.moves_absurd(stack.writes, prog_len(left), h_at,
+            λ (s: MachineState<M>) => pre(s.gprs, s.memory) ∧ out.test.taken(s.gprs) = False,
+            λ (t: MachineState<M>) => post(t.gprs, t.memory),
+            λ s held => {
+                let bad: (True = False) = trans(sym(cong_fn<Bool, Bool>(λ b => !b, clear)),
+                    trans(sym(out_ok.left(values, s.gprs, held.left.left)), held.right));
+                absurd(bad)
+            }),
+        site.moves_trans(stack.writes, prog_len(jumped), prog_len(back), h_at,
+            λ (s: MachineState<M>) => pre(s.gprs, s.memory) ∧ out.test.taken(s.gprs) = True,
+            λ (s: MachineState<M>) => post(s.gprs, s.memory), λ (t: MachineState<M>) => post(t.gprs, t.memory),
+            site.moves_weaken(stack.writes, prog_len(cont), prog_len(back), λ (s: MachineState<M>) => pre(s.gprs, s.memory),
+                λ (t: MachineState<M>) => post(t.gprs, t.memory),
+                λ (s: MachineState<M>) => pre(s.gprs, s.memory) ∧ out.test.taken(s.gprs) = True,
+                λ (t: MachineState<M>) => post(t.gprs, t.memory),
+                site.moves_block(stack.writes, fits, back_in.witness, cont, 0, out.moves, back_in.proof,
+                    program.block_reads_at(laid, back_in.witness, cont, 0, out.moves, back_in.proof), pre, post,
+                    λ s memory held => {
+                        let ran = out_ok.right.left(values, s, held.left);
+                        ⟨ran.left, ⟨kept_trans(body_kept(saves), s0.gprs, s.gprs, execute_block_normal(out.moves, s).gprs, held.right.left,
+                            ran.right), held.right.right⟩⟩
+                    }),
+                λ s held => held.left, λ t held => held),
+            site.moves_jump_item(stack.writes, fits, again_in.witness, back, 0, short_h, h_name, again_in.proof, h_at, jump_lands, post)))
+}
+
+// The loop: the entry's moves, the passes by induction on the ones its
+// meaning gives, and the file after.
+theorem until_emits<M>(saves: Nat, site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data), lending: Lending,
+    Pass: Valuation() → Buffers() → Buffers() → Type, values: Valuation(), d: Nat, s0: MachineState<M>, prog: Prog, file: File,
+    inputs, parameters: List<Nat>, exit: Nat, next, outputs: List<Nat>, names: Nat, short: List<Nat>, entry: UntilEntry,
+    entry_ok: UntilEntryOk<M>(saves, values, file, inputs, parameters, entry), pass: Emitted,
+    pass_emits: (v: Valuation()) → (from, to: Buffers()) →
+        EmitsOver<M>(saves, site, stack, lending, v, d, s0, until_head(prog, entry, names), entry.head, Pass(v, from, to), from, to, pass),
+    before, after: Buffers(), out: UntilExit, out_ok: UntilExitOk<M>(saves, pass.file, entry.registers, exit, next, outputs, out)):
+    EmitsOver<M>(saves, site, stack, lending, values, d, s0, prog, file,
+        Exists<Nat>(λ n => UntilRunsOver(Pass, parameters, exit, next, n, words_of(values, inputs), words_of(values, outputs), before, after)),
+        before, after, Emitted(until_done(pass.prog, out, names, short), out.out, pass.placement, pass.names)) {
+    let registers = entry.registers;
+    let entered = At(prog, 0, Block(entry.code));
+    let head = until_head(prog, entry, names);
+    let jumped = until_jumped(pass.prog, out, names, short);
+    let again = until_again(pass.prog, out, names, short);
+    let done = until_done(pass.prog, out, names, short);
+    let grown: head.Within(pass.prog) = pass_emits(values, before, before).left;
+    let opened: prog.Within(head) = Exists(2, refl);
+    let closed: pass.prog.Within(done) = Exists(8, refl);
+    let holds: Type = Exists<Nat>(λ n => UntilRunsOver(Pass, parameters, exit, next, n, words_of(values, inputs), words_of(values, outputs), before,
+        after));
+    let keep = λ (now: Buffers()) => λ (m: M) => stack.Trail(lending, d, s0.memory, now, m);
+    ⟨Prog::within_trans(opened, Prog::within_trans(grown, closed)),
+     λ within => {
+        let program = site.program;
+        let unique = program.laid_out_unique(laid);
+        let pass_in = Prog::within_trans(closed, within);
+        let head_in = Prog::within_trans(grown, pass_in);
+        let entered_back: entered.Within(head) = Exists(1, refl);
+        let entered_in = Prog::within_trans(entered_back, head_in);
+        let jumped_back: jumped.Within(done) = Exists(4, refl);
+        let jumped_in = Prog::within_trans(jumped_back, within);
+        let cont_back: At(jumped, names + 2, Block([])).Within(done) = Exists(3, refl);
+        let cont_in = Prog::within_trans(cont_back, within);
+        let again_back: again.Within(done) = Exists(1, refl);
+        let again_in = Prog::within_trans(again_back, within);
+        let h_lands = label_target(head_in.witness, program, entered, names, Block([]), unique, head_in.proof);
+        let c_lands = label_target(cont_in.witness, program, jumped, names + 1, Block([]), unique, cont_in.proof);
+        let j_lands = label_target(within.witness, program, again, names + 2, Block([]), unique, within.proof);
+        let Here = λ (state: List<BitVec(64)>) (now: Buffers()) (s: MachineState<M>) =>
+            stack.UntilAt(saves, keep(now), s0, registers.state, state)(s.gprs, s.memory);
+        let Passed = λ (v: Valuation()) (now: Buffers()) (s: MachineState<M>) =>
+            stack.LoopPassed(saves, keep(now), s0, pass.file, v)(s.gprs, s.memory);
+        let enters = λ (v: Valuation()) (from: Buffers()) (to: Buffers()) (passed: Pass(v, from, to)) =>
+            until_body_runs<M>(saves, site, stack, lending, Pass, d, s0, head, entry, parameters, entry_ok.right, v, from, to,
+                pass, pass_emits(v, from, to), pass_in, passed);
+        let leave = λ (v: Valuation()) (from: Buffers()) (to: Buffers()) (passed: Pass(v, from, to)) (set_bit: v(1, exit).head_bit() = True) =>
+            site.moves_trans(stack.writes, prog_len(head), prog_len(pass.prog), prog_len(done),
+                Here(words_of(v, parameters), from), Passed(v, to), Here(words_of(v, next), to),
+                enters(v, from, to, passed),
+                until_leaves<M>(saves, site, laid, stack, keep(to), s0, registers, pass.prog, pass.file, exit, next, outputs,
+                    out, out_ok, names, short, jumped_in, c_lands, prog_len(done), j_lands, v, set_bit));
+        let rounds = λ (v: Valuation()) (from: Buffers()) (to: Buffers()) (passed: Pass(v, from, to)) (clear: v(1, exit).head_bit() = False) =>
+            site.moves_trans(stack.writes, prog_len(head), prog_len(pass.prog), prog_len(head),
+                Here(words_of(v, parameters), from), Passed(v, to), Here(words_of(v, next), to),
+                enters(v, from, to, passed),
+                until_rounds<M>(saves, site, laid, stack, keep(to), s0, registers, pass.prog, pass.file, exit, next, outputs,
+                    out, out_ok, names, short, again_in, c_lands, prog_len(head), h_lands, v, clear));
+        let pre = λ (g: Gprs) (m: M) => (file.Represents(values, g) ∧ holds) ∧
+            (Kept(body_kept(saves), s0.gprs, g) ∧ stack.Trail(lending, d, s0.memory, before, m));
+        let entering = site.moves_block(stack.writes, program.laid_out_fits(laid), entered_in.witness, prog, 0, entry.code, entered_in.proof,
+            program.block_reads_at(laid, entered_in.witness, prog, 0, entry.code, entered_in.proof),
+            pre, stack.UntilAt(saves, keep(before), s0, registers.state, words_of(values, inputs)),
+            λ s memory held => {
+                let ran = entry_ok.left(s, held.left.left);
+                ⟨ran.left, ⟨kept_trans(body_kept(saves), s0.gprs, s.gprs, execute_block_normal(entry.code, s).gprs, held.right.left, ran.right),
+                  held.right.right⟩⟩
+            });
+        let finished = λ (t: MachineState<M>) => out.out.Represents(values, t.gprs) ∧ stack.Trailed(saves, lending, d, s0, after, t);
+        λ s here resident held => site.moves_trans(stack.writes, prog_len(prog), prog_len(head), prog_len(done),
+            λ (x: MachineState<M>) => pre(x.gprs, x.memory), Here(words_of(values, inputs), before), finished,
+            entering,
+            site.moves_weaken(stack.writes, prog_len(head), prog_len(done), Here(words_of(values, inputs), before),
+                Here(words_of(values, outputs), after), Here(words_of(values, inputs), before), finished,
+                site.until_passes_run(stack.writes, prog_len(head), prog_len(done), Here, Here, Pass, parameters, exit, next, leave, rounds,
+                    held.left.right.witness, words_of(values, inputs), words_of(values, outputs), before, after, held.left.right.proof),
+                λ x h => h,
+                λ t ended => ⟨out_ok.right.right(values, t.gprs, ended.left), ended.right⟩))(s, here, resident, held)
+     }⟩
+}
+
+theorem until_close_emits<M>(saves: Nat, site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data),
+    lending: Lending, Pass: Valuation() → Buffers() → Buffers() → Type, values: Valuation(), d: Nat, s0: MachineState<M>, prog: Prog,
+    file: File, inputs, parameters: List<Nat>, exit: Nat, next, outputs: List<Nat>, names: Nat, short: List<Nat>, entry: UntilEntry,
+    entry_ok: UntilEntryOk<M>(saves, values, file, inputs, parameters, entry), pass: Emitted,
+    pass_emits: (v: Valuation()) → (from, to: Buffers()) →
+        EmitsOver<M>(saves, site, stack, lending, v, d, s0, until_head(prog, entry, names), entry.head, Pass(v, from, to), from, to, pass),
+    before, after: Buffers()):
+    MayEmitOver<M>(saves, site, stack, lending, values, d, s0, prog, file,
+        Exists<Nat>(λ n => UntilRunsOver(Pass, parameters, exit, next, n, words_of(values, inputs), words_of(values, outputs), before, after)),
+        before, after, pass.until_close(saves, entry.registers, exit, next, outputs, names, short)) {
+    (match pass.file.until_exit(saves, entry.registers, exit, next, outputs) as λ e =>
+        MayUntilExit<M>(saves, pass.file, entry.registers, exit, next, outputs, e) →
+        MayEmitOver<M>(saves, site, stack, lending, values, d, s0, prog, file,
+            Exists<Nat>(λ n => UntilRunsOver(Pass, parameters, exit, next, n, words_of(values, inputs), words_of(values, outputs), before,
+                after)),
+            before, after,
+            match e {
+                None => None,
+                Some(out) => Some(Emitted(until_done(pass.prog, out, names, short), out.out, pass.placement, pass.names)),
+            }) {
+        None => λ _ => trivial,
+        Some(out) => λ out_ok => until_emits<M>(saves, site, laid, stack, lending, Pass, values, d, s0, prog, file, inputs, parameters,
+            exit, next, outputs, names, short, entry, entry_ok, pass, pass_emits, before, after, out, out_ok),
+    })(until_exit_sound<M>(saves, pass.file, entry.registers, exit, next, outputs))
+}
+
 // The region theorem over machine runs: whatever `emit_calls` emits keeps
 // the trail and runs the region from the file it starts over to the file
 // its meaning says, its calls answered by the functions below `bound`, its
@@ -5722,6 +6308,44 @@ theorem StructuredRegion::emit_calls_runs<M>(self region: StructuredRegion, save
                     })(λ v from to => body.emit_calls_runs<M>(saves, slots, short, site, laid, stack, top, effects, rooms, bound, avail, lending, loan, needs, calls, v, d, w, s0, under, framing, allowed, asks, shallow, carried_homes(loop_carried(homes, inputs, parameters, next)), loop_tested(prog, entry, names, short),
                         entry.head, entry.registers.rest, names + 4, from, to)),
             })(loop_entry_sound<M>(saves, values, file, inputs, limit, parameters, count, placement))
+        },
+        Until(inputs, parameters, body, exit, next, outputs, measure_at) => λ allowed asks shallow homes prog file placement names before after => {
+            let held_homes = HomesHold(homes, values, lending.addresses, lending.buffers);
+            let facts = StructuredRegionRunsOver(effects, values, Until(inputs, parameters, body, exit, next, outputs, measure_at), before, after) ∧ held_homes;
+            let carried = carried_homes(loop_carried(homes, inputs, parameters, next));
+            let Ran = λ (v: Valuation()) (from: Buffers()) (to: Buffers()) => StructuredRegionRunsOver(effects, v, body, from, to);
+            let Pass = λ (v: Valuation()) (from: Buffers()) (to: Buffers()) => StructuredRegionRunsOver(effects, v, body, from, to) ∧
+                HomesHold(carried, v, lending.addresses, lending.buffers);
+            let holds: Type = Exists<Nat>(λ n => UntilRunsOver(Pass, parameters, exit, next, n, words_of(values, inputs), words_of(values, outputs),
+                before, after));
+            (match file.until_entry(saves, inputs, parameters, placement) as λ e =>
+                MayUntilEntry<M>(saves, values, file, inputs, parameters, e) →
+                MayEmitOver<M>(saves, site, stack, lending, values, w, s0, prog, file, facts, before, after, match e {
+                    None => None,
+                    Some(entry) => match body.emit_calls(saves, slots, short, until_head(prog, entry, names), entry.head, entry.registers.rest, names + 3, bound, lending.counts, carried_homes(loop_carried(homes, inputs, parameters, next))) {
+                        None => None,
+                        Some(pass) => pass.until_close(saves, entry.registers, exit, next, outputs, names, short),
+                    },
+                }) {
+                None => λ _ => trivial,
+                Some(entry) => λ entry_ok =>
+                    (match body.emit_calls(saves, slots, short, until_head(prog, entry, names), entry.head, entry.registers.rest, names + 3, bound, lending.counts, carried_homes(loop_carried(homes, inputs, parameters, next))) as λ b =>
+                        ((v: Valuation()) → (from, to: Buffers()) → MayEmitOver<M>(saves, site, stack, lending, v, w, s0,
+                            until_head(prog, entry, names), entry.head, Pass(v, from, to), from, to, b)) →
+                        MayEmitOver<M>(saves, site, stack, lending, values, w, s0, prog, file, facts, before, after, match b {
+                            None => None,
+                            Some(pass) => pass.until_close(saves, entry.registers, exit, next, outputs, names, short),
+                        }) {
+                        None => λ _ => trivial,
+                        Some(pass) => λ pass_emits => may_emit_over_weaken<M>(saves, site, stack, lending, values, w, s0, prog, file, holds, facts,
+                            λ held => Exists(held.left.witness, until_carries(Ran, values, lending.addresses, lending.buffers, homes, held.right,
+                                inputs, parameters, exit, next, held.left.witness, words_of(values, outputs), before, after, held.left.proof).left),
+                            before, after, pass.until_close(saves, entry.registers, exit, next, outputs, names, short),
+                            until_close_emits<M>(saves, site, laid, stack, lending, Pass, values, w, s0, prog, file, inputs, parameters,
+                                exit, next, outputs, names, short, entry, entry_ok, pass, pass_emits, before, after)),
+                    })(λ v from to => body.emit_calls_runs<M>(saves, slots, short, site, laid, stack, top, effects, rooms, bound, avail, lending, loan, needs, calls, v, d, w, s0, under, framing, allowed, asks, shallow, carried_homes(loop_carried(homes, inputs, parameters, next)), until_head(prog, entry, names),
+                        entry.head, entry.registers.rest, names + 3, from, to)),
+            })(until_entry_sound<M>(saves, values, file, inputs, parameters, placement))
         },
     }
 }
@@ -6677,6 +7301,7 @@ theorem StructuredRegion::fits_shift(self region: StructuredRegion, rooms, other
             when_false.fits_shift(rooms, other, bound, avail, wider, grown, ok.right)⟩,
         Call(callee, _, _, _) => λ ok below => { let fit = ok(below); let more = grown(callee, below); omega },
         Loop(_, _, _, _, body, _, _, _, _) => λ ok => body.fits_shift(rooms, other, bound, avail, wider, grown, ok),
+        Until(_, _, body, _, _, _, measure_at) => λ ok => body.fits_shift(rooms, other, bound, avail, wider, grown, ok),
         Lend(_, callee, _, _) => λ ok below => { let fit = ok(below); let more = grown(callee, below); omega },
     }
 }
@@ -7245,6 +7870,7 @@ fn StructuredRegion::uses_buffer(self region: StructuredRegion, b: Nat) → Bool
         Lend(_, _, _, _) => False,
         Call(_, _, _, _) => False,
         Loop(_, _, _, _, body, _, _, _, _) => body.uses_buffer(b),
+        Until(_, _, body, _, _, _, measure_at) => body.uses_buffer(b),
     }
 }
 
@@ -7269,6 +7895,9 @@ fn StructuredRegion::home_reads(self region: StructuredRegion, homes: List<Lent>
         Lend(_, _, _, _) => [],
         Call(_, _, _, _) => [],
         Loop(inputs, _, parameters, _, body, _, next, _, _) =>
+            homes_touched(carried_homes(loop_carried(homes, inputs, parameters, next)), body) ++
+                body.home_reads(carried_homes(loop_carried(homes, inputs, parameters, next))),
+        Until(inputs, parameters, body, _, next, _, measure_at) =>
             homes_touched(carried_homes(loop_carried(homes, inputs, parameters, next)), body) ++
                 body.home_reads(carried_homes(loop_carried(homes, inputs, parameters, next))),
     }
@@ -7945,6 +8574,7 @@ theorem StructuredRegion::lends_none(self region: StructuredRegion): region.lend
         Lend(_, _, _, _) => refl,
         Call(_, _, _, _) => refl,
         Loop(_, _, _, _, _, _, _, _, _) => refl,
+        Until(_, _, _, _, _, _, _) => refl,
     }
 }
 
@@ -8104,6 +8734,22 @@ theorem StructuredRegion::emit_calls_quiet(self region: StructuredRegion, saves:
                             body.quiet(), pass_quiet),
                     })(body.emit_calls_quiet(saves, slots, short, bound, counts, loop_tested(prog, entry, names, short), entry.head, entry.registers.rest,
                         names + 4)),
+            },
+        Until(inputs, parameters, body, exit, next, outputs, measure_at) => λ prog file placement names =>
+            match file.until_entry(saves, inputs, parameters, placement) {
+                None => trivial,
+                Some(entry) =>
+                    (match body.emit_calls(saves, slots, short, until_head(prog, entry, names), entry.head, entry.registers.rest, names + 3,
+                        bound, counts, []) as λ b => Quiets(body.quiet(), b) →
+                        Quiets(body.quiet(), match b {
+                            None => None,
+                            Some(pass) => pass.until_close(saves, entry.registers, exit, next, outputs, names, short),
+                        }) {
+                        None => λ _ => trivial,
+                        Some(pass) => λ pass_quiet => quiets_of(pass.until_close(saves, entry.registers, exit, next, outputs, names, short),
+                            body.quiet(), pass_quiet),
+                    })(body.emit_calls_quiet(saves, slots, short, bound, counts, until_head(prog, entry, names), entry.head, entry.registers.rest,
+                        names + 3)),
             },
     }
 }

@@ -335,6 +335,7 @@ fn StructuredRegion::touches(self region: StructuredRegion) → List<Nat> {
         Lend(views, _, _, result) => nodes_writes(views_nodes(views)) ++ [result],
         Call(_, _, result, also) => Cons(result, also),
         Loop(_, _, parameters, count, body, _, _, outputs, exhausted) => Cons(count, Cons(exhausted, parameters ++ (outputs ++ body.touches()))),
+        Until(_, parameters, body, _, _, outputs, measure_at) => parameters ++ (outputs ++ body.touches()),
     }
 }
 
@@ -351,6 +352,9 @@ fn StructuredRegion::named(self region: StructuredRegion) → List<Nat> {
             nodes_words(loop_entry(bound, count, inputs, parameters)) ++ (nodes_words(loop_zero(count, exhausted)) ++
             (nodes_words(moves(parameters, next)) ++ (nodes_words(loop_stop(exhausted)) ++ (nodes_words(loop_down(count, exhausted)) ++
             (nodes_words(moves(outputs, parameters)) ++ Cons(exit, body.named())))))),
+        Until(inputs, parameters, body, exit, next, outputs, measure_at) =>
+            nodes_words(moves(parameters, inputs)) ++ (nodes_words(moves(parameters, next)) ++ (nodes_words(moves(outputs, parameters)) ++
+            Cons(exit, body.named()))),
     }
 }
 
@@ -361,7 +365,12 @@ fn StructuredRegion::named(self region: StructuredRegion) → List<Nat> {
 // tested, out to the end when it is set; the body; the parameters moved
 // from `next`; the exit bit tested, out by `loop_stop` when it is set, else
 // `loop_down` and back to the head; at the end the outputs moved from the
-// parameters.
+// parameters. An unbounded loop's: the parameters moved from the inputs; at
+// the head the body; the parameters moved from `next`; the exit bit tested,
+// on to the end when it is set, else back to the head. Its set is keyed by
+// its exit, the word its test reads, as a `Repeat`'s is by its bit: it has
+// no count (round B of docs/language/loop-combinator-design.md §6.9; the
+// Rust allocator does not read an unbounded loop yet).
 // A loop's head: what its head needs within its set, and what is live
 // before its entry.
 fn Homes::closed(self homes: Homes, head, set: List<Nat>, entry: List<Node>) → Option<List<Nat>> {
@@ -394,6 +403,13 @@ fn Homes::region_checked(self homes: Homes, region: StructuredRegion, out: List<
             homes.region_checked(body, after).and_then(λ b =>
             homes.leaf_checked(loop_zero(count, exhausted), Cons(exhausted, b.union(done))).and_then(λ head =>
             homes.closed(head, set, loop_entry(bound, count, inputs, parameters))))))))
+        },
+        Until(inputs, parameters, body, exit, next, outputs, measure_at) => {
+            let set = homes.loop_set(exit);
+            homes.leaf_checked(moves(outputs, parameters), out).and_then(λ done =>
+            homes.leaf_checked(moves(parameters, next), Cons(exit, done.union(set))).and_then(λ after =>
+            homes.region_checked(body, after).and_then(λ head =>
+            homes.closed(head, set, moves(parameters, inputs)))))
         },
     }
 }
@@ -534,6 +550,13 @@ fn Homes::region_needs(self homes: Homes, region: StructuredRegion, out: List<Na
             let head = nodes_live_in(loop_zero(count, exhausted), Cons(exhausted, b.live.union(done)));
             let had = match b.sets.nth(count) { None => set, Some(held) => held };
             Needs(nodes_live_in(loop_entry(bound, count, inputs, parameters), set), b.sets.put(count, had.union(head), []))
+        },
+        Until(inputs, parameters, body, exit, next, outputs, measure_at) => {
+            let set = homes.loop_set(exit);
+            let done = nodes_live_in(moves(outputs, parameters), out);
+            let b = homes.region_needs(body, nodes_live_in(moves(parameters, next), Cons(exit, done.union(set))), sets);
+            let had = match b.sets.nth(exit) { None => set, Some(held) => held };
+            Needs(nodes_live_in(moves(parameters, inputs), set), b.sets.put(exit, had.union(b.live), []))
         },
     }
 }
@@ -749,6 +772,13 @@ fn Homes::region_graph(self homes: Homes, region: StructuredRegion, out: List<Na
             let head = leaf_graph(loop_zero(count, exhausted), Cons(exhausted, b.live.union(done.live)), b.of);
             leaf_graph(loop_entry(bound, count, inputs, parameters), set, head.of)
         },
+        Until(inputs, parameters, body, exit, next, outputs, measure_at) => {
+            let set = homes.loop_set(exit);
+            let done = leaf_graph(moves(outputs, parameters), out, of);
+            let moved = leaf_graph(moves(parameters, next), Cons(exit, done.live.union(set)), done.of);
+            let b = homes.region_graph(body, moved.live, moved.of);
+            leaf_graph(moves(parameters, inputs), set, b.of)
+        },
     }
 }
 
@@ -812,6 +842,12 @@ fn StructuredRegion::weighed(self region: StructuredRegion, loop_weight, scale: 
             let passes = nodes_weights(loop_zero(count, exhausted) ++ (moves(parameters, next) ++ loop_down(count, exhausted)), inner,
                 body.weighed(loop_weight, inner, entered).bump(exit, inner));
             nodes_weights(loop_stop(exhausted) ++ moves(outputs, parameters), scale, passes)
+        },
+        Until(inputs, parameters, body, exit, next, outputs, measure_at) => {
+            let inner = scale + loop_weight;
+            let entered = nodes_weights(moves(parameters, inputs), scale, weights);
+            let passes = nodes_weights(moves(parameters, next), inner, body.weighed(loop_weight, inner, entered).bump(exit, inner));
+            nodes_weights(moves(outputs, parameters), scale, passes)
         },
     }
 }
@@ -1291,6 +1327,39 @@ theorem StructuredRegion::checked_inside(self region: StructuredRegion, loops: L
                                         j(sym(within), λ w _ => Option::Inside(w.guard(homes.leaf_checked(entry, set)), m),
                                             entry.leaf_checked_inside(loops, set, m, set_in, s0))
                                     }))))))
+        },
+        Until(inputs, parameters, body, exit, next, outputs, measure_at) => λ out so sw => {
+            let set = homes.loop_set(exit);
+            let entry = moves(parameters, inputs);
+            let w0 = nodes_words(entry);
+            let w1 = nodes_words(moves(parameters, next));
+            let w2 = nodes_words(moves(outputs, parameters));
+            let w3 = Cons(exit, body.named());
+            let t2 = w2 ++ w3;
+            let t1 = w1 ++ t2;
+            let in1: t1.Inside(m) = λ i x => sw(i, w0.mem_append_r(t1, i, x));
+            let in2: t2.Inside(m) = λ i x => in1(i, w1.mem_append_r(t2, i, x));
+            let in3: w3.Inside(m) = λ i x => in2(i, w2.mem_append_r(w3, i, x));
+            let s0: w0.Inside(m) = λ i x => sw(i, w0.mem_append_l(t1, i, x));
+            let s1: w1.Inside(m) = λ i x => in1(i, w1.mem_append_l(t2, i, x));
+            let s2: w2.Inside(m) = λ i x => in2(i, w2.mem_append_l(w3, i, x));
+            let is_m: (set = m) = wide(exit, in3(exit, Inl(refl)));
+            let set_in: set.Inside(m) = j(sym(is_m), λ k _ => k.Inside(m), λ i x => x);
+            let f3 = λ (head: List<Nat>) => homes.closed(head, set, entry);
+            let f2 = λ (after: List<Nat>) => homes.region_checked(body, after).and_then(f3);
+            let f1 = λ (done: List<Nat>) => homes.leaf_checked(moves(parameters, next), Cons(exit, done.union(set))).and_then(f2);
+            homes.leaf_checked(moves(outputs, parameters), out).inside_and_then(m, f1,
+                moves(outputs, parameters).leaf_checked_inside(loops, out, m, so, s2),
+                λ done in_done => homes.leaf_checked(moves(parameters, next), Cons(exit, done.union(set))).inside_and_then(m, f2,
+                    moves(parameters, next).leaf_checked_inside(loops, Cons(exit, done.union(set)), m,
+                        done.union(set).cons_inside(exit, m, in3(exit, Inl(refl)), done.inside_union(set, m, in_done, set_in)), s1),
+                    λ after in_after => homes.region_checked(body, after).inside_and_then(m, f3,
+                        body.checked_inside(loops, m, wide, after, in_after, λ i x => in3(i, Inr(x))),
+                        λ head in_head => {
+                            let within = head.within_of_inside(set, λ i x => j(sym(is_m), λ k _ => Mem(i, k), in_head(i, x)));
+                            j(sym(within), λ w _ => Option::Inside(w.guard(homes.leaf_checked(entry, set)), m),
+                                entry.leaf_checked_inside(loops, set, m, set_in, s0))
+                        })))
         },
     }
 }

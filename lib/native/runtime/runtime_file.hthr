@@ -164,19 +164,40 @@ theorem FFun::lowered_answers(self f: FFun, fw: FWorld, base: Nat, r: Option<Fun
 // are called after the ones that only read.
 fn FFun::code(self f: FFun, w: World, fsigs: List<Sig>) → Function { Setup::code_of(f.lower(w, fsigs, w.sigs.len())) }
 
-// The class's statement for such a reflection, pinned to `f`: the pin is
-// `refl` at a function the reflection was read from.
+// The pin of a function over a span: it and its reflection's meaning alike
+// at every rest of the file, own span and words
+// (docs/language/loop-combinator-design.md §6.5). Where `f`'s body is the
+// reflection's meaning it is `Ty::alike_to_refl`, checked by conversion.
+fn FFun::Pinned<F>(f: F, rt: FFun, w: World, callees: (b: Buffers()) → Sig::Sems(w.tys, w.sigs), fsigs: List<Sig>,
+    writers: (rest: List<List<BitVec(8)>>) → FTm::Sems(w.tys, fsigs), typed: Itself(F) = Itself(FTm::Source(w.tys, rt.lent, rt.params, rt.result))) → Type {
+    (rest: List<List<BitVec(8)>>) → (own: List<BitVec(8)>) →
+        Ty::AlikeTo(w.tys, rt.params, Mutated<List<BitVec(8)>, rt.result.sem(w.tys)>,
+            FTm::source_at(w.tys, rt.lent, rt.params, rt.result, typed, f, rest, own), rt.meaning(FWorld::of(w, callees, fsigs, writers, rest), own))
+}
+
+// The pin of a function equal to its reflection's meaning at every rest of
+// the file and own span, read pointwise.
+theorem FFun::pinned_of_eq<F>(f: F, rt: FFun, w: World, callees: (b: Buffers()) → Sig::Sems(w.tys, w.sigs), fsigs: List<Sig>,
+    writers: (rest: List<List<BitVec(8)>>) → FTm::Sems(w.tys, fsigs), typed: Itself(F) = Itself(FTm::Source(w.tys, rt.lent, rt.params, rt.result)),
+    same: (rest: List<List<BitVec(8)>>) → (own: List<BitVec(8)>) →
+        FTm::source_at(w.tys, rt.lent, rt.params, rt.result, typed, f, rest, own) = rt.meaning(FWorld::of(w, callees, fsigs, writers, rest), own)):
+    FFun::Pinned(f, rt, w, callees, fsigs, writers, typed) {
+    λ rest own => Ty::alike_to_of_eq(w.tys, rt.params, Mutated<List<BitVec(8)>, rt.result.sem(w.tys)>,
+        FTm::source_at(w.tys, rt.lent, rt.params, rt.result, typed, f, rest, own), rt.meaning(FWorld::of(w, callees, fsigs, writers, rest), own), same(rest, own))
+}
+
+// The class's statement for such a reflection, carried to `f` along its pin.
 theorem FFun::plain_runs<F>(f: F, rt: FFun, w: World, callees: (b: Buffers()) → Sig::Sems(w.tys, w.sigs), fsigs: List<Sig>,
     writers: (rest: List<List<BitVec(8)>>) → FTm::Sems(w.tys, fsigs), typed: Itself(F) = Itself(FTm::Source(w.tys, rt.lent, rt.params, rt.result)),
-    pinned: (rest: List<List<BitVec(8)>>) → (own: List<BitVec(8)>) →
-        FTm::source_at(w.tys, rt.lent, rt.params, rt.result, typed, f, rest, own) = rt.meaning(FWorld::of(w, callees, fsigs, writers, rest), own),
+    pinned: FFun::Pinned(f, rt, w, callees, fsigs, writers, typed),
     ok: Setup::lowers(rt.lower(w, fsigs, w.sigs.len())) = True):
     (rest: List<List<BitVec(8)>>) → (call: Writers()) → FTm::CallsAgree(FWorld::of(w, callees, fsigs, writers, rest), w.sigs.len(), call) →
     (own: List<BitVec(8)>) →
     FTm::AnswersAll(w.tys, rt.params, rt.result, rest, FTm::source_at(w.tys, rt.lent, rt.params, rt.result, typed, f, rest, own),
         λ xs => rt.code(w, fsigs).run(call, xs, Cons(own, rest))) {
     λ rest call agree own =>
-        j(sym(pinned(rest, own)), λ g _ => FTm::AnswersAll(w.tys, rt.params, rt.result, rest, g, λ xs => rt.code(w, fsigs).run(call, xs, Cons(own, rest))),
+        FTm::answers_all_alike(w.tys, rt.params, rt.result, rest, FTm::source_at(w.tys, rt.lent, rt.params, rt.result, typed, f, rest, own),
+            rt.meaning(FWorld::of(w, callees, fsigs, writers, rest), own), λ xs => rt.code(w, fsigs).run(call, xs, Cons(own, rest)), pinned(rest, own),
             rt.lowered_answers(FWorld::of(w, callees, fsigs, writers, rest), w.sigs.len(), rt.lower(w, fsigs, w.sigs.len()), Bool::is_true_of_eq(ok),
                 rt.lower_sound(FWorld::of(w, callees, fsigs, writers, rest), w.sigs.len()), call, agree, own))
 }
@@ -185,8 +206,7 @@ theorem FFun::plain_runs<F>(f: F, rt: FFun, w: World, callees: (b: Buffers()) �
 // two writers met in a link are told apart at their reflections.
 fn FFun::compile<F>(rt: FFun, w: World, callees: (b: Buffers()) → Sig::Sems(w.tys, w.sigs), fsigs: List<Sig>,
     writers: (rest: List<List<BitVec(8)>>) → FTm::Sems(w.tys, fsigs), f: F, typed: Itself(F) = Itself(FTm::Source(w.tys, rt.lent, rt.params, rt.result)),
-    pinned: (rest: List<List<BitVec(8)>>) → (own: List<BitVec(8)>) →
-        FTm::source_at(w.tys, rt.lent, rt.params, rt.result, typed, f, rest, own) = rt.meaning(FWorld::of(w, callees, fsigs, writers, rest), own),
+    pinned: FFun::Pinned(f, rt, w, callees, fsigs, writers, typed),
     ok: Setup::lowers(rt.lower(w, fsigs, w.sigs.len())) = True) → CompileSpan<F>(f) {
     CompileSpan(rt, w, callees, fsigs, writers, typed, rt.code(w, fsigs), FFun::plain_runs(f, rt, w, callees, fsigs, writers, typed, pinned, ok))
 }
@@ -686,6 +706,14 @@ theorem FFun::source_every<F>(f: F, tys: Table, lent: Nat, ps: List<Ty>, r: Ty, 
     (rest: List<List<BitVec(8)>>) → (own: List<BitVec(8)>) →
     FTm::source_at(tys, lent, ps, r, typed, f, rest, own) = FTm::source_at(tys, lent, ps, r, typed, f, rest, own) {
     λ _ _ => refl
+}
+
+// The same pointwise: the pin of a function over a span whose body is its
+// reflection's meaning (`FFun::Pinned`), checked by conversion.
+theorem FFun::source_alike<F>(f: F, tys: Table, lent: Nat, ps: List<Ty>, r: Ty, typed: Itself(F) = Itself(FTm::Source(tys, lent, ps, r))):
+    (rest: List<List<BitVec(8)>>) → (own: List<BitVec(8)>) →
+    Ty::AlikeTo(tys, ps, Mutated<List<BitVec(8)>, r.sem(tys)>, FTm::source_at(tys, lent, ps, r, typed, f, rest, own), FTm::source_at(tys, lent, ps, r, typed, f, rest, own)) {
+    λ rest own => Ty::alike_to_refl(tys, ps, Mutated<List<BitVec(8)>, r.sem(tys)>, FTm::source_at(tys, lent, ps, r, typed, f, rest, own))
 }
 
 // The table of the functions that write, an entry at a time: each function

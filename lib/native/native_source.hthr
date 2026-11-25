@@ -131,6 +131,7 @@ fn StructuredRegion::written(self region: StructuredRegion, call: Writers(), val
         Lend(views, _, _, result) => nodes_write_ports(views_nodes(views)) ++ [Port(result, 64)],
         Call(_, _, result, also) => word_ports(Cons(result, also)),
         Loop(_, _, _, _, _, _, _, outputs, exhausted) => word_ports(outputs) ++ [Port(exhausted, 1)],
+        Until(_, _, _, _, _, outputs, measure_at) => word_ports(outputs),
     }
 }
 
@@ -450,6 +451,7 @@ fn StructuredRegion::ids(self region: StructuredRegion) → List<Nat> {
         Call(_, arguments, result, also) => Cons(result, also ++ arguments),
         Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) =>
             Cons(bound, Cons(count, Cons(exit, Cons(exhausted, inputs ++ (parameters ++ (next ++ (outputs ++ body.ids()))))))),
+        Until(inputs, parameters, body, exit, next, outputs, measure_at) => Cons(exit, inputs ++ (parameters ++ (next ++ (outputs ++ body.ids())))),
     }
 }
 

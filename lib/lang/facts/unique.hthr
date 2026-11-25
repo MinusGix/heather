@@ -103,7 +103,15 @@ fn Tm::share(self t: Tm, sigs: List<Sig>, d: Nat, g: List<Share>) → Share {
         // A loop's state starts as `init` and is carried word by word, never
         // a buffer (`Ty::Carries`).
         Iterate(init, _, _) => Share(Cons(d, Share::at(g, init).ids), False),
+        // A loop's state and answer are words (`Tm::lower_in`).
+        Again(_, _) => Share([d], False),
+        Loop(_, _) => Share([d], False),
     }
+}
+
+// `k` word variables bound from depth `d` on: a loop's state.
+fn Share::words(d, k: Nat, g: List<Share>) → List<Share> {
+    match k { Zero => g, Succ(j) => Share::words(d + 1, j, Cons(Share([d], False), g)) }
 }
 
 // The levels of the variables whose identities meet `c`.
@@ -145,6 +153,8 @@ fn Tm::reads(self t: Tm, d: Nat, bound: Nat, ls: List<Nat>) → Bool {
         Inject(_, _, args) => Tm::hits(args, d, bound, ls),
         Slot(_, _, of) => Tm::hit(of, d, bound, ls),
         Iterate(init, test, body) => Tm::hit(init, d, bound, ls) || test.reads(d + 1, bound, ls) || body.reads(d + 1, bound, ls),
+        Again(_, args) => Tm::hits(args, d, bound, ls),
+        Loop(inits, body) => Tm::hits(inits, d, bound, ls) || body.reads(d + inits.len(), bound, ls),
     }
 }
 
@@ -222,6 +232,8 @@ fn Tm::uses(self t: Tm, sigs: List<Sig>, n: Nat, d: Nat, g: List<Share>, ks: Lis
         // No buffer reaches a loop's passes (`Ty::Carries`), so a pass's
         // consuming uses are of buffers it makes itself.
         Iterate(_, test, body) => test.uses(sigs, n, d + 1, Cons(Share([d], False), g), ks) ++ body.uses(sigs, n, d + 1, Cons(Share([d], False), g), ks),
+        Again(_, _) => [],
+        Loop(inits, body) => body.uses(sigs, n, d + inits.len(), Share::words(d, inits.len(), Nil), ks),
     }
 }
 

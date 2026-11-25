@@ -35,6 +35,7 @@ fn StructuredRegion::calls_only(self region: StructuredRegion, live: Nat → Boo
         Call(callee, _, _, _) => live(callee),
         Loop(_, _, _, _, body, _, _, _, _) => body.calls_only(live),
         Lend(_, callee, _, _) => live(callee),
+        Until(_, _, body, _, _, _, measure_at) => body.calls_only(live),
     }
 }
 
@@ -82,6 +83,12 @@ theorem StructuredRegion::runs_weaken_within(self region: StructuredRegion, live
                 ⟨Exists(ran.proof.right.proof.left.witness, implies(viewed(views, values, ran.witness), callee, only,
                     words_of(values, views_homes(views) ++ arguments), values(64, result), ran.proof.right.proof.left.witness,
                     ran.proof.right.witness, ran.proof.right.proof.left.proof)), ran.proof.right.proof.right⟩)⟩),
+        Until(inputs, parameters, body, exit, next, outputs, measure_at) => λ only values before after ran => Exists(ran.witness,
+            until_runs_over_weaken(
+                λ (pass: Valuation()) (from: Buffers()) (to: Buffers()) => StructuredRegionRunsOver(effects, pass, body, from, to),
+                λ (pass: Valuation()) (from: Buffers()) (to: Buffers()) => StructuredRegionRunsOver(weaker, pass, body, from, to),
+                λ pass from to old => body.runs_weaken_within(live, effects, weaker, implies, only, pass, from, to, old),
+                parameters, exit, next, ran.witness, words_of(values, inputs), words_of(values, outputs), before, after, ran.proof)),
     }
 }
 

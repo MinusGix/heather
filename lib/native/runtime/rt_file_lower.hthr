@@ -69,6 +69,20 @@ fn FTm::Answers(tys: Table, ps: List<Ty>, r: Ty, rest: List<List<BitVec(8)>>)
     }
 }
 
+// What answers like one of two functions alike at every argument answers
+// like the other: the one congruence the span route's pin needs
+// (docs/language/loop-combinator-design.md §6.5).
+theorem FTm::answers_alike(tys: Table, ps: List<Ty>, r: Ty, rest: List<List<BitVec(8)>>):
+    (v, u: Ty::ArrowsTo(tys, ps, Mutated<List<BitVec(8)>, r.sem(tys)>)) → (ans: List<BitVec(64)> → Ending) →
+    Ty::AlikeTo(tys, ps, Mutated<List<BitVec(8)>, r.sem(tys)>, v, u) → FTm::Answers(tys, ps, r, rest, u, ans) → FTm::Answers(tys, ps, r, rest, v, ans) {
+    match ps {
+        Nil => λ v u ans same h => trans(h, cong_fn(λ (m: Mutated<List<BitVec(8)>, r.sem(tys)>) => FTm::ended(tys, r, rest, m), sym(same))),
+        Cons(p, more) => λ v u ans same h x =>
+            FTm::answers_alike(tys, more, r, rest, v(Ty::cast(tys, Word(64), p, x)), u(Ty::cast(tys, Word(64), p, x)), λ ws => ans(Cons(x, ws)),
+                same(Ty::cast(tys, Word(64), p, x)), h(x)),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Results of several words (docs/native/runtime-fn-setups-design.md §16.21)
 //
@@ -164,10 +178,6 @@ fn Ty::check_words_out(self t: Ty, tys: Table) → Option<t.WordsOut(tys)> {
     }
 }
 
-theorem Ty::words_one_cons(fs: List<Ty>): Ty::WordsOne(fs) → fs = Nil → False {
-    match fs { Nil => λ never _ => never, Cons(g, rest) => λ _ (bad: Cons(g, rest) = Nil) => absurd(bad) }
-}
-
 // A value of such a code held from `port`: the port's word is its first
 // word, and the ports past it (`Ty::also_ports`) hold the rest.
 theorem Ty::words_out_reads(tys: Table, values: Valuation(), port: Nat, t: Ty): t.WordsOut(tys) → (v: t.sem(tys)) → t.Holds(tys, values, port, v) →
@@ -185,6 +195,19 @@ theorem Ty::words_out_reads(tys: Table, values: Valuation(), port: Nat, t: Ty): 
             let tag: (x = RecInfo::enum_word(tys, i, v)) = trans(sym(BitVec::ofNat_toNat(64, x)), cong_fn(λ (m: Nat) => BitVec::ofNat(m, n := 64), h.left.left));
             ⟨tag, Ty::ports_reads(values, tys.ens(i).slots, port + 1, ok, tys.ens(i).fields(v), h.right)⟩
         },
+    }
+}
+
+// The same congruence for the function's own boundary, every word of its
+// value (`FTm::AnswersAll`).
+theorem FTm::answers_all_alike(tys: Table, ps: List<Ty>, r: Ty, rest: List<List<BitVec(8)>>):
+    (v, u: Ty::ArrowsTo(tys, ps, Mutated<List<BitVec(8)>, r.sem(tys)>)) → (ans: List<BitVec(64)> → Ending) →
+    Ty::AlikeTo(tys, ps, Mutated<List<BitVec(8)>, r.sem(tys)>, v, u) → FTm::AnswersAll(tys, ps, r, rest, u, ans) → FTm::AnswersAll(tys, ps, r, rest, v, ans) {
+    match ps {
+        Nil => λ v u ans same h => trans(h, cong_fn(λ (m: Mutated<List<BitVec(8)>, r.sem(tys)>) => FTm::ended_all(tys, r, rest, m), sym(same))),
+        Cons(p, more) => λ v u ans same h x =>
+            FTm::answers_all_alike(tys, more, r, rest, v(Ty::cast(tys, Word(64), p, x)), u(Ty::cast(tys, Word(64), p, x)), λ ws => ans(Cons(x, ws)),
+                same(Ty::cast(tys, Word(64), p, x)), h(x)),
     }
 }
 

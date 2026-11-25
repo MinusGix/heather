@@ -1267,6 +1267,8 @@ fn StructuredRegion::learn(self region: StructuredRegion, seen: Seen) → Learne
                             Seen(seen.made, seen.range, seen.how, why.proved, seen.bits, [], seen.indexes, seen.origin, inner.seen.wants, seen.order, seen.joins, seen.tables)).forgetting()),
                     }))),
         Lend(_, _, _, _) => Learned(Same, seen.forgetting()),
+        // Replayed whole only, for now.
+        Until(_, _, _, _, _, _, _) => Learned(Same, seen.forgetting()),
     }
 }
 
@@ -1291,6 +1293,7 @@ fn StructuredRegion::indexes(self region: StructuredRegion, found: NatMap<Bool>)
         Conditional(_, _, _, _, when_true, when_false) => when_false.indexes(when_true.indexes(found)),
         Call(_, _, _, _) => found,
         Loop(_, _, _, _, body, _, _, _, _) => body.indexes(found),
+        Until(_, _, body, _, _, _, measure_at) => body.indexes(found),
         Lend(_, _, _, _) => found,
     }
 }
@@ -1314,6 +1317,7 @@ fn StructuredRegion::ends(self region: StructuredRegion, found: NatMap<Nat>) →
         Conditional(_, _, _, _, when_true, when_false) => when_false.ends(when_true.ends(found)),
         Call(_, _, _, _) => found,
         Loop(_, _, _, _, body, _, _, _, _) => body.ends(found),
+        Until(_, _, body, _, _, _, measure_at) => body.ends(found),
         Lend(_, _, _, _) => found,
     }
 }
@@ -1347,6 +1351,8 @@ fn StructuredRegion::reads(self region: StructuredRegion, counts: NatMap<Nat>) �
         Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) =>
             body.reads(reads_counted(Cons(bound, Cons(count, Cons(exit, Cons(exhausted, inputs ++ (parameters ++ (next ++ outputs)))))), counts)),
         Lend(views, _, arguments, _) => reads_counted(nodes_mentions(views_nodes(views)) ++ (views_homes(views) ++ arguments), counts),
+        Until(inputs, parameters, body, exit, next, outputs, measure_at) =>
+            body.reads(reads_counted(Cons(exit, inputs ++ (parameters ++ (next ++ outputs))), counts)),
     }
 }
 

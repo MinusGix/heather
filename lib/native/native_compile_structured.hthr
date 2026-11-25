@@ -17,6 +17,17 @@
 // body's code, which runs as the body's meaning, and that is the body's run
 // from the pass's own valuation (`StructuredRegion::faithful` over
 // `Scope::pass`).
+//
+// An unbounded loop (`Until`) has no count: its code is the body, the moves
+// of `next` and the jump back. It runs as its source's `until_run` where the
+// loop ends within the passes the meaning gives it (`until_halts`, in
+// `StructuredRegion::Ok`): at its head, with fuel `f` to which the loop
+// leaves, the code runs on to the end as the rest of the passes do
+// (`Target::until_head`, by induction on `f`; at no fuel the loop does not
+// leave, so the case is absurd). Termination is the lowering's hypothesis
+// (docs/language/loop-combinator-design.md §6.9): a statement takes no
+// unbounded loop yet (`StructuredRegion::scopes`), since its meaning has no
+// place for one that does not end.
 import native_source;
 import native_structured;
 import native_structured_meaning;
@@ -34,6 +45,7 @@ import function_ir;
 import function_ir_eval;
 import function_ir_lower;
 import function_ir_state;
+import function_ir_counted;
 import function_ir_placeless;
 import linux_trees;
 import linux_x86_64_io;
@@ -247,6 +259,13 @@ theorem StructuredRegion::meaning_frame(self region: StructuredRegion, call: Wri
                     absent_append_intro(x, outputs, [exhausted], p4.left, Bool::is_true_and_intro(x.differs(exhausted), True, known, trivial)));
             Env::settle_frame(word_ports(outputs) ++ [Port(exhausted, 1)], Env(env.words, after.buffers, env.args), after.values, x, fresh)
         },
+        Until(inputs, parameters, body, exit, next, outputs, measure_at) => λ env x h => {
+            let after = Until(inputs, parameters, body, exit, next, outputs, measure_at).run(call, env.valuation(), env.buffers);
+            let p3 = absent_append(x, parameters, outputs ++ body.touches(), h);
+            let p4 = absent_append(x, outputs, body.touches(), p3.right);
+            Env::settle_frame(word_ports(outputs), Env(env.words, after.buffers, env.args), after.values, x,
+                j(sym(word_port_ids(outputs)), λ l _ => absent(x, l).IsTrue(), p4.left))
+        },
     }
 }
 
@@ -285,43 +304,63 @@ theorem Bool::guard_with<B, R>({b: Bool}, {o: Option<B>}, {c: B}, h: b.guard(o) 
 // What the machine claim asks of a region
 
 // What the compile's region scope gives the claim: leaves wide, and each
-// loop in counted form with its body scoped from its pass.
-fn StructuredRegion::Ok(self region: StructuredRegion) → Type {
+// loop in counted form with its body scoped from its pass; an unbounded
+// loop in its form, and ending.
+fn StructuredRegion::Ok(self region: StructuredRegion, call: Writers()) → Type {
     match region {
         Dataflow(body) => nodes_wide(body.nodes).IsTrue(),
-        Sequence(prefix, continuation) => nodes_wide(prefix.nodes).IsTrue() ∧ continuation.Ok(),
-        Compose(prefix, continuation) => prefix.Ok() ∧ continuation.Ok(),
-        Conditional(_, _, _, _, when_true, when_false) => when_true.Ok() ∧ when_false.Ok(),
+        Sequence(prefix, continuation) => nodes_wide(prefix.nodes).IsTrue() ∧ continuation.Ok(call),
+        Compose(prefix, continuation) => prefix.Ok(call) ∧ continuation.Ok(call),
+        Conditional(_, _, _, _, when_true, when_false) => when_true.Ok(call) ∧ when_false.Ok(call),
         Lend(_, _, _, _) => False,
         Call(_, _, _, _) => True,
-        Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => body.Ok() ∧
+        Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => body.Ok(call) ∧
             (LoopShape(inputs, parameters, count, body, exit, next, outputs, exhausted) ∧
             Exists<Scope>(λ bs => (body.scoped(Scope::pass(parameters, count)) = Some(bs)) ∧ (bs.bit(exit) && bs.all_defined(next)).IsTrue())),
+        Until(inputs, parameters, body, exit, next, outputs, measure_at) => body.Ok(call) ∧
+            (UntilShape(inputs, parameters, body, exit, next, outputs) ∧
+            (Exists<Scope>(λ bs => (body.scoped(Scope::until_pass(parameters)) = Some(bs)) ∧ (bs.bit(exit) && bs.all_defined(next)).IsTrue()) ∧
+            body.until_halts(call, parameters, exit, next))),
     }
 }
 
-theorem StructuredRegion::ok_of_scoped(self region: StructuredRegion): (s, t: Scope) → region.scoped(s) = Some(t) → region.Ok() {
+// A scoped region whose unbounded loops count is ok: the scope gives all
+// but an unbounded loop's ending, and the count gives that
+// (`counts_halts`).
+theorem StructuredRegion::ok_of_scoped(self region: StructuredRegion, call: Writers()): region.until_counted().IsTrue() → (s, t: Scope) →
+    region.scoped(s) = Some(t) → region.Ok(call) {
     match region {
-        Dataflow(body) => λ s t scoped => Scope::wide_of(body.nodes, s, t, scoped),
-        Sequence(prefix, continuation) => λ s t scoped => {
+        Dataflow(body) => λ free s t scoped => Scope::wide_of(body.nodes, s, t, scoped),
+        Sequence(prefix, continuation) => λ free s t scoped => {
             cases scoped as got(m);
-            ⟨Scope::wide_of(prefix.nodes, s, m, got), continuation.ok_of_scoped(m, t, scoped)⟩
+            ⟨Scope::wide_of(prefix.nodes, s, m, got), continuation.ok_of_scoped(call, free, m, t, scoped)⟩
         },
-        Compose(prefix, continuation) => λ s t scoped => {
+        Compose(prefix, continuation) => λ free s t scoped => {
+            let fr = Bool::both(free);
             cases scoped as got(m);
-            ⟨prefix.ok_of_scoped(s, m, got), continuation.ok_of_scoped(m, t, scoped)⟩
+            ⟨prefix.ok_of_scoped(call, fr.left, s, m, got), continuation.ok_of_scoped(call, fr.right, m, t, scoped)⟩
         },
-        Conditional(_, condition, _, _, when_true, when_false) => λ s t scoped => {
+        Conditional(_, condition, _, _, when_true, when_false) => λ free s t scoped => {
+            let fr = Bool::both(free);
             cases scoped as bit, yes(a), no(c);
-            ⟨when_true.ok_of_scoped(s, a, yes), when_false.ok_of_scoped(s, c, no)⟩
+            ⟨when_true.ok_of_scoped(call, fr.left, s, a, yes), when_false.ok_of_scoped(call, fr.right, s, c, no)⟩
         },
-        Lend(_, _, _, _) => λ s t none => absurd(none),
-        Call(_, _, _, _) => λ s t _ => trivial,
-        Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => λ s t scoped => {
+        Lend(_, _, _, _) => λ free s t none => absurd(none),
+        Call(_, _, _, _) => λ free s t _ => trivial,
+        Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => λ free s t scoped => {
             cases scoped as ok, got(bs), bits;
             let parts = Bool::both(Bool::is_true_of_eq(ok));
             let shape = StructuredRegion::loop_shaped(inputs, bound, parameters, count, body, exit, next, outputs, exhausted, parts.right);
-            ⟨body.ok_of_scoped(Scope::pass(parameters, count), bs, got), ⟨shape, Exists(bs, ⟨got, Bool::is_true_of_eq(bits)⟩)⟩⟩
+            ⟨body.ok_of_scoped(call, free, Scope::pass(parameters, count), bs, got), ⟨shape, Exists(bs, ⟨got, Bool::is_true_of_eq(bits)⟩)⟩⟩
+        },
+        Until(inputs, parameters, body, exit, next, outputs, measure_at) => λ counted s t scoped => {
+            let r = Until(inputs, parameters, body, exit, next, outputs, measure_at);
+            let fr = Bool::both(counted);
+            cases scoped as ok, got(bs), bits;
+            let parts = Bool::is_true_and(s.all_defined(inputs), r.until_shape(), Bool::is_true_of_eq(ok));
+            let shape = StructuredRegion::until_shaped(inputs, parameters, body, exit, next, outputs, measure_at, parts.right);
+            ⟨body.ok_of_scoped(call, fr.right, Scope::until_pass(parameters), bs, got),
+                ⟨shape, ⟨Exists(bs, ⟨got, Bool::is_true_of_eq(bits)⟩), body.counts_halts(call, parameters, next, exit, measure_at, fr.left)⟩⟩⟩
         },
     }
 }
@@ -383,6 +422,47 @@ theorem StructuredRegion::loop_code(inputs: List<Nat>, bound: Nat, parameters: L
     Option::and_then_with(h4, λ x x_is h5 =>
     Option::and_then_with(h5, λ d d_is h6 =>
         LoopCode(fits, e, e_is, z, z_is, b, b_is, m, m_is, x, x_is, d, d_is, h6))))))))
+}
+
+// The pieces of an unbounded loop's code, each piece's words live after it
+// named by `set`, `done` and `after`.
+record UntilCode(p: Prog, layout: Layout, out: List<Nat>, names: Nat, inputs: List<Nat>, parameters: List<Nat>, body: StructuredRegion, exit: Nat,
+    next, outputs: List<Nat>, set, done, after: List<Nat>, c: Compiled) {
+    fits: (layout.word_fits(exit) && until_keeps(out, outputs, parameters ++ body.touches())).IsTrue(),
+    e: Compiled,
+    e_is: p.computes(layout, set, moves(parameters, inputs), Succ(Succ(Succ(names)))) = Some(e),
+    b: Compiled,
+    b_is: body.code(e.prog.label(Succ(names)), layout, after, e.names) = Some(b),
+    m: Compiled,
+    m_is: b.prog.computes(layout, Cons(exit, done.union(set)), moves(parameters, next), b.names) = Some(m),
+    c_is: then(m.prog.tests(layout, exit, Succ(Succ(names))).else_label(Succ(Succ(names)), Succ(Succ(Succ(names)))), Jmp(Succ(names)))
+        .label(Succ(Succ(Succ(names)))).computes(layout, out, moves(outputs, parameters), m.names) = Some(c),
+}
+
+theorem StructuredRegion::until_code(inputs: List<Nat>, parameters: List<Nat>, body: StructuredRegion, exit: Nat, next, outputs: List<Nat>, measure_at: Nat,
+    p: Prog, layout: Layout, out: List<Nat>, names: Nat, c: Compiled,
+    emitted: Until(inputs, parameters, body, exit, next, outputs, measure_at).code(p, layout, out, names) = Some(c)):
+    UntilCode(p, layout, out, names, inputs, parameters, body, exit, next, outputs, layout.homes.loop_set(exit),
+        nodes_live_in(moves(outputs, parameters), out),
+        nodes_live_in(moves(parameters, next), Cons(exit, nodes_live_in(moves(outputs, parameters), out).union(layout.homes.loop_set(exit)))), c) {
+    let homes = layout.homes;
+    let head = Succ(names);
+    let again = Succ(head);
+    let leave = Succ(again);
+    let set = homes.loop_set(exit);
+    let done = nodes_live_in(moves(outputs, parameters), out);
+    let after = nodes_live_in(moves(parameters, next), Cons(exit, done.union(set)));
+    let chain: ((layout.word_fits(exit) && until_keeps(out, outputs, parameters ++ body.touches())).guard(
+        p.computes(layout, set, moves(parameters, inputs), leave).and_then(λ e =>
+        body.code(e.prog.label(head), layout, after, e.names).and_then(λ b =>
+        b.prog.computes(layout, Cons(exit, done.union(set)), moves(parameters, next), b.names).and_then(λ m =>
+        then(m.prog.tests(layout, exit, again).else_label(again, leave), Jmp(head)).label(leave)
+            .computes(layout, out, moves(outputs, parameters), m.names))))) = Some(c)) = emitted;
+    Bool::guard_with(chain, λ fits h0 =>
+    Option::and_then_with(h0, λ e e_is h1 =>
+    Option::and_then_with(h1, λ b b_is h2 =>
+    Option::and_then_with(h2, λ m m_is h3 =>
+        UntilCode(fits, e, e_is, b, b_is, m, m_is, h3)))))
 }
 
 // ---------------------------------------------------------------------------
@@ -479,6 +559,25 @@ theorem StructuredRegion::within_code(self region: StructuredRegion, layout: Lay
             Prog::within_trans(mt.within_computes(layout, done, loop_stop(exhausted), k.m.names, k.x, k.x_is),
             calc { k.x.prog <= xl := Exists(2, refl), <= c.prog := Prog::within_trans(xl.within_computes(layout, set, loop_down(count, exhausted), k.x.names, k.d, k.d_is),
             calc { k.d.prog <= dj := Exists(2, refl), <= c.prog := dj.within_computes(layout, out, moves(outputs, parameters), k.d.names, c, k.c_is), }), })))), }))))
+        },
+        Until(inputs, parameters, body, exit, next, outputs, measure_at) => λ p out names c emitted => {
+            let k = StructuredRegion::until_code(inputs, parameters, body, exit, next, outputs, measure_at, p, layout, out, names, c, emitted);
+            let head = Succ(names);
+            let again = Succ(head);
+            let leave = Succ(again);
+            let hp = k.e.prog.label(head);
+            let mt = k.m.prog.tests(layout, exit, again);
+            let xl = mt.else_label(again, leave);
+            let dj = then(xl, Jmp(head)).label(leave);
+            let set = layout.homes.loop_set(exit);
+            let done = nodes_live_in(moves(outputs, parameters), out);
+            let after = nodes_live_in(moves(parameters, next), Cons(exit, done.union(set)));
+            Prog::within_trans(p.within_computes(layout, set, moves(parameters, inputs), leave, k.e, k.e_is),
+            Prog::within_trans(k.e.prog.within_label(head),
+            Prog::within_trans(body.within_code(layout, hp, after, k.e.names, k.b, k.b_is),
+            Prog::within_trans(k.b.prog.within_computes(layout, Cons(exit, done.union(set)), moves(parameters, next), k.b.names, k.m, k.m_is),
+            Prog::within_trans(k.m.prog.within_tests(layout, exit, again),
+            calc { mt <= xl := Exists(2, refl), <= dj := Exists(2, refl), <= c.prog := dj.within_computes(layout, out, moves(outputs, parameters), k.m.names, c, k.c_is), })))))
         },
     }
 }
@@ -804,6 +903,34 @@ theorem Homes::loop_checked(self homes: Homes, inputs: List<Nat>, bound: Nat, pa
     })
 }
 
+// An unbounded loop's checks taken apart.
+record UntilChecked(homes: Homes, out: List<Nat>, inputs: List<Nat>, parameters: List<Nat>, body: StructuredRegion, exit: Nat, next,
+    outputs: List<Nat>, set, done, after, live: List<Nat>) {
+    done_ok: homes.leaf_checked(moves(outputs, parameters), out) = Some(done),
+    after_ok: homes.leaf_checked(moves(parameters, next), Cons(exit, done.union(set))) = Some(after),
+    body_ok: homes.region_checked(body, after) = Some(homes.region_live(body, after)),
+    closed: homes.region_live(body, after).within(set).IsTrue(),
+    entry_ok: homes.leaf_checked(moves(parameters, inputs), set) = Some(live),
+}
+
+theorem Homes::until_checked(self homes: Homes, inputs: List<Nat>, parameters: List<Nat>, body: StructuredRegion, exit: Nat, next, outputs: List<Nat>, measure_at: Nat,
+    out, live: List<Nat>, checked: homes.region_checked(Until(inputs, parameters, body, exit, next, outputs, measure_at), out) = Some(live)):
+    UntilChecked(homes, out, inputs, parameters, body, exit, next, outputs, homes.loop_set(exit), nodes_live_in(moves(outputs, parameters), out),
+        nodes_live_in(moves(parameters, next), Cons(exit, nodes_live_in(moves(outputs, parameters), out).union(homes.loop_set(exit)))), live) {
+    let set = homes.loop_set(exit);
+    let done = nodes_live_in(moves(outputs, parameters), out);
+    let after = nodes_live_in(moves(parameters, next), Cons(exit, done.union(set)));
+    let chain: (homes.leaf_checked(moves(outputs, parameters), out).and_then(λ done =>
+        homes.leaf_checked(moves(parameters, next), Cons(exit, done.union(set))).and_then(λ after =>
+        homes.region_checked(body, after).and_then(λ head =>
+        homes.closed(head, set, moves(parameters, inputs))))) = Some(live)) = checked;
+    let c1 = Option::and_then_canon(chain, done, λ a got => homes.leaf_checked_sound(moves(outputs, parameters), out, a, got).left);
+    let c2 = Option::and_then_canon(c1.right, after, λ a got => homes.leaf_checked_sound(moves(parameters, next), Cons(exit, done.union(set)), a, got).left);
+    let c3 = Option::and_then_canon(c2.right, homes.region_live(body, after), λ a got => homes.region_live_of(body, after, a, got));
+    let closing: (homes.region_live(body, after).within(set).guard(homes.leaf_checked(moves(parameters, inputs), set)) = Some(live)) = c3.right;
+    Bool::guard_with(closing, λ closed entry_ok => UntilChecked(c1.left, c2.left, c3.left, closed, entry_ok))
+}
+
 // ---------------------------------------------------------------------------
 // A loop runs as its source's loop
 
@@ -1031,7 +1158,7 @@ theorem Target::loop_goes(self t: Target, call: Writers(), inputs: List<Nat>, bo
     emitted: Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted).code(p, t.layout(), out, names) = Some(c),
     within: c.prog.Within(t.program),
     checked: t.homes.region_checked(Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted), out) = Some(live),
-    ok: Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted).Ok(),
+    ok: Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted).Ok(call),
     body_runs: (q: Prog) → (o: List<Nat>) → (n: Nat) → (bc: Compiled) → body.code(q, t.layout(), o, n) = Some(bc) → bc.prog.Within(t.program) →
         (l: List<Nat>) → t.homes.region_checked(body, o) = Some(l) → t.Computes(body, call, l, o, q, bc.prog)):
     t.Computes(Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted), call, live, out, p, c.prog) {
@@ -1150,9 +1277,288 @@ theorem Target::loop_goes(self t: Target, call: Writers(), inputs: List<Nat>, bo
 }
 
 // ---------------------------------------------------------------------------
+// An unbounded loop runs as its source's loop
+
+// A pass's own valuation agrees with an environment holding the pass's
+// state in the parameters.
+theorem Env::until_agrees(self env: Env, parameters: List<Nat>, state: List<BitVec(64)>, held: words_of(env.valuation(), parameters) = state):
+    Valuation::Agrees(until_valuation(parameters, state), env, Scope::until_pass(parameters)) {
+    let base = Valuation::zero();
+    let len: (state.len() = parameters.len()) = trans(sym(cong_fn<List<BitVec(64)>, Nat>(λ l => l.len(), held)), words_of_len(env.valuation(), parameters));
+    λ x def => {
+        let mx = parameters.holds_mem(x, Bool::true_of(parameters.holds(x), def));
+        let w: (until_valuation(parameters, state)(64, x) = env.word(x)) = j(held, λ st _ => Valuation::bind(base, parameters, st)(64, x) = env.word(x),
+            Valuation::bind_words_at(parameters, base, env.valuation(), x, mx));
+        ⟨w, λ _ => trans(Valuation::bind_coherent(parameters, state, len, base, x, mx), cong_fn(λ (y: BitVec(64)) => y.head_bit(), w))⟩
+    }
+}
+
+// What an unbounded loop's meaning holds: its outputs settled from where
+// its passes end.
+fn Env::until_ended(self env: Env, e: LoopState, outputs: List<Nat>) → Env {
+    Env(env.words, e.buffers, env.args).settle(Valuation::bind(env.valuation(), outputs, e.end.state), word_ports(outputs))
+}
+
+record UntilEnded(env: Env, e: LoopState, outputs: List<Nat>) {
+    buffers: env.until_ended(e, outputs).buffers = e.buffers,
+    args: env.until_ended(e, outputs).args = env.args,
+    outs: (x: Nat) → Mem(x, outputs) → env.until_ended(e, outputs).number(x) = Valuation::bind(env.valuation(), outputs, e.end.state)(64, x).toNat(),
+    others: (x: Nat) → absent(x, outputs).IsTrue() → env.until_ended(e, outputs).number(x) = env.number(x),
+}
+
+theorem Env::until_ended_at(self env: Env, e: LoopState, outputs: List<Nat>): UntilEnded(env, e, outputs) {
+    let ports = word_ports(outputs);
+    let v = Valuation::bind(env.valuation(), outputs, e.end.state);
+    let base = Env(env.words, e.buffers, env.args);
+    let kept = Env::settle_kept(ports, base, v);
+    let ids_eq: (port_ids(ports) = outputs) = word_port_ids(outputs);
+    UntilEnded(kept.left, kept.right,
+        λ x mo => Env::settle_width(ports, base, v, x, 64, λ (port: Port) (mp: Mem(port, ports)) (named: port.id = x) => word_ports_mem(outputs, port, mp).right,
+            j(sym(ids_eq), λ l _ => Mem(x, l), mo)),
+        λ x fresh => Env::settle_frame(ports, base, v, x, j(sym(ids_eq), λ l _ => absent(x, l).IsTrue(), fresh)))
+}
+
+// Every word live after an unbounded loop is an output, or one it never
+// writes.
+theorem until_keeps_mem(out: List<Nat>, outputs: List<Nat>, clobbered: List<Nat>): until_keeps(out, outputs, clobbered).IsTrue() →
+    (i: Nat) → Mem(i, out) → (outputs.holds(i) || absent(i, clobbered)).IsTrue() {
+    match out {
+        Nil => λ _ i never => false_elim(never),
+        Cons(o, rest) => λ keeps i m => {
+            match m {
+                Inl(e) => j(sym(e), λ y _ => (outputs.holds(y) || absent(y, clobbered)).IsTrue(), known),
+                Inr(later) => until_keeps_mem(rest, outputs, clobbered, known, i, later),
+            }
+        },
+    }
+}
+
+// Where an unbounded loop's passes end: the state in the parameters, the
+// buffers the passes left, every word the loop never writes as it was.
+fn Env::UntilEnds(self now: Env, env: Env, final: LoopState, parameters: List<Nat>, body: StructuredRegion) → Type {
+    (now.buffers = final.buffers) ∧ ((now.args = env.args) ∧ ((words_of(now.valuation(), parameters) = final.end.state) ∧
+        now.Kept(env, parameters ++ body.touches())))
+}
+
+// At the loop's head with fuel `fuel` within which it leaves, the
+// parameters holding the pass's state: the code runs on to where the passes
+// end.
+theorem Target::until_head(self t: Target, call: Writers(), inputs: List<Nat>, parameters: List<Nat>, body: StructuredRegion, exit: Nat,
+    next, outputs: List<Nat>, p: Prog, out: List<Nat>, names: Nat, c: Compiled, set, done, after, live: List<Nat>,
+    k: UntilCode(p, t.layout(), out, names, inputs, parameters, body, exit, next, outputs, set, done, after, c),
+    h: UntilChecked(t.homes, out, inputs, parameters, body, exit, next, outputs, set, done, after, live),
+    within: c.prog.Within(t.program), shape: UntilShape(inputs, parameters, body, exit, next, outputs),
+    bs: Scope, body_scoped: body.scoped(Scope::until_pass(parameters)) = Some(bs), bits: (bs.bit(exit) && bs.all_defined(next)).IsTrue(),
+    body_runs: t.Computes(body, call, t.homes.region_live(body, after), after, k.e.prog.label(Succ(names)), k.b.prog),
+    env: Env, tree: ITree<BitVec(64)>(Events::linux()), final: LoopState,
+    ends: (now: Env) → now.UntilEnds(env, final, parameters, body) →
+        t.At(prog_len(then(k.m.prog.tests(t.layout(), exit, Succ(Succ(names))).else_label(Succ(Succ(names)), Succ(Succ(Succ(names)))), Jmp(Succ(names))).label(Succ(Succ(Succ(names))))), done, tree, now),
+    fuel: Nat):
+    (now: Env) → (state: List<BitVec(64)>) → words_of(now.valuation(), parameters) = state → now.args = env.args →
+    now.Kept(env, parameters ++ body.touches()) →
+    until_run(λ (pass: Valuation()) (held: Buffers()) => body.run(call, pass, held), parameters, exit, next, fuel, state, now.buffers) = final →
+    until_run_defined(λ (pass: Valuation()) (held: Buffers()) => body.run(call, pass, held), λ (pass: Valuation()) (held: Buffers()) => True,
+        parameters, exit, next, fuel, state, now.buffers).IsTrue() →
+    t.At(prog_len(k.e.prog), set, tree, now) {
+    let layout = t.layout();
+    let head = Succ(names);
+    let again = Succ(head);
+    let leave = Succ(again);
+    let hp = k.e.prog.label(head);
+    let mt = k.m.prog.tests(layout, exit, again);
+    let xjump = then(mt, Jmp(leave));
+    let xl = mt.else_label(again, leave);
+    let djump = then(xl, Jmp(head));
+    let dj = djump.label(leave);
+    let exit_out = Cons(exit, done.union(set));
+    let w_dj: dj.Within(t.program) = Prog::within_trans(dj.within_computes(layout, out, moves(outputs, parameters), k.m.names, c, k.c_is), within);
+    let w_djump: djump.Within(t.program) = djump.within_before(leave, Block([]), t.program, w_dj);
+    let w_xl: xl.Within(t.program) = xl.within_before(0, Jmp(head), t.program, w_djump);
+    let w_xjump: xjump.Within(t.program) = xjump.within_before(again, Block([]), t.program, w_xl);
+    let w_mt: mt.Within(t.program) = mt.within_before(0, Jmp(leave), t.program, w_xjump);
+    let w_m: k.m.prog.Within(t.program) = Prog::within_trans(k.m.prog.within_tests(layout, exit, again), w_mt);
+    let w_b: k.b.prog.Within(t.program) = Prog::within_trans(k.b.prog.within_computes(layout, exit_out, moves(parameters, next), k.b.names, k.m, k.m_is), w_m);
+    let w_hp: hp.Within(t.program) = Prog::within_trans(body.within_code(layout, hp, after, k.e.names, k.b, k.b_is), w_b);
+    let fits = k.fits;
+    let inside_exit = layout.word_inside(exit, known);
+    let next_len: (next.len() = parameters.len()) = Nat::matches_eq(next.len(), parameters.len(), shape.next_len);
+    let step = λ (pass: Valuation()) (held: Buffers()) => body.run(call, pass, held);
+    let none = λ (pass: Valuation()) (held: Buffers()) => True;
+    let closed_sub = λ (i: Nat) (mi: Mem(i, t.homes.region_live(body, after))) => t.homes.region_live(body, after).within_mem(set, h.closed, i, mi);
+    match fuel {
+        Zero => λ now state held args kept run never => false_elim(never),
+        Succ(f2) => λ now state held args kept run defined => {
+            let pv = until_valuation(parameters, state);
+            let agree = now.until_agrees(parameters, state, held);
+            let mb = body.meaning(call, now);
+            let fa = body.faithful(call, Scope::until_pass(parameters), bs, body_scoped, pv, now, agree);
+            let run_s = body.run(call, pv, now.buffers);
+            let after_next = words_of(run_s.values, next);
+            let branch = λ (b: Bool) => match b as λ _ => LoopState {
+                False => until_run(step, parameters, exit, next, f2, after_next, run_s.buffers),
+                True => LoopState(LoopEnd(after_next, False), run_s.buffers),
+            };
+            let run_b: (branch(run_s.values(1, exit).head_bit()) = final) = run;
+            let ending = λ (b: Bool) => match b as λ _ => Bool {
+                False => until_run_defined(step, none, parameters, exit, next, f2, after_next, run_s.buffers),
+                True => True,
+            };
+            let defined_b: ending(run_s.values(1, exit).head_bit()).IsTrue() = defined;
+            let em = mb.steps(moves(parameters, next));
+            let moved = Env::steps_moves(parameters, next, shape.next_ordered, shape.parameters_distinct, next_len, mb);
+            let agrees_after = fa.right.right;
+            let exit_bit: (run_s.values(1, exit).head_bit() = em.bit(exit)) = trans(agrees_after(exit, known).right(known),
+                sym(cong_fn<Nat, Bool>(λ v => BitVec::ofNat(v, n := 64).head_bit(), moved.left(exit, shape.exit_parameters))));
+            let next_words: (after_next = words_of(mb.valuation(), next)) = words_agree(next, mb.valuation(), run_s.values,
+                λ id mi => agrees_after(id, bs.all_defined_mem(next, known, id, mi)).left);
+            let m_state: (words_of(em.valuation(), parameters) = after_next) =
+                trans(Env::moves_words(parameters, next, shape.next_ordered, shape.parameters_distinct, next_len, mb), sym(next_words));
+            let mb_args: (mb.args = now.args) = trans(sym(fa.right.left.right.right),
+                Env::settle_kept(body.written(call, pv, now.buffers), Env(now.words, run_s.buffers, now.args), run_s.values).right);
+            let m_buffers: (em.buffers = run_s.buffers) = trans(moved.right.right.left, sym(fa.left));
+            let m_args: (em.args = env.args) = trans(moved.right.right.right, trans(mb_args, args));
+            let m_kept = λ (x: Nat) (cl: absent(x, parameters ++ body.touches()).IsTrue()) => {
+                let parts = absent_append(x, parameters, body.touches(), cl);
+                let r: (em.number(x) = env.number(x)) = trans(moved.left(x, parts.left), trans(body.meaning_frame(call, now, x, parts.right), kept(x, cl)));
+                r
+            };
+            let x_leg = λ (set_exit: em.bit(exit) = True) => {
+                let hb: (run_s.values(1, exit).head_bit() = True) = trans(exit_bit, set_exit);
+                let run_t: (LoopState(LoopEnd(after_next, False), run_s.buffers) = final) = j(hb, λ b _ => branch(b) = final, run_b);
+                let ended: em.UntilEnds(env, final, parameters, body) =
+                    ⟨trans(m_buffers, cong_fn<LoopState, Buffers()>(λ s => s.buffers, run_t)),
+                    ⟨m_args,
+                    ⟨trans(m_state, cong_fn<LoopState, List<BitVec(64)>>(λ s => s.end.state, run_t)), m_kept⟩⟩⟩;
+                let widened: t.At(prog_len(mt), exit_out, tree, em) =
+                    t.at_sub(t.at_jmp(mt, again, w_xjump, djump, Block([]), w_dj, tree, done, em, ends(em, ended)), λ i mi => Inr(done.union_left(set, i, mi)));
+                widened
+            };
+            let back_leg = λ (clear_exit: em.bit(exit) = False) => {
+                let hb: (run_s.values(1, exit).head_bit() = False) = trans(exit_bit, clear_exit);
+                let run_f0: (until_run(step, parameters, exit, next, f2, after_next, run_s.buffers) = final) = j(hb, λ b _ => branch(b) = final, run_b);
+                let run_f: (until_run(step, parameters, exit, next, f2, after_next, em.buffers) = final) =
+                    j(sym(m_buffers), λ bb _ => until_run(step, parameters, exit, next, f2, after_next, bb) = final, run_f0);
+                let def_f0: until_run_defined(step, none, parameters, exit, next, f2, after_next, run_s.buffers).IsTrue() =
+                    j(hb, λ b _ => ending(b).IsTrue(), defined_b);
+                let def_f: until_run_defined(step, none, parameters, exit, next, f2, after_next, em.buffers).IsTrue() =
+                    j(sym(m_buffers), λ bb _ => until_run_defined(step, none, parameters, exit, next, f2, after_next, bb).IsTrue(), def_f0);
+                let rest = t.until_head(call, inputs, parameters, body, exit, next, outputs, p, out, names, c, set, done, after, live,
+                    k, h, within, shape, bs, body_scoped, bits, body_runs, env, tree, final, ends, f2, em, after_next, m_state, m_args, m_kept, run_f, def_f);
+                let widened: t.At(prog_len(xl), exit_out, tree, em) =
+                    t.at_sub(t.at_jmp(xl, names, w_djump, k.e.prog, Block([]), w_hp, tree, set, em, rest), λ i mi => Inr(done.union_right(set, i, mi)));
+                widened
+            };
+            let m_leg = t.goes_tests(exit_out, em, k.m.prog, exit, head, inside_exit, Inl(refl), w_mt, w_xl.witness, xjump, Block([]), w_xl.proof,
+                tree, x_leg, back_leg);
+            let body_leg = body_runs(now, tree, t.leaf_goes(exit_out, moves(parameters, next), k.b.prog, k.b.names, k.m, k.m_is, w_m, after, h.after_ok,
+                moves_wide(parameters, next), mb, tree, m_leg));
+            t.at_sub(body_leg, closed_sub)
+        },
+    }
+}
+
+// An unbounded loop's code runs as its meaning: the entry sets the
+// parameters, the head runs the passes, and the exit's moves leave the
+// outputs and every word the loop never writes as the meaning does.
+theorem Target::until_goes(self t: Target, call: Writers(), inputs: List<Nat>, parameters: List<Nat>, body: StructuredRegion, exit: Nat,
+    next, outputs: List<Nat>, measure_at: Nat, p: Prog, out: List<Nat>, names: Nat, c: Compiled, live: List<Nat>,
+    emitted: Until(inputs, parameters, body, exit, next, outputs, measure_at).code(p, t.layout(), out, names) = Some(c),
+    within: c.prog.Within(t.program),
+    checked: t.homes.region_checked(Until(inputs, parameters, body, exit, next, outputs, measure_at), out) = Some(live),
+    ok: Until(inputs, parameters, body, exit, next, outputs, measure_at).Ok(call),
+    body_runs: (q: Prog) → (o: List<Nat>) → (n: Nat) → (bc: Compiled) → body.code(q, t.layout(), o, n) = Some(bc) → bc.prog.Within(t.program) →
+        (l: List<Nat>) → t.homes.region_checked(body, o) = Some(l) → t.Computes(body, call, l, o, q, bc.prog)):
+    t.Computes(Until(inputs, parameters, body, exit, next, outputs, measure_at), call, live, out, p, c.prog) {
+    let layout = t.layout();
+    let k = StructuredRegion::until_code(inputs, parameters, body, exit, next, outputs, measure_at, p, layout, out, names, c, emitted);
+    let h = t.homes.until_checked(inputs, parameters, body, exit, next, outputs, measure_at, out, live, checked);
+    let shape = ok.right.left;
+    let head = Succ(names);
+    let again = Succ(head);
+    let leave = Succ(again);
+    let set = t.homes.loop_set(exit);
+    let done = nodes_live_in(moves(outputs, parameters), out);
+    let after = nodes_live_in(moves(parameters, next), Cons(exit, done.union(set)));
+    let hp = k.e.prog.label(head);
+    let mt = k.m.prog.tests(layout, exit, again);
+    let xl = mt.else_label(again, leave);
+    let dj = then(xl, Jmp(head)).label(leave);
+    let w_dj: dj.Within(t.program) = Prog::within_trans(dj.within_computes(layout, out, moves(outputs, parameters), k.m.names, c, k.c_is), within);
+    let w_mt: mt.Within(t.program) = Prog::within_trans(calc { mt <= xl := Exists(2, refl), <= dj := Exists(2, refl), }, w_dj);
+    let w_m: k.m.prog.Within(t.program) = Prog::within_trans(k.m.prog.within_tests(layout, exit, again), w_mt);
+    let w_b: k.b.prog.Within(t.program) = Prog::within_trans(k.b.prog.within_computes(layout, Cons(exit, done.union(set)), moves(parameters, next), k.b.names, k.m, k.m_is), w_m);
+    let w_hp: hp.Within(t.program) = Prog::within_trans(body.within_code(layout, hp, after, k.e.names, k.b, k.b_is), w_b);
+    let w_e: k.e.prog.Within(t.program) = k.e.prog.within_before(head, Block([]), t.program, w_hp);
+    let fits = k.fits;
+    let keeps = until_keeps_mem(out, outputs, parameters ++ body.touches(), known);
+    let outputs_len: (outputs.len() = parameters.len()) = Nat::matches_eq(outputs.len(), parameters.len(), shape.outputs_len);
+    let inputs_len: (inputs.len() = parameters.len()) = Nat::matches_eq(inputs.len(), parameters.len(), shape.inputs_len);
+    let step = λ (pass: Valuation()) (held: Buffers()) => body.run(call, pass, held);
+    let none = λ (pass: Valuation()) (held: Buffers()) => True;
+    let body_go = body_runs(hp, after, k.e.names, k.b, k.b_is, w_b, t.homes.region_live(body, after), h.body_ok);
+    let passes = λ (bs: Scope) => (body.scoped(Scope::until_pass(parameters)) = Some(bs)) ∧ (bs.bit(exit) && bs.all_defined(next)).IsTrue();
+    λ env tree next_out => Exists::with(passes, ok.right.right.left, λ bs pr => {
+        let s0 = words_of(env.valuation(), inputs);
+        let final = until_run(step, parameters, exit, next, until_passes(), s0, env.buffers);
+        let ended = env.until_ended(final, outputs);
+        let lp = env.until_ended_at(final, outputs);
+        let ends = λ (now: Env) (le: now.UntilEnds(env, final, parameters, body)) => {
+            let eo = now.steps(moves(outputs, parameters));
+            let os = Env::steps_moves(outputs, parameters, shape.outputs_ordered, shape.outputs_distinct, sym(outputs_len), now);
+            let state_len: (final.end.state.len() = outputs.len()) = trans(sym(cong_fn<List<BitVec(64)>, Nat>(λ l => l.len(), le.right.right.left)),
+                trans(words_of_len(now.valuation(), parameters), sym(outputs_len)));
+            let at_output = λ (i: Nat) (mo: Mem(i, outputs)) => {
+                let r: (eo.number(i) = ended.number(i)) = trans(os.right.left(i, mo), trans(
+                    cong_fn<List<BitVec(64)>, Nat>(λ ws => Valuation::bind(now.valuation(), outputs, ws)(64, i).toNat(), le.right.right.left),
+                    trans(cong_fn<BitVec(64), Nat>(λ w => w.toNat(), Valuation::bind_bound(outputs, final.end.state, state_len, now.valuation(), env.valuation(), 64, i, mo)),
+                        sym(lp.outs(i, mo)))));
+                r
+            };
+            let at_other = λ (i: Nat) (fresh: absent(i, outputs).IsTrue()) (cl: absent(i, parameters ++ body.touches()).IsTrue()) => {
+                let r: (eo.number(i) = ended.number(i)) = trans(os.left(i, fresh), trans(le.right.right.right(i, cl), sym(lp.others(i, fresh))));
+                r
+            };
+            let like: eo.Like(ended, out) = ⟨λ i mi => match held_out: absent(i, outputs) {
+                    False => at_output(i, outputs.holds_mem(i, cong_fn<Bool, Bool>(λ b => !b, held_out))),
+                    True => {
+                        let fresh_t: absent(i, outputs).IsTrue() = j(sym(held_out), λ b _ => b.IsTrue(), trivial);
+                        let cl = match Bool::is_true_or(outputs.holds(i), absent(i, parameters ++ body.touches()), keeps(i, mi))
+                                as λ _ => absent(i, parameters ++ body.touches()).IsTrue() {
+                            Inl(holds) => false_elim(j(held_out, λ b _ => (!b).IsTrue(), holds)),
+                            Inr(a) => a,
+                        };
+                        at_other(i, fresh_t, cl)
+                    },
+                },
+                ⟨trans(os.right.right.left, trans(le.left, sym(lp.buffers))), trans(os.right.right.right, trans(le.right.left, sym(lp.args)))⟩⟩;
+            t.leaf_goes(out, moves(outputs, parameters), dj, k.m.names, c, k.c_is, within, done, h.done_ok, moves_wide(outputs, parameters), now, tree,
+                t.at_like(prog_len(c.prog), out, tree, Until(inputs, parameters, body, exit, next, outputs, measure_at).meaning(call, env), eo, like, next_out))
+        };
+        let e1 = env.steps(moves(parameters, inputs));
+        let entered = Env::steps_moves(parameters, inputs, shape.entry_ordered, shape.parameters_distinct, inputs_len, env);
+        let held0: (words_of(e1.valuation(), parameters) = s0) =
+            Env::moves_words(parameters, inputs, shape.entry_ordered, shape.parameters_distinct, inputs_len, env);
+        let buffers0: (e1.buffers = env.buffers) = entered.right.right.left;
+        let kept0 = λ (x: Nat) (cl: absent(x, parameters ++ body.touches()).IsTrue()) => {
+            let r: (e1.number(x) = env.number(x)) = entered.left(x, absent_append(x, parameters, body.touches(), cl).left);
+            r
+        };
+        let run0: (until_run(step, parameters, exit, next, until_passes(), s0, e1.buffers) = final) =
+            j(sym(buffers0), λ bb _ => until_run(step, parameters, exit, next, until_passes(), s0, bb) = final, refl);
+        let ends0: until_run_defined(step, none, parameters, exit, next, until_passes(), s0, e1.buffers).IsTrue() =
+            j(sym(buffers0), λ bb _ => until_run_defined(step, none, parameters, exit, next, until_passes(), s0, bb).IsTrue(),
+                ok.right.right.right(s0, env.buffers));
+        t.leaf_goes(set, moves(parameters, inputs), p, leave, k.e, k.e_is, w_e, live, h.entry_ok, moves_wide(parameters, inputs), env, tree,
+            t.until_head(call, inputs, parameters, body, exit, next, outputs, p, out, names, c, set, done, after, live,
+                k, h, within, shape, bs, pr.left, pr.right, body_go, env, tree, final, ends,
+                until_passes(), e1, s0, held0, entered.right.right.right, kept0, run0, ends0))
+    })
+}
+
+// ---------------------------------------------------------------------------
 // Every region compiled runs as its meaning
 
-theorem StructuredRegion::code_runs(self region: StructuredRegion, t: Target, call: Writers(), fns: t.Functions(call)): region.Ok() → (p: Prog) → (out: List<Nat>) → (names: Nat) →
+theorem StructuredRegion::code_runs(self region: StructuredRegion, t: Target, call: Writers(), fns: t.Functions(call)): region.Ok(call) → (p: Prog) → (out: List<Nat>) → (names: Nat) →
     (c: Compiled) → region.code(p, t.layout(), out, names) = Some(c) → c.prog.Within(t.program) → (live: List<Nat>) →
     t.homes.region_checked(region, out) = Some(live) → t.Computes(region, call, live, out, p, c.prog) {
     let layout = t.layout();
@@ -1247,6 +1653,9 @@ theorem StructuredRegion::code_runs(self region: StructuredRegion, t: Target, ca
         },
         Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => λ ok p out names c emitted within live checked =>
             t.loop_goes(call, inputs, bound, parameters, count, body, exit, next, outputs, exhausted, p, out, names, c, live, emitted, within, checked, ok,
+                body.code_runs(t, call, fns, ok.left)),
+        Until(inputs, parameters, body, exit, next, outputs, measure_at) => λ ok p out names c emitted within live checked =>
+            t.until_goes(call, inputs, parameters, body, exit, next, outputs, measure_at, p, out, names, c, live, emitted, within, checked, ok,
                 body.code_runs(t, call, fns, ok.left)),
     }
 }

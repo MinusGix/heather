@@ -226,6 +226,8 @@ theorem Tm::reader_ok_counted<A>(self e: Tm, hw: HWorld<A>, whole: Stored<A>, so
         Inject(_, _, _) => refl,
         Slot(_, _, _) => refl,
         Iterate(_, _, _) => refl,
+        Again(_, _) => refl,
+        Loop(_, _) => refl,
     }
 }
 

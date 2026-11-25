@@ -2022,6 +2022,11 @@ fn replay_region(table: List<Rule>, region: StructuredRegion) → Facts → Plan
             Same => Some(Regioned(Lend(views, callee, arguments, result), facts.forget())),
             _ => None,
         },
+        // Replayed whole only, for now (docs/language/loop-combinator-design.md §6.9).
+        Until(inputs, parameters, body, exit, next, outputs, measure_at) => λ facts plan => match plan {
+            Same => Some(Regioned(Until(inputs, parameters, body, exit, next, outputs, measure_at), facts.forget())),
+            _ => None,
+        },
     }
 }
 
@@ -2219,6 +2224,12 @@ theorem replay_region_sound(table: List<Rule>, effects: Effects(), region: Struc
         Lend(views, callee, arguments, result) => λ facts plan => match plan {
             Same => λ r made values before after held loaded ran =>
                 j(Option::some_inj(Regioned(Lend(views, callee, arguments, result), facts.forget()), r, made),
+                    λ x _ => x.Sound(effects, values, before, after), ⟨ran, ⟨held, trivial⟩⟩),
+            _ => λ r made values before after held loaded ran => absurd(made),
+        },
+        Until(inputs, parameters, body, exit, next, outputs, measure_at) => λ facts plan => match plan {
+            Same => λ r made values before after held loaded ran =>
+                j(Option::some_inj(Regioned(Until(inputs, parameters, body, exit, next, outputs, measure_at), facts.forget()), r, made),
                     λ x _ => x.Sound(effects, values, before, after), ⟨ran, ⟨held, trivial⟩⟩),
             _ => λ r made values before after held loaded ran => absurd(made),
         },

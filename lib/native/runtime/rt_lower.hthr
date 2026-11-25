@@ -690,6 +690,23 @@ fn Ty::check_words(ps: List<Ty>) → Option<Ty::Words(ps)> {
     }
 }
 
+// Fields that are 64-bit words, one at least: the first is the word
+// returned, the rest beside it.
+fn Ty::WordsOne(fs: List<Ty>) → Type {
+    match fs { Nil => False, Cons(f, rest) => (f = Word(64)) ∧ Ty::Words(rest) }
+}
+
+fn Ty::check_words_one(fs: List<Ty>) → Option<Ty::WordsOne(fs)> {
+    match fs as λ g => Option<Ty::WordsOne(g)> {
+        Nil => None,
+        Cons(f, rest) => f.check(Word(64)).and_then(λ e => Ty::check_words(rest).and_then(λ ws => Some(⟨e, ws⟩))),
+    }
+}
+
+theorem Ty::words_one_all(fs: List<Ty>): Ty::WordsOne(fs) → Ty::Words(fs) {
+    match fs { Nil => λ never => false_elim(never), Cons(_, _) => λ ok => ok }
+}
+
 // A code a function takes or returns in one 64-bit word at its boundary:
 // a 64-bit word, or a record whose one field is (a type held at its
 // `datarepr`'s word carrier, `SInt(64)` as `BitVec(64)`). The word read at
@@ -981,26 +998,6 @@ fn Ty::first(n: Nat, ws: List<BitVec(64)>) → List<BitVec(64)> {
 
 fn Ty::skip(n: Nat, ws: List<BitVec(64)>) → List<BitVec(64)> {
     match n { Zero => ws, Succ(k) => Ty::skip(k, ws.tail()) }
-}
-
-// A payload read off words, one slot a word (zero past the words' end).
-fn Ty::flats_of_words(fs: List<Ty>, ws: List<BitVec(64)>) → Ty::Flats(fs) {
-    match fs { Nil => trivial, Cons(f, rest) => Pair(f.word_at(ws.head_or(BitVec::zero()), EnumInfo::nones), Ty::flats_of_words(rest, ws.tail())) }
-}
-
-// A code's words read back as its value: the first as the code reads a
-// word (`Ty::cast`); at an enum, the tag word as its constructor (the last
-// past it) and the slots after it as the payload's.
-fn Ty::read_words(self p: Ty, tys: Table, ws: List<BitVec(64)>) → p.sem(tys) {
-    match p as λ q => q.sem(tys) {
-        Word(w) => Ty::cast(tys, Word(64), Word(w), ws.head_or(BitVec::zero())),
-        Bit => Ty::cast(tys, Word(64), Bit, ws.head_or(BitVec::zero())),
-        ByteList(n) => Ty::cast(tys, Word(64), ByteList(n), ws.head_or(BitVec::zero())),
-        Lines => Ty::cast(tys, Word(64), Lines, ws.head_or(BitVec::zero())),
-        Named(i) => tys.mk(i, Ty::flats_of_words(tys.fields(i), ws)),
-        Count => Ty::cast(tys, Word(64), Count, ws.head_or(BitVec::zero())),
-        Enum(i) => tys.ens(i).of(ws.head_or(BitVec::zero()).toNat().min(tys.ens(i).last), Ty::flats_of_words(tys.ens(i).slots, ws.tail())),
-    }
 }
 
 // The words a code's boundary admits, from the first: an enum's, the
@@ -1697,6 +1694,85 @@ fn Ty::ids(self p: Ty, tys: Table, m: Nat) → List<Nat> {
     }
 }
 
+theorem Ty::ids_len(tys: Table, p: Ty, m: Nat): p.ids(tys, m).len() = p.span(tys) {
+    match p {
+        Word(_) => refl, Bit => refl, ByteList(_) => refl, Lines => refl, Named(i) => Ty::ports_from_len(tys.fields(i), m), Count => refl,
+        Enum(i) => cong_fn(λ (n: Nat) => Succ(n), Ty::ports_from_len(tys.ens(i).slots, m + 1)),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// A loop's answer in words (docs/language/loop-combinator-design.md §6.9).
+
+// A code a loop answers: a 64-bit word, or a record of 64-bit words (one at
+// least), held at its ids (`Ty::ids`) and left in the first of the next
+// state's words. Its words read back as it (`Ty::answer_round`), which an
+// enum's need not: a word past its last tag reads as another constructor.
+fn Ty::Answer(self t: Ty, tys: Table) → Type {
+    match t {
+        Word(w) => w = 64, Bit => False, ByteList(_) => False, Lines => False,
+        Named(i) => Ty::WordsOne(tys.fields(i)) ∧ Ty::NoEnums(tys.recs(i).fields), Count => False, Enum(_) => False,
+    }
+}
+
+fn Ty::check_answer(self t: Ty, tys: Table) → Option<t.Answer(tys)> {
+    match t as λ x => Option<x.Answer(tys)> {
+        Word(w) => match w.equation(64) { Inl(e) => Some(e), Inr(_) => None },
+        Bit => None, ByteList(_) => None, Lines => None,
+        Named(i) => Ty::check_words_one(tys.fields(i)).and_then(λ ok => Ty::check_no_enums(tys.recs(i).fields).and_then(λ none => Some(⟨ok, none⟩))),
+        Count => None, Enum(_) => None,
+    }
+}
+
+theorem Ty::words_one_cons(fs: List<Ty>): Ty::WordsOne(fs) → fs = Nil → False {
+    match fs { Nil => λ never _ => never, Cons(g, rest) => λ _ (bad: Cons(g, rest) = Nil) => absurd(bad) }
+}
+
+// Fields' words: the head's, then those after it.
+theorem Ty::flats_words_cons(fs: List<Ty>): (fs = Nil → False) → (t: Ty::Flats(fs)) →
+    Ty::flats_words(fs, t) = Cons(Ty::flats_head_word(fs, EnumInfo::nones, t), Ty::flats_tail_words(fs, t)) {
+    match fs { Nil => λ no t => false_elim(no(refl)), Cons(_, _) => λ _ t => refl }
+}
+
+// An answer held from `port`: its ids read its words.
+theorem Ty::answer_reads(tys: Table, values: Valuation(), port: Nat, t: Ty): t.Answer(tys) → (v: t.sem(tys)) → t.Holds(tys, values, port, v) →
+    words_of(values, t.ids(tys, port)) = Ty::result_words(tys, t, v) {
+    match t {
+        Word(w) => λ e v h => cong_fn(λ (x: BitVec(64)) => Cons(x, Nil), Ty::one_word_reads(tys, values, port, Word(w), e, v, h)),
+        Bit => λ never => false_elim(never),
+        ByteList(_) => λ never => false_elim(never),
+        Lines => λ never => false_elim(never),
+        Named(i) => λ ok v h => trans(Ty::ports_reads(values, tys.fields(i), port, Ty::words_one_all(tys.fields(i), ok.left), tys.get(i, v), h),
+            Ty::flats_words_cons(tys.fields(i), Ty::words_one_cons(tys.fields(i), ok.left), tys.get(i, v))),
+        Count => λ never => false_elim(never),
+        Enum(_) => λ never => false_elim(never),
+    }
+}
+
+// An answer's words read back as it and written again are the first of
+// them.
+theorem Ty::answer_round(tys: Table, t: Ty): t.Answer(tys) → (ys: List<BitVec(64)>) →
+    Ty::result_words(tys, t, Ty::read_words(t, tys, ys)) = Ty::first(t.span(tys), ys) {
+    match t {
+        Word(w) => λ e ys => j(sym(e), λ m _ => Ty::result_words(tys, Word(m), Ty::read_words(Word(m), tys, ys)) = Ty::first(1, ys),
+            cong_fn(λ (x: BitVec(64)) => Cons(x, Nil),
+                trans(Ty::cast_self(tys, Word(64), Ty::cast(tys, Word(64), Word(64), ys.head_or(BitVec::zero()))),
+                    Ty::cast_self(tys, Word(64), ys.head_or(BitVec::zero()))))),
+        Bit => λ never => false_elim(never),
+        ByteList(_) => λ never => false_elim(never),
+        Lines => λ never => false_elim(never),
+        Named(i) => λ ok ys => {
+            let fs = tys.fields(i);
+            let fl = Ty::flats_of_words(fs, ys);
+            trans(sym(Ty::flats_words_cons(fs, Ty::words_one_cons(fs, ok.left), tys.get(i, tys.mk(i, fl)))),
+                trans(cong_fn(λ (x: Ty::Flats(fs)) => Ty::flats_words(fs, x), tys.round(i, ok.right, fl)),
+                    Ty::flats_words_of(fs, Ty::words_one_all(fs, ok.left), ys)))
+        },
+        Count => λ never => false_elim(never),
+        Enum(_) => λ never => false_elim(never),
+    }
+}
+
 // A function answers every word like a curried meaning: on every word list
 // its parameters take, the meaning's words (`Ty::result_words`). The first
 // word is `Ty::Answers`'s and the rest `Ty::AnswersAlso`'s
@@ -1730,6 +1806,41 @@ fn Ty::Alike(tys: Table, ps: List<Ty>, r: Ty) → Ty::Arrows(tys, ps, r) → Ty:
     match ps {
         Nil => λ v u => v = u,
         Cons(p, rest) => λ v u => (a: p.sem(tys)) → Ty::Alike(tys, rest, r, v(a), u(a)),
+    }
+}
+
+// Every function is alike itself: the pin of a function whose body is its
+// reflection's meaning, checked against `Setup::Pinned` by conversion.
+theorem Ty::alike_refl(tys: Table, ps: List<Ty>, r: Ty): (v: Ty::Arrows(tys, ps, r)) → Ty::Alike(tys, ps, r, v, v) {
+    match ps {
+        Nil => λ v => refl,
+        Cons(p, rest) => λ v a => Ty::alike_refl(tys, rest, r, v(a)),
+    }
+}
+
+// Curried functions to any result `R`, alike at every argument: the pin of
+// a function over a span (`FFun::Pinned`), whose result is not a code.
+fn Ty::AlikeTo(tys: Table, ps: List<Ty>, R: Type) → Ty::ArrowsTo(tys, ps, R) → Ty::ArrowsTo(tys, ps, R) → Type {
+    match ps {
+        Nil => λ v u => v = u,
+        Cons(p, rest) => λ v u => (a: p.sem(tys)) → Ty::AlikeTo(tys, rest, R, v(a), u(a)),
+    }
+}
+
+theorem Ty::alike_to_refl(tys: Table, ps: List<Ty>, R: Type): (v: Ty::ArrowsTo(tys, ps, R)) → Ty::AlikeTo(tys, ps, R, v, v) {
+    match ps {
+        Nil => λ v => refl,
+        Cons(p, rest) => λ v a => Ty::alike_to_refl(tys, rest, R, v(a)),
+    }
+}
+
+// Two functions equal are alike: a pin proved as an equation of functions
+// (a function written out over its bytes, `runtime`'s `SpanWritten`) read
+// pointwise.
+theorem Ty::alike_to_of_eq(tys: Table, ps: List<Ty>, R: Type): (v, u: Ty::ArrowsTo(tys, ps, R)) → v = u → Ty::AlikeTo(tys, ps, R, v, u) {
+    match ps {
+        Nil => λ v u e => e,
+        Cons(p, rest) => λ v u e a => Ty::alike_to_of_eq(tys, rest, R, v(a), u(a), cong_fn(λ (g: Ty::ArrowsTo(tys, Cons(p, rest), R)) => g(a), e)),
     }
 }
 
@@ -3072,6 +3183,9 @@ fn Tm::Within(self t: Tm, keep: Nat → Bool) → Type {
         Inject(_, _, args) => Tm::AllKept(args, keep),
         Slot(_, _, of) => keep(of) = True,
         Iterate(init, test, body) => (keep(init) = True) ∧ (test.Within(Tm::under(keep)) ∧ body.Within(Tm::under(keep))),
+        Again(_, args) => Tm::AllKept(args, keep),
+        // Not yet carried by an enclosing loop.
+        Loop(_, _) => False,
     }
 }
 
@@ -3107,6 +3221,8 @@ fn Tm::check_within(self t: Tm) → (keep: Nat → Bool) → Option<t.Within(kee
         Inject(_, _, args) => λ keep => Tm::check_all_kept(args, keep),
         Slot(_, _, of) => λ keep => Tm::kept_at(keep, of),
         Iterate(init, test, body) => λ keep => Tm::both(Tm::kept_at(keep, init), Tm::both(test.check_within(Tm::under(keep)), body.check_within(Tm::under(keep)))),
+        Again(_, args) => λ keep => Tm::check_all_kept(args, keep),
+        Loop(_, _) => λ keep => None,
     }
 }
 
@@ -3134,6 +3250,8 @@ fn Tm::vars(self t: Tm) → List<Nat> {
         Inject(_, _, args) => args,
         Slot(_, _, of) => [of],
         Iterate(init, test, body) => Cons(init, Tm::unbind(test.vars()) ++ Tm::unbind(body.vars())),
+        Again(_, args) => args,
+        Loop(inits, _) => inits,
     }
 }
 
@@ -3283,6 +3401,9 @@ theorem Tm::sem_kept(self t: Tm, w: World): (keep: Nat → Bool) → (g: List<Ty
                         Tm::sem_kept(body, w, Tm::under(keep), inner, Pair(s, e1), Pair(s, e2), h.right.right, under(s)))),
                     loop::Loop::passes(), Env::get(w.tys, g, e2, init)))
         },
+        // Outside every loop, going round means the code's default.
+        Again(_, _) => λ keep g e1 e2 h a => refl,
+        Loop(_, _) => λ keep g e1 e2 h a => false_elim(h),
     }
 }
 
@@ -3518,40 +3639,672 @@ fn Tm::lower_iterate(w: World, g: List<Ty>, ports: List<Nat>, next, init, pi: Na
         Tm::iter_checked(w, Ty::at(g, init), Cons(Ty::at(g, init), g), test, body, pi, next, c, lt, lb))))))
 }
 
-fn Tm::lower(self t: Tm, w: World, g: List<Ty>, ports: List<Nat>, next: Nat) → Option<Lowered> {
+// ---------------------------------------------------------------------------
+// A loop's pass (docs/language/loop-combinator-design.md §6.7): a pass writes the flag word (1 to leave, 0
+// to go round) and the next state's moved words at `nexts`; leaving, the
+// first of them is the result.
+
+// A value at `res` read as a word, and a word read at `res`: what a pass
+// leaves for the loop, and what the loop's continuation is read at.
+fn Tm::out(tys: Table, res: Ty, v: res.sem(tys)) → BitVec(64) { Ty::cast(tys, res, Word(64), v) }
+
+fn Tm::into(tys: Table, res: Ty, x: BitVec(64)) → res.sem(tys) { Ty::cast(tys, Word(64), res, x) }
+
+// A code held in one word: a word read at it and back is the word (the
+// repr's round trip, `emb(abs(x)) = x`).
+theorem Tm::out_into(tys: Table, res: Ty, er: res.OneWord(tys), x: BitVec(64)): Tm::out(tys, res, Tm::into(tys, res, x)) = x {
+    match res as λ t => t.OneWord(tys) → Tm::out(tys, t, Tm::into(tys, t, x)) = x {
+        Word(n) => λ (e: n = 64) => j(sym(e), λ m _ => Tm::out(tys, Word(m), Tm::into(tys, Word(m), x)) = x,
+            trans(Ty::cast_self(tys, Word(64), Ty::cast(tys, Word(64), Word(64), x)), Ty::cast_self(tys, Word(64), x))),
+        Bit => λ never => false_elim(never),
+        ByteList(_) => λ never => false_elim(never),
+        Lines => λ never => false_elim(never),
+        Named(i) => λ e => j(sym(tys.word_leaves(i, e)), λ fs _ => (mk: Ty::Flats(fs) → tys.recs(i).T) → (get: tys.recs(i).T → Ty::Flats(fs)) →
+                ((t: Ty::Flats(fs)) → get(mk(t)) = t) →
+                Ty::flats_head_word(fs, EnumInfo::nones, get(mk(Ty::flats_word(fs, x, EnumInfo::nones)))) = x,
+            λ mk get round => cong_fn(λ (t: Ty::Flats([Word(64)])) => Ty::flats_head_word([Word(64)], EnumInfo::nones, t),
+                round(Ty::flats_word([Word(64)], x, EnumInfo::nones))))(
+            λ t => tys.mk(i, t), λ v => tys.get(i, v), λ t => tys.word_round(i, e, t)),
+        Count => λ never => false_elim(never),
+        Enum(_) => λ never => false_elim(never),
+    }(er)
+}
+
+// Read along an equation of codes, then as a word: the value read as a word.
+theorem Tm::out_cast(tys: Table, a, res: Ty, e: a = res, v: a.sem(tys)): Tm::out(tys, res, Ty::cast(tys, a, res, v)) = Ty::cast(tys, a, Word(64), v) {
+    j(e, λ b _ => Tm::out(tys, b, Ty::cast(tys, a, b, v)) = Ty::cast(tys, a, Word(64), v),
+        cong_fn(λ (u: a.sem(tys)) => Ty::cast(tys, a, Word(64), u), Ty::cast_self(tys, a, v)))
+}
+
+// A match read as a word is its arms read so.
+theorem Tm::out_match(tys: Table, res: Ty, b: Bool, yes, no: res.sem(tys)):
+    (match b { False => Tm::out(tys, res, no), True => Tm::out(tys, res, yes) }) = Tm::out(tys, res, match b { False => no, True => yes }) {
+    match b as λ c => (match c { False => Tm::out(tys, res, no), True => Tm::out(tys, res, yes) }) =
+        Tm::out(tys, res, match c { False => no, True => yes }) {
+        False => refl,
+        True => refl,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tail mode: a pass writes the flag word (1 to leave, 0 to go round) and the
+// next state's moved words at `nexts`; leaving, the first of them is the
+// result. The words of `kept` it hands on where they are.
+
+theorem Tm::eq3<A, B, C, D>(g: A → B → C → D, {a, a2: A}, {b, b2: B}, {c, c2: C}, p: a = a2, q: b = b2, s: c = c2): g(a, b, c) = g(a2, b2, c2) {
+    trans(eq2(λ (x: A) (y: B) => g(x, y, c), p, q), cong_fn(λ (z: C) => g(a2, b2, z), s))
+}
+
+// What a pass leaves for the loop: the result where the flag is 1, the
+// continuation on the next state otherwise. The next state is the words
+// the pass hands on in place (`kept`: ids it reads and never writes, a
+// lent span's home among them) and then the ones it moves to `nexts`; the
+// result is the first of `nexts`.
+fn Tm::leave(after: Valuation(), flag: Nat, kept, nexts: List<Nat>, again: List<BitVec(64)> → BitVec(64)) → BitVec(64) {
+    match after(64, flag).eq_bit(BitVec::ofNat(1)) {
+        False => again(words_of(after, kept) ++ words_of(after, nexts)),
+        True => words_of(after, nexts).head_or(BitVec::zero()),
+    }
+}
+
+theorem Tm::leave_same(a, b: Valuation(), flag: Nat, kept, nexts: List<Nat>, again: List<BitVec(64)> → BitVec(64),
+    same: (wd, id: Nat) → a(wd, id) = b(wd, id)): Tm::leave(a, flag, kept, nexts, again) = Tm::leave(b, flag, kept, nexts, again) {
+    Tm::eq3(λ (x: BitVec(64)) (ks: List<BitVec(64)>) (ws: List<BitVec(64)>) =>
+            match x.eq_bit(BitVec::ofNat(1)) { False => again(ks ++ ws), True => ws.head_or(BitVec::zero()) },
+        same(64, flag), words_agree(kept, b, a, λ id _ => same(64, id)), words_agree(nexts, b, a, λ id _ => same(64, id)))
+}
+
+// Moves of words, `nexts[i]` from `qs[i]`.
+fn Tm::moves_to(ns: List<Nat>, qs: List<Nat>) → List<Node> {
+    match ns {
+        Nil => Nil,
+        Cons(n, rest) => match qs { Nil => Nil, Cons(q, more) => Cons(Move(64, n, q), Tm::moves_to(rest, more)) },
+    }
+}
+
+theorem Tm::moves_to_writes(ns: List<Nat>): (qs: List<Nat>) → (id: Nat) → absent(id, ns).IsTrue() → absent(id, nodes_writes(Tm::moves_to(ns, qs))).IsTrue() {
+    match ns {
+        Nil => λ qs id _ => trivial,
+        Cons(n, rest) => λ qs => match qs as λ q2 => (id: Nat) → absent(id, Cons(n, rest)).IsTrue() →
+            absent(id, nodes_writes(Tm::moves_to(Cons(n, rest), q2))).IsTrue() {
+            Nil => λ id _ => trivial,
+            Cons(q, more) => λ id h => {
+                let parts = Bool::is_true_and(id.differs(n), absent(id, rest), h);
+                Bool::is_true_and_intro(id.differs(n), absent(id, nodes_writes(Tm::moves_to(rest, more))), parts.left,
+                    Tm::moves_to_writes(rest, more, id, parts.right))
+            },
+        },
+    }
+}
+
+theorem Tm::disjoint_tail(n: Nat, rest: List<Nat>, ys: List<Nat>): disjoint(Cons(n, rest), ys).IsTrue() → disjoint(rest, ys).IsTrue() {
+    match ys {
+        Nil => λ _ => trivial,
+        Cons(y, more) => λ h => {
+            let parts = Bool::is_true_and(absent(y, Cons(n, rest)), disjoint(Cons(n, rest), more), h);
+            let first = Bool::is_true_and(y.differs(n), absent(y, rest), parts.left);
+            Bool::is_true_and_intro(absent(y, rest), disjoint(rest, more), first.right, Tm::disjoint_tail(n, rest, more, parts.right))
+        },
+    }
+}
+
+// Distinct targets, none a source, as many as the sources: the targets read
+// the sources' words.
+theorem Tm::moves_to_words(ns: List<Nat>, buffers: Buffers()): (qs: List<Nat>) → (values: Valuation()) → distinct(ns).IsTrue() → disjoint(ns, qs).IsTrue() →
+    ns.len() = qs.len() → words_of(eval_nodes_over(buffers, Tm::moves_to(ns, qs), values), ns) = words_of(values, qs) {
+    match ns {
+        Nil => λ qs values _ _ => match qs as λ q2 => 0 = q2.len() → words_of(eval_nodes_over(buffers, Tm::moves_to(Nil, q2), values), Nil) = words_of(values, q2) {
+            Nil => λ _ => refl,
+            Cons(_, more) => λ (bad: 0 = more.len() + 1) => false_elim(more.len().zero_ne_succ(bad)),
+        },
+        Cons(n, rest) => λ qs values apart => match qs as λ q2 => disjoint(Cons(n, rest), q2).IsTrue() → rest.len() + 1 = q2.len() →
+            words_of(eval_nodes_over(buffers, Tm::moves_to(Cons(n, rest), q2), values), Cons(n, rest)) = words_of(values, q2) {
+            Nil => λ _ (bad: rest.len() + 1 = 0) => false_elim(rest.len().succ_ne_zero(bad)),
+            Cons(q, more) => λ dis same => {
+                let parts = Bool::is_true_and(absent(n, rest), distinct(rest), apart);
+                let dparts = Bool::is_true_and(absent(q, Cons(n, rest)), disjoint(Cons(n, rest), more), dis);
+                let moved = Valuation::set(values, n, λ wd => values(wd, q));
+                let after = eval_nodes_over(buffers, Tm::moves_to(rest, more), moved);
+                let head: (after(64, n) = values(64, q)) = trans(
+                    eval_nodes_frame(Tm::moves_to(rest, more), buffers, moved, 64, n, Tm::moves_to_writes(rest, more, n, parts.left)),
+                    Valuation::set_here(values, n, λ wd => values(wd, q), 64));
+                // `n` is none of `more`'s sources.
+                let fresh: (y: Nat) → Mem(y, more) → (moved(64, y) = values(64, y)) = λ y m =>
+                    Valuation::set_other(values, n, λ wd => values(wd, q), 64, y, Nat::differs_ne(y, n,
+                        Bool::is_true_and(y.differs(n), absent(y, rest), disjoint_mem(Cons(n, rest), more, dparts.right, y, m)).left));
+                let tail = trans(Tm::moves_to_words(rest, buffers, more, moved, parts.right,
+                        Tm::disjoint_tail(n, rest, more, dparts.right),
+                        Nat::succ_inj(rest.len(), more.len(), same)),
+                    words_agree(more, values, moved, fresh));
+                eq2(λ (x: BitVec(64)) (ws: List<BitVec(64)>) => Cons(x, ws), head, tail)
+            },
+        },
+    }
+}
+
+// A self-call's argument ports: each a word variable.
+fn Tm::self_args(w: World, g: List<Ty>, ports: List<Nat>, args: List<Nat>) → Option<List<Nat>> {
+    match args {
+        Nil => Some(Nil),
+        Cons(a, more) => port_at(ports, a).and_then(λ q =>
+            Ty::at(g, a).check_one_word(w.tys).and_then(λ _ => Tm::self_args(w, g, ports, more).and_then(λ qs => Some(Cons(q, qs))))),
+    }
+}
+
+theorem Tm::self_args_sound(w: World, g: List<Ty>, ports: List<Nat>, values: Valuation(), env: Env(w.tys, g),
+    held: EnvHolds(w.tys, values, g, ports, env), args: List<Nat>):
+    (qs: List<Nat>) → Tm::self_args(w, g, ports, args) = Some(qs) → words_of(values, qs) = Tm::words(w, g, env, args) {
+    match args {
+        Nil => λ qs e => j(Option::some_inj(Nil, qs, e), λ z _ => words_of(values, z) = Nil, refl),
+        Cons(a, more) => {
+            let Goal = λ (qs: List<Nat>) => words_of(values, qs) = Tm::words(w, g, env, Cons(a, more));
+            let P = λ (o: Option<List<Nat>>) => (qs: List<Nat>) → o = Some(qs) → Goal(qs);
+            let none: P(None) = λ qs e => Option::none_ne_some(qs, e, Goal(qs));
+            Option::and_then_elim(P, none, port_at(ports, a), λ q =>
+                Ty::at(g, a).check_one_word(w.tys).and_then(λ _ => Tm::self_args(w, g, ports, more).and_then(λ qs => Some(Cons(q, qs)))), λ q at_q =>
+            Option::and_then_elim(P, none, Ty::at(g, a).check_one_word(w.tys), λ _ => Tm::self_args(w, g, ports, more).and_then(λ qs => Some(Cons(q, qs))),
+                λ ea _ =>
+            Option::and_then_elim(P, none, Tm::self_args(w, g, ports, more), λ qs => Some(Cons(q, qs)), λ found e_rest =>
+                λ qs e => j(Option::some_inj(Cons(q, found), qs, e), λ z _ => Goal(z),
+                    eq2(λ (x: BitVec(64)) (ws: List<BitVec(64)>) => Cons(x, ws),
+                        Ty::one_word_reads(w.tys, values, q, Ty::at(g, a), ea, Env::get(w.tys, g, env, a), env_holds_at(w.tys, values, g, ports, env, held, a, q, at_q)),
+                        Tm::self_args_sound(w, g, ports, values, env, held, more, found, e_rest))))))
+        },
+    }
+}
+
+// Going round: the arguments moved to `nexts`, then the flag 0. The flag
+// comes last in both arms of a pass, so the native planner finds each
+// arm's sources dead by then and puts every one of `nexts` and the flag in
+// the register the branch's join wants (`pick_targets`); with the flag
+// first, an arm could take a register a source still held and the arms
+// disagree, which `File::meet` drops.
+fn Tm::again_region(flag: Nat, nexts, qs: List<Nat>) → StructuredRegion {
+    Compose(nodes_region(Tm::moves_to(nexts, qs)), nodes_region([Const(64, flag, 0)]))
+}
+
+// The arguments a self-call hands on in place: the first of `qs` are the
+// ids `kept` themselves. What is left of `qs` is moved.
+fn Tm::split_kept(kept, qs: List<Nat>) → Option<List<Nat>> {
+    match kept {
+        Nil => Some(qs),
+        Cons(k, rest) => match qs {
+            Nil => None,
+            Cons(q, more) => match k.same(q) { False => None, True => Tm::split_kept(rest, more) },
+        },
+    }
+}
+
+theorem Tm::split_kept_words(values: Valuation(), kept: List<Nat>): (qs, moved: List<Nat>) → Tm::split_kept(kept, qs) = Some(moved) →
+    words_of(values, kept) ++ words_of(values, moved) = words_of(values, qs) {
+    match kept {
+        Nil => λ qs moved e => cong_fn(λ (l: List<Nat>) => words_of(values, l), sym(Option::some_inj(qs, moved, e))),
+        Cons(k, rest) => λ qs => match qs as λ q2 => (moved: List<Nat>) → Tm::split_kept(Cons(k, rest), q2) = Some(moved) →
+            words_of(values, Cons(k, rest)) ++ words_of(values, moved) = words_of(values, q2) {
+            Nil => λ moved e => Option::none_ne_some(moved, e, words_of(values, Cons(k, rest)) ++ words_of(values, moved) = Nil),
+            Cons(q, more) => λ moved e => (match k.same(q) as λ b => k.same(q) = b →
+                (match b { False => None, True => Tm::split_kept(rest, more) }) = Some(moved) →
+                words_of(values, Cons(k, rest)) ++ words_of(values, moved) = words_of(values, Cons(q, more)) {
+                False => λ _ never => Option::none_ne_some(moved, never,
+                    words_of(values, Cons(k, rest)) ++ words_of(values, moved) = words_of(values, Cons(q, more))),
+                True => λ same found => eq2(λ (x: BitVec(64)) (ws: List<BitVec(64)>) => Cons(x, ws),
+                    cong_fn(λ (id: Nat) => values(64, id), k.same_sound(q, same)), Tm::split_kept_words(values, rest, more, moved, found)),
+            })(refl, e),
+        },
+    }
+}
+
+// Going round hands `kept` on in place, which is what the function compiler
+// asks of a home it carries through a loop (`carried_sound`): the call
+// passes each as the id it came in as, and the pass writes none of them.
+fn Tm::lower_again(flag: Nat, kept, nexts: List<Nat>, next: Nat, qs: List<Nat>) → Option<Lowered> {
+    Tm::split_kept(kept, qs).and_then(λ moved =>
+        Tm::check_true((distinct(Cons(flag, nexts)) && (disjoint(Cons(flag, nexts), moved) && nexts.len().matches(moved.len()))) &&
+            disjoint(Cons(flag, nexts), kept))
+            .and_then(λ _ => Some(Lowered(Tm::again_region(flag, nexts, moved), flag, next))))
+}
+
+// Leaving: the value moved to the first of `nexts` and copied to the rest,
+// which nothing reads, then the flag 1: a branch's arms both write every
+// one of `nexts`, so the native lowering finds them held in a register
+// wherever the pass ends (`File::meet` keeps only what both arms hold).
+fn Tm::copies(ns: List<Nat>, n0: Nat) → List<Nat> { ns.map(λ _ => n0) }
+
+fn Tm::leave_region(l: Lowered, flag, n0: Nat, rest: List<Nat>) → StructuredRegion {
+    Compose(l.region, Compose(nodes_region(Cons(Move(64, n0, l.result), Tm::moves_to(rest, Tm::copies(rest, n0)))),
+        nodes_region([Const(64, flag, 1)])))
+}
+
+fn Tm::leave_at(flag: Nat, nexts: List<Nat>, l: Lowered) → Option<Lowered> {
+    match nexts {
+        Nil => None,
+        Cons(n0, rest) => Tm::check_true(distinct(Cons(flag, Cons(n0, rest))))
+            .and_then(λ _ => Some(Lowered(Tm::leave_region(l, flag, n0, rest), flag, l.next))),
+    }
+}
+
+// A branch of a pass: both arms write the flag and `nexts`.
+fn Tm::tail_branch(g: List<Ty>, ports: List<Nat>, c, flag: Nat, nexts: List<Nat>, ly, ln: Lowered) → Option<Lowered> {
+    port_at(ports, c).and_then(λ pc => Ty::at(g, c).check(Bit).and_then(λ _ =>
+        Some(Lowered(branch(pc, Ports(word_ports(Cons(flag, nexts))), ly.region, ln.region), flag, ln.next))))
+}
+
+// What a pass's branch leaves is what the arm its bit chooses leaves.
+theorem Tm::leave_branch(values: Valuation(), pc: Nat, outs: Ports, wt, wf: StructuredRegion, call: Answers(), buffers: Buffers(), flag: Nat, kept, nexts: List<Nat>,
+    again: List<BitVec(64)> → BitVec(64), b: Bool): values(1, pc).head_bit() = b →
+    Tm::leave(branch(pc, outs, wt, wf).eval(call, values, buffers := buffers), flag, kept, nexts, again) =
+        match b { False => Tm::leave(wf.eval(call, values, buffers := buffers), flag, kept, nexts, again), True => Tm::leave(wt.eval(call, values, buffers := buffers), flag, kept, nexts, again) } {
+    match b {
+        True => λ h => Tm::leave_same(branch(pc, outs, wt, wf).eval(call, values, buffers := buffers), wt.eval(call, values, buffers := buffers), flag, kept, nexts, again,
+            λ wd id => branch_true(values, pc, outs, wt, wf, call, buffers, h, wd, id)),
+        False => λ h => Tm::leave_same(branch(pc, outs, wt, wf).eval(call, values, buffers := buffers), wf.eval(call, values, buffers := buffers), flag, kept, nexts, again,
+            λ wd id => branch_false(values, pc, outs, wt, wf, call, buffers, h, wd, id)),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// A loop node's pass leaving an answer of several words (§6.9). Tail mode's
+// `Tm::leave` above answers one; the node's answer is a word or a record of
+// words (`Ty::Answer`), as many words as it spans.
+
+// What a pass leaves for the loop: the answer's words where the flag is 1
+// (the first `k` of `nexts`), the continuation on the next state otherwise.
+fn Tm::leaves(after: Valuation(), flag: Nat, kept, nexts: List<Nat>, k: Nat, again: List<BitVec(64)> → List<BitVec(64)>) → List<BitVec(64)> {
+    match after(64, flag).eq_bit(BitVec::ofNat(1)) {
+        False => again(words_of(after, kept) ++ words_of(after, nexts)),
+        True => Ty::first(k, words_of(after, nexts)),
+    }
+}
+
+theorem Tm::leaves_same(a, b: Valuation(), flag: Nat, kept, nexts: List<Nat>, k: Nat, again: List<BitVec(64)> → List<BitVec(64)>,
+    same: (wd, id: Nat) → a(wd, id) = b(wd, id)): Tm::leaves(a, flag, kept, nexts, k, again) = Tm::leaves(b, flag, kept, nexts, k, again) {
+    Tm::eq3(λ (x: BitVec(64)) (ks: List<BitVec(64)>) (ws: List<BitVec(64)>) =>
+            match x.eq_bit(BitVec::ofNat(1)) { False => again(ks ++ ws), True => Ty::first(k, ws) },
+        same(64, flag), words_agree(kept, b, a, λ id _ => same(64, id)), words_agree(nexts, b, a, λ id _ => same(64, id)))
+}
+
+theorem Tm::leaves_branch(values: Valuation(), pc: Nat, outs: Ports, wt, wf: StructuredRegion, call: Answers(), buffers: Buffers(), flag: Nat, kept, nexts: List<Nat>,
+    k: Nat, again: List<BitVec(64)> → List<BitVec(64)>, b: Bool): values(1, pc).head_bit() = b →
+    Tm::leaves(branch(pc, outs, wt, wf).eval(call, values, buffers := buffers), flag, kept, nexts, k, again) =
+        match b { False => Tm::leaves(wf.eval(call, values, buffers := buffers), flag, kept, nexts, k, again),
+            True => Tm::leaves(wt.eval(call, values, buffers := buffers), flag, kept, nexts, k, again) } {
+    match b {
+        True => λ h => Tm::leaves_same(branch(pc, outs, wt, wf).eval(call, values, buffers := buffers), wt.eval(call, values, buffers := buffers), flag, kept, nexts, k, again,
+            λ wd id => branch_true(values, pc, outs, wt, wf, call, buffers, h, wd, id)),
+        False => λ h => Tm::leaves_same(branch(pc, outs, wt, wf).eval(call, values, buffers := buffers), wf.eval(call, values, buffers := buffers), flag, kept, nexts, k, again,
+            λ wd id => branch_false(values, pc, outs, wt, wf, call, buffers, h, wd, id)),
+    }
+}
+
+// The ids a leaf moves to `nexts`: the answer's ids `aps` first, then its
+// first id `a0` again for each next word past them, which nothing reads (a
+// branch's arms then both write every one of `nexts`, so the native
+// lowering finds them held wherever the pass ends).
+fn Tm::fill(ns, aps: List<Nat>, a0: Nat) → List<Nat> {
+    match ns {
+        Nil => Nil,
+        Cons(_, rest) => match aps { Nil => Cons(a0, Tm::fill(rest, Nil, a0)), Cons(a, more) => Cons(a, Tm::fill(rest, more, a0)) },
+    }
+}
+
+theorem Tm::fill_len(ns: List<Nat>, a0: Nat): (aps: List<Nat>) → Tm::fill(ns, aps, a0).len() = ns.len() {
+    match ns {
+        Nil => λ aps => refl,
+        Cons(_, rest) => λ aps => match aps as λ q => Tm::fill(Cons(0, rest), q, a0).len() = rest.len() + 1 {
+            Nil => cong_fn(λ (n: Nat) => n + 1, Tm::fill_len(rest, a0, Nil)),
+            Cons(_, more) => cong_fn(λ (n: Nat) => n + 1, Tm::fill_len(rest, a0, more)),
+        },
+    }
+}
+
+// The first words the moves leave are the answer's.
+theorem Tm::fill_first(values: Valuation(), a0: Nat, ns: List<Nat>): (aps: List<Nat>) → aps.len() <= ns.len() →
+    Ty::first(aps.len(), words_of(values, Tm::fill(ns, aps, a0))) = words_of(values, aps) {
+    match ns {
+        Nil => λ aps => match aps as λ q => q.len() <= 0 → Ty::first(q.len(), words_of(values, Tm::fill(Nil, q, a0))) = words_of(values, q) {
+            Nil => λ _ => refl,
+            Cons(_, more) => λ never => false_elim(Nat::not_succ_le_zero(more.len(), never)),
+        },
+        Cons(n, rest) => λ aps => match aps as λ q => q.len() <= rest.len() + 1 →
+            Ty::first(q.len(), words_of(values, Tm::fill(Cons(n, rest), q, a0))) = words_of(values, q) {
+            Nil => λ _ => refl,
+            Cons(a, more) => λ le => cong_fn(λ (ws: List<BitVec(64)>) => Cons(values(64, a), ws), Tm::fill_first(values, a0, rest, more, le)),
+        },
+    }
+}
+
+// Leaving: the answer's words moved to the first of `nexts`, the rest
+// filled, then the flag 1.
+fn Tm::leaves_region(l: Lowered, flag: Nat, nexts, aps: List<Nat>) → StructuredRegion {
+    Compose(l.region, Compose(nodes_region(Tm::moves_to(nexts, Tm::fill(nexts, aps, l.result))), nodes_region([Const(64, flag, 1)])))
+}
+
+fn Tm::leaves_at(flag: Nat, nexts, aps: List<Nat>, l: Lowered) → Option<Lowered> {
+    Tm::check_true((distinct(Cons(flag, nexts)) && disjoint(Cons(flag, nexts), Tm::fill(nexts, aps, l.result))) && aps.len().leb(nexts.len()))
+        .and_then(λ _ => Some(Lowered(Tm::leaves_region(l, flag, nexts, aps), flag, l.next)))
+}
+
+// A match read in words is its arms read so.
+theorem Tm::words_match(tys: Table, res: Ty, b: Bool, yes, no: res.sem(tys)):
+    (match b { False => Ty::result_words(tys, res, no), True => Ty::result_words(tys, res, yes) }) =
+        Ty::result_words(tys, res, match b { False => no, True => yes }) {
+    match b as λ c => (match c { False => Ty::result_words(tys, res, no), True => Ty::result_words(tys, res, yes) }) =
+        Ty::result_words(tys, res, match c { False => no, True => yes }) {
+        False => refl,
+        True => refl,
+    }
+}
+
+// A function's parameters bound onto `ports` in order: the last is variable 0.
+fn Fun::ports_onto(ps: List<Ty>, m: Nat, ports: List<Nat>) → List<Nat> {
+    match ps { Nil => ports, Cons(_, rest) => Fun::ports_onto(rest, m + 1, Cons(m, ports)) }
+}
+
+// Whether a term goes round no loop but those inside it: no `Again` leaf
+// outside a `Loop`. Its meaning then reads no label.
+fn Tm::Unlabelled(self t: Tm) → Type {
     match t {
-        Var(i) => port_at(ports, i).and_then(λ p => Some(Lowered(nodes_region(Nil), p, next))),
-        Lit(c, n) => Tm::lower_lit(w.tys, c, n, next),
-        Prim(op, args) => Tm::lower_prim(op, w.tys, g, ports, next, args),
+        Var(_) => True,
+        Lit(_, _) => True,
+        Prim(_, _) => True,
+        Let(e, body) => e.Unlabelled() ∧ body.Unlabelled(),
+        If(_, yes, no) => yes.Unlabelled() ∧ no.Unlabelled(),
+        IfEq(_, yes, no) => yes.Unlabelled() ∧ no.Unlabelled(),
+        Make(_, _) => True,
+        Field(_, _, _) => True,
+        Call(_, _) => True,
+        Fold(_, _, _) => True,
+        Case(_, zero, succ) => zero.Unlabelled() ∧ succ.Unlabelled(),
+        Byte(_, _, _) => True,
+        Pick(_, _, arms, _) => arms.Unlabelled(),
+        Inject(_, _, _) => True,
+        Slot(_, _, _) => True,
+        Iterate(_, test, body) => test.Unlabelled() ∧ body.Unlabelled(),
+        Again(_, _) => False,
+        Loop(_, _) => True,
+    }
+}
+
+fn Tm::check_unlabelled(self t: Tm) → Option<t.Unlabelled()> {
+    match t as λ u => Option<u.Unlabelled()> {
+        Var(_) => Some(trivial),
+        Lit(_, _) => Some(trivial),
+        Prim(_, _) => Some(trivial),
+        Let(e, body) => Tm::both(e.check_unlabelled(), body.check_unlabelled()),
+        If(_, yes, no) => Tm::both(yes.check_unlabelled(), no.check_unlabelled()),
+        IfEq(_, yes, no) => Tm::both(yes.check_unlabelled(), no.check_unlabelled()),
+        Make(_, _) => Some(trivial),
+        Field(_, _, _) => Some(trivial),
+        Call(_, _) => Some(trivial),
+        Fold(_, _, _) => Some(trivial),
+        Case(_, zero, succ) => Tm::both(zero.check_unlabelled(), succ.check_unlabelled()),
+        Byte(_, _, _) => Some(trivial),
+        Pick(_, _, arms, _) => arms.check_unlabelled(),
+        Inject(_, _, _) => Some(trivial),
+        Slot(_, _, _) => Some(trivial),
+        Iterate(_, test, body) => Tm::both(test.check_unlabelled(), body.check_unlabelled()),
+        Again(_, _) => None,
+        Loop(_, _) => Some(trivial),
+    }
+}
+
+// Where a loop's pass leaves what it computes: the loop's result code, the
+// flag word and the next state's words (`Tm::leave`).
+record PassAt { res: Ty, flag: Nat, nexts: List<Nat> }
+
+// A loop node over the state's words `sg`, its inputs at `qs`, its ids
+// from `b`: the bound (`fuel`), the parameters, the count, the next words
+// and the flag; then the pass `t`, lowered past the flag; past it, the exit
+// test's two ids, the outputs and the exhausted bit.
+fn Tm::loop_c(sg: List<Ty>, b: Nat) → Nat { Fun::past(sg, b + 1) }
+fn Tm::loop_ns(sg: List<Ty>, b: Nat) → List<Nat> { Fun::param_ids(sg, Tm::loop_c(sg, b) + 1) }
+fn Tm::loop_flag(sg: List<Ty>, b: Nat) → Nat { Fun::past(sg, Tm::loop_c(sg, b) + 1) }
+fn Tm::loop_x(sg: List<Ty>, t: Lowered) → Nat { Fun::past(sg, t.next + 2) }
+
+// A pass: the body, then its exit bit, whether the flag is 1.
+fn Tm::loop_pass(flag: Nat, t: Lowered) → StructuredRegion {
+    Compose(t.region, nodes_region([Const(64, t.next, 1), Equal(64, t.next + 1, flag, t.next)]))
+}
+
+fn Tm::loop_core(sg: List<Ty>, qs: List<Nat>, b, fuel: Nat, t: Lowered) → StructuredRegion {
+    Compose(nodes_region([Const(64, b, fuel)]),
+        Loop(qs, b, Fun::param_ids(sg, b + 1), Tm::loop_c(sg, b), Tm::loop_pass(Tm::loop_flag(sg, b), t), t.next + 1,
+            Tm::loop_ns(sg, b), Fun::param_ids(sg, t.next + 2), Tm::loop_x(sg, t)))
+}
+
+// The loop node (`Tm::lower_loop`): `Tm::passes()` passes of `t`, and with
+// them run out, one more pass `t2`, in a loop node of one pass whose ids
+// start past the first's exhausted bit, so that it runs on its own
+// parameters as every pass does. The answer, at the last id, is the first
+// output of whichever ran last: a pass that leaves moves its answer to the
+// first next word, and one that goes round in the extra pass leaves the
+// state's first word, which the meaning answers too (`Tm::sem_in`'s
+// `Loop`).
+fn Tm::loop_region(sg: List<Ty>, qs: List<Nat>, next: Nat, t, t2: Lowered) → Lowered {
+    Lowered(Compose(Tm::loop_core(sg, qs, next, Tm::passes(), t),
+        branch(Tm::loop_x(sg, t), Ports([Port(Tm::loop_x(sg, t2) + 1, 64)]),
+            Compose(Tm::loop_core(sg, Fun::param_ids(sg, t.next + 2), Tm::loop_x(sg, t) + 1, 1, t2),
+                nodes_region([Move(64, Tm::loop_x(sg, t2) + 1, t2.next + 2)])),
+            nodes_region([Move(64, Tm::loop_x(sg, t2) + 1, t.next + 2)]))),
+        Tm::loop_x(sg, t2) + 1, Tm::loop_x(sg, t2) + 2)
+}
+
+// A loop of at least one word of state: the state's words and the answer
+// held in one word each.
+fn Tm::lower_loop_at(w: World, g: List<Ty>, ports: List<Nat>, next: Nat, inits: List<Nat>, body: Tm,
+    lower_body: PassAt → List<Nat> → Nat → Option<Lowered>) → Option<Lowered> {
+    Tm::self_args(w, g, ports, inits).and_then(λ qs =>
+    Ty::check_one_words(w.tys, Tm::state(g, inits)).and_then(λ _ =>
+    body.ty(w, Tm::inside(g, inits)).check_one_word(w.tys).and_then(λ _ =>
+    lower_body(PassAt(body.ty(w, Tm::inside(g, inits)), Tm::loop_flag(Tm::state(g, inits), next), Tm::loop_ns(Tm::state(g, inits), next)),
+        Fun::ports_onto(Tm::state(g, inits), next + 1, Nil), Tm::loop_flag(Tm::state(g, inits), next) + 1).and_then(λ t =>
+    lower_body(PassAt(body.ty(w, Tm::inside(g, inits)), Tm::loop_flag(Tm::state(g, inits), Tm::loop_x(Tm::state(g, inits), t) + 1),
+            Tm::loop_ns(Tm::state(g, inits), Tm::loop_x(Tm::state(g, inits), t) + 1)),
+        Fun::ports_onto(Tm::state(g, inits), Tm::loop_x(Tm::state(g, inits), t) + 2, Nil),
+        Tm::loop_flag(Tm::state(g, inits), Tm::loop_x(Tm::state(g, inits), t) + 1) + 1).and_then(λ t2 =>
+    Some(Tm::loop_region(Tm::state(g, inits), qs, next, t, t2)))))))
+}
+
+fn Tm::lower_loop(w: World, g: List<Ty>, ports: List<Nat>, next: Nat, inits: List<Nat>, body: Tm,
+    lower_body: PassAt → List<Nat> → Nat → Option<Lowered>) → Option<Lowered> {
+    match inits { Nil => None, Cons(_, _) => Tm::lower_loop_at(w, g, ports, next, inits, body, lower_body) }
+}
+
+// A value a term computes, as a pass's last act or not: in a pass it is the
+// loop's answer, at the loop's result code (a word or a record of words,
+// `Ty::Answer`), its words moved out with the flag set.
+fn Tm::leaf_at(self t: Tm, w: World, mode: Option<PassAt>, g: List<Ty>, o: Option<Lowered>) → Option<Lowered> {
+    match mode {
+        None => o,
+        Some(pc) => o.and_then(λ l => t.ty(w, g).check(pc.res).and_then(λ _ => pc.res.check_answer(w.tys).and_then(λ _ =>
+            t.check_unlabelled().and_then(λ _ => Tm::leaves_at(pc.flag, pc.nexts, pc.res.ids(w.tys, l.result), l))))),
+    }
+}
+
+// A branch, as a pass's or as a value's: a pass's arms both end the pass,
+// each at the loop's result code.
+fn Tm::branch_at(mode: Option<PassAt>, w: World, g: List<Ty>, ports: List<Nat>, c: Nat, yes, no: Tm, ly, ln: Lowered) → Option<Lowered> {
+    match mode {
+        None => Tm::lower_branch(w.tys, g, ports, c, Tm::ty(yes, w, g), Tm::ty(no, w, g), ly, ln),
+        Some(pc) => Tm::ty(yes, w, g).check(pc.res).and_then(λ _ => Tm::ty(no, w, g).check(pc.res).and_then(λ _ =>
+            Tm::tail_branch(g, ports, c, pc.flag, pc.nexts, ly, ln))),
+    }
+}
+
+// A term bound in a pass is read under the loop's label, so it may not go
+// round.
+fn Tm::bound_at(mode: Option<PassAt>, e: Tm, o: Option<Lowered>) → Option<Lowered> {
+    match mode { None => o, Some(_) => e.check_unlabelled().and_then(λ _ => o) }
+}
+
+// A term lowered as a value (`mode` none) or as a loop's pass (`Tm::lower`
+// is the first). One recursion for both, because a loop's body is a pass
+// whose leaves are values and a value may hold a loop.
+fn Tm::lower_in(self t: Tm, w: World, mode: Option<PassAt>, g: List<Ty>, ports: List<Nat>, next: Nat) → Option<Lowered> {
+    match t {
+        Var(i) => Tm::leaf_at(Var(i), w, mode, g, port_at(ports, i).and_then(λ p => Some(Lowered(nodes_region(Nil), p, next)))),
+        Lit(c, n) => Tm::leaf_at(Lit(c, n), w, mode, g, Tm::lower_lit(w.tys, c, n, next)),
+        Prim(op, args) => Tm::leaf_at(Prim(op, args), w, mode, g, Tm::lower_prim(op, w.tys, g, ports, next, args)),
         // The body sees the term's port as variable 0, and takes fresh ids
         // above the term's.
-        Let(e, body) => Tm::lower(e, w, g, ports, next).and_then(λ le =>
-            Tm::lower(body, w, Cons(Tm::ty(e, w, g), g), Cons(le.result, ports), le.next).and_then(λ lb => Tm::compose(le, lb))),
+        Let(e, body) => Tm::bound_at(mode, e, Tm::lower_in(e, w, None, g, ports, next).and_then(λ le =>
+            Tm::lower_in(body, w, mode, Cons(Tm::ty(e, w, g), g), Cons(le.result, ports), le.next).and_then(λ lb => Tm::compose(le, lb)))),
         // Each arm from the same context; the second's fresh ids above the
         // first's (either may run, never both).
-        If(c, yes, no) => Tm::lower(yes, w, g, ports, next).and_then(λ ly =>
-            Tm::lower(no, w, g, ports, ly.next).and_then(λ ln => Tm::lower_branch(w.tys, g, ports, c, Tm::ty(yes, w, g), Tm::ty(no, w, g), ly, ln))),
+        If(c, yes, no) => Tm::lower_in(yes, w, mode, g, ports, next).and_then(λ ly =>
+            Tm::lower_in(no, w, mode, g, ports, ly.next).and_then(λ ln => Tm::branch_at(mode, w, g, ports, c, yes, no, ly, ln))),
         // The convoyed equation is erased: the same branch as `If`.
-        IfEq(c, yes, no) => Tm::lower(yes, w, g, ports, next).and_then(λ ly =>
-            Tm::lower(no, w, g, ports, ly.next).and_then(λ ln => Tm::lower_branch(w.tys, g, ports, c, Tm::ty(yes, w, g), Tm::ty(no, w, g), ly, ln))),
-        Make(i, args) => Tm::lower_make(w, g, ports, next, i, args),
-        Field(i, k, of) => Tm::lower_field(w, g, ports, next, i, k, of),
-        Call(f, args) => Tm::lower_call(w, g, ports, next, f, args),
+        IfEq(c, yes, no) => Tm::lower_in(yes, w, mode, g, ports, next).and_then(λ ly =>
+            Tm::lower_in(no, w, mode, g, ports, ly.next).and_then(λ ln => Tm::branch_at(mode, w, g, ports, c, yes, no, ly, ln))),
+        Make(i, args) => Tm::leaf_at(Make(i, args), w, mode, g, Tm::lower_make(w, g, ports, next, i, args)),
+        Field(i, k, of) => Tm::leaf_at(Field(i, k, of), w, mode, g, Tm::lower_field(w, g, ports, next, i, k, of)),
+        Call(f, args) => Tm::leaf_at(Call(f, args), w, mode, g, Tm::lower_call(w, g, ports, next, f, args)),
         Fold(_, _, _) => None,
         // A fuel's `match` is a loop function's body (`Fun::lower_loop`),
         // lowered there and nowhere else.
         Case(_, _, _) => None,
-        Byte(k, i, length) => Tm::lower_byte(g, ports, next, k, i, length),
+        Byte(k, i, length) => Tm::leaf_at(Byte(k, i, length), w, mode, g, Tm::lower_byte(g, ports, next, k, i, length)),
         // The arms read the constructor at the enum's own port: the
         // constructor its word names is the one `pick` chose.
-        Pick(i, c, arms, eq) => port_at(ports, c).and_then(λ pc =>
-            Ty::at(g, c).check(Enum(i)).and_then(λ _ => Tm::lower(arms, w, Cons(Enum(i), g), Cons(pc, ports), next))),
-        Inject(i, k, args) => Tm::lower_inject(w, g, ports, next, i, k, args),
-        Slot(i, j, of) => Tm::lower_slot(w, g, ports, next, i, j, of),
+        Pick(i, c, arms, eq) => Tm::leaf_at(Pick(i, c, arms, eq), w, mode, g, port_at(ports, c).and_then(λ pc =>
+            Ty::at(g, c).check(Enum(i)).and_then(λ _ => Tm::lower_in(arms, w, None, Cons(Enum(i), g), Cons(pc, ports), next)))),
+        Inject(i, k, args) => Tm::leaf_at(Inject(i, k, args), w, mode, g, Tm::lower_inject(w, g, ports, next, i, k, args)),
+        Slot(i, j, of) => Tm::leaf_at(Slot(i, j, of), w, mode, g, Tm::lower_slot(w, g, ports, next, i, j, of)),
         // A `while` loop: a FunctionIR loop over the state and the context
         // it carries (`Tm::lower_iterate`).
-        Iterate(init, test, body) => port_at(ports, init).and_then(λ pi => Tm::lower_iterate(w, g, ports, next, init, pi, test, body,
-            λ ps k => Tm::lower(test, w, Cons(Ty::at(g, init), g), ps, k), λ ps k => Tm::lower(body, w, Cons(Ty::at(g, init), g), ps, k))),
+        Iterate(init, test, body) => Tm::leaf_at(Iterate(init, test, body), w, mode, g, port_at(ports, init).and_then(λ pi =>
+            Tm::lower_iterate(w, g, ports, next, init, pi, test, body,
+                λ ps k => Tm::lower_in(test, w, None, Cons(Ty::at(g, init), g), ps, k), λ ps k => Tm::lower_in(body, w, None, Cons(Ty::at(g, init), g), ps, k)))),
+        // Going round: the state's words moved to the pass's next ones, the
+        // flag 0. Never a value.
+        Again(r, args) => match mode {
+            None => None,
+            Some(pc) => r.check(pc.res).and_then(λ _ => Tm::self_args(w, g, ports, args).and_then(λ qs => Tm::lower_again(pc.flag, Nil, pc.nexts, next, qs))),
+        },
+        // A loop that answers: its passes in a FunctionIR loop over its
+        // state's words (`Tm::lower_loop`).
+        Loop(inits, body) => Tm::leaf_at(Loop(inits, body), w, mode, g, Tm::lower_loop(w, g, ports, next, inits, body,
+            λ pc ps k => Tm::lower_in(body, w, Some(pc), Tm::inside(g, inits), ps, k))),
+    }
+}
+
+fn Tm::lower(self t: Tm, w: World, g: List<Ty>, ports: List<Nat>, next: Nat) → Option<Lowered> { t.lower_in(w, None, g, ports, next) }
+
+// A loop's meaning, one step: the passes its label does not reach. Its own
+// lemma because deciding two loops' meanings alike by conversion unrolls
+// their passes.
+theorem Tm::sem_in_loop(inits: List<Nat>, body: Tm, w: World, lab: Tm::Label(w.tys), g: List<Ty>, env: Env(w.tys, g)):
+    Tm::sem_in(Loop(inits, body), w, lab, g, env) = loop::Loop::rounds(Tm::passes(),
+        λ (again: List<BitVec(64)> → body.ty(w, Tm::inside(g, inits)).sem(w.tys)) (xs: List<BitVec(64)>) =>
+            body.sem_in(w, Tm::round(w.tys, body.ty(w, Tm::inside(g, inits)), again), Tm::inside(g, inits),
+                Ty::extend(w.tys, Tm::state(g, inits), Nil, trivial, xs)),
+        λ (xs: List<BitVec(64)>) => body.sem_in(w,
+            Tm::round(w.tys, body.ty(w, Tm::inside(g, inits)), λ ys => Ty::read_words(body.ty(w, Tm::inside(g, inits)), w.tys, ys)),
+            Tm::inside(g, inits), Ty::extend(w.tys, Tm::state(g, inits), Nil, trivial, xs)),
+        Tm::words(w, g, env, inits)) { refl }
+
+theorem Tm::unlabelled_if(c: Nat, yes, no: Tm, w: World, l1, l2: Tm::Label(w.tys), g: List<Ty>, env: Env(w.tys, g),
+    hy: yes.sem_in(w, l1, g, env) = yes.sem_in(w, l2, g, env), hn: no.sem_in(w, l1, g, env) = no.sem_in(w, l2, g, env)):
+    Tm::sem_in(If(c, yes, no), w, l1, g, env) = Tm::sem_in(If(c, yes, no), w, l2, g, env) {
+    let T = yes.ty(w, g).sem(w.tys);
+    let b = Ty::cast(w.tys, Ty::at(g, c), Bit, Env::get(w.tys, g, env, c));
+    let pick = λ (y: T) (n: no.ty(w, g).sem(w.tys)) => match b as λ _ => T { False => Ty::cast(w.tys, no.ty(w, g), yes.ty(w, g), n), True => y };
+    let r: (pick(yes.sem_in(w, l1, g, env), no.sem_in(w, l1, g, env)) = pick(yes.sem_in(w, l2, g, env), no.sem_in(w, l2, g, env))) = eq2(pick, hy, hn);
+    r
+}
+
+theorem Tm::unlabelled_ifeq(c: Nat, yes, no: Tm, w: World, l1, l2: Tm::Label(w.tys), g: List<Ty>, env: Env(w.tys, g),
+    hy: yes.sem_in(w, l1, g, env) = yes.sem_in(w, l2, g, env), hn: no.sem_in(w, l1, g, env) = no.sem_in(w, l2, g, env)):
+    Tm::sem_in(IfEq(c, yes, no), w, l1, g, env) = Tm::sem_in(IfEq(c, yes, no), w, l2, g, env) {
+    let T = yes.ty(w, g).sem(w.tys);
+    let b = Ty::cast(w.tys, Ty::at(g, c), Bit, Env::get(w.tys, g, env, c));
+    let pick = λ (y: T) (n: no.ty(w, g).sem(w.tys)) => Tm::convoy(T, b, y, Ty::cast(w.tys, no.ty(w, g), yes.ty(w, g), n));
+    let r: (pick(yes.sem_in(w, l1, g, env), no.sem_in(w, l1, g, env)) = pick(yes.sem_in(w, l2, g, env), no.sem_in(w, l2, g, env))) = eq2(pick, hy, hn);
+    r
+}
+
+theorem Tm::unlabelled_let(e, body: Tm, w: World, l1, l2: Tm::Label(w.tys), g: List<Ty>, env: Env(w.tys, g),
+    he: e.sem_in(w, l1, g, env) = e.sem_in(w, l2, g, env),
+    hb: body.sem_in(w, l1, Cons(e.ty(w, g), g), Pair(e.sem_in(w, l2, g, env), env)) = body.sem_in(w, l2, Cons(e.ty(w, g), g), Pair(e.sem_in(w, l2, g, env), env))):
+    Tm::sem_in(Let(e, body), w, l1, g, env) = Tm::sem_in(Let(e, body), w, l2, g, env) {
+    let r: (body.sem_in(w, l1, Cons(e.ty(w, g), g), Pair(e.sem_in(w, l1, g, env), env)) = body.sem_in(w, l2, Cons(e.ty(w, g), g), Pair(e.sem_in(w, l2, g, env), env))) =
+        trans(cong_fn(λ (x: e.ty(w, g).sem(w.tys)) => body.sem_in(w, l1, Cons(e.ty(w, g), g), Pair(x, env)), he), hb);
+    r
+}
+
+theorem Tm::unlabelled_pick(i, c: Nat, arms: Tm, eq: Bool, w: World, l1, l2: Tm::Label(w.tys), g: List<Ty>, env: Env(w.tys, g),
+    ha: (n: Nat) → (t: Ty::Flats(w.tys.ens(i).slots)) → arms.sem_in(w, l1, Cons(Enum(i), g), Pair(w.tys.ens(i).of(n, t), env)) = arms.sem_in(w, l2, Cons(Enum(i), g), Pair(w.tys.ens(i).of(n, t), env))):
+    Tm::sem_in(Pick(i, c, arms, eq), w, l1, g, env) = Tm::sem_in(Pick(i, c, arms, eq), w, l2, g, env) {
+    let e = w.tys.ens(i);
+    let R = arms.ty(w, Cons(Enum(i), g)).sem(w.tys);
+    let arm = λ (l: Tm::Label(w.tys)) (n: Nat) (t: Ty::Flats(e.slots)) => arms.sem_in(w, l, Cons(Enum(i), g), Pair(e.of(n, t), env));
+    e.choose_ext(eq, R, arm(l1), arm(l2), ha, Ty::cast(w.tys, Ty::at(g, c), Enum(i), Env::get(w.tys, g, env, c)))
+}
+
+theorem Tm::unlabelled_case(c: Nat, zero, succ: Tm, w: World, l1, l2: Tm::Label(w.tys), g: List<Ty>, env: Env(w.tys, g),
+    hz: zero.sem_in(w, l1, g, env) = zero.sem_in(w, l2, g, env),
+    hs: (k: Nat) → succ.sem_in(w, l1, Cons(Count, g), Pair(k, env)) = succ.sem_in(w, l2, Cons(Count, g), Pair(k, env))):
+    Tm::sem_in(Case(c, zero, succ), w, l1, g, env) = Tm::sem_in(Case(c, zero, succ), w, l2, g, env) {
+    let T = zero.ty(w, g).sem(w.tys);
+    let run = λ (l: Tm::Label(w.tys)) (n: Nat) => match n as λ _ => T {
+        Zero => zero.sem_in(w, l, g, env),
+        Succ(k) => Ty::cast(w.tys, succ.ty(w, Cons(Count, g)), zero.ty(w, g), succ.sem_in(w, l, Cons(Count, g), Pair(k, env))),
+    };
+    let r: (run(l1, Ty::cast(w.tys, Ty::at(g, c), Count, Env::get(w.tys, g, env, c))) = run(l2, Ty::cast(w.tys, Ty::at(g, c), Count, Env::get(w.tys, g, env, c)))) =
+        match Ty::cast(w.tys, Ty::at(g, c), Count, Env::get(w.tys, g, env, c)) as λ n => run(l1, n) = run(l2, n) {
+            Zero => hz,
+            Succ(k) => cong_fn(λ (y: succ.ty(w, Cons(Count, g)).sem(w.tys)) => Ty::cast(w.tys, succ.ty(w, Cons(Count, g)), zero.ty(w, g), y), hs(k)),
+        };
+    r
+}
+
+theorem Tm::unlabelled_iterate(init: Nat, test, body: Tm, w: World, l1, l2: Tm::Label(w.tys), g: List<Ty>, env: Env(w.tys, g),
+    ht: (s: Ty::at(g, init).sem(w.tys)) → test.sem_in(w, l1, Cons(Ty::at(g, init), g), Pair(s, env)) = test.sem_in(w, l2, Cons(Ty::at(g, init), g), Pair(s, env)),
+    hb: (s: Ty::at(g, init).sem(w.tys)) → body.sem_in(w, l1, Cons(Ty::at(g, init), g), Pair(s, env)) = body.sem_in(w, l2, Cons(Ty::at(g, init), g), Pair(s, env))):
+    Tm::sem_in(Iterate(init, test, body), w, l1, g, env) = Tm::sem_in(Iterate(init, test, body), w, l2, g, env) {
+    let st = Ty::at(g, init);
+    let inner = Cons(st, g);
+    let turn = λ (l: Tm::Label(w.tys)) (s: st.sem(w.tys)) => loop::Step::turn(
+        Ty::cast(w.tys, test.ty(w, inner), Bit, test.sem_in(w, l, inner, Pair(s, env))),
+        λ _ => Ty::cast(w.tys, body.ty(w, inner), st, body.sem_in(w, l, inner, Pair(s, env))), s);
+    loop::Loop::steps_ext(turn(l1), turn(l2), λ s => eq2(λ (b: Bool) (y: st.sem(w.tys)) => loop::Step::turn(b, λ _ => y, s),
+            cong_fn(λ (x: test.ty(w, inner).sem(w.tys)) => Ty::cast(w.tys, test.ty(w, inner), Bit, x), ht(s)),
+            cong_fn(λ (x: body.ty(w, inner).sem(w.tys)) => Ty::cast(w.tys, body.ty(w, inner), st, x), hb(s))),
+        loop::Loop::passes(), Env::get(w.tys, g, env, init))
+}
+
+// A term that goes round no loop but its own means the same under any
+// label: what lets a pass's leaf, lowered as a value, mean what it means in
+// the pass.
+theorem Tm::sem_in_unlabelled(self t: Tm, w: World, l1, l2: Tm::Label(w.tys)): t.Unlabelled() → (g: List<Ty>) → (env: Env(w.tys, g)) →
+    t.sem_in(w, l1, g, env) = t.sem_in(w, l2, g, env) {
+    match t {
+        Var(_) => λ h g env => refl,
+        Lit(_, _) => λ h g env => refl,
+        Prim(_, _) => λ h g env => refl,
+        Let(e, body) => λ h g env => Tm::unlabelled_let(e, body, w, l1, l2, g, env, Tm::sem_in_unlabelled(e, w, l1, l2, h.left, g, env),
+            Tm::sem_in_unlabelled(body, w, l1, l2, h.right, Cons(e.ty(w, g), g), Pair(e.sem_in(w, l2, g, env), env))),
+        If(c, yes, no) => λ h g env => Tm::unlabelled_if(c, yes, no, w, l1, l2, g, env,
+            Tm::sem_in_unlabelled(yes, w, l1, l2, h.left, g, env), Tm::sem_in_unlabelled(no, w, l1, l2, h.right, g, env)),
+        IfEq(c, yes, no) => λ h g env => Tm::unlabelled_ifeq(c, yes, no, w, l1, l2, g, env,
+            Tm::sem_in_unlabelled(yes, w, l1, l2, h.left, g, env), Tm::sem_in_unlabelled(no, w, l1, l2, h.right, g, env)),
+        Make(_, _) => λ h g env => refl,
+        Field(_, _, _) => λ h g env => refl,
+        Call(_, _) => λ h g env => refl,
+        Fold(_, _, _) => λ h g env => refl,
+        Case(c, zero, succ) => λ h g env => Tm::unlabelled_case(c, zero, succ, w, l1, l2, g, env, Tm::sem_in_unlabelled(zero, w, l1, l2, h.left, g, env),
+            λ k => Tm::sem_in_unlabelled(succ, w, l1, l2, h.right, Cons(Count, g), Pair(k, env))),
+        Byte(_, _, _) => λ h g env => refl,
+        Pick(i, c, arms, eq) => λ (h: arms.Unlabelled()) g env => Tm::unlabelled_pick(i, c, arms, eq, w, l1, l2, g, env,
+            λ n fl => Tm::sem_in_unlabelled(arms, w, l1, l2, h, Cons(Enum(i), g), Pair(w.tys.ens(i).of(n, fl), env))),
+        Inject(_, _, _) => λ h g env => refl,
+        Slot(_, _, _) => λ h g env => refl,
+        Iterate(init, test, body) => λ h g env => Tm::unlabelled_iterate(init, test, body, w, l1, l2, g, env,
+            λ s => Tm::sem_in_unlabelled(test, w, l1, l2, h.left, Cons(Ty::at(g, init), g), Pair(s, env)),
+            λ s => Tm::sem_in_unlabelled(body, w, l1, l2, h.right, Cons(Ty::at(g, init), g), Pair(s, env))),
+        Again(_, _) => λ h g env => false_elim(h),
+        // A loop reads its body under its own label.
+        Loop(inits, body) => λ h g env => trans(Tm::sem_in_loop(inits, body, w, l1, g, env), sym(Tm::sem_in_loop(inits, body, w, l2, g, env))),
     }
 }
 
@@ -5345,18 +6098,850 @@ theorem Tm::iterate_sound(init: Nat, test, body: Tm, w: World,
             e_t, e_b)))))))))
 }
 
-theorem Tm::lower_sound(self t: Tm, w: World): (g: List<Ty>) → (ports: List<Nat>) → (next: Nat) →
-    Tm::LowerHolds(t, w, g, ports, next, Tm::lower(t, w, g, ports, next)) {
+// ---------------------------------------------------------------------------
+// A loop's pass (docs/language/loop-combinator-design.md §6.7).
+
+// What a pass promises: from where the environment holds below `next`,
+// with calls answered by the program's meanings, `next` grows, and what it
+// leaves for the loop (`Tm::leaves`: the answer's words where the flag is 1, the
+// loop's continuation on the next state otherwise) is the term's meaning
+// under the loop's label, whatever the continuation is.
+fn Tm::PassHolds(self t: Tm, w: World, pc: PassAt, g: List<Ty>, ports: List<Nat>, next: Nat, r: Option<Lowered>) → Type {
+    match r {
+        None => True,
+        Some(c) => (call: Answers()) → Tm::CallsAgree(w, call) → (values: Valuation()) → (env: Env(w.tys, g)) →
+            EnvHolds(w.tys, values, g, ports, env) → Below(w.tys, g, ports, next) →
+            (next <= c.next) ∧ ((again: List<BitVec(64)> → pc.res.sem(w.tys)) →
+                Tm::leaves(c.region.eval(call, values, buffers := w.spans), pc.flag, Nil, pc.nexts, pc.res.span(w.tys),
+                    λ ys => Ty::result_words(w.tys, pc.res, again(ys))) =
+                    Ty::result_words(w.tys, pc.res, Ty::cast(w.tys, t.ty(w, g), pc.res, t.sem_in(w, Tm::round(w.tys, pc.res, again), g, env)))),
+    }
+}
+
+// What a lowering promises, as a value's or as a pass's.
+fn Tm::HoldsIn(self t: Tm, w: World, mode: Option<PassAt>, g: List<Ty>, ports: List<Nat>, next: Nat, r: Option<Lowered>) → Type {
+    match mode { None => t.LowerHolds(w, g, ports, next, r), Some(pc) => t.PassHolds(w, pc, g, ports, next, r) }
+}
+
+// A pass's leaf: a value lowered as one, moved out as the answer. It reads
+// no label, so it means under the loop's what it means as a value.
+theorem Tm::leaf_at_sound(t: Tm, w: World, res: Ty, flag: Nat, nexts: List<Nat>, g: List<Ty>, ports: List<Nat>, next: Nat,
+    o: Option<Lowered>, held: Tm::LowerHolds(t, w, g, ports, next, o)):
+    Tm::PassHolds(t, w, PassAt(res, flag, nexts), g, ports, next, Tm::leaf_at(t, w, Some(PassAt(res, flag, nexts)), g, o)) {
+    let P = λ (r: Option<Lowered>) => Tm::PassHolds(t, w, PassAt(res, flag, nexts), g, ports, next, r);
+    Option::and_then_elim(P, trivial, o, λ l => t.ty(w, g).check(res).and_then(λ _ => res.check_answer(w.tys).and_then(λ _ =>
+        t.check_unlabelled().and_then(λ _ => Tm::leaves_at(flag, nexts, res.ids(w.tys, l.result), l)))), λ l lowered =>
+    Option::and_then_elim(P, trivial, t.ty(w, g).check(res), λ _ => res.check_answer(w.tys).and_then(λ _ =>
+        t.check_unlabelled().and_then(λ _ => Tm::leaves_at(flag, nexts, res.ids(w.tys, l.result), l))), λ e _ =>
+    Option::and_then_elim(P, trivial, res.check_answer(w.tys), λ _ => t.check_unlabelled().and_then(λ _ =>
+        Tm::leaves_at(flag, nexts, res.ids(w.tys, l.result), l)), λ ok _ =>
+    Option::and_then_elim(P, trivial, t.check_unlabelled(), λ _ => Tm::leaves_at(flag, nexts, res.ids(w.tys, l.result), l), λ u _ => {
+    let aps = res.ids(w.tys, l.result);
+    let fl = Tm::fill(nexts, aps, l.result);
+    Option::and_then_elim(P, trivial,
+        Tm::check_true((distinct(Cons(flag, nexts)) && disjoint(Cons(flag, nexts), fl)) && aps.len().leb(nexts.len())),
+        λ _ => Some(Lowered(Tm::leaves_region(l, flag, nexts, aps), flag, l.next)), λ c _ =>
+        λ call agree values env held_env below => {
+            let ran = j(lowered, λ r _ => Tm::LowerHolds(t, w, g, ports, next, r), held)(call, agree, values, env, held_env, below);
+            let p1 = Bool::is_true_and(distinct(Cons(flag, nexts)) && disjoint(Cons(flag, nexts), fl), aps.len().leb(nexts.len()), c);
+            let p2 = Bool::is_true_and(distinct(Cons(flag, nexts)), disjoint(Cons(flag, nexts), fl), p1.left);
+            let apart = Bool::is_true_and(absent(flag, nexts), distinct(nexts), p2.left);
+            let mid = l.region.eval(call, values, buffers := w.spans);
+            let shifted = eval_nodes_over(w.spans, Tm::moves_to(nexts, fl), mid);
+            let after = Valuation::set(shifted, flag, λ wd => BitVec::ofNat(1));
+            let at_flag: (after(64, flag) = BitVec::ofNat(1)) = Valuation::set_here(shifted, flag, λ wd => BitVec::ofNat(1), 64);
+            let unflagged: (words_of(after, nexts) = words_of(shifted, nexts)) = words_agree(nexts, shifted, after, λ y m =>
+                Valuation::set_other(shifted, flag, λ wd => BitVec::ofNat(1), 64, y, λ same => absent_mem(flag, nexts, apart.left, y, m, sym(same))));
+            let moved: (words_of(after, nexts) = words_of(mid, fl)) = trans(unflagged,
+                Tm::moves_to_words(nexts, w.spans, fl, mid, apart.right, Tm::disjoint_tail(flag, nexts, fl, p2.right),
+                    sym(Tm::fill_len(nexts, l.result, aps))));
+            let firsts: (Ty::first(aps.len(), words_of(after, nexts)) = words_of(mid, aps)) =
+                trans(cong_fn(λ (ws: List<BitVec(64)>) => Ty::first(aps.len(), ws), moved),
+                    Tm::fill_first(mid, l.result, nexts, aps, aps.len().leb_sound(nexts.len(), p1.right)));
+            let spanned: (Ty::first(res.span(w.tys), words_of(after, nexts)) = words_of(mid, aps)) =
+                j(Ty::ids_len(w.tys, res, l.result), λ n _ => Ty::first(n, words_of(after, nexts)) = words_of(mid, aps), firsts);
+            let v = t.sem(w, g, env);
+            let ans_t: t.ty(w, g).Answer(w.tys) = j(sym(e), λ x _ => x.Answer(w.tys), ok);
+            let read_t: (words_of(mid, t.ty(w, g).ids(w.tys, l.result)) = Ty::result_words(w.tys, t.ty(w, g), Ty::cast(w.tys, t.ty(w, g), t.ty(w, g), v))) =
+                trans(Ty::answer_reads(w.tys, mid, l.result, t.ty(w, g), ans_t, v, ran.right.right.right),
+                    cong_fn(λ (x: t.ty(w, g).sem(w.tys)) => Ty::result_words(w.tys, t.ty(w, g), x), sym(Ty::cast_self(w.tys, t.ty(w, g), v))));
+            let read: (words_of(mid, aps) = Ty::result_words(w.tys, res, Ty::cast(w.tys, t.ty(w, g), res, v))) =
+                j(e, λ x _ => words_of(mid, x.ids(w.tys, l.result)) = Ty::result_words(w.tys, x, Ty::cast(w.tys, t.ty(w, g), x, v)), read_t);
+            ⟨ran.left, λ again => {
+                let labelled: (v = t.sem_in(w, Tm::round(w.tys, res, again), g, env)) =
+                    Tm::sem_in_unlabelled(t, w, Tm::no_label(w.tys), Tm::round(w.tys, res, again), u, g, env);
+                trans(cong_fn(λ (x: BitVec(64)) => match x.eq_bit(BitVec::ofNat(1)) {
+                        False => Ty::result_words(w.tys, res, again(words_of(after, Nil) ++ words_of(after, nexts))),
+                        True => Ty::first(res.span(w.tys), words_of(after, nexts)) }, at_flag),
+                    trans(spanned, trans(read, cong_fn(λ (x: t.ty(w, g).sem(w.tys)) => Ty::result_words(w.tys, res, Ty::cast(w.tys, t.ty(w, g), res, x)), labelled))))
+            }⟩
+        })
+    }))))
+}
+
+// A word read back along an equation of codes and forth again.
+theorem Tm::cast_back(tys: Table, r, res: Ty, e: r = res, v: res.sem(tys)): Ty::cast(tys, r, res, Ty::cast(tys, res, r, v)) = v {
+    j(sym(e), λ x _ => Ty::cast(tys, x, res, Ty::cast(tys, res, x, v)) = v,
+        trans(Ty::cast_self(tys, res, Ty::cast(tys, res, res, v)), Ty::cast_self(tys, res, v)))
+}
+
+// Going round: the state's words moved to the next ones, the flag 0. The
+// leaf names the loop's own code, so the label answers it as the
+// continuation does.
+theorem Tm::again_at_sound(r0: Ty, args: List<Nat>, w: World, res: Ty, flag: Nat, nexts: List<Nat>, g: List<Ty>, ports: List<Nat>, next: Nat):
+    Tm::PassHolds(Again(r0, args), w, PassAt(res, flag, nexts), g, ports, next,
+        Tm::lower_in(Again(r0, args), w, Some(PassAt(res, flag, nexts)), g, ports, next)) {
+    let Q = λ (r: Option<Lowered>) => Tm::PassHolds(Again(r0, args), w, PassAt(res, flag, nexts), g, ports, next, r);
+    Option::and_then_elim(Q, trivial, r0.check(res), λ _ => Tm::self_args(w, g, ports, args).and_then(λ qs => Tm::lower_again(flag, Nil, nexts, next, qs)), λ er _ => {
+    let P = λ (r: Option<Lowered>) => Tm::PassHolds(Again(r0, args), w, PassAt(res, flag, nexts), g, ports, next, r);
+    Option::and_then_elim(P, trivial, Tm::self_args(w, g, ports, args), λ qs => Tm::lower_again(flag, Nil, nexts, next, qs), λ qs e_qs =>
+    Option::and_then_elim(P, trivial, Tm::split_kept(Nil, qs), λ moved =>
+        Tm::check_true((distinct(Cons(flag, nexts)) && (disjoint(Cons(flag, nexts), moved) && nexts.len().matches(moved.len()))) &&
+            disjoint(Cons(flag, nexts), Nil))
+            .and_then(λ _ => Some(Lowered(Tm::again_region(flag, nexts, moved), flag, next))), λ moved e_moved =>
+    Option::and_then_elim(P, trivial,
+        Tm::check_true((distinct(Cons(flag, nexts)) && (disjoint(Cons(flag, nexts), moved) && nexts.len().matches(moved.len()))) &&
+            disjoint(Cons(flag, nexts), Nil)),
+        λ _ => Some(Lowered(Tm::again_region(flag, nexts, moved), flag, next)), λ ok _ =>
+        λ call agree values env held below => {
+            let both = Bool::is_true_and(distinct(Cons(flag, nexts)) && (disjoint(Cons(flag, nexts), moved) && nexts.len().matches(moved.len())),
+                disjoint(Cons(flag, nexts), Nil), ok);
+            let parts = Bool::is_true_and(distinct(Cons(flag, nexts)), disjoint(Cons(flag, nexts), moved) && nexts.len().matches(moved.len()), both.left);
+            let rest = Bool::is_true_and(disjoint(Cons(flag, nexts), moved), nexts.len().matches(moved.len()), parts.right);
+            let apart = Bool::is_true_and(absent(flag, nexts), distinct(nexts), parts.left);
+            let shifted = eval_nodes_over(w.spans, Tm::moves_to(nexts, moved), values);
+            let after = Valuation::set(shifted, flag, λ wd => BitVec::ofNat(0));
+            // The flag is none of `nexts`.
+            let at_flag: (after(64, flag) = BitVec::ofNat(0)) = Valuation::set_here(shifted, flag, λ wd => BitVec::ofNat(0), 64);
+            let unflagged: (words_of(after, nexts) = words_of(shifted, nexts)) = words_agree(nexts, shifted, after, λ y m =>
+                Valuation::set_other(shifted, flag, λ wd => BitVec::ofNat(0), 64, y, λ e => absent_mem(flag, nexts, apart.left, y, m, sym(e))));
+            let moved_words: (words_of(after, nexts) = words_of(values, moved)) = trans(unflagged,
+                Tm::moves_to_words(nexts, w.spans, moved, values, apart.right, Tm::disjoint_tail(flag, nexts, moved, rest.left),
+                    nexts.len().matches_eq(moved.len(), rest.right)));
+            let kept_words: (words_of(after, Nil) = words_of(values, Nil)) = words_agree(Nil, values, after, λ y m => {
+                let out = Bool::is_true_and(y.differs(flag), absent(y, nexts), disjoint_mem(Cons(flag, nexts), Nil, both.right, y, m));
+                trans(Valuation::set_other(shifted, flag, λ wd => BitVec::ofNat(0), 64, y, y.differs_ne(flag, out.left)),
+                    eval_nodes_frame(Tm::moves_to(nexts, moved), w.spans, values, 64, y, Tm::moves_to_writes(nexts, moved, y, out.right)))
+            });
+            let state: (words_of(after, Nil) ++ words_of(after, nexts) = Tm::words(w, g, env, args)) = trans(
+                eq2(λ (a: List<BitVec(64)>) (b: List<BitVec(64)>) => a ++ b, kept_words, moved_words),
+                trans(Tm::split_kept_words(values, Nil, qs, moved, e_moved), Tm::self_args_sound(w, g, ports, values, env, held, args, qs, e_qs)));
+            ⟨next.le_refl(), λ again => trans(
+                cong_fn(λ (x: BitVec(64)) => match x.eq_bit(BitVec::ofNat(1)) {
+                        False => Ty::result_words(w.tys, res, again(words_of(after, Nil) ++ words_of(after, nexts))),
+                        True => Ty::first(res.span(w.tys), words_of(after, nexts)) },
+                    at_flag),
+                trans(cong_fn(λ (ws: List<BitVec(64)>) => Ty::result_words(w.tys, res, again(ws)), state),
+                    cong_fn(λ (v: res.sem(w.tys)) => Ty::result_words(w.tys, res, v), sym(Tm::cast_back(w.tys, r0, res, er, again(Tm::words(w, g, env, args)))))))⟩
+        })))
+    })
+}
+
+// A branch's value read at the loop's code, where its first arm is at it:
+// each arm read there.
+theorem Tm::cast_pick(tys: Table, a, b, r: Ty, ea: a = r, bit: Bool, yv: a.sem(tys), nv: b.sem(tys)):
+    Ty::cast(tys, a, r, match bit as λ _ => a.sem(tys) { False => Ty::cast(tys, b, a, nv), True => yv }) =
+        match bit { False => Ty::cast(tys, b, r, nv), True => Ty::cast(tys, a, r, yv) } {
+    match bit as λ x => Ty::cast(tys, a, r, match x as λ _ => a.sem(tys) { False => Ty::cast(tys, b, a, nv), True => yv }) =
+        match x { False => Ty::cast(tys, b, r, nv), True => Ty::cast(tys, a, r, yv) } {
+        False => j(ea, λ x _ => Ty::cast(tys, a, x, Ty::cast(tys, b, a, nv)) = Ty::cast(tys, b, x, nv), Ty::cast_self(tys, a, Ty::cast(tys, b, a, nv))),
+        True => refl,
+    }
+}
+
+// A pass's branch, for any term that means, at the loop's code, the match
+// of its arms there: both arms write the flag and `nexts`.
+theorem Tm::if_at_sound(t: Tm, c: Nat, yes, no: Tm, w: World, res: Ty, flag: Nat, nexts: List<Nat>,
+    ih_yes: (g: List<Ty>) → (ports: List<Nat>) → (next: Nat) →
+        Tm::PassHolds(yes, w, PassAt(res, flag, nexts), g, ports, next, Tm::lower_in(yes, w, Some(PassAt(res, flag, nexts)), g, ports, next)),
+    ih_no: (g: List<Ty>) → (ports: List<Nat>) → (next: Nat) →
+        Tm::PassHolds(no, w, PassAt(res, flag, nexts), g, ports, next, Tm::lower_in(no, w, Some(PassAt(res, flag, nexts)), g, ports, next)),
+    g: List<Ty>, ports: List<Nat>, next: Nat,
+    means: Tm::ty(yes, w, g) = res → (again: List<BitVec(64)> → res.sem(w.tys)) → (env: Env(w.tys, g)) →
+        Ty::cast(w.tys, t.ty(w, g), res, t.sem_in(w, Tm::round(w.tys, res, again), g, env)) =
+        match Ty::cast(w.tys, Ty::at(g, c), Bit, Env::get(w.tys, g, env, c)) {
+            False => Ty::cast(w.tys, no.ty(w, g), res, no.sem_in(w, Tm::round(w.tys, res, again), g, env)),
+            True => Ty::cast(w.tys, yes.ty(w, g), res, yes.sem_in(w, Tm::round(w.tys, res, again), g, env)) }):
+    Tm::PassHolds(t, w, PassAt(res, flag, nexts), g, ports, next,
+        Tm::lower_in(yes, w, Some(PassAt(res, flag, nexts)), g, ports, next).and_then(λ ly =>
+        Tm::lower_in(no, w, Some(PassAt(res, flag, nexts)), g, ports, ly.next).and_then(λ ln =>
+            Tm::branch_at(Some(PassAt(res, flag, nexts)), w, g, ports, c, yes, no, ly, ln)))) {
+    let pa = PassAt(res, flag, nexts);
+    let P = λ (r: Option<Lowered>) => Tm::PassHolds(t, w, pa, g, ports, next, r);
+    let outs = Ports(word_ports(Cons(flag, nexts)));
+    Option::and_then_elim(P, trivial, Tm::lower_in(yes, w, Some(pa), g, ports, next),
+        λ ly => Tm::lower_in(no, w, Some(pa), g, ports, ly.next).and_then(λ ln => Tm::branch_at(Some(pa), w, g, ports, c, yes, no, ly, ln)),
+        λ ly lowered_yes =>
+    Option::and_then_elim(P, trivial, Tm::lower_in(no, w, Some(pa), g, ports, ly.next),
+        λ ln => Tm::branch_at(Some(pa), w, g, ports, c, yes, no, ly, ln), λ ln lowered_no =>
+    Option::and_then_elim(P, trivial, Tm::ty(yes, w, g).check(res),
+        λ _ => Tm::ty(no, w, g).check(res).and_then(λ _ => Tm::tail_branch(g, ports, c, flag, nexts, ly, ln)), λ ey _ =>
+    Option::and_then_elim(P, trivial, Tm::ty(no, w, g).check(res), λ _ => Tm::tail_branch(g, ports, c, flag, nexts, ly, ln), λ _ _ =>
+    Option::and_then_elim(P, trivial, port_at(ports, c),
+        λ pc => Ty::at(g, c).check(Bit).and_then(λ _ => Some(Lowered(branch(pc, outs, ly.region, ln.region), flag, ln.next))), λ pc at_c =>
+    Option::and_then_elim(P, trivial, Ty::at(g, c).check(Bit), λ _ => Some(Lowered(branch(pc, outs, ly.region, ln.region), flag, ln.next)),
+        λ ec _ =>
+        λ call agree values env held below => {
+            let first = j(lowered_yes, λ r _ => Tm::PassHolds(yes, w, pa, g, ports, next, r), ih_yes(g, ports, next))(
+                call, agree, values, env, held, below);
+            let second = j(lowered_no, λ r _ => Tm::PassHolds(no, w, pa, g, ports, ly.next, r), ih_no(g, ports, ly.next))(
+                call, agree, values, env, held, below_mono(w.tys, g, next, ly.next, first.left, ports, below));
+            let scrutinee = Ty::cast(w.tys, Ty::at(g, c), Bit, Env::get(w.tys, g, env, c));
+            let bit = Tm::operand(w, g, ports, values, env, held, c, pc, at_c, Bit, ec);
+            let chosen = trans(cong_fn(λ (x: BitVec(1)) => x.head_bit(), bit), BitVec::head_bit_ofBool(scrutinee));
+            ⟨Nat::le_trans(next, ly.next, ln.next, first.left, second.left), λ again => {
+                let lab = Tm::round(w.tys, res, again);
+                let k = λ (ys: List<BitVec(64)>) => Ty::result_words(w.tys, res, again(ys));
+                trans(Tm::leaves_branch(values, pc, outs, ly.region, ln.region, call, w.spans, flag, Nil, nexts, res.span(w.tys), k, scrutinee, chosen),
+                    trans(eq2(λ (x: List<BitVec(64)>) (y: List<BitVec(64)>) => match scrutinee { False => y, True => x },
+                        first.right(again), second.right(again)),
+                        trans(Tm::words_match(w.tys, res, scrutinee, Ty::cast(w.tys, yes.ty(w, g), res, yes.sem_in(w, lab, g, env)),
+                                Ty::cast(w.tys, no.ty(w, g), res, no.sem_in(w, lab, g, env))),
+                            cong_fn(λ (v: res.sem(w.tys)) => Ty::result_words(w.tys, res, v), sym(means(ey, again, env))))))
+            }⟩
+        }))))))
+}
+
+// A pass's `Let`: the bound term lowered as a value (it goes round no loop
+// of its own, so it means under the label what it means), the rest of the
+// pass after it.
+theorem Tm::let_at_sound(e, body: Tm, w: World, res: Ty, flag: Nat, nexts: List<Nat>, g: List<Ty>, ports: List<Nat>, next: Nat,
+    ih_e: (g2: List<Ty>) → (ports2: List<Nat>) → (next2: Nat) → Tm::LowerHolds(e, w, g2, ports2, next2, Tm::lower_in(e, w, None, g2, ports2, next2)),
+    ih_body: (g2: List<Ty>) → (ports2: List<Nat>) → (next2: Nat) →
+        Tm::PassHolds(body, w, PassAt(res, flag, nexts), g2, ports2, next2, Tm::lower_in(body, w, Some(PassAt(res, flag, nexts)), g2, ports2, next2))):
+    Tm::PassHolds(Let(e, body), w, PassAt(res, flag, nexts), g, ports, next, Tm::lower_in(Let(e, body), w, Some(PassAt(res, flag, nexts)), g, ports, next)) {
+    let pa = PassAt(res, flag, nexts);
+    let P = λ (r: Option<Lowered>) => Tm::PassHolds(Let(e, body), w, pa, g, ports, next, r);
+    let inner = Cons(Tm::ty(e, w, g), g);
+    let rest = Tm::lower_in(e, w, None, g, ports, next).and_then(λ le =>
+        Tm::lower_in(body, w, Some(pa), inner, Cons(le.result, ports), le.next).and_then(λ lb => Tm::compose(le, lb)));
+    Option::and_then_elim(P, trivial, e.check_unlabelled(), λ _ => rest, λ u _ =>
+    Option::and_then_elim(P, trivial, Tm::lower_in(e, w, None, g, ports, next),
+        λ le => Tm::lower_in(body, w, Some(pa), inner, Cons(le.result, ports), le.next).and_then(λ lb => Tm::compose(le, lb)), λ le lowered_e =>
+    Option::and_then_elim(P, trivial, Tm::lower_in(body, w, Some(pa), inner, Cons(le.result, ports), le.next), λ lb => Tm::compose(le, lb),
+        λ lb lowered_body => λ call agree values env held below => {
+            let first = j(lowered_e, λ r _ => Tm::LowerHolds(e, w, g, ports, next, r), ih_e(g, ports, next))(call, agree, values, env, held, below);
+            let mid = le.region.eval(call, values, buffers := w.spans);
+            let then = j(lowered_body, λ r _ => Tm::PassHolds(body, w, pa, inner, Cons(le.result, ports), le.next, r), ih_body(inner, Cons(le.result, ports), le.next))(
+                call, agree, mid, Pair(Tm::sem(e, w, g, env), env),
+                ⟨first.right.right.right, env_holds_keeps(w.tys, g, values, mid, next, first.right.right.left, ports, env, below, held)⟩,
+                ⟨first.right.left, below_mono(w.tys, g, next, le.next, first.left, ports, below)⟩);
+            ⟨Nat::le_trans(next, le.next, lb.next, first.left, then.left), λ again => {
+                let lab = Tm::round(w.tys, res, again);
+                trans(then.right(again), cong_fn(λ (x: e.ty(w, g).sem(w.tys)) =>
+                    Ty::result_words(w.tys, res, Ty::cast(w.tys, body.ty(w, inner), res, body.sem_in(w, lab, inner, Pair(x, env)))),
+                    Tm::sem_in_unlabelled(e, w, Tm::no_label(w.tys), lab, u, g, env)))
+            }⟩
+        })))
+}
+
+// A lowering that is a leaf of a pass wherever it is one: its promise as a
+// value gives both.
+theorem Tm::both_leaf(t: Tm, w: World,
+    plain: (g: List<Ty>) → (ports: List<Nat>) → (next: Nat) → Tm::LowerHolds(t, w, g, ports, next, Tm::lower_in(t, w, None, g, ports, next)),
+    shaped: (pc: PassAt) → (g: List<Ty>) → (ports: List<Nat>) → (next: Nat) →
+        Tm::lower_in(t, w, Some(pc), g, ports, next) = Tm::leaf_at(t, w, Some(pc), g, Tm::lower_in(t, w, None, g, ports, next))):
+    (mode: Option<PassAt>) → (g: List<Ty>) → (ports: List<Nat>) → (next: Nat) → Tm::HoldsIn(t, w, mode, g, ports, next, Tm::lower_in(t, w, mode, g, ports, next)) {
+    λ mode => match mode as λ md => (g: List<Ty>) → (ports: List<Nat>) → (next: Nat) → Tm::HoldsIn(t, w, md, g, ports, next, Tm::lower_in(t, w, md, g, ports, next)) {
+        None => plain,
+        Some(pc) => λ g ports next => j(sym(shaped(pc, g, ports, next)), λ r _ => Tm::PassHolds(t, w, pc, g, ports, next, r),
+            Tm::leaf_at_sound(t, w, pc.res, pc.flag, pc.nexts, g, ports, next, Tm::lower_in(t, w, None, g, ports, next), plain(g, ports, next))),
+    }
+}
+
+// A term refused in both modes promises nothing.
+theorem Tm::holds_none(t: Tm, w: World): (mode: Option<PassAt>) → (g: List<Ty>) → (ports: List<Nat>) → (next: Nat) →
+    Tm::HoldsIn(t, w, mode, g, ports, next, None) {
+    λ mode => match mode as λ md => (g: List<Ty>) → (ports: List<Nat>) → (next: Nat) → Tm::HoldsIn(t, w, md, g, ports, next, None) {
+        None => λ g ports next => trivial,
+        Some(_) => λ g ports next => trivial,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Words bound at parameters as an environment, and a pass's answer.
+
+// The words at `ids`, zero past the words' end.
+fn Fun::BoundWords(values: Valuation(), ids: List<Nat>) → List<BitVec(64)> → Type {
+    match ids {
+        Nil => λ _ => True,
+        Cons(id, rest) => λ xs => match xs {
+            Nil => (values(64, id) = BitVec::zero()) ∧ Fun::BoundWords(values, rest, Nil),
+            Cons(x, more) => (values(64, id) = x) ∧ Fun::BoundWords(values, rest, more),
+        },
+    }
+}
+// The parameters' ports hold the environment the words make.
+theorem Fun::env_extend_holds(tys: Table, values: Valuation(), ps: List<Ty>): (g: List<Ty>) → (ports: List<Nat>) →
+    (env: Env(tys, g)) → (m: Nat) → (xs: List<BitVec(64)>) → Ty::OneWords(tys, ps) → EnvHolds(tys, values, g, ports, env) →
+    Fun::BoundWords(values, Fun::param_ids(ps, m), xs) →
+    EnvHolds(tys, values, Ty::bind_onto(ps, g), Fun::ports_onto(ps, m, ports), Ty::extend(tys, ps, g, env, xs)) {
+    match ps {
+        Nil => λ g ports env m xs ok held bound => held,
+        Cons(p, rest) => λ g ports env m xs ok held => match xs as λ ys =>
+            Fun::BoundWords(values, Fun::param_ids(Cons(p, rest), m), ys) →
+            EnvHolds(tys, values, Ty::bind_onto(Cons(p, rest), g), Fun::ports_onto(Cons(p, rest), m, ports), Ty::extend(tys, Cons(p, rest), g, env, ys)) {
+            Nil => λ bound => Fun::env_extend_holds(tys, values, rest, Cons(p, g), Cons(m, ports),
+                Pair(Ty::cast(tys, Word(64), p, BitVec::zero()), env), m + 1, Nil, ok.right,
+                ⟨Ty::one_word_holds(tys, values, m, p, ok.left, BitVec::zero(), bound.left), held⟩, bound.right),
+            Cons(x, more) => λ bound => Fun::env_extend_holds(tys, values, rest, Cons(p, g), Cons(m, ports),
+                Pair(Ty::cast(tys, Word(64), p, x), env), m + 1, more, ok.right,
+                ⟨Ty::one_word_holds(tys, values, m, p, ok.left, x, bound.left), held⟩, bound.right),
+        },
+    }
+}
+theorem Fun::below_onto(tys: Table, ps: List<Ty>): (g: List<Ty>) → (m: Nat) → (ports: List<Nat>) → Ty::OneWords(tys, ps) →
+    Below(tys, g, ports, m) → Below(tys, Ty::bind_onto(ps, g), Fun::ports_onto(ps, m, ports), Fun::past(ps, m)) {
+    match ps {
+        Nil => λ g m ports _ below => below,
+        Cons(p, rest) => λ g m ports ok below => Fun::below_onto(tys, rest, Cons(p, g), m + 1, Cons(m, ports), ok.right,
+            ⟨Ty::one_word_below(tys, p, ok.left, m),
+                below_mono(tys, g, m, m + 1, Nat::le_succ_r(m, m, m.le_refl()), ports, below)⟩),
+    }
+}
+// Words read back where they are bound, as `Fun::BoundWords`.
+theorem Fun::bound_of_words(values: Valuation(), ids: List<Nat>): (xs: List<BitVec(64)>) → ids.len() = xs.len() → words_of(values, ids) = xs →
+    Fun::BoundWords(values, ids, xs) {
+    match ids {
+        Nil => λ xs _ _ => trivial,
+        Cons(id, rest) => λ xs => match xs as λ ys => rest.len() + 1 = ys.len() → words_of(values, Cons(id, rest)) = ys →
+            Fun::BoundWords(values, Cons(id, rest), ys) {
+            Nil => λ (bad: rest.len() + 1 = 0) _ => false_elim(rest.len().succ_ne_zero(bad)),
+            Cons(x, more) => λ same read => ⟨cong_fn(λ (ws: List<BitVec(64)>) => ws.head_or(BitVec::zero()), read),
+                Fun::bound_of_words(values, rest, more, Nat::succ_inj(rest.len(), more.len(), same),
+                    cong_fn(λ (ws: List<BitVec(64)>) => ws.tail(), read))⟩,
+        },
+    }
+}
+// Leaving or not, the first moved word, for a continuation that is it.
+theorem Tm::leave_first(a: Valuation(), flag: Nat, kept, ns: List<Nat>):
+    Tm::leave(a, flag, kept, ns, λ (ys: List<BitVec(64)>) => words_of(a, ns).head_or(BitVec::zero())) = words_of(a, ns).head_or(BitVec::zero()) {
+    match a(64, flag).eq_bit(BitVec::ofNat(1)) as λ b => (match b { False => words_of(a, ns).head_or(BitVec::zero()),
+        True => words_of(a, ns).head_or(BitVec::zero()) }) = words_of(a, ns).head_or(BitVec::zero()) {
+        False => refl,
+        True => refl,
+    }
+}
+// What a pass leaves reads its continuation only at the next state.
+theorem Tm::leave_cont(a: Valuation(), flag: Nat, kept, ns: List<Nat>, k1, k2: List<BitVec(64)> → BitVec(64),
+    same: k1(words_of(a, kept) ++ words_of(a, ns)) = k2(words_of(a, kept) ++ words_of(a, ns))):
+    Tm::leave(a, flag, kept, ns, k1) = Tm::leave(a, flag, kept, ns, k2) {
+    cong_fn(λ (k: BitVec(64)) => match a(64, flag).eq_bit(BitVec::ofNat(1)) { False => k, True => words_of(a, ns).head_or(BitVec::zero()) }, same)
+}
+// The word bound at `o0`, past a prefix of ids that are not it.
+theorem Fun::bind_past(values: Valuation(), o0: Nat, os: List<Nat>, s0: BitVec(64), rest: List<BitVec(64)>, ko: List<Nat>):
+    (kw: List<BitVec(64)>) → absent(o0, ko).IsTrue() → ko.len() = kw.len() →
+    Valuation::bind(values, ko ++ Cons(o0, os), kw ++ Cons(s0, rest), 64, o0) = s0 {
+    match ko {
+        Nil => λ kw _ => match kw as λ k2 => 0 = k2.len() → Valuation::bind(values, Cons(o0, os), k2 ++ Cons(s0, rest), 64, o0) = s0 {
+            Nil => λ _ => Valuation::set_here(Valuation::bind(values, os, rest), o0, word_value(s0), 64),
+            Cons(_, more) => λ (bad: 0 = more.len() + 1) => false_elim(more.len().zero_ne_succ(bad)),
+        },
+        Cons(k, later) => λ kw fresh => match kw as λ k2 => later.len() + 1 = k2.len() →
+            Valuation::bind(values, Cons(k, later) ++ Cons(o0, os), k2 ++ Cons(s0, rest), 64, o0) = s0 {
+            Nil => λ (bad: later.len() + 1 = 0) => false_elim(later.len().succ_ne_zero(bad)),
+            Cons(y, more) => λ same => {
+                let parts = Bool::is_true_and(o0.differs(k), absent(o0, later), fresh);
+                trans(Valuation::set_other(Valuation::bind(values, later ++ Cons(o0, os), more ++ Cons(s0, rest)), k, word_value(y), 64, o0,
+                        o0.differs_ne(k, parts.left)),
+                    Fun::bind_past(values, o0, os, s0, rest, later, more, parts.right, Nat::succ_inj(later.len(), more.len(), same)))
+            },
+        },
+    }
+}
+// ---------------------------------------------------------------------------
+// The loop node's passes (`Tm::loop_core`).
+
+// One pass from the state `words_of(v, parameters)` with `Succ(r)` passes
+// left: leaving, what `finish` makes of the next state; going round,
+// `later` of it.
+fn Tm::round_of<B>(step: Valuation() → Valuation(), parameters: List<Nat>, count, exit: Nat, next: List<Nat>, finish: LoopEnd → B,
+    later: List<BitVec(64)> → B, r: Nat, v: Valuation()) → B {
+    let after = step(pass_valuation(parameters, count, r + 1, words_of(v, parameters)));
+    match after(1, exit).head_bit() {
+        False => later(words_of(after, next)),
+        True => finish(LoopEnd(words_of(after, next), False)),
+    }
+}
+
+// A loop agrees with `run`, a recursion on its fuel, when it does with no
+// passes left, and each pass does with the recursion on the passes after
+// it.
+theorem Tm::rounds_agree<B>(step: Valuation() → Valuation(), parameters: List<Nat>, count, exit: Nat, next: List<Nat>,
+    apart: distinct(parameters).IsTrue(), lengths: next.len() = parameters.len(), finish: LoopEnd → B,
+    run: Nat → List<BitVec(64)> → B,
+    at_zero: (v: Valuation()) → finish(LoopEnd(words_of(v, parameters), True)) = run(0, words_of(v, parameters)),
+    at_pass: (r: Nat) → (v: Valuation()) →
+        Tm::round_of(step, parameters, count, exit, next, finish, λ (state: List<BitVec(64)>) => run(r, state), r, v) = run(r + 1, words_of(v, parameters)),
+    remaining: Nat): (v: Valuation()) → finish(loop_eval(step, parameters, count, exit, next, remaining, words_of(v, parameters))) =
+        run(remaining, words_of(v, parameters)) {
+    match remaining {
+        Zero => λ v => at_zero(v),
+        Succ(r) => λ v => {
+            let after = step(pass_valuation(parameters, count, r + 1, words_of(v, parameters)));
+            let state = words_of(after, next);
+            let rebound: (words_of(Valuation::bind(Valuation::zero(), parameters, state), parameters) = state) =
+                words_of_bind(Valuation::zero(), parameters, apart, state, sym(trans(words_of_len(after, next), lengths)));
+            let earlier = Tm::rounds_agree(step, parameters, count, exit, next, apart, lengths, finish, run, at_zero, at_pass, r,
+                Valuation::bind(Valuation::zero(), parameters, state));
+            let later: (finish(loop_eval(step, parameters, count, exit, next, r, state)) = run(r, state)) =
+                j(rebound, λ st _ => finish(loop_eval(step, parameters, count, exit, next, r, st)) = run(r, st), earlier);
+            (match after(1, exit).head_bit() as λ b =>
+                (match b { False => run(r, state), True => finish(LoopEnd(state, False)) }) = run(r + 1, words_of(v, parameters)) →
+                finish(match b { False => loop_eval(step, parameters, count, exit, next, r, state),
+                    True => LoopEnd(state, False) }) = run(r + 1, words_of(v, parameters)) {
+                False => λ passed => trans(later, passed),
+                True => λ passed => passed,
+            })(at_pass(r, v))
+        },
+    }
+}
+
+// What a loop node's end means, in words: leaving, the first of its state,
+// as many as the answer spans; with its passes run out, `stuck` of the
+// state.
+fn Tm::loop_end(tys: Table, res: Ty, stuck: List<BitVec(64)> → res.sem(tys), e: LoopEnd) → List<BitVec(64)> {
+    match e.exhausted { False => Ty::first(res.span(tys), e.state), True => Ty::result_words(tys, res, stuck(e.state)) }
+}
+
+// The loop's one pass, as its meaning reads it: the body under the label
+// of `again`, at the state's words.
+fn Tm::loop_body(w: World, sg: List<Ty>, body: Tm, again: List<BitVec(64)> → body.ty(w, Ty::bind_onto(sg, Nil)).sem(w.tys),
+    xs: List<BitVec(64)>) → body.ty(w, Ty::bind_onto(sg, Nil)).sem(w.tys) {
+    body.sem_in(w, Tm::round(w.tys, body.ty(w, Ty::bind_onto(sg, Nil)), again), Ty::bind_onto(sg, Nil), Ty::extend(w.tys, sg, Nil, trivial, xs))
+}
+
+// One pass of a loop node: what it leaves is the meaning's round after it,
+// whatever the meaning does past its passes.
+theorem Tm::core_pass(sg: List<Ty>, body: Tm, w: World, ok: Ty::OneWords(w.tys, sg), b: Nat, t: Lowered,
+    held_t: Tm::PassHolds(body, w, PassAt(body.ty(w, Ty::bind_onto(sg, Nil)), Tm::loop_flag(sg, b), Tm::loop_ns(sg, b)), Ty::bind_onto(sg, Nil),
+        Fun::ports_onto(sg, b + 1, Nil), Tm::loop_flag(sg, b) + 1, Some(t)),
+    call: Answers(), agree: Tm::CallsAgree(w, call), stuck: List<BitVec(64)> → body.ty(w, Ty::bind_onto(sg, Nil)).sem(w.tys), r: Nat, v: Valuation()):
+    Tm::round_of(λ (pass: Valuation()) => Tm::loop_pass(Tm::loop_flag(sg, b), t).eval(call, pass, buffers := w.spans), Fun::param_ids(sg, b + 1),
+        Tm::loop_c(sg, b), t.next + 1, Tm::loop_ns(sg, b), λ (e: LoopEnd) => Tm::loop_end(w.tys, body.ty(w, Ty::bind_onto(sg, Nil)), stuck, e),
+        λ (ys: List<BitVec(64)>) => Ty::result_words(w.tys, body.ty(w, Ty::bind_onto(sg, Nil)), loop::Loop::rounds(r, λ k xs => Tm::loop_body(w, sg, body, k, xs), stuck, ys)), r, v) =
+        Ty::result_words(w.tys, body.ty(w, Ty::bind_onto(sg, Nil)), loop::Loop::rounds(r + 1, λ k xs => Tm::loop_body(w, sg, body, k, xs), stuck, words_of(v, Fun::param_ids(sg, b + 1)))) {
+    let tys = w.tys;
+    let inner = Ty::bind_onto(sg, Nil);
+    let res = body.ty(w, inner);
+    let ps = Fun::param_ids(sg, b + 1);
+    let c = Tm::loop_c(sg, b);
+    let ns = Tm::loop_ns(sg, b);
+    let flag = Tm::loop_flag(sg, b);
+    let ports = Fun::ports_onto(sg, b + 1, Nil);
+    let F = λ (k: List<BitVec(64)> → res.sem(tys)) (xs: List<BitVec(64)>) => Tm::loop_body(w, sg, body, k, xs);
+    let again = λ (ys: List<BitVec(64)>) => loop::Loop::rounds(r, F, stuck, ys);
+    let later = λ (ys: List<BitVec(64)>) => Ty::result_words(tys, res, again(ys));
+    let st = words_of(v, ps);
+    let len_st: (st.len() = sg.len()) = trans(words_of_len(v, ps), Fun::ids_len(sg, b + 1));
+    let counted = Valuation::set(Valuation::zero(), c, word_value(BitVec::ofNat(r + 1)));
+    let pv = Valuation::bind(counted, ps, st);
+    let env = Ty::extend(tys, sg, Nil, trivial, st);
+    let ids_len: (ps.len() = st.len()) = trans(Fun::ids_len(sg, b + 1), sym(len_st));
+    let held: EnvHolds(tys, pv, inner, ports, env) = Fun::env_extend_holds(tys, pv, sg, Nil, Nil, trivial, b + 1, st, ok, trivial,
+        Fun::bound_of_words(pv, ps, st, ids_len, words_of_bind(counted, ps, Fun::ids_distinct(sg, b + 1), st, ids_len)));
+    let c_flag: (c < flag + 1) = Nat::lt_of_lt_of_le(c, c + 1, flag + 1, c.lt_succ_self(), Nat::le_succ_r(c + 1, flag, Fun::past_ge(sg, c + 1)));
+    let below: Below(tys, inner, ports, flag + 1) = below_mono(tys, inner, c, flag + 1, Nat::le_of_lt(c, flag + 1, c_flag), ports,
+        Fun::below_onto(tys, sg, Nil, b + 1, Nil, ok, trivial));
+    let ran = held_t(call, agree, pv, env, held, below);
+    let pv2 = t.region.eval(call, pv, buffers := w.spans);
+    let pv2a = Valuation::set(pv2, t.next, λ wd => BitVec::ofNat(1));
+    let exit_value = bit_value(pv2a(64, flag).eq_bit(pv2a(64, t.next)));
+    let pv3 = Valuation::set(pv2a, t.next + 1, exit_value);
+    let flag_lt: (flag < t.next) = Nat::lt_of_lt_of_le(flag, flag + 1, t.next, flag.lt_succ_self(), ran.left);
+    let exit_bit: (pv3(1, t.next + 1).head_bit() = pv2(64, flag).eq_bit(BitVec::ofNat(1))) =
+        trans(cong_fn(λ (x: BitVec(1)) => x.head_bit(), Valuation::set_here(pv2a, t.next + 1, exit_value, 1)),
+            eq2(λ (a: BitVec(64)) (b2: BitVec(64)) => a.eq_bit(b2),
+                Valuation::set_other(pv2, t.next, λ wd => BitVec::ofNat(1), 64, flag, Nat::ne_of_lt(flag, t.next, flag_lt)),
+                Valuation::set_here(pv2, t.next, λ wd => BitVec::ofNat(1), 64)));
+    let ns_out = Fun::absent_ids(sg, c + 1, t.next, Inr(Nat::le_of_lt(flag, t.next, flag_lt)));
+    let ns_out2 = Fun::absent_ids(sg, c + 1, t.next + 1, Inr(Nat::le_succ_r(flag, t.next, Nat::le_of_lt(flag, t.next, flag_lt))));
+    let nexts_same: (words_of(pv3, ns) = words_of(pv2, ns)) = words_agree(ns, pv2, pv3, λ id mem =>
+        trans(Valuation::set_other(pv2a, t.next + 1, exit_value, 64, id, λ e => absent_mem(t.next + 1, ns, ns_out2, id, mem, sym(e))),
+            Valuation::set_other(pv2, t.next, λ wd => BitVec::ofNat(1), 64, id, λ e => absent_mem(t.next, ns, ns_out, id, mem, sym(e)))));
+    let M = λ (bit: Bool) (s: List<BitVec(64)>) (fin: List<BitVec(64)>) => match bit { False => later(s), True => fin };
+    let meant: (Ty::cast(tys, res, res, body.sem_in(w, Tm::round(tys, res, again), inner, env)) = F(again, st)) =
+        Ty::cast_self(tys, res, body.sem_in(w, Tm::round(tys, res, again), inner, env));
+    trans(Tm::eq3(M, exit_bit, nexts_same, cong_fn(λ (s: List<BitVec(64)>) => Ty::first(res.span(tys), s), nexts_same)),
+        trans(ran.right(again), cong_fn(λ (x: res.sem(tys)) => Ty::result_words(tys, res, x), meant)))
+}
+
+// A value held in one word below `next` is at a port below it.
+theorem Tm::one_word_port(tys: Table, t: Ty, port, next: Nat): t.OneWord(tys) → t.Below(tys, port, next) → port < next {
     match t {
-        Var(i) => λ g ports next =>
+        Word(_) => λ _ h => h,
+        Bit => λ never _ => false_elim(never),
+        ByteList(_) => λ never _ => false_elim(never),
+        Lines => λ never _ => false_elim(never),
+        Named(i) => λ e (h: Ty::FieldsBelow(tys.fields(i), port, next)) => j(tys.word_leaves(i, e), λ fs _ => Ty::FieldsBelow(fs, port, next), h).left,
+        Count => λ never _ => false_elim(never),
+        Enum(_) => λ never _ => false_elim(never),
+    }
+}
+
+// The ports a loop's state starts at are below `next`.
+theorem Tm::self_args_below(w: World, g: List<Ty>, ports: List<Nat>, next: Nat, below: Below(w.tys, g, ports, next), args: List<Nat>):
+    (qs: List<Nat>) → Tm::self_args(w, g, ports, args) = Some(qs) → Tm::AllBelow(qs, next) {
+    match args {
+        Nil => λ qs e => j(Option::some_inj(Nil, qs, e), λ z _ => Tm::AllBelow(z, next), trivial),
+        Cons(a, more) => {
+            let Goal = λ (qs: List<Nat>) => Tm::AllBelow(qs, next);
+            let P = λ (o: Option<List<Nat>>) => (qs: List<Nat>) → o = Some(qs) → Goal(qs);
+            let none: P(None) = λ qs e => Option::none_ne_some(qs, e, Goal(qs));
+            Option::and_then_elim(P, none, port_at(ports, a), λ q =>
+                Ty::at(g, a).check_one_word(w.tys).and_then(λ _ => Tm::self_args(w, g, ports, more).and_then(λ qs => Some(Cons(q, qs)))), λ q at_q =>
+            Option::and_then_elim(P, none, Ty::at(g, a).check_one_word(w.tys), λ _ => Tm::self_args(w, g, ports, more).and_then(λ qs => Some(Cons(q, qs))),
+                λ ea _ =>
+            Option::and_then_elim(P, none, Tm::self_args(w, g, ports, more), λ qs => Some(Cons(q, qs)), λ found e_rest =>
+                λ qs e => j(Option::some_inj(Cons(q, found), qs, e), λ z _ => Goal(z),
+                    ⟨Tm::one_word_port(w.tys, Ty::at(g, a), q, next, ea, below_at(w.tys, g, ports, next, below, a, q, at_q)),
+                        Tm::self_args_below(w, g, ports, next, below, more, found, e_rest)⟩))))
+        },
+    }
+}
+
+// A loop node runs as its meaning's rounds, from any state of its length.
+theorem Tm::core_runs(sg: List<Ty>, body: Tm, w: World, ok: Ty::OneWords(w.tys, sg), b: Nat, t: Lowered,
+    held_t: Tm::PassHolds(body, w, PassAt(body.ty(w, Ty::bind_onto(sg, Nil)), Tm::loop_flag(sg, b), Tm::loop_ns(sg, b)), Ty::bind_onto(sg, Nil),
+        Fun::ports_onto(sg, b + 1, Nil), Tm::loop_flag(sg, b) + 1, Some(t)),
+    call: Answers(), agree: Tm::CallsAgree(w, call), stuck: List<BitVec(64)> → body.ty(w, Ty::bind_onto(sg, Nil)).sem(w.tys), k: Nat,
+    xs: List<BitVec(64)>, len: xs.len() = sg.len()):
+    Tm::loop_end(w.tys, body.ty(w, Ty::bind_onto(sg, Nil)), stuck,
+        loop_eval(λ (pass: Valuation()) => Tm::loop_pass(Tm::loop_flag(sg, b), t).eval(call, pass, buffers := w.spans), Fun::param_ids(sg, b + 1),
+            Tm::loop_c(sg, b), t.next + 1, Tm::loop_ns(sg, b), k, xs)) =
+        Ty::result_words(w.tys, body.ty(w, Ty::bind_onto(sg, Nil)), loop::Loop::rounds(k, λ a ys => Tm::loop_body(w, sg, body, a, ys), stuck, xs)) {
+    let res = body.ty(w, Ty::bind_onto(sg, Nil));
+    let ps = Fun::param_ids(sg, b + 1);
+    let ns = Tm::loop_ns(sg, b);
+    let step = λ (pass: Valuation()) => Tm::loop_pass(Tm::loop_flag(sg, b), t).eval(call, pass, buffers := w.spans);
+    let fin = λ (e: LoopEnd) => Tm::loop_end(w.tys, res, stuck, e);
+    let run = λ (r: Nat) (ys: List<BitVec(64)>) => Ty::result_words(w.tys, res, loop::Loop::rounds(r, λ a zs => Tm::loop_body(w, sg, body, a, zs), stuck, ys));
+    let lengths: (ns.len() = ps.len()) = trans(Fun::ids_len(sg, Tm::loop_c(sg, b) + 1), sym(Fun::ids_len(sg, b + 1)));
+    let v = Valuation::bind(Valuation::zero(), ps, xs);
+    let bound: (words_of(v, ps) = xs) = words_of_bind(Valuation::zero(), ps, Fun::ids_distinct(sg, b + 1), xs, trans(Fun::ids_len(sg, b + 1), sym(len)));
+    j(bound, λ ys _ => fin(loop_eval(step, ps, Tm::loop_c(sg, b), t.next + 1, ns, k, ys)) = run(k, ys),
+        Tm::rounds_agree(step, ps, Tm::loop_c(sg, b), t.next + 1, ns, Fun::ids_distinct(sg, b + 1), lengths, fin, run,
+            λ u => refl, λ r u => Tm::core_pass(sg, body, w, ok, b, t, held_t, call, agree, stuck, r, u), k, v))
+}
+
+// Variables read as words: one word per variable.
+theorem Tm::words_length(w: World, g: List<Ty>, env: Env(w.tys, g), vs: List<Nat>): Tm::words(w, g, env, vs).len() = vs.len() {
+    match vs {
+        Nil => refl,
+        Cons(v, rest) => cong_fn(λ (k: Nat) => k + 1, Tm::words_length(w, g, env, rest)),
+    }
+}
+
+// The first word bound at the first of `ids`.
+theorem Tm::bind_first(values: Valuation(), id: Nat, ids: List<Nat>, x: BitVec(64), xs: List<BitVec(64)>):
+    Valuation::bind(values, Cons(id, ids), Cons(x, xs))(64, id) = x {
+    Valuation::set_here(Valuation::bind(values, ids, xs), id, word_value(x), 64)
+}
+
+// The extra pass's answer: its loop's first words, whether that pass left
+// or went round (its going round answers the state read as the answer,
+// whose words are the state's first).
+theorem Tm::extra_end(tys: Table, res: Ty, ok: res.Answer(tys), e: LoopEnd):
+    Tm::loop_end(tys, res, λ (ys: List<BitVec(64)>) => Ty::read_words(res, tys, ys), e) = Ty::first(res.span(tys), e.state) {
+    match e.exhausted as λ b => (match b { False => Ty::first(res.span(tys), e.state),
+        True => Ty::result_words(tys, res, Ty::read_words(res, tys, e.state)) }) = Ty::first(res.span(tys), e.state) {
+        False => refl,
+        True => Ty::answer_round(tys, res, ok, e.state),
+    }
+}
+
+// A code held in one word is an answer.
+theorem Ty::one_word_answer(tys: Table, t: Ty): t.OneWord(tys) → t.Answer(tys) {
+    match t {
+        Word(_) => λ e => e,
+        Bit => λ never => false_elim(never),
+        ByteList(_) => λ never => false_elim(never),
+        Lines => λ never => false_elim(never),
+        Named(i) => λ e => ⟨j(sym(tys.word_leaves(i, e)), λ g _ => Ty::WordsOne(g), ⟨refl, trivial⟩), j(sym(e), λ g _ => Ty::NoEnums(g), ⟨trivial, trivial⟩)⟩,
+        Count => λ never => false_elim(never),
+        Enum(_) => λ never => false_elim(never),
+    }
+}
+
+// The first of an answer's first words is the first word.
+theorem Ty::first_head(fs: List<Ty>, xs: List<BitVec(64)>): (fs = Nil → False) → Ty::first(fs.len(), xs).head_or(BitVec::zero()) = xs.head_or(BitVec::zero()) {
+    match fs { Nil => λ no => false_elim(no(refl)), Cons(_, _) => λ _ => refl }
+}
+
+theorem Ty::answer_head(tys: Table, t: Ty, xs: List<BitVec(64)>): t.Answer(tys) → Ty::first(t.span(tys), xs).head_or(BitVec::zero()) = xs.head_or(BitVec::zero()) {
+    match t {
+        Word(_) => λ _ => refl,
+        Bit => λ never => false_elim(never),
+        ByteList(_) => λ never => false_elim(never),
+        Lines => λ never => false_elim(never),
+        Named(i) => λ ok => Ty::first_head(tys.fields(i), xs, Ty::words_one_cons(tys.fields(i), ok.left)),
+        Count => λ never => false_elim(never),
+        Enum(_) => λ never => false_elim(never),
+    }
+}
+
+// A loop node's pass takes its ids past its flag.
+theorem Tm::pass_next(sg: List<Ty>, body: Tm, w: World, ok: Ty::OneWords(w.tys, sg), b: Nat, t: Lowered,
+    held_t: Tm::PassHolds(body, w, PassAt(body.ty(w, Ty::bind_onto(sg, Nil)), Tm::loop_flag(sg, b), Tm::loop_ns(sg, b)), Ty::bind_onto(sg, Nil),
+        Fun::ports_onto(sg, b + 1, Nil), Tm::loop_flag(sg, b) + 1, Some(t)),
+    call: Answers(), agree: Tm::CallsAgree(w, call)): Tm::loop_flag(sg, b) + 1 <= t.next {
+    let ps = Fun::param_ids(sg, b + 1);
+    let st = words_of(Valuation::zero(), ps);
+    let ids_len: (ps.len() = st.len()) = sym(words_of_len(Valuation::zero(), ps));
+    let pv = Valuation::bind(Valuation::zero(), ps, st);
+    let c = Tm::loop_c(sg, b);
+    let flag = Tm::loop_flag(sg, b);
+    let c_flag: (c < flag + 1) = Nat::lt_of_lt_of_le(c, c + 1, flag + 1, c.lt_succ_self(), Nat::le_succ_r(c + 1, flag, Fun::past_ge(sg, c + 1)));
+    (held_t(call, agree, pv, Ty::extend(w.tys, sg, Nil, trivial, st),
+        Fun::env_extend_holds(w.tys, pv, sg, Nil, Nil, trivial, b + 1, st, ok, trivial,
+            Fun::bound_of_words(pv, ps, st, ids_len, words_of_bind(Valuation::zero(), ps, Fun::ids_distinct(sg, b + 1), st, ids_len))),
+        below_mono(w.tys, Ty::bind_onto(sg, Nil), c, flag + 1, Nat::le_of_lt(c, flag + 1, c_flag), Fun::ports_onto(sg, b + 1, Nil),
+            Fun::below_onto(w.tys, sg, Nil, b + 1, Nil, ok, trivial)))).left
+}
+
+// Words bound at ids from `o`, read at `o`: the first of them.
+theorem Tm::bind_head(values: Valuation(), o: Nat, more: List<Nat>, st: List<BitVec(64)>, len: st.len() = more.len() + 1):
+    Valuation::bind(values, Cons(o, more), st)(64, o) = st.head_or(BitVec::zero()) {
+    match st as λ s => s.len() = more.len() + 1 → Valuation::bind(values, Cons(o, more), s)(64, o) = s.head_or(BitVec::zero()) {
+        Nil => λ (bad: 0 = more.len() + 1) => false_elim(more.len().zero_ne_succ(bad)),
+        Cons(x, xs) => λ _ => Tm::bind_first(values, o, more, x, xs),
+    }(len)
+}
+
+// The bit a loop node leaves at its exhausted id.
+theorem Tm::exhausted_bit(values: Valuation(), x: Nat, b: Bool): Valuation::set(values, x, bit_value(b))(1, x).head_bit() = b {
+    trans(cong_fn(λ (v: BitVec(1)) => v.head_bit(), trans(Valuation::set_here(values, x, bit_value(b), 1), bit_value_bit(b))), BitVec::head_bit_ofBool(b))
+}
+
+// The past of a nonempty state is past its first id.
+theorem Tm::past_cons(p: Ty, rest: List<Ty>, o: Nat): o < Fun::past(Cons(p, rest), o) { Fun::past_ge(rest, o + 1) }
+
+// The loop node keeps a valuation below its first id where it writes only
+// at `ids` and one more id at or above `n`.
+theorem Tm::bind_set_keeps(values: Valuation(), ids: List<Nat>, st: List<BitVec(64)>, x: Nat, bv: (wd: Nat) → BitVec(wd), n: Nat,
+    ids_above: (id: Nat) → id < n → absent(id, ids).IsTrue(), x_above: n <= x):
+    Keeps(values, Valuation::set(Valuation::bind(values, ids, st), x, bv), n) {
+    λ wd id below_id => trans(Valuation::set_other(Valuation::bind(values, ids, st), x, bv, wd, id, Nat::ne_of_lt(id, x, Nat::lt_of_lt_of_le(id, n, x, below_id, x_above))),
+        Valuation::bind_frame(values, ids, st, wd, id, ids_above(id, below_id)))
+}
+
+theorem Tm::loop_sound_at(i0: Nat, irest: List<Nat>, body: Tm, w: World, g: List<Ty>, ports: List<Nat>, next: Nat,
+    ih: (pc: PassAt) → (ps: List<Nat>) → (k: Nat) →
+        Tm::PassHolds(body, w, pc, Tm::inside(g, Cons(i0, irest)), ps, k, Tm::lower_in(body, w, Some(pc), Tm::inside(g, Cons(i0, irest)), ps, k))):
+    Tm::LowerHolds(Loop(Cons(i0, irest), body), w, g, ports, next, Tm::lower_loop_at(w, g, ports, next, Cons(i0, irest), body,
+        λ pc ps k => Tm::lower_in(body, w, Some(pc), Tm::inside(g, Cons(i0, irest)), ps, k))) {
+    let inits = Cons(i0, irest);
+    let tys = w.tys;
+    let sg = Tm::state(g, inits);
+    let inner = Tm::inside(g, inits);
+    let res = body.ty(w, inner);
+    let lower_body = λ (pc: PassAt) (ps: List<Nat>) (k: Nat) => Tm::lower_in(body, w, Some(pc), inner, ps, k);
+    let pa = PassAt(res, Tm::loop_flag(sg, next), Tm::loop_ns(sg, next));
+    let P = λ (r: Option<Lowered>) => Tm::LowerHolds(Loop(inits, body), w, g, ports, next, r);
+    let second = λ (t: Lowered) => lower_body(PassAt(res, Tm::loop_flag(sg, Tm::loop_x(sg, t) + 1), Tm::loop_ns(sg, Tm::loop_x(sg, t) + 1)),
+        Fun::ports_onto(sg, Tm::loop_x(sg, t) + 2, Nil), Tm::loop_flag(sg, Tm::loop_x(sg, t) + 1) + 1);
+    Option::and_then_elim(P, trivial, Tm::self_args(w, g, ports, inits), λ qs =>
+        Ty::check_one_words(tys, sg).and_then(λ _ => res.check_one_word(tys).and_then(λ _ =>
+        lower_body(pa, Fun::ports_onto(sg, next + 1, Nil), Tm::loop_flag(sg, next) + 1).and_then(λ t =>
+        second(t).and_then(λ t2 => Some(Tm::loop_region(sg, qs, next, t, t2)))))), λ qs e_qs =>
+    Option::and_then_elim(P, trivial, Ty::check_one_words(tys, sg), λ _ => res.check_one_word(tys).and_then(λ _ =>
+        lower_body(pa, Fun::ports_onto(sg, next + 1, Nil), Tm::loop_flag(sg, next) + 1).and_then(λ t =>
+        second(t).and_then(λ t2 => Some(Tm::loop_region(sg, qs, next, t, t2))))), λ ok _ =>
+    Option::and_then_elim(P, trivial, res.check_one_word(tys), λ _ =>
+        lower_body(pa, Fun::ports_onto(sg, next + 1, Nil), Tm::loop_flag(sg, next) + 1).and_then(λ t =>
+        second(t).and_then(λ t2 => Some(Tm::loop_region(sg, qs, next, t, t2)))), λ er _ =>
+    Option::and_then_elim(P, trivial, lower_body(pa, Fun::ports_onto(sg, next + 1, Nil), Tm::loop_flag(sg, next) + 1), λ t =>
+        second(t).and_then(λ t2 => Some(Tm::loop_region(sg, qs, next, t, t2))), λ t lowered_t =>
+    Option::and_then_elim(P, trivial, second(t), λ t2 => Some(Tm::loop_region(sg, qs, next, t, t2)), λ t2 lowered_t2 =>
+    λ call agree values env held below => {
+        let o = t.next + 2;
+        let x = Tm::loop_x(sg, t);
+        let b2 = x + 1;
+        let o2 = t2.next + 2;
+        let x2 = Tm::loop_x(sg, t2);
+        let rr = x2 + 1;
+        let outs = Fun::param_ids(sg, o);
+        let outs2 = Fun::param_ids(sg, o2);
+        let pa2 = PassAt(res, Tm::loop_flag(sg, b2), Tm::loop_ns(sg, b2));
+        let held_t = j(lowered_t, λ r _ => Tm::PassHolds(body, w, pa, inner, Fun::ports_onto(sg, next + 1, Nil), Tm::loop_flag(sg, next) + 1, r),
+            ih(pa, Fun::ports_onto(sg, next + 1, Nil), Tm::loop_flag(sg, next) + 1));
+        let held_t2 = j(lowered_t2, λ r _ => Tm::PassHolds(body, w, pa2, inner, Fun::ports_onto(sg, b2 + 1, Nil), Tm::loop_flag(sg, b2) + 1, r),
+            ih(pa2, Fun::ports_onto(sg, b2 + 1, Nil), Tm::loop_flag(sg, b2) + 1));
+        // The ids, in order.
+        let c1 = Tm::loop_c(sg, next);
+        let next_c1: (next < c1) = Fun::past_ge(sg, next + 1);
+        let c1_flag: (c1 < Tm::loop_flag(sg, next) + 1) = Nat::lt_of_lt_of_le(c1, c1 + 1, Tm::loop_flag(sg, next) + 1, c1.lt_succ_self(),
+            Nat::le_succ_r(c1 + 1, Tm::loop_flag(sg, next), Fun::past_ge(sg, c1 + 1)));
+        let flag_t = Tm::pass_next(sg, body, w, ok, next, t, held_t, call, agree);
+        let next_o: (next < o) = Nat::lt_of_lt_of_le(next, c1, o, next_c1, Nat::le_trans(c1, t.next, o,
+            Nat::le_trans(c1, Tm::loop_flag(sg, next) + 1, t.next, Nat::le_of_lt(c1, Tm::loop_flag(sg, next) + 1, c1_flag), flag_t),
+            Nat::le_succ_r(t.next, t.next + 1, Nat::le_succ_r(t.next, t.next, t.next.le_refl()))));
+        let o_x: (o < x) = Tm::past_cons(Ty::at(g, i0), irest.map(λ i => Ty::at(g, i)), o);
+        let c2 = Tm::loop_c(sg, b2);
+        let flag_t2 = Tm::pass_next(sg, body, w, ok, b2, t2, held_t2, call, agree);
+        let b2_c2: (b2 < c2) = Fun::past_ge(sg, b2 + 1);
+        let c2_t2: (c2 <= t2.next) = Nat::le_trans(c2, Tm::loop_flag(sg, b2) + 1, t2.next,
+            Nat::le_succ_r(c2, Tm::loop_flag(sg, b2), Nat::le_trans(c2, c2 + 1, Tm::loop_flag(sg, b2), Nat::le_succ_r(c2, c2, c2.le_refl()),
+                Fun::past_ge(sg, c2 + 1))), flag_t2);
+        let b2_o2: (b2 < o2) = Nat::lt_of_lt_of_le(b2, c2, o2, b2_c2, Nat::le_trans(c2, t2.next, o2, c2_t2,
+            Nat::le_succ_r(t2.next, t2.next + 1, Nat::le_succ_r(t2.next, t2.next, t2.next.le_refl()))));
+        let o2_x2: (o2 < x2) = Tm::past_cons(Ty::at(g, i0), irest.map(λ i => Ty::at(g, i)), o2);
+        let x_b2: (x < b2) = x.lt_succ_self();
+        let next_x: (next < x) = Nat::lt_trans(next, o, x, next_o, o_x);
+        let next_b2: (next < b2) = Nat::lt_trans(next, x, b2, next_x, x_b2);
+        let next_o2: (next < o2) = Nat::lt_trans(next, b2, o2, next_b2, b2_o2);
+        let next_x2: (next < x2) = Nat::lt_trans(next, o2, x2, next_o2, o2_x2);
+        let next_rr: (next < rr) = Nat::lt_trans(next, x2, rr, next_x2, x2.lt_succ_self());
+        // The first loop node.
+        let F = λ (a: List<BitVec(64)> → res.sem(tys)) (ys: List<BitVec(64)>) => Tm::loop_body(w, sg, body, a, ys);
+        let ok_res: res.Answer(tys) = Ty::one_word_answer(tys, res, er);
+        let junk = λ (ys: List<BitVec(64)>) => Ty::read_words(res, tys, ys);
+        let stuck = λ (ys: List<BitVec(64)>) => F(junk, ys);
+        let xs0 = Tm::words(w, g, env, inits);
+        let len0: (xs0.len() = sg.len()) = trans(Tm::words_length(w, g, env, inits), sym(List::len_map(inits, λ i => Ty::at(g, i))));
+        let values1 = Valuation::set(values, next, λ wd => BitVec::ofNat(Tm::passes()));
+        let keeps1: Keeps(values, values1, next) = λ wd id below_id =>
+            Valuation::set_other(values, next, λ y => BitVec::ofNat(Tm::passes()), wd, id, Nat::ne_of_lt(id, next, below_id));
+        let in_below = Tm::self_args_below(w, g, ports, next, below, inits, qs, e_qs);
+        let ws0: (words_of(values1, qs) = xs0) =
+            trans(Tm::words_kept(values, values1, next, keeps1, qs, in_below), Tm::self_args_sound(w, g, ports, values, env, held, inits, qs, e_qs));
+        let at_bound: (values1(64, next).toNat() = Tm::passes()) = trans(
+            cong_fn(λ (v: BitVec(64)) => v.toNat(), Valuation::set_here(values, next, λ wd => BitVec::ofNat(Tm::passes()), 64)),
+            BitVec::toNat_ofNat(64, Tm::passes(), trivial));
+        let ps1 = Fun::param_ids(sg, next + 1);
+        let ns1 = Tm::loop_ns(sg, next);
+        let step1 = λ (pass: Valuation()) => Tm::loop_pass(Tm::loop_flag(sg, next), t).eval(call, pass, buffers := w.spans);
+        let end1 = loop_eval(step1, ps1, c1, t.next + 1, ns1, values1(64, next).toNat(), words_of(values1, qs));
+        let ran1: (Tm::loop_end(tys, res, stuck, end1) = Ty::result_words(tys, res, loop::Loop::rounds(Tm::passes(), F, stuck, xs0))) =
+            j(sym(at_bound), λ k _ => Tm::loop_end(tys, res, stuck, loop_eval(step1, ps1, c1, t.next + 1, ns1, k,
+                    words_of(values1, qs))) = Ty::result_words(tys, res, loop::Loop::rounds(Tm::passes(), F, stuck, xs0)),
+                j(sym(ws0), λ ys _ => Tm::loop_end(tys, res, stuck, loop_eval(step1, ps1, c1, t.next + 1, ns1,
+                        Tm::passes(), ys)) = Ty::result_words(tys, res, loop::Loop::rounds(Tm::passes(), F, stuck, xs0)),
+                    Tm::core_runs(sg, body, w, ok, next, t, held_t, call, agree, stuck, Tm::passes(), xs0, len0)));
+        let st1 = end1.state;
+        let lengths1: (ns1.len() = ps1.len()) = trans(Fun::ids_len(sg, c1 + 1), sym(Fun::ids_len(sg, next + 1)));
+        let qs_len: (words_of(values1, qs).len() = ps1.len()) = trans(cong_fn(λ (l: List<BitVec(64)>) => l.len(), ws0), trans(len0, sym(Fun::ids_len(sg, next + 1))));
+        let st1_len: (st1.len() = sg.len()) = trans(loop_eval_len(step1, ps1, c1, t.next + 1, ns1, lengths1, values1(64, next).toNat(), words_of(values1, qs), qs_len),
+            Fun::ids_len(sg, next + 1));
+        let bv1 = Valuation::bind(values1, outs, st1);
+        let va = Valuation::set(bv1, x, bit_value(end1.exhausted));
+        let keeps_va: Keeps(values1, va, next) = Tm::bind_set_keeps(values1, outs, st1, x, bit_value(end1.exhausted), next,
+            λ id lt => Fun::absent_ids(sg, o, id, Inl(Nat::lt_trans(id, next, o, lt, next_o))), Nat::le_of_lt(next, x, next_x));
+        // After it: the answer, or the extra pass.
+        let arm_f = nodes_region([Move(64, rr, o)]);
+        let core2 = Tm::loop_core(sg, outs, b2, 1, t2);
+        let arm_t = Compose(core2, nodes_region([Move(64, rr, o2)]));
+        let fin = branch(x, Ports([Port(rr, 64)]), arm_t, arm_f).eval(call, va, buffers := w.spans);
+        let vb = Valuation::set(va, b2, λ wd => BitVec::ofNat(1));
+        let ps2 = Fun::param_ids(sg, b2 + 1);
+        let ns2 = Tm::loop_ns(sg, b2);
+        let step2 = λ (pass: Valuation()) => Tm::loop_pass(Tm::loop_flag(sg, b2), t2).eval(call, pass, buffers := w.spans);
+        let end2 = loop_eval(step2, ps2, c2, t2.next + 1, ns2, vb(64, b2).toNat(), words_of(vb, outs));
+        let va2 = Valuation::set(Valuation::bind(vb, outs2, end2.state), x2, bit_value(end2.exhausted));
+        let keeps_vb: Keeps(va, vb, next) = λ wd id below_id =>
+            Valuation::set_other(va, b2, λ y => BitVec::ofNat(1), wd, id, Nat::ne_of_lt(id, b2, Nat::lt_trans(id, next, b2, below_id, next_b2)));
+        let keeps_va2: Keeps(vb, va2, next) = Tm::bind_set_keeps(vb, outs2, end2.state, x2, bit_value(end2.exhausted), next,
+            λ id lt => Fun::absent_ids(sg, o2, id, Inl(Nat::lt_trans(id, next, o2, lt, next_o2))), Nat::le_of_lt(next, x2, next_x2));
+        let keeps_t: Keeps(va, arm_t.eval(call, va, buffers := w.spans), next) = λ wd id below_id =>
+            trans(Valuation::set_other(va2, rr, λ y => va2(y, o2), wd, id, Nat::ne_of_lt(id, rr, Nat::lt_trans(id, next, rr, below_id, next_rr))),
+                trans(keeps_va2(wd, id, below_id), keeps_vb(wd, id, below_id)));
+        let keeps_f: Keeps(va, arm_f.eval(call, va, buffers := w.spans), next) = λ wd id below_id =>
+            Valuation::set_other(va, rr, λ y => va(y, o), wd, id, Nat::ne_of_lt(id, rr, Nat::lt_trans(id, next, rr, below_id, next_rr)));
+        let keeps_all: Keeps(values, fin, next) = λ wd id below_id =>
+            trans(branch_keeps(va, x, Ports([Port(rr, 64)]), arm_t, arm_f, call, w.spans, next, keeps_t, keeps_f, wd, id, below_id),
+                trans(keeps_va(wd, id, below_id), keeps1(wd, id, below_id)));
+        let more1 = irest.map(λ i => Ty::at(g, i));
+        let len_b1: (st1.len() = Fun::param_ids(more1, o + 1).len() + 1) = trans(st1_len, cong_fn(λ (k: Nat) => k + 1, sym(Fun::ids_len(more1, o + 1))));
+        let head = λ (ws: List<BitVec(64)>) => ws.head_or(BitVec::zero());
+        let answer: (fin(64, rr) = head(Tm::loop_end(tys, res, stuck, end1))) =
+            (match end1.exhausted as λ bx => end1.exhausted = bx → fin(64, rr) = head(Tm::loop_end(tys, res, stuck, end1)) {
+                False => λ (h: end1.exhausted = False) => {
+                    let bit: (va(1, x).head_bit() = False) = trans(Tm::exhausted_bit(bv1, x, end1.exhausted), h);
+                    let at_o: (va(64, o) = st1.head_or(BitVec::zero())) = trans(
+                        Valuation::set_other(bv1, x, bit_value(end1.exhausted), 64, o, Nat::ne_of_lt(o, x, o_x)),
+                        Tm::bind_head(values1, o, Fun::param_ids(more1, o + 1), st1, len_b1));
+                    let le: (head(Tm::loop_end(tys, res, stuck, end1)) = st1.head_or(BitVec::zero())) =
+                        j(sym(h), λ bb _ => head(match bb { False => Ty::first(res.span(tys), st1), True => Ty::result_words(tys, res, stuck(st1)) }) =
+                            st1.head_or(BitVec::zero()), Ty::answer_head(tys, res, st1, ok_res));
+                    trans(branch_false(va, x, Ports([Port(rr, 64)]), arm_t, arm_f, call, w.spans, bit, 64, rr),
+                        trans(Valuation::set_here(va, rr, λ y => va(y, o), 64), trans(at_o, sym(le))))
+                },
+                True => λ (h: end1.exhausted = True) => {
+                    let bit: (va(1, x).head_bit() = True) = trans(Tm::exhausted_bit(bv1, x, end1.exhausted), h);
+                    let outs_len: (outs.len() = st1.len()) = trans(Fun::ids_len(sg, o), sym(st1_len));
+                    let in2: (words_of(vb, outs) = st1) = trans(
+                        words_agree(outs, bv1, vb, λ id mem => {
+                            let lt_x: (id < x) = Fun::param_ids_below(sg, o, id, mem);
+                            trans(Valuation::set_other(va, b2, λ y => BitVec::ofNat(1), 64, id, Nat::ne_of_lt(id, b2, Nat::lt_trans(id, x, b2, lt_x, x_b2))),
+                                Valuation::set_other(bv1, x, bit_value(end1.exhausted), 64, id, Nat::ne_of_lt(id, x, lt_x)))
+                        }),
+                        words_of_bind(values1, outs, Fun::ids_distinct(sg, o), st1, outs_len));
+                    let bound2: (vb(64, b2).toNat() = 1) = trans(cong_fn(λ (v: BitVec(64)) => v.toNat(), Valuation::set_here(va, b2, λ wd => BitVec::ofNat(1), 64)),
+                        BitVec::toNat_ofNat(64, 1, trivial));
+                    let ran2: (Tm::loop_end(tys, res, junk, end2) = Ty::result_words(tys, res, loop::Loop::rounds(1, F, junk, st1))) =
+                        j(sym(bound2), λ k _ => Tm::loop_end(tys, res, junk, loop_eval(step2, ps2, c2, t2.next + 1, ns2, k, words_of(vb, outs))) =
+                                Ty::result_words(tys, res, loop::Loop::rounds(1, F, junk, st1)),
+                            j(sym(in2), λ ys _ => Tm::loop_end(tys, res, junk, loop_eval(step2, ps2, c2, t2.next + 1, ns2, 1, ys)) =
+                                    Ty::result_words(tys, res, loop::Loop::rounds(1, F, junk, st1)),
+                                Tm::core_runs(sg, body, w, ok, b2, t2, held_t2, call, agree, junk, 1, st1, st1_len)));
+                    let lengths2: (ns2.len() = ps2.len()) = trans(Fun::ids_len(sg, c2 + 1), sym(Fun::ids_len(sg, b2 + 1)));
+                    let in_len: (words_of(vb, outs).len() = ps2.len()) = trans(cong_fn(λ (l: List<BitVec(64)>) => l.len(), in2), trans(st1_len, sym(Fun::ids_len(sg, b2 + 1))));
+                    let st2_len: (end2.state.len() = sg.len()) = trans(loop_eval_len(step2, ps2, c2, t2.next + 1, ns2, lengths2, vb(64, b2).toNat(), words_of(vb, outs), in_len),
+                        Fun::ids_len(sg, b2 + 1));
+                    let len_b2: (end2.state.len() = Fun::param_ids(more1, o2 + 1).len() + 1) = trans(st2_len, cong_fn(λ (k: Nat) => k + 1, sym(Fun::ids_len(more1, o2 + 1))));
+                    let at_o2: (va2(64, o2) = end2.state.head_or(BitVec::zero())) = trans(
+                        Valuation::set_other(Valuation::bind(vb, outs2, end2.state), x2, bit_value(end2.exhausted), 64, o2, Nat::ne_of_lt(o2, x2, o2_x2)),
+                        Tm::bind_head(vb, o2, Fun::param_ids(more1, o2 + 1), end2.state, len_b2));
+                    let le: (Tm::loop_end(tys, res, stuck, end1) = Ty::result_words(tys, res, stuck(st1))) =
+                        j(sym(h), λ bb _ => (match bb { False => Ty::first(res.span(tys), st1), True => Ty::result_words(tys, res, stuck(st1)) }) =
+                            Ty::result_words(tys, res, stuck(st1)), refl);
+                    let extra: (end2.state.head_or(BitVec::zero()) = head(Tm::loop_end(tys, res, junk, end2))) =
+                        trans(sym(Ty::answer_head(tys, res, end2.state, ok_res)), cong_fn(head, sym(Tm::extra_end(tys, res, ok_res, end2))));
+                    trans(branch_true(va, x, Ports([Port(rr, 64)]), arm_t, arm_f, call, w.spans, bit, 64, rr),
+                        trans(Valuation::set_here(va2, rr, λ y => va2(y, o2), 64),
+                            trans(at_o2, trans(extra, cong_fn(head, trans(ran2, sym(le)))))))
+                },
+            })(refl);
+        let meaning: (loop::Loop::rounds(Tm::passes(), F, stuck, xs0) = Tm::sem(Loop(inits, body), w, g, env)) =
+            sym(Tm::sem_in_loop(inits, body, w, Tm::no_label(tys), g, env));
+        let word: (fin(64, rr) = Tm::out(tys, res, Tm::sem(Loop(inits, body), w, g, env))) =
+            trans(answer, trans(cong_fn(head, ran1), cong_fn(λ (v: res.sem(tys)) => Tm::out(tys, res, v), meaning)));
+        let holds0 = Ty::one_word_holds(tys, fin, rr, res, er, fin(64, rr), refl);
+        let holds1 = j(word, λ xw _ => res.Holds(tys, fin, rr, Ty::cast(tys, Word(64), res, xw)), holds0);
+        let holds = j(Ty::one_word_back(tys, res, er, Tm::sem(Loop(inits, body), w, g, env)), λ v _ => res.Holds(tys, fin, rr, v), holds1);
+        ⟨Nat::le_succ_r(next, rr, Nat::le_of_lt(next, rr, next_rr)), ⟨Ty::one_word_below(tys, res, er, rr), ⟨keeps_all, holds⟩⟩⟩
+    })))))
+}
+
+theorem Tm::loop_sound(inits: List<Nat>, body: Tm, w: World, g: List<Ty>, ports: List<Nat>, next: Nat,
+    ih: (pc: PassAt) → (ps: List<Nat>) → (k: Nat) → Tm::PassHolds(body, w, pc, Tm::inside(g, inits), ps, k, Tm::lower_in(body, w, Some(pc), Tm::inside(g, inits), ps, k))):
+    Tm::LowerHolds(Loop(inits, body), w, g, ports, next, Tm::lower_loop(w, g, ports, next, inits, body,
+        λ pc ps k => Tm::lower_in(body, w, Some(pc), Tm::inside(g, inits), ps, k))) {
+    match inits as λ is => ((pc: PassAt) → (ps: List<Nat>) → (k: Nat) →
+            Tm::PassHolds(body, w, pc, Tm::inside(g, is), ps, k, Tm::lower_in(body, w, Some(pc), Tm::inside(g, is), ps, k))) →
+        Tm::LowerHolds(Loop(is, body), w, g, ports, next, Tm::lower_loop(w, g, ports, next, is, body,
+            λ pc ps k => Tm::lower_in(body, w, Some(pc), Tm::inside(g, is), ps, k))) {
+        Nil => λ _ => trivial,
+        Cons(i0, irest) => λ ih2 => Tm::loop_sound_at(i0, irest, body, w, g, ports, next, ih2),
+    }(ih)
+}
+
+// The lowering's soundness, as a value's and as a pass's: one induction,
+// because a loop's body is a pass whose leaves are values.
+theorem Tm::lower_in_sound(self t: Tm, w: World): (mode: Option<PassAt>) → (g: List<Ty>) → (ports: List<Nat>) → (next: Nat) →
+    Tm::HoldsIn(t, w, mode, g, ports, next, Tm::lower_in(t, w, mode, g, ports, next)) {
+    match t {
+        Var(i) => Tm::both_leaf(Var(i), w, λ g ports next =>
             Option::and_then_elim(λ (r: Option<Lowered>) => Tm::LowerHolds(Var(i), w, g, ports, next, r), trivial,
                 port_at(ports, i), λ p => Some(Lowered(nodes_region(Nil), p, next)), λ p at =>
                 λ call agree values env held below =>
                     ⟨next.le_refl(), ⟨below_at(w.tys, g, ports, next, below, i, p, at),
-                        ⟨λ wd id _ => refl, env_holds_at(w.tys, values, g, ports, env, held, i, p, at)⟩⟩⟩),
-        Lit(c, n) => λ g ports next => Tm::lower_lit_sound(w, g, ports, next, c, n),
-        Prim(op, args) => λ g ports next => Tm::lower_prim_sound(op, w, g, ports, next, args),
-        Let(e, body) => λ g ports next => {
+                        ⟨λ wd id _ => refl, env_holds_at(w.tys, values, g, ports, env, held, i, p, at)⟩⟩⟩), λ pc g ports next => refl),
+        Lit(c, n) => Tm::both_leaf(Lit(c, n), w, λ g ports next => Tm::lower_lit_sound(w, g, ports, next, c, n), λ pc g ports next => refl),
+        Prim(op, args) => Tm::both_leaf(Prim(op, args), w, λ g ports next => Tm::lower_prim_sound(op, w, g, ports, next, args), λ pc g ports next => refl),
+        Let(e, body) => λ mode => match mode as λ md => (g: List<Ty>) → (ports: List<Nat>) → (next: Nat) →
+            Tm::HoldsIn(Let(e, body), w, md, g, ports, next, Tm::lower_in(Let(e, body), w, md, g, ports, next)) {
+            None => λ g ports next => {
             let P = λ (r: Option<Lowered>) => Tm::LowerHolds(Let(e, body), w, g, ports, next, r);
             let inner = Cons(Tm::ty(e, w, g), g);
             Option::and_then_elim(P, trivial, Tm::lower(e, w, g, ports, next),
@@ -5364,10 +6949,10 @@ theorem Tm::lower_sound(self t: Tm, w: World): (g: List<Ty>) → (ports: List<Na
             Option::and_then_elim(P, trivial, Tm::lower(body, w, inner, Cons(le.result, ports), le.next), λ lb => Tm::compose(le, lb),
                 λ lb lowered_body => λ call agree values env held below => {
                     let first = j(lowered_e, λ r _ => Tm::LowerHolds(e, w, g, ports, next, r),
-                        Tm::lower_sound(e, w, g, ports, next))(call, agree, values, env, held, below);
+                        Tm::lower_in_sound(e, w, None, g, ports, next))(call, agree, values, env, held, below);
                     let mid = le.region.eval(call, values, buffers := w.spans);
                     let then = j(lowered_body, λ r _ => Tm::LowerHolds(body, w, inner, Cons(le.result, ports), le.next, r),
-                        Tm::lower_sound(body, w, inner, Cons(le.result, ports), le.next))(call, agree, mid, Pair(Tm::sem(e, w, g, env), env),
+                        Tm::lower_in_sound(body, w, None, inner, Cons(le.result, ports), le.next))(call, agree, mid, Pair(Tm::sem(e, w, g, env), env),
                         ⟨first.right.right.right, env_holds_keeps(w.tys, g, values, mid, next, first.right.right.left, ports, env, below, held)⟩,
                         ⟨first.right.left, below_mono(w.tys, g, next, le.next, first.left, ports, below)⟩);
                     ⟨Nat::le_trans(next, le.next, lb.next, first.left, then.left), ⟨then.right.left,
@@ -5376,25 +6961,69 @@ theorem Tm::lower_sound(self t: Tm, w: World): (g: List<Ty>) → (ports: List<Na
                             then.right.right.right⟩⟩⟩
                 }))
         },
-        If(c, yes, no) => λ g ports next => Tm::if_sound(c, yes, no, w,
-            λ g2 ports2 next2 => Tm::lower_sound(yes, w, g2, ports2, next2), λ g2 ports2 next2 => Tm::lower_sound(no, w, g2, ports2, next2),
+            Some(pc) => λ g ports next => Tm::let_at_sound(e, body, w, pc.res, pc.flag, pc.nexts, g, ports, next,
+                λ g2 ports2 next2 => Tm::lower_in_sound(e, w, None, g2, ports2, next2),
+                λ g2 ports2 next2 => Tm::lower_in_sound(body, w, Some(pc), g2, ports2, next2)),
+        },
+        If(c, yes, no) => λ mode => match mode as λ md => (g: List<Ty>) → (ports: List<Nat>) → (next: Nat) →
+            Tm::HoldsIn(If(c, yes, no), w, md, g, ports, next, Tm::lower_in(If(c, yes, no), w, md, g, ports, next)) {
+            None => λ g ports next => Tm::if_sound(c, yes, no, w,
+            λ g2 ports2 next2 => Tm::lower_in_sound(yes, w, None, g2, ports2, next2), λ g2 ports2 next2 => Tm::lower_in_sound(no, w, None, g2, ports2, next2),
             g, ports, next),
-        IfEq(c, yes, no) => λ g ports next => Tm::ifeq_of_if(c, yes, no, w, g, ports, next, Tm::lower(If(c, yes, no), w, g, ports, next),
+            Some(pc) => λ g ports next => Tm::if_at_sound(If(c, yes, no), c, yes, no, w, pc.res, pc.flag, pc.nexts,
+                λ g2 ports2 next2 => Tm::lower_in_sound(yes, w, Some(pc), g2, ports2, next2),
+                λ g2 ports2 next2 => Tm::lower_in_sound(no, w, Some(pc), g2, ports2, next2), g, ports, next,
+                λ ey again env => Tm::cast_pick(w.tys, yes.ty(w, g), no.ty(w, g), pc.res, ey, Ty::cast(w.tys, Ty::at(g, c), Bit, Env::get(w.tys, g, env, c)),
+                    yes.sem_in(w, Tm::round(w.tys, pc.res, again), g, env), no.sem_in(w, Tm::round(w.tys, pc.res, again), g, env))),
+        },
+        IfEq(c, yes, no) => λ mode => match mode as λ md => (g: List<Ty>) → (ports: List<Nat>) → (next: Nat) →
+            Tm::HoldsIn(IfEq(c, yes, no), w, md, g, ports, next, Tm::lower_in(IfEq(c, yes, no), w, md, g, ports, next)) {
+            None => λ g ports next => Tm::ifeq_of_if(c, yes, no, w, g, ports, next, Tm::lower(If(c, yes, no), w, g, ports, next),
             Tm::if_sound(c, yes, no, w,
-                λ g2 ports2 next2 => Tm::lower_sound(yes, w, g2, ports2, next2), λ g2 ports2 next2 => Tm::lower_sound(no, w, g2, ports2, next2),
+                λ g2 ports2 next2 => Tm::lower_in_sound(yes, w, None, g2, ports2, next2), λ g2 ports2 next2 => Tm::lower_in_sound(no, w, None, g2, ports2, next2),
                 g, ports, next)),
-        Make(i, args) => λ g ports next => Tm::lower_make_sound(w, g, ports, next, i, args),
-        Field(i, k, of) => λ g ports next => Tm::lower_field_sound(w, g, ports, next, i, k, of),
-        Call(f, args) => λ g ports next => Tm::lower_call_sound(w, g, ports, next, f, args),
-        Fold(_, _, _) => λ g ports next => trivial,
-        Case(_, _, _) => λ g ports next => trivial,
-        Byte(k, i, length) => λ g ports next => Tm::lower_byte_sound(w, g, ports, next, k, i, length),
-        Pick(i, c, arms, eq) => λ g ports next => Tm::pick_sound(i, c, arms, eq, w, λ g2 ports2 next2 => Tm::lower_sound(arms, w, g2, ports2, next2), g, ports, next),
-        Inject(i, k, args) => λ g ports next => Tm::lower_inject_sound(w, g, ports, next, i, k, args),
-        Slot(i, j, of) => λ g ports next => Tm::lower_slot_sound(w, g, ports, next, i, j, of),
-        Iterate(init, test, body) => λ g ports next => Tm::iterate_sound(init, test, body, w,
-            λ g2 ports2 next2 => Tm::lower_sound(test, w, g2, ports2, next2), λ g2 ports2 next2 => Tm::lower_sound(body, w, g2, ports2, next2), g, ports, next),
+            Some(pc) => λ g ports next => Tm::if_at_sound(IfEq(c, yes, no), c, yes, no, w, pc.res, pc.flag, pc.nexts,
+                λ g2 ports2 next2 => Tm::lower_in_sound(yes, w, Some(pc), g2, ports2, next2),
+                λ g2 ports2 next2 => Tm::lower_in_sound(no, w, Some(pc), g2, ports2, next2), g, ports, next,
+                λ ey again env => {
+                    let lab = Tm::round(w.tys, pc.res, again);
+                    let b = Ty::cast(w.tys, Ty::at(g, c), Bit, Env::get(w.tys, g, env, c));
+                    let nv = Ty::cast(w.tys, no.ty(w, g), yes.ty(w, g), no.sem_in(w, lab, g, env));
+                    trans(cong_fn(λ (v: yes.ty(w, g).sem(w.tys)) => Ty::cast(w.tys, yes.ty(w, g), pc.res, v),
+                            Tm::convoy_match(yes.ty(w, g).sem(w.tys), b, yes.sem_in(w, lab, g, env), nv)),
+                        Tm::cast_pick(w.tys, yes.ty(w, g), no.ty(w, g), pc.res, ey, b, yes.sem_in(w, lab, g, env), no.sem_in(w, lab, g, env)))
+                }),
+        },
+        Make(i, args) => Tm::both_leaf(Make(i, args), w, λ g ports next => Tm::lower_make_sound(w, g, ports, next, i, args), λ pc g ports next => refl),
+        Field(i, k, of) => Tm::both_leaf(Field(i, k, of), w, λ g ports next => Tm::lower_field_sound(w, g, ports, next, i, k, of), λ pc g ports next => refl),
+        Call(f, args) => Tm::both_leaf(Call(f, args), w, λ g ports next => Tm::lower_call_sound(w, g, ports, next, f, args), λ pc g ports next => refl),
+        Fold(a0, a1, a2) => Tm::holds_none(Fold(a0, a1, a2), w),
+        Case(a0, a1, a2) => Tm::holds_none(Case(a0, a1, a2), w),
+        Byte(k, i, length) => Tm::both_leaf(Byte(k, i, length), w, λ g ports next => Tm::lower_byte_sound(w, g, ports, next, k, i, length), λ pc g ports next => refl),
+        Pick(i, c, arms, eq) => Tm::both_leaf(Pick(i, c, arms, eq), w, λ g ports next => Tm::pick_sound(i, c, arms, eq, w, λ g2 ports2 next2 => Tm::lower_in_sound(arms, w, None, g2, ports2, next2), g, ports, next), λ pc g ports next => refl),
+        Inject(i, k, args) => Tm::both_leaf(Inject(i, k, args), w, λ g ports next => Tm::lower_inject_sound(w, g, ports, next, i, k, args), λ pc g ports next => refl),
+        Slot(i, j, of) => Tm::both_leaf(Slot(i, j, of), w, λ g ports next => Tm::lower_slot_sound(w, g, ports, next, i, j, of), λ pc g ports next => refl),
+        Iterate(init, test, body) => Tm::both_leaf(Iterate(init, test, body), w, λ g ports next => Tm::iterate_sound(init, test, body, w,
+            λ g2 ports2 next2 => Tm::lower_in_sound(test, w, None, g2, ports2, next2), λ g2 ports2 next2 => Tm::lower_in_sound(body, w, None, g2, ports2, next2), g, ports, next), λ pc g ports next => refl),
+        Again(r, args) => λ mode => match mode as λ md => (g: List<Ty>) → (ports: List<Nat>) → (next: Nat) →
+            Tm::HoldsIn(Again(r, args), w, md, g, ports, next, Tm::lower_in(Again(r, args), w, md, g, ports, next)) {
+            None => λ g ports next => trivial,
+            Some(pc) => λ g ports next => Tm::again_at_sound(r, args, w, pc.res, pc.flag, pc.nexts, g, ports, next),
+        },
+        Loop(inits, body) => λ mode => match mode as λ md => (g: List<Ty>) → (ports: List<Nat>) → (next: Nat) →
+            Tm::HoldsIn(Loop(inits, body), w, md, g, ports, next, Tm::lower_in(Loop(inits, body), w, md, g, ports, next)) {
+            None => λ g ports next => Tm::loop_sound(inits, body, w, g, ports, next,
+                λ pc ps k => Tm::lower_in_sound(body, w, Some(pc), Tm::inside(g, inits), ps, k)),
+            Some(pc) => λ g ports next => Tm::leaf_at_sound(Loop(inits, body), w, pc.res, pc.flag, pc.nexts, g, ports, next,
+                Tm::lower_in(Loop(inits, body), w, None, g, ports, next),
+                Tm::loop_sound(inits, body, w, g, ports, next, λ pc2 ps k => Tm::lower_in_sound(body, w, Some(pc2), Tm::inside(g, inits), ps, k))),
+        },
     }
+}
+
+theorem Tm::lower_sound(self t: Tm, w: World): (g: List<Ty>) → (ports: List<Nat>) → (next: Nat) →
+    Tm::LowerHolds(t, w, g, ports, next, Tm::lower(t, w, g, ports, next)) {
+    λ g ports next => Tm::lower_in_sound(t, w, None, g, ports, next)
 }
 
 // ---------------------------------------------------------------------------
@@ -5612,19 +7241,6 @@ theorem Ty::edge_reads(tys: Table, call: function_ir_eval::Answers(), buffers: B
 // (`Ty::Back`); a C caller is handed two at most, which `compile-x86`
 // checks.
 
-// Fields that are 64-bit words, one at least: the first is the word
-// returned, the rest beside it.
-fn Ty::WordsOne(fs: List<Ty>) → Type {
-    match fs { Nil => False, Cons(f, rest) => (f = Word(64)) ∧ Ty::Words(rest) }
-}
-
-fn Ty::check_words_one(fs: List<Ty>) → Option<Ty::WordsOne(fs)> {
-    match fs as λ g => Option<Ty::WordsOne(g)> {
-        Nil => None,
-        Cons(f, rest) => f.check(Word(64)).and_then(λ e => Ty::check_words(rest).and_then(λ ws => Some(⟨e, ws⟩))),
-    }
-}
-
 // Slots, one at least: the first is the word returned, the rest beside it.
 fn Ty::SlotsOne(fs: List<Ty>) → Type {
     match fs { Nil => False, Cons(f, rest) => f.Slot() ∧ Ty::Slots(rest) }
@@ -5640,10 +7256,6 @@ theorem Ty::slots_one_all(fs: List<Ty>): Ty::SlotsOne(fs) → Ty::Slots(fs) {
 
 theorem Ty::slots_one_cons(fs: List<Ty>): Ty::SlotsOne(fs) → fs = Nil → False {
     match fs { Nil => λ never _ => never, Cons(g, rest) => λ _ (bad: Cons(g, rest) = Nil) => absurd(bad) }
-}
-
-theorem Ty::words_one_all(fs: List<Ty>): Ty::WordsOne(fs) → Ty::Words(fs) {
-    match fs { Nil => λ never => false_elim(never), Cons(_, _) => λ ok => ok }
 }
 
 // The first of such fields held from `port` is the word there.
@@ -5721,10 +7333,6 @@ theorem Ty::out_pieces(tys: Table, call: function_ir_eval::Answers(), buffers: B
 // meaning (`Fun::meaning`). Parameters are 64-bit words, the ids 0, 1, …
 // in order; the last is variable 0, so the context's ports are the ids
 // reversed, and the body takes fresh ids above them.
-
-fn Fun::ports_onto(ps: List<Ty>, m: Nat, ports: List<Nat>) → List<Nat> {
-    match ps { Nil => ports, Cons(_, rest) => Fun::ports_onto(rest, m + 1, Cons(m, ports)) }
-}
 
 fn Fun::context(self f: Fun) → List<Ty> { Ty::bind_onto(f.params, Nil) }
 
@@ -5815,18 +7423,6 @@ fn Fun::lower(self f: Fun, w: World) → Option<Function> {
     Ty::check_edges(w.tys, f.params).and_then(λ _ => f.lower_result(w))
 }
 
-// Words as an environment: the parameters bound onto `g` in order, each
-// word cast to its parameter's code (zero past the words' end).
-fn Ty::extend(tys: Table, ps: List<Ty>) → (g: List<Ty>) → Env(tys, g) → List<BitVec(64)> → Env(tys, Ty::bind_onto(ps, g)) {
-    match ps {
-        Nil => λ g env xs => env,
-        Cons(p, rest) => λ g env xs => match xs {
-            Nil => Ty::extend(tys, rest, Cons(p, g), Pair(Ty::cast(tys, Word(64), p, BitVec::zero()), env), Nil),
-            Cons(x, more) => Ty::extend(tys, rest, Cons(p, g), Pair(Ty::cast(tys, Word(64), p, x), env), more),
-        },
-    }
-}
-
 // Words as an environment the plain way: each parameter reads its own
 // words (`Ty::read_words`) and the next takes those after them.
 fn Ty::extend_words(tys: Table, ps: List<Ty>) → (g: List<Ty>) → Env(tys, g) → List<BitVec(64)> → Env(tys, Ty::bind_onto(ps, g)) {
@@ -5875,17 +7471,6 @@ theorem Ty::curry_answers(tys: Table, r: Ty, ps: List<Ty>): (g: List<Ty>) → (e
                     trans(cong_fn(λ (u: p.sem(tys)) => k_at(u, Ty::skip(p.span(tys), xs)), t.right.right),
                         cong_fn(λ (s: List<BitVec(64)>) => k_at(a, s), t.right.left)))
             })),
-    }
-}
-
-// The words at `ids`, zero past the words' end.
-fn Fun::BoundWords(values: Valuation(), ids: List<Nat>) → List<BitVec(64)> → Type {
-    match ids {
-        Nil => λ _ => True,
-        Cons(id, rest) => λ xs => match xs {
-            Nil => (values(64, id) = BitVec::zero()) ∧ Fun::BoundWords(values, rest, Nil),
-            Cons(x, more) => (values(64, id) = x) ∧ Fun::BoundWords(values, rest, more),
-        },
     }
 }
 
@@ -5941,13 +7526,6 @@ theorem Fun::bound_split(values: Valuation(), ids: List<Nat>, later: List<Nat>):
                 ⟨⟨bound.left, inner.left⟩, inner.right⟩
             },
         },
-    }
-}
-
-theorem Ty::ids_len(tys: Table, p: Ty, m: Nat): p.ids(tys, m).len() = p.span(tys) {
-    match p {
-        Word(_) => refl, Bit => refl, ByteList(_) => refl, Lines => refl, Named(i) => Ty::ports_from_len(tys.fields(i), m), Count => refl,
-        Enum(i) => cong_fn(λ (n: Nat) => Succ(n), Ty::ports_from_len(tys.ens(i).slots, m + 1)),
     }
 }
 
@@ -6015,36 +7593,6 @@ theorem Fun::word_ids_below(tys: Table, ps: List<Ty>): (m, id: Nat) → Mem(id, 
                 Fun::words_past_ge(tys, rest, m + p.span(tys))),
             Inr(later) => Fun::word_ids_below(tys, rest, m + p.span(tys), id, later),
         },
-    }
-}
-
-// The parameters' ports hold the environment the words make.
-theorem Fun::env_extend_holds(tys: Table, values: Valuation(), ps: List<Ty>): (g: List<Ty>) → (ports: List<Nat>) →
-    (env: Env(tys, g)) → (m: Nat) → (xs: List<BitVec(64)>) → Ty::OneWords(tys, ps) → EnvHolds(tys, values, g, ports, env) →
-    Fun::BoundWords(values, Fun::param_ids(ps, m), xs) →
-    EnvHolds(tys, values, Ty::bind_onto(ps, g), Fun::ports_onto(ps, m, ports), Ty::extend(tys, ps, g, env, xs)) {
-    match ps {
-        Nil => λ g ports env m xs ok held bound => held,
-        Cons(p, rest) => λ g ports env m xs ok held => match xs as λ ys =>
-            Fun::BoundWords(values, Fun::param_ids(Cons(p, rest), m), ys) →
-            EnvHolds(tys, values, Ty::bind_onto(Cons(p, rest), g), Fun::ports_onto(Cons(p, rest), m, ports), Ty::extend(tys, Cons(p, rest), g, env, ys)) {
-            Nil => λ bound => Fun::env_extend_holds(tys, values, rest, Cons(p, g), Cons(m, ports),
-                Pair(Ty::cast(tys, Word(64), p, BitVec::zero()), env), m + 1, Nil, ok.right,
-                ⟨Ty::one_word_holds(tys, values, m, p, ok.left, BitVec::zero(), bound.left), held⟩, bound.right),
-            Cons(x, more) => λ bound => Fun::env_extend_holds(tys, values, rest, Cons(p, g), Cons(m, ports),
-                Pair(Ty::cast(tys, Word(64), p, x), env), m + 1, more, ok.right,
-                ⟨Ty::one_word_holds(tys, values, m, p, ok.left, x, bound.left), held⟩, bound.right),
-        },
-    }
-}
-
-theorem Fun::below_onto(tys: Table, ps: List<Ty>): (g: List<Ty>) → (m: Nat) → (ports: List<Nat>) → Ty::OneWords(tys, ps) →
-    Below(tys, g, ports, m) → Below(tys, Ty::bind_onto(ps, g), Fun::ports_onto(ps, m, ports), Fun::past(ps, m)) {
-    match ps {
-        Nil => λ g m ports _ below => below,
-        Cons(p, rest) => λ g m ports ok below => Fun::below_onto(tys, rest, Cons(p, g), m + 1, Cons(m, ports), ok.right,
-            ⟨Ty::one_word_below(tys, p, ok.left, m),
-                below_mono(tys, g, m, m + 1, Nat::le_succ_r(m, m, m.le_refl()), ports, below)⟩),
     }
 }
 
@@ -6472,6 +8020,8 @@ theorem Tm::ty_static(self t: Tm, w: World, cs: Sig::Sems(w.tys, w.sigs), spans:
         Inject(_, _, _) => λ g => refl,
         Slot(_, _, _) => λ g => refl,
         Iterate(_, _, _) => λ g => refl,
+        Again(_, _) => λ g => refl,
+        Loop(inits, body) => λ g => Tm::ty_static(body, w, cs, spans, Tm::inside(g, inits)),
     }
 }
 
@@ -6572,6 +8122,8 @@ theorem Tm::lower_static(self t: Tm, w: World, cs: Sig::Sems(w.tys, w.sigs), spa
         Iterate(init, test, body) => λ g ports next => Tm::iterate_static(init, test, body, w, cs, spans, g, ports, next,
             λ ps k => Tm::lower_static(test, w, cs, spans, Cons(Ty::at(g, init), g), ps, k),
             λ ps k => Tm::lower_static(body, w, cs, spans, Cons(Ty::at(g, init), g), ps, k)),
+        Again(_, _) => λ g ports next => refl,
+        Loop(_, _) => λ g ports next => refl,
     }
 }
 

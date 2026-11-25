@@ -73,6 +73,46 @@ theorem loop_eval_same_where(step, other_step: Valuation() → Valuation(), defi
     }
 }
 
+// The same for an unbounded loop (`Until`).
+theorem until_eval_same_where(step, other_step: Valuation() → Valuation(), defined: Valuation() → Bool,
+    same: (v: Valuation()) → defined(v).IsTrue() → Valuation::Same(step(v), other_step(v)),
+    parameters: List<Nat>, exit: Nat, next: List<Nat>, fuel: Nat):
+    (state: List<BitVec(64)>) → until_defined(step, defined, parameters, exit, next, fuel, state).IsTrue() →
+    until_eval(other_step, parameters, exit, next, fuel, state) = until_eval(step, parameters, exit, next, fuel, state) {
+    match fuel {
+        Zero => λ state never => false_elim(never),
+        Succ(rest) => λ state all => {
+            let entry = until_valuation(parameters, state);
+            let after = step(entry);
+            let halves = Bool::is_true_and(defined(entry), match after(1, exit).head_bit() {
+                False => until_defined(step, defined, parameters, exit, next, rest, words_of(after, next)),
+                True => True,
+            }, all);
+            let alike = same(entry, halves.left);
+            let bit: (other_step(entry, 1, exit).head_bit() = after(1, exit).head_bit()) =
+                cong_fn(λ (x: BitVec(1)) => x.head_bit(), alike(1, exit));
+            let words: (words_of(other_step(entry), next) = words_of(after, next)) =
+                words_agree(next, after, other_step(entry), λ id _ => alike(64, id));
+            let moved = eq2(λ (b: Bool) (ws: List<BitVec(64)>) => match b {
+                    False => until_eval(other_step, parameters, exit, next, rest, ws),
+                    True => LoopEnd(ws, False),
+                }, bit, words);
+            trans(moved, (match after(1, exit).head_bit() as λ b =>
+                (match b as λ _ => Bool {
+                    False => until_defined(step, defined, parameters, exit, next, rest, words_of(after, next)),
+                    True => True,
+                }).IsTrue() →
+                (match b { False => until_eval(other_step, parameters, exit, next, rest, words_of(after, next)),
+                    True => LoopEnd(words_of(after, next), False) }) =
+                (match b { False => until_eval(step, parameters, exit, next, rest, words_of(after, next)),
+                    True => LoopEnd(words_of(after, next), False) }) {
+                False => λ later => until_eval_same_where(step, other_step, defined, same, parameters, exit, next, rest, words_of(after, next), later),
+                True => λ _ => refl,
+            })(halves.right))
+        },
+    }
+}
+
 // The theorem: a region defined at a valuation, its calls answered alike
 // wherever `defines` says a callee is defined, evaluates alike from
 // agreeing valuations. `StructuredRegion::eval_answers_over` with the
@@ -154,6 +194,20 @@ theorem StructuredRegion::eval_where_over(self region: StructuredRegion, buffers
                 Valuation::set_same(Valuation::bind(values, outputs, end.state), Valuation::bind(others, outputs, end.state),
                     Valuation::bind_same(values, others, same, outputs, end.state), exhausted, bit_value(end.exhausted), bit_value(end.exhausted),
                     λ w => refl))
+        },
+        Until(inputs, parameters, body, exit, next, outputs, measure_at) => λ values others same ok => {
+            let step = λ (pass: Valuation()) => body.eval_over(buffers, call, pass);
+            let other_step = λ (pass: Valuation()) => body.eval_over(buffers, other, pass);
+            let defined = λ (pass: Valuation()) => body.defined_over(buffers, call, defines, pass);
+            let end = until_eval(step, parameters, exit, next, until_passes(), words_of(values, inputs));
+            let ran: (until_eval(other_step, parameters, exit, next, until_passes(), words_of(others, inputs)) = end) =
+                trans(cong_fn(λ (st: List<BitVec(64)>) => until_eval(other_step, parameters, exit, next, until_passes(), st),
+                        words_agree(inputs, values, others, λ id _ => same(64, id))),
+                    until_eval_same_where(step, other_step, defined,
+                        λ v d => body.eval_where_over(buffers, call, other, defines, answers, v, v, λ w id => refl, d),
+                        parameters, exit, next, until_passes(), words_of(values, inputs), ok));
+            j(sym(ran), λ e _ => Valuation::Same(Valuation::bind(values, outputs, end.state), Valuation::bind(others, outputs, e.state)),
+                Valuation::bind_same(values, others, same, outputs, end.state))
         },
     }
 }
@@ -554,6 +608,56 @@ theorem loop_defined_same_where(step, other_step: Valuation() → Valuation(), d
     }
 }
 
+// The same for an unbounded loop.
+theorem until_defined_same_where(step, other_step: Valuation() → Valuation(), defined, other_defined: Valuation() → Bool,
+    same: (v: Valuation()) → defined(v).IsTrue() → Valuation::Same(step(v), other_step(v)),
+    also: (v: Valuation()) → defined(v).IsTrue() → other_defined(v).IsTrue(),
+    parameters: List<Nat>, exit: Nat, next: List<Nat>, fuel: Nat):
+    (state: List<BitVec(64)>) → until_defined(step, defined, parameters, exit, next, fuel, state).IsTrue() →
+    until_defined(other_step, other_defined, parameters, exit, next, fuel, state).IsTrue() {
+    match fuel {
+        Zero => λ state all => false_elim(all),
+        Succ(rest) => λ state all => {
+            let entry = until_valuation(parameters, state);
+            let after = step(entry);
+            let halves = Bool::is_true_and(defined(entry), match after(1, exit).head_bit() {
+                False => until_defined(step, defined, parameters, exit, next, rest, words_of(after, next)),
+                True => True,
+            }, all);
+            let alike = same(entry, halves.left);
+            let bit: (other_step(entry, 1, exit).head_bit() = after(1, exit).head_bit()) =
+                cong_fn(λ (x: BitVec(1)) => x.head_bit(), alike(1, exit));
+            let words: (words_of(other_step(entry), next) = words_of(after, next)) =
+                words_agree(next, after, other_step(entry), λ id _ => alike(64, id));
+            let later = (match after(1, exit).head_bit() as λ b =>
+                (match b as λ _ => Bool {
+                    False => until_defined(step, defined, parameters, exit, next, rest, words_of(after, next)),
+                    True => True,
+                }).IsTrue() →
+                (match b as λ _ => Bool {
+                    False => until_defined(other_step, other_defined, parameters, exit, next, rest, words_of(after, next)),
+                    True => True,
+                }).IsTrue() {
+                False => λ l => until_defined_same_where(step, other_step, defined, other_defined, same, also, parameters, exit, next, rest,
+                    words_of(after, next), l),
+                True => λ _ => trivial,
+            })(halves.right);
+            let read = j(sym(words), λ ws _ => (match after(1, exit).head_bit() as λ _ => Bool {
+                    False => until_defined(other_step, other_defined, parameters, exit, next, rest, ws),
+                    True => True,
+                }).IsTrue(), later);
+            let moved = j(sym(bit), λ b _ => (match b as λ _ => Bool {
+                    False => until_defined(other_step, other_defined, parameters, exit, next, rest, words_of(other_step(entry), next)),
+                    True => True,
+                }).IsTrue(), read);
+            Bool::is_true_and_intro(other_defined(entry), match other_step(entry, 1, exit).head_bit() {
+                    False => until_defined(other_step, other_defined, parameters, exit, next, rest, words_of(other_step(entry), next)),
+                    True => True,
+                }, also(entry, halves.left), moved)
+        },
+    }
+}
+
 // The theorem: a region defined at a valuation is defined from any
 // agreeing valuation, over calls answered alike wherever `defines` says a
 // callee is defined, and by any `wider` that says so wherever `defines`
@@ -643,6 +747,18 @@ theorem StructuredRegion::defined_where_over(self region: StructuredRegion, buff
             j(sym(words_agree(inputs, values, others, λ id _ => same(64, id))), λ ws _ =>
                 loop_defined(other_step, other_defined, parameters, count, exit, next, others(64, bound).toNat(), ws).IsTrue(), counted)
         },
+        Until(inputs, parameters, body, exit, next, outputs, measure_at) => λ values others same ok => {
+            let step = λ (pass: Valuation()) => body.eval_over(buffers, call, pass);
+            let other_step = λ (pass: Valuation()) => body.eval_over(buffers, other, pass);
+            let defined = λ (pass: Valuation()) => body.defined_over(buffers, call, defines, pass);
+            let other_defined = λ (pass: Valuation()) => body.defined_over(buffers, other, wider, pass);
+            let ran = until_defined_same_where(step, other_step, defined, other_defined,
+                λ v d => body.eval_where_over(buffers, call, other, defines, answers, v, v, λ w id => refl, d),
+                λ v d => body.defined_where_over(buffers, call, other, defines, wider, answers, widens, v, v, λ w id => refl, d),
+                parameters, exit, next, until_passes(), words_of(values, inputs), ok);
+            j(sym(words_agree(inputs, values, others, λ id _ => same(64, id))), λ ws _ =>
+                until_defined(other_step, other_defined, parameters, exit, next, until_passes(), ws).IsTrue(), ran)
+        },
     }
 }
 
@@ -657,6 +773,9 @@ fn StructuredRegion::quiet(self region: StructuredRegion) → Bool {
         Lend(_, _, _, _) => False,
         Call(_, _, _, _) => False,
         Loop(_, _, _, _, body, _, _, _, _) => body.quiet(),
+        // Defined only where it ends, which is a proof, not a property of
+        // its nodes.
+        Until(_, _, _, _, _, _, _) => False,
     }
 }
 
@@ -695,6 +814,7 @@ theorem StructuredRegion::quiet_defined(self region: StructuredRegion, buffers: 
                 λ (pass: Valuation()) => body.defined_over(buffers, call, defines, pass),
                 λ pass => body.quiet_defined(buffers, call, defines, quiet, pass), parameters, count, exit, next,
                 values(64, bound).toNat(), words_of(values, inputs)),
+        Until(_, _, _, _, _, _, _) => λ never _ => false_elim(never),
     }
 }
 
@@ -783,6 +903,18 @@ theorem StructuredRegion::relabel_defined_over(self region: StructuredRegion, bu
                 loop_defined(other_step, other_defined, parameters, count, exit, next, n, words_of(values, inputs)).IsTrue(), ran);
             j(sym(words_agree(inputs, values, others, λ id _ => same(64, id))), λ ws _ =>
                 loop_defined(other_step, other_defined, parameters, count, exit, next, others(64, bound).toNat(), ws).IsTrue(), counted)
+        },
+        Until(inputs, parameters, body, exit, next, outputs, measure_at) => λ values others same ok => {
+            let step = λ (pass: Valuation()) => body.eval_over(buffers, Answers::relabel(call, links), pass);
+            let other_step = λ (pass: Valuation()) => body.relabel(links).eval_over(buffers, call, pass);
+            let defined = λ (pass: Valuation()) => body.defined_over(buffers, Answers::relabel(call, links), Defines::relabel(defines, links), pass);
+            let other_defined = λ (pass: Valuation()) => body.relabel(links).defined_over(buffers, call, defines, pass);
+            let ran = until_defined_same_where(step, other_step, defined, other_defined,
+                λ v d => body.relabel_eval_over(buffers, call, links, v, v, λ w id => refl),
+                λ v d => body.relabel_defined_over(buffers, call, defines, links, v, v, λ w id => refl, d),
+                parameters, exit, next, until_passes(), words_of(values, inputs), ok);
+            j(sym(words_agree(inputs, values, others, λ id _ => same(64, id))), λ ws _ =>
+                until_defined(other_step, other_defined, parameters, exit, next, until_passes(), ws).IsTrue(), ran)
         },
     }
 }

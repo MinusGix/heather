@@ -1,0 +1,259 @@
+// A counted unbounded loop: the measure an `Until` carries, its decrease
+// decided by evaluation (docs/language/loop-combinator-design.md §6.9).
+//
+// Every loop carries its measure (Minus, 2026-11-25): `Until`'s `measure`
+// names the parameter it falls on, and that it falls on every pass that
+// goes round is proved where the loop is built. Where the measure and its
+// step are closed, the proof is this check. A counted pass is any region
+// `work` that leaves the counter alone, then one leaf of five nodes:
+//
+//   t := 1; q := p - t; t := 0; t := (q = t); exit := exit | t
+//
+// `p` the counter, the parameter at `measure`, and `q` the next word at
+// the same place: the counter falls by one, and the exit bit is set where
+// it reaches zero, whatever else set it. Its measure is the counter less
+// one, so a loop entered with zero ends too, within `until_passes()`
+// (`counted_halts`).
+import function_ir;
+import function_ir_eval;
+import function_ir_state;
+import function_ir_run;
+import function_ir_replay;
+import bitvec;
+import bitvec_nat;
+import bool;
+import list;
+import logic;
+import nat;
+import option;
+
+// The leaf that ends a counted pass, `t` its one temporary.
+fn counted_nodes(p, q, exit, t: Nat) → List<Node> {
+    [Const(64, t, 1), Sub(64, q, p, t), Const(64, t, 0), Equal(64, t, q, t), BitOr(64, exit, exit, t)]
+}
+
+// Whether `p` is the parameter at `at`, none before it, and `q` the next
+// word there: so the next pass reads at `p` what this one left at `q`.
+fn until_counter(parameters, next: List<Nat>, at, p, q: Nat) → Bool {
+    match parameters {
+        Nil => False,
+        Cons(id, rest) => match next {
+            Nil => False,
+            Cons(n, more) => match at {
+                Zero => id.matches(p) && n.matches(q),
+                Succ(k) => p.differs(id) && until_counter(rest, more, k, p, q),
+            },
+        },
+    }
+}
+
+// Whether the leaf's nodes are the counted ones, its temporary apart from
+// the counter and its next word, and the exit bit apart from the next word.
+fn counted_leaf(nodes: List<Node>, p, q, exit: Nat) → Bool {
+    match nodes {
+        Nil => False,
+        Cons(first, _) => match first {
+            Const(_, t, _) => nodes_same(nodes, counted_nodes(p, q, exit, t)) && (t.differs(p) && (t.differs(q) && exit.differs(q))),
+            _ => False,
+        },
+    }
+}
+
+// Whether a pass counts at `p` into `q`: work that leaves `p` alone, then
+// the counted leaf.
+fn StructuredRegion::counts_with(self body: StructuredRegion, p, q, exit: Nat) → Bool {
+    match body {
+        Compose(work, tail) => absent(p, work.writes()) && match tail {
+            Dataflow(leaf) => counted_leaf(leaf.nodes, p, q, exit),
+            _ => False,
+        },
+        _ => False,
+    }
+}
+
+// Whether an unbounded loop's pass counts at the parameter its measure
+// names: its ending decided by evaluation.
+fn StructuredRegion::counts(self body: StructuredRegion, parameters, next: List<Nat>, exit, at: Nat) → Bool {
+    match parameters.nth(at) {
+        None => False,
+        Some(p) => match next.nth(at) {
+            None => False,
+            Some(q) => until_counter(parameters, next, at, p, q) && body.counts_with(p, q, exit),
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Why a counted loop ends
+
+// The next pass reads at the counter what this one left at its next word.
+theorem until_counter_word(values, v: Valuation(), parameters: List<Nat>): (next: List<Nat>) → (at, p, q: Nat) →
+    until_counter(parameters, next, at, p, q).IsTrue() → Valuation::bind(values, parameters, words_of(v, next))(64, p) = v(64, q) {
+    match parameters {
+        Nil => λ next at p q never => false_elim(never),
+        Cons(id, rest) => λ next => match next {
+            Nil => λ at p q never => false_elim(never),
+            Cons(n, more) => λ at => match at {
+                Zero => λ p q h => {
+                    let parts = Bool::both(h);
+                    let held = Valuation::bind(values, rest, words_of(v, more));
+                    let here: (Valuation::set(held, id, word_value(v(64, n)))(64, id) = v(64, q)) =
+                        trans(Valuation::set_here(held, id, word_value(v(64, n)), 64), @cong(λ (x: Nat) => v(64, x), n, q, Nat::matches_eq(n, q, parts.right)));
+                    j(Nat::matches_eq(id, p, parts.left), λ x _ => Valuation::set(held, id, word_value(v(64, n)))(64, x) = v(64, q), here)
+                },
+                Succ(k) => λ p q h => {
+                    let parts = Bool::both(h);
+                    let held = Valuation::bind(values, rest, words_of(v, more));
+                    trans(Valuation::set_other(held, id, word_value(v(64, n)), 64, p, Nat::differs_ne(p, id, parts.left)),
+                        until_counter_word(values, v, rest, more, k, p, q, parts.right))
+                },
+            },
+        },
+    }
+}
+
+// The counted leaf leaves the counter less one at the next word, and an
+// exit bit clear only where that is not zero.
+theorem counted_pass(p, q, exit, t: Nat, tp: t ≠ p, tq: t ≠ q, eq: exit ≠ q, values: Valuation(), buffers: Buffers()):
+    (run_nodes(counted_nodes(p, q, exit, t), values, buffers).values(64, q) = values(64, p).sub(BitVec::ofNat(1))) ∧
+    (run_nodes(counted_nodes(p, q, exit, t), values, buffers).values(1, exit).head_bit() = False →
+        values(64, p).sub(BitVec::ofNat(1)).eq_bit(BitVec::ofNat(0)) = False) {
+    let v1 = Const(64, t, 1).step(values);
+    let v2 = Sub(64, q, p, t).step(v1);
+    let v3 = Const(64, t, 0).step(v2);
+    let v4 = Equal(64, t, q, t).step(v3);
+    let qt: q ≠ t = λ e => tq(sym(e));
+    let pt: p ≠ t = λ e => tp(sym(e));
+    let qe: q ≠ exit = λ e => eq(sym(e));
+    let d = values(64, p).sub(BitVec::ofNat(1));
+    let at_p: (v1(64, p) = values(64, p)) = Valuation::set_other(values, t, Const(64, t, 1).value(values), 64, p, pt);
+    let at_one: (v1(64, t) = BitVec::ofNat(1)) = Valuation::set_here(values, t, Const(64, t, 1).value(values), 64);
+    let at_q2: (v2(64, q) = d) = trans(Valuation::set_here(v1, q, Sub(64, q, p, t).value(v1), 64),
+        trans(@cong(λ (x: BitVec(64)) => x.sub(v1(64, t)), v1(64, p), values(64, p), at_p),
+            @cong(λ (y: BitVec(64)) => values(64, p).sub(y), v1(64, t), BitVec::ofNat(1), at_one)));
+    let at_q3: (v3(64, q) = d) = trans(Valuation::set_other(v2, t, Const(64, t, 0).value(v2), 64, q, qt), at_q2);
+    let at_zero: (v3(64, t) = BitVec::ofNat(0)) = Valuation::set_here(v2, t, Const(64, t, 0).value(v2), 64);
+    let at_q4: (v4(64, q) = d) = trans(Valuation::set_other(v3, t, Equal(64, t, q, t).value(v3), 64, q, qt), at_q3);
+    let at_q5: (BitOr(64, exit, exit, t).step(v4)(64, q) = d) = trans(Valuation::set_other(v4, exit, BitOr(64, exit, exit, t).value(v4), 64, q, qe), at_q4);
+    let at_bit: (v4(1, t) = bit_value(d.eq_bit(BitVec::ofNat(0)), 1)) = trans(Valuation::set_here(v3, t, Equal(64, t, q, t).value(v3), 1),
+        trans(@cong(λ (x: BitVec(64)) => bit_value(x.eq_bit(v3(64, t)), 1), v3(64, q), d, at_q3),
+            @cong(λ (y: BitVec(64)) => bit_value(d.eq_bit(y), 1), v3(64, t), BitVec::ofNat(0), at_zero)));
+    let at_exit: (BitOr(64, exit, exit, t).step(v4)(1, exit).head_bit() = (v4(1, exit).head_bit() || v4(1, t).head_bit())) =
+        @cong(λ (x: BitVec(1)) => x.head_bit(), BitOr(64, exit, exit, t).step(v4)(1, exit), v4(1, exit).bor(v4(1, t)),
+            Valuation::set_here(v4, exit, BitOr(64, exit, exit, t).value(v4), 1));
+    let bit_is: (v4(1, t).head_bit() = d.eq_bit(BitVec::ofNat(0))) =
+        @cong(λ (x: BitVec(1)) => x.head_bit(), v4(1, t), bit_value(d.eq_bit(BitVec::ofNat(0)), 1), at_bit);
+    ⟨at_q5, λ clear => trans(sym(bit_is), Bool::or_false_parts(v4(1, exit).head_bit(), v4(1, t).head_bit(), trans(sym(at_exit), clear)).right)⟩
+}
+
+// The counter less one: what a counted loop lowers on every pass that goes
+// round.
+fn counted_measure(parameters: List<Nat>, p: Nat) → List<BitVec(64)> → Nat {
+    λ state => until_valuation(parameters, state)(64, p).sub(BitVec::ofNat(1)).toNat()
+}
+
+// A counted loop ends from every state, over every file, within the passes
+// its meaning gives it.
+theorem counted_halts(call: Writers(), work: StructuredRegion, leaf: Region, parameters, next: List<Nat>, exit, at, p, q, t: Nat,
+    nodes_are: leaf.nodes = counted_nodes(p, q, exit, t), counter: until_counter(parameters, next, at, p, q).IsTrue(),
+    keeps: absent(p, work.writes()).IsTrue(), tp: t ≠ p, tq: t ≠ q, eq: exit ≠ q): (state: List<BitVec(64)>) → (buffers: Buffers()) →
+    until_run_defined(λ (pass: Valuation()) (held: Buffers()) => Compose(work, Dataflow(leaf)).run(call, pass, held),
+        λ (pass: Valuation()) (held: Buffers()) => True, parameters, exit, next, until_passes(), state, buffers).IsTrue() {
+    let step = λ (pass: Valuation()) (held: Buffers()) => Compose(work, Dataflow(leaf)).run(call, pass, held);
+    let decreases = λ (state: List<BitVec(64)>) (buffers: Buffers())
+        (clear: step(until_valuation(parameters, state), buffers).values(1, exit).head_bit() = False) => {
+        let before = until_valuation(parameters, state);
+        let mid = work.run(call, before, buffers);
+        let after = run_nodes(leaf.nodes, mid.values, mid.buffers).values;
+        let pass = j(sym(nodes_are), λ ns _ => (run_nodes(ns, mid.values, mid.buffers).values(64, q) = mid.values(64, p).sub(BitVec::ofNat(1))) ∧
+            (run_nodes(ns, mid.values, mid.buffers).values(1, exit).head_bit() = False →
+                mid.values(64, p).sub(BitVec::ofNat(1)).eq_bit(BitVec::ofNat(0)) = False),
+            counted_pass(p, q, exit, t, tp, tq, eq, mid.values, mid.buffers));
+        let kept: (mid.values(64, p) = before(64, p)) = work.run_keeps(call, before, buffers, 64, p, keeps);
+        let d = before(64, p).sub(BitVec::ofNat(1));
+        let nz: (d.eq_bit(BitVec::ofNat(0)) = False) =
+            j(kept, λ x _ => x.sub(BitVec::ofNat(1)).eq_bit(BitVec::ofNat(0)) = False, pass.right(clear));
+        let word: (until_valuation(parameters, words_of(after, next))(64, p) = d) =
+            trans(until_counter_word(Valuation::zero(), after, parameters, next, at, p, q, counter),
+                trans(pass.left, @cong(λ (x: BitVec(64)) => x.sub(BitVec::ofNat(1)), mid.values(64, p), before(64, p), kept)));
+        let lower: (counted_measure(parameters, p)(words_of(after, next)) < counted_measure(parameters, p)(state)) =
+            j(sym(word), λ x _ => x.sub(BitVec::ofNat(1)).toNat() < d.toNat(), toNat_sub_one_lt(d, nz));
+        lower
+    };
+    λ state buffers => until_run_defined_of_measure(step, λ (pass: Valuation()) (held: Buffers()) => True, parameters, exit, next,
+        counted_measure(parameters, p), λ _ _ => trivial, decreases, until_passes(), state, buffers,
+        until_word_within(until_valuation(parameters, state)(64, p).sub(BitVec::ofNat(1))))
+}
+
+// ---------------------------------------------------------------------------
+// From the check
+
+// Whether an unbounded loop leaves within the passes its meaning gives it
+// (`until_passes`), from every state and every file: the termination its
+// code runs as its meaning under.
+fn StructuredRegion::until_halts(self body: StructuredRegion, call: Writers(), parameters: List<Nat>, exit: Nat, next: List<Nat>) → Type {
+    (state: List<BitVec(64)>) → (buffers: Buffers()) →
+        until_run_defined(λ (pass: Valuation()) (held: Buffers()) => body.run(call, pass, held), λ (pass: Valuation()) (held: Buffers()) => True,
+            parameters, exit, next, until_passes(), state, buffers).IsTrue()
+}
+
+// The counted leaf, taken apart.
+record CountedLeaf(nodes: List<Node>, p, q, exit: Nat) { t: Nat, is: nodes = counted_nodes(p, q, exit, t), tp: t ≠ p, tq: t ≠ q, eq: exit ≠ q }
+
+theorem counted_leaf_of(nodes: List<Node>, p, q, exit: Nat): counted_leaf(nodes, p, q, exit).IsTrue() → CountedLeaf(nodes, p, q, exit) {
+    match nodes {
+        Nil => λ never => false_elim(never),
+        Cons(first, rest) => match first as λ f => counted_leaf(Cons(f, rest), p, q, exit).IsTrue() → CountedLeaf(Cons(f, rest), p, q, exit) {
+            Const(w, t, c) => λ h => {
+                let parts = Bool::both(h);
+                let apart = Bool::both(parts.right);
+                let more = Bool::both(apart.right);
+                CountedLeaf(t, nodes_same_sound(Cons(Const(w, t, c), rest), counted_nodes(p, q, exit, t), eq_true_of_is_true(nodes_same(Cons(Const(w, t, c), rest), counted_nodes(p, q, exit, t)), parts.left)),
+                    Nat::differs_ne(t, p, apart.left), Nat::differs_ne(t, q, more.left), Nat::differs_ne(exit, q, more.right))
+            },
+            _ => λ never => false_elim(never),
+        },
+    }
+}
+
+theorem StructuredRegion::counts_with_halts(self body: StructuredRegion, call: Writers(), parameters, next: List<Nat>, exit, at, p, q: Nat,
+    counter: until_counter(parameters, next, at, p, q).IsTrue()): body.counts_with(p, q, exit).IsTrue() → body.until_halts(call, parameters, exit, next) {
+    match body {
+        Compose(work, tail) => λ h => {
+            let parts = Bool::both(h);
+            (match tail as λ tl => (match tl { Dataflow(leaf) => counted_leaf(leaf.nodes, p, q, exit), _ => False }).IsTrue() →
+                    Compose(work, tl).until_halts(call, parameters, exit, next) {
+                Dataflow(leaf) => λ cl => {
+                    let c = counted_leaf_of(leaf.nodes, p, q, exit, cl);
+                    counted_halts(call, work, leaf, parameters, next, exit, at, p, q, c.t, c.is, counter, parts.left, c.tp, c.tq, c.eq)
+                },
+                _ => λ never => false_elim(never),
+            })(parts.right)
+        },
+        _ => λ never => false_elim(never),
+    }
+}
+
+// A loop whose pass counts at the parameter its measure names ends.
+theorem StructuredRegion::counts_halts(self body: StructuredRegion, call: Writers(), parameters, next: List<Nat>, exit, at: Nat):
+    body.counts(parameters, next, exit, at).IsTrue() → body.until_halts(call, parameters, exit, next) {
+    match parameters.nth(at) as λ o => (match o {
+            None => False,
+            Some(p) => match next.nth(at) {
+                None => False,
+                Some(q) => until_counter(parameters, next, at, p, q) && body.counts_with(p, q, exit),
+            },
+        }).IsTrue() → body.until_halts(call, parameters, exit, next) {
+        None => λ never => false_elim(never),
+        Some(p) => match next.nth(at) as λ o => (match o {
+                None => False,
+                Some(q) => until_counter(parameters, next, at, p, q) && body.counts_with(p, q, exit),
+            }).IsTrue() → body.until_halts(call, parameters, exit, next) {
+            None => λ never => false_elim(never),
+            Some(q) => λ h => {
+                let parts = Bool::both(h);
+                body.counts_with_halts(call, parameters, next, exit, at, p, q, parts.left, parts.right)
+            },
+        },
+    }
+}

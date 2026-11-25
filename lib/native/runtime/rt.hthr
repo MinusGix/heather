@@ -814,6 +814,26 @@ fn Ty::cast(tys: Table, a, b: Ty, v: a.sem(tys)) → b.sem(tys) {
     match a.equation(b) { Inl(e) => j(e, λ x _ => x.sem(tys), v), Inr(_) => Ty::convert(tys, a, b, v) }
 }
 
+// A payload read off words, one slot a word (zero past the words' end).
+fn Ty::flats_of_words(fs: List<Ty>, ws: List<BitVec(64)>) → Ty::Flats(fs) {
+    match fs { Nil => trivial, Cons(f, rest) => Pair(f.word_at(ws.head_or(BitVec::zero()), EnumInfo::nones), Ty::flats_of_words(rest, ws.tail())) }
+}
+
+// A code's words read back as its value: the first as the code reads a
+// word (`Ty::cast`); at an enum, the tag word as its constructor (the last
+// past it) and the slots after it as the payload's.
+fn Ty::read_words(self p: Ty, tys: Table, ws: List<BitVec(64)>) → p.sem(tys) {
+    match p as λ q => q.sem(tys) {
+        Word(w) => Ty::cast(tys, Word(64), Word(w), ws.head_or(BitVec::zero())),
+        Bit => Ty::cast(tys, Word(64), Bit, ws.head_or(BitVec::zero())),
+        ByteList(n) => Ty::cast(tys, Word(64), ByteList(n), ws.head_or(BitVec::zero())),
+        Lines => Ty::cast(tys, Word(64), Lines, ws.head_or(BitVec::zero())),
+        Named(i) => tys.mk(i, Ty::flats_of_words(tys.fields(i), ws)),
+        Count => Ty::cast(tys, Word(64), Count, ws.head_or(BitVec::zero())),
+        Enum(i) => tys.ens(i).of(ws.head_or(BitVec::zero()).toNat().min(tys.ens(i).last), Ty::flats_of_words(tys.ens(i).slots, ws.tail())),
+    }
+}
+
 // The curried function type of a signature.
 fn Ty::Arrows(tys: Table, ps: List<Ty>, r: Ty) → Type {
     match ps { Nil => r.sem(tys), Cons(p, rest) => p.sem(tys) → Ty::Arrows(tys, rest, r) }
@@ -1071,6 +1091,19 @@ inductive Tm {
     // state is the loop's answer. Its meaning is `Loop::steps` of
     // `Step::turn(test, body, s)`, at most `Tm::passes()` of them.
     Iterate(init: Nat, test: Tm, body: Tm),
+    // Going round the innermost loop around it (`Loop`) at the state the
+    // variables `args` hold, each read as a word. `res` is that loop's
+    // result code, which the leaf names so that no term's code depends on
+    // the loop it is in.
+    Again(res: Ty, args: List<Nat>),
+    // A loop that answers a value (docs/language/loop-combinator-design.md
+    // §6.7): its state starts as the words of variables `inits`, and `body`
+    // sees the state and nothing else, its words bound in order (the last
+    // as variable 0, as a function sees its parameters); what it reads of
+    // the context is a word of the state its passes hand on unchanged. Each
+    // pass is `body`: a leaf `Again` goes round at the state it names, and
+    // any other leaf is the loop's answer.
+    Loop(inits: List<Nat>, body: Tm),
 }
 
 record Sig { params: List<Ty>, result: Ty }
@@ -1173,6 +1206,12 @@ fn Tm::lit(t: Ty, n: Nat, tys: Table) → t.sem(tys) {
     }
 }
 
+// A loop's state codes, the codes of its variables `inits`, and the
+// context its body sees: the state alone.
+fn Tm::state(g: List<Ty>, inits: List<Nat>) → List<Ty> { inits.map(λ i => Ty::at(g, i)) }
+
+fn Tm::inside(g: List<Ty>, inits: List<Nat>) → List<Ty> { Ty::bind_onto(Tm::state(g, inits), Nil) }
+
 // The code a term synthesizes in a context.
 fn Tm::ty(self t: Tm, w: World, g: List<Ty>) → Ty {
     match t {
@@ -1192,6 +1231,8 @@ fn Tm::ty(self t: Tm, w: World, g: List<Ty>) → Ty {
         Inject(i, _, _) => Enum(i),
         Slot(i, j, _) => Ty::at(w.tys.ens(i).slots, j),
         Iterate(init, _, _) => Ty::at(g, init),
+        Again(res, _) => res,
+        Loop(inits, body) => body.ty(w, Tm::inside(g, inits)),
     }
 }
 
@@ -1222,21 +1263,53 @@ fn Tm::passes() → Nat { loop::Loop::passes() }
 // measure is one stops within them (`loop::Loop::steps_stays`).
 theorem Tm::word_within(w: BitVec(64)): w.toNat() <= loop::Loop::passes() { BitVec::toNat_lt_pow(64, w) }
 
-// The meaning of a term, at the code it synthesizes.
-fn Tm::sem(self t: Tm, w: World) → (g: List<Ty>) → Env(w.tys, g) → t.ty(w, g).sem(w.tys) {
+// Variables read as 64-bit words.
+fn Tm::words(w: World, g: List<Ty>, env: Env(w.tys, g), vs: List<Nat>) → List<BitVec(64)> {
+    match vs {
+        Nil => Nil,
+        Cons(v, rest) => Cons(Ty::cast(w.tys, Ty::at(g, v), Word(64), Env::get(w.tys, g, env, v)), Tm::words(w, g, env, rest)),
+    }
+}
+
+// Words as an environment: the parameters bound onto `g` in order, each
+// word cast to its parameter's code (zero past the words' end).
+fn Ty::extend(tys: Table, ps: List<Ty>) → (g: List<Ty>) → Env(tys, g) → List<BitVec(64)> → Env(tys, Ty::bind_onto(ps, g)) {
+    match ps {
+        Nil => λ g env xs => env,
+        Cons(p, rest) => λ g env xs => match xs {
+            Nil => Ty::extend(tys, rest, Cons(p, g), Pair(Ty::cast(tys, Word(64), p, BitVec::zero()), env), Nil),
+            Cons(x, more) => Ty::extend(tys, rest, Cons(p, g), Pair(Ty::cast(tys, Word(64), p, x), env), more),
+        },
+    }
+}
+
+// What an `Again` leaf answers, at each code: the continuation of the
+// innermost loop around it. A loop's body is read with its own (`Loop`);
+// outside every loop, the default.
+fn Tm::Label(tys: Table) → Type { (r: Ty) → List<BitVec(64)> → r.sem(tys) }
+
+fn Tm::no_label(tys: Table) → Tm::Label(tys) { λ r _ => r.default(tys) }
+
+// A loop's continuation `again`, at its result code `res`, as a label:
+// read at the code a leaf names (the same code, where the leaf is right).
+fn Tm::round(tys: Table, res: Ty, again: List<BitVec(64)> → res.sem(tys)) → Tm::Label(tys) { λ r ys => Ty::cast(tys, res, r, again(ys)) }
+
+// The meaning of a term under a loop's continuation `lab`, at the code it
+// synthesizes.
+fn Tm::sem_in(self t: Tm, w: World, lab: Tm::Label(w.tys)) → (g: List<Ty>) → Env(w.tys, g) → t.ty(w, g).sem(w.tys) {
     match t {
         Var(i) => λ g env => Env::get(w.tys, g, env, i),
         Lit(c, n) => λ g env => Tm::lit(c, n, w.tys),
         Prim(op, args) => λ g env => Tm::apply(w, g, env, op.result(), op.params(), op.sem(w.tys), args),
-        Let(e, body) => λ g env => body.sem(w, Cons(e.ty(w, g), g), Pair(e.sem(w, g, env), env)),
+        Let(e, body) => λ g env => body.sem_in(w, lab, Cons(e.ty(w, g), g), Pair(e.sem_in(w, lab, g, env), env)),
         If(c, yes, no) => λ g env =>
             match Ty::cast(w.tys, Ty::at(g, c), Bit, Env::get(w.tys, g, env, c)) {
-                False => Ty::cast(w.tys, no.ty(w, g), yes.ty(w, g), no.sem(w, g, env)),
-                True => yes.sem(w, g, env),
+                False => Ty::cast(w.tys, no.ty(w, g), yes.ty(w, g), no.sem_in(w, lab, g, env)),
+                True => yes.sem_in(w, lab, g, env),
             },
         IfEq(c, yes, no) => λ g env =>
             Tm::convoy(yes.ty(w, g).sem(w.tys), Ty::cast(w.tys, Ty::at(g, c), Bit, Env::get(w.tys, g, env, c)),
-                yes.sem(w, g, env), Ty::cast(w.tys, no.ty(w, g), yes.ty(w, g), no.sem(w, g, env))),
+                yes.sem_in(w, lab, g, env), Ty::cast(w.tys, no.ty(w, g), yes.ty(w, g), no.sem_in(w, lab, g, env))),
         Make(i, args) => λ g env => w.tys.recs(i).mk(Tm::fields(w, g, env, w.tys.recs(i).fields, args)),
         Field(i, k, of) => λ g env =>
             Ty::at(w.tys.recs(i).fields, k).of_flat(w.tys,
@@ -1249,14 +1322,14 @@ fn Tm::sem(self t: Tm, w: World) → (g: List<Ty>) → Env(w.tys, g) → t.ty(w,
                 Tm::step(w, Ty::at(g, over).elem(), step),
                 Ty::cast(w.tys, Ty::at(g, init), Sig::at(w.sigs, step).result, Env::get(w.tys, g, env, init))),
         Case(c, zero, succ) => λ g env => match Ty::cast(w.tys, Ty::at(g, c), Count, Env::get(w.tys, g, env, c)) {
-            Zero => zero.sem(w, g, env),
-            Succ(k) => Ty::cast(w.tys, succ.ty(w, Cons(Count, g)), zero.ty(w, g), succ.sem(w, Cons(Count, g), Pair(k, env))),
+            Zero => zero.sem_in(w, lab, g, env),
+            Succ(k) => Ty::cast(w.tys, succ.ty(w, Cons(Count, g)), zero.ty(w, g), succ.sem_in(w, lab, Cons(Count, g), Pair(k, env))),
         },
         Byte(k, i, length) => λ g env =>
             w.spans.span(k).byte_within(Ty::cast(w.tys, Ty::at(g, length), Word(64), Env::get(w.tys, g, env, length)),
                 Ty::cast(w.tys, Ty::at(g, i), Word(64), Env::get(w.tys, g, env, i))),
         Pick(i, c, arms, eq) => λ g env =>
-            w.tys.ens(i).choose(eq, arms.ty(w, Cons(Enum(i), g)).sem(w.tys), λ n t => arms.sem(w, Cons(Enum(i), g), Pair(w.tys.ens(i).of(n, t), env)),
+            w.tys.ens(i).choose(eq, arms.ty(w, Cons(Enum(i), g)).sem(w.tys), λ n t => arms.sem_in(w, lab, Cons(Enum(i), g), Pair(w.tys.ens(i).of(n, t), env)),
                 Ty::cast(w.tys, Ty::at(g, c), Enum(i), Env::get(w.tys, g, env, c))),
         Inject(i, k, args) => λ g env => w.tys.ens(i).of(k, Ty::spread(w.tys.ens(i).slots, w.tys.ens(i).lo(k), w.tys.ens(i).arity(k),
             Tm::slots(w, g, env, Ty::range(w.tys.ens(i).slots, w.tys.ens(i).lo(k), w.tys.ens(i).arity(k)), args))),
@@ -1265,12 +1338,28 @@ fn Tm::sem(self t: Tm, w: World) → (g: List<Ty>) → Env(w.tys, g) → t.ty(w,
                 Ty::flat_nth(w.tys.ens(i).slots, w.tys.ens(i).fields(Ty::cast(w.tys, Ty::at(g, of), Enum(i), Env::get(w.tys, g, env, of))), j)),
         Iterate(init, test, body) => λ g env => loop::Loop::steps(loop::Loop::passes(),
             λ (s: Ty::at(g, init).sem(w.tys)) => loop::Step::turn(
-                Ty::cast(w.tys, test.ty(w, Cons(Ty::at(g, init), g)), Bit, test.sem(w, Cons(Ty::at(g, init), g), Pair(s, env))),
-                λ _ => Ty::cast(w.tys, body.ty(w, Cons(Ty::at(g, init), g)), Ty::at(g, init), body.sem(w, Cons(Ty::at(g, init), g), Pair(s, env))),
+                Ty::cast(w.tys, test.ty(w, Cons(Ty::at(g, init), g)), Bit, test.sem_in(w, lab, Cons(Ty::at(g, init), g), Pair(s, env))),
+                λ _ => Ty::cast(w.tys, body.ty(w, Cons(Ty::at(g, init), g)), Ty::at(g, init), body.sem_in(w, lab, Cons(Ty::at(g, init), g), Pair(s, env))),
                 s),
             Env::get(w.tys, g, env, init)),
+        Again(res, args) => λ g env => lab(res, Tm::words(w, g, env, args)),
+        // A pass is the body read under the loop's own continuation. Out of
+        // passes, one more runs, its going round answering the state it
+        // names read as the answer (`Ty::read_words`: what the loop's code
+        // does once its count is spent, `Tm::lower_loop`).
+        Loop(inits, body) => λ g env => loop::Loop::rounds(Tm::passes(),
+            λ (again: List<BitVec(64)> → body.ty(w, Tm::inside(g, inits)).sem(w.tys)) (xs: List<BitVec(64)>) =>
+                body.sem_in(w, Tm::round(w.tys, body.ty(w, Tm::inside(g, inits)), again), Tm::inside(g, inits),
+                    Ty::extend(w.tys, Tm::state(g, inits), Nil, trivial, xs)),
+            λ (xs: List<BitVec(64)>) => body.sem_in(w,
+                Tm::round(w.tys, body.ty(w, Tm::inside(g, inits)), λ ys => Ty::read_words(body.ty(w, Tm::inside(g, inits)), w.tys, ys)),
+                Tm::inside(g, inits), Ty::extend(w.tys, Tm::state(g, inits), Nil, trivial, xs)),
+            Tm::words(w, g, env, inits)),
     }
 }
+
+// The meaning of a term, at the code it synthesizes: outside every loop.
+fn Tm::sem(self t: Tm, w: World) → (g: List<Ty>) → Env(w.tys, g) → t.ty(w, g).sem(w.tys) { t.sem_in(w, Tm::no_label(w.tys)) }
 
 // A function's meaning: its body under its parameters, curried, at its
 // declared result.
@@ -1409,6 +1498,8 @@ fn Tm::same(self t: Tm) → Tm → Bool {
             Iterate(init2, test2, body2) => init.same(init2).and(test.same(test2)).and(body.same(body2)),
             _ => False,
         },
+        Again(res, args) => λ u => match u { Again(res2, args2) => res.same(res2).and(Tm::nats_same(args, args2)), _ => False },
+        Loop(inits, body) => λ u => match u { Loop(inits2, body2) => Tm::nats_same(inits, inits2).and(body.same(body2)), _ => False },
     }
 }
 

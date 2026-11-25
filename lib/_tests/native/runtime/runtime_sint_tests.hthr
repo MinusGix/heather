@@ -116,7 +116,12 @@ runtime fn zext32(x: BitVec(64)) → BitVec(64) { x.truncate(32, 32).zero_extend
 theorem zext32_negative(): program_eval(zext32::program, 0, [BitVec::ofNat(0x1234567880000000)]) =
     BitVec::ofNat(0x80000000) { zext32::agrees(BitVec::ofNat(0x1234567880000000)) }
 
-// expect-error(mismatch)
+// The kernel refuses it. The elaborator's probe for a message compares the
+// program spelled by name with the agreement's program spelled out, and
+// since the pin became pointwise (docs/language/loop-combinator-design.md
+// §6.6) that comparison runs past the probe's budget, so the refusal is the
+// kernel's own and not a mismatch the elaborator words.
+// expect-error(kernel)
 theorem zext32_is_not_sext(): program_eval(zext32::program, 0, [BitVec::ofNat(0x80000000)]) =
     BitVec::ofNat(0xffffffff80000000) { zext32::agrees(BitVec::ofNat(0x80000000)) }
 

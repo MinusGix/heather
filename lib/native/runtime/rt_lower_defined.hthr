@@ -348,6 +348,11 @@ theorem Tm::lower_defined(self t: Tm, w: World, ok: Tm::Oracle(w)): (g: List<Ty>
             Tm::leaf_defined(Slot(i, j, of), w, ok, g, ports, next, λ region => refl, Tm::lower(Slot(i, j, of), w, g, ports, next)),
         Iterate(init, test, body) => λ g ports next => Tm::leaf_defined(Iterate(init, test, body), w, ok, g, ports, next, λ region => refl,
             Tm::lower(Iterate(init, test, body), w, g, ports, next)),
+        Again(_, _) => λ g ports next => trivial,
+        // A loop's region requires nothing only where it calls nothing
+        // (`Tm::quiet_in`), as `Iterate`'s.
+        Loop(inits, body) => λ g ports next => Tm::leaf_defined(Loop(inits, body), w, ok, g, ports, next, λ region => refl,
+            Tm::lower(Loop(inits, body), w, g, ports, next)),
     }
 }
 

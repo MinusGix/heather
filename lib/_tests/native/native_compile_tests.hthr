@@ -462,7 +462,14 @@ theorem uneven_period(): uneven().period(uneven().homes(), uneven().bodies()) = 
 theorem uneven_left(): uneven().left(uneven().homes(), uneven().bodies()) = 296 { refl }
 theorem uneven_odd_left(): uneven_to(5, 7).left(uneven_to(5, 7).homes(), uneven_to(5, 7).bodies()) = 336 { refl }
 theorem uneven_compiles(): refused(uneven()) = [] { refl }
-theorem uneven_shallow_exits(): compiled_next(uneven_to(5, 5), 8) = Exits(call_depth_status()) { refl }
+// In stages (docs/proof-patterns.md §2): the room, then the run at it.
+theorem uneven_shallow_left(): uneven_to(5, 5).left(uneven_to(5, 5).homes(), uneven_to(5, 5).bodies()) = 240 { refl }
+theorem uneven_shallow_run(): ITree::next(Events::linux(), uneven_to(5, 5).bounded_tree([], uneven_to(5, 5).charges(uneven_to(5, 5).homes(),
+    uneven_to(5, 5).bodies()), 240, 8)) = Exits(call_depth_status()) { refl }
+theorem uneven_shallow_exits(): compiled_next(uneven_to(5, 5), 8) = Exits(call_depth_status()) {
+    trans(cong_fn(λ (l: Nat) => ITree::next(Events::linux(), uneven_to(5, 5).bounded_tree([], uneven_to(5, 5).charges(uneven_to(5, 5).homes(),
+        uneven_to(5, 5).bodies()), l, 8)), uneven_shallow_left()), uneven_shallow_run())
+}
 
 // Many levels cost the room a period's rows and a long division, not a row
 // a level: 100,000 levels of `sum`, 100,001 of each cycle.

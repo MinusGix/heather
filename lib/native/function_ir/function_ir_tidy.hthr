@@ -173,6 +173,7 @@ fn StructuredRegion::copy_plan(self region: StructuredRegion, copies: Copies) �
         Call(_, arguments, _, _) => CopyPlan(Args(copies.read_all(arguments)), copies),
         Loop(inputs, _, _, _, body, _, _, _, _) => CopyPlan(Inputs(copies.read_all(inputs), body.copy_plan(Copies::none()).plan), copies),
         Lend(_, _, _, _) => CopyPlan(Same, copies),
+        Until(_, _, _, _, _, _, _) => CopyPlan(Same, copies),
     }
 }
 
@@ -247,6 +248,8 @@ fn StructuredRegion::dead_plan(self region: StructuredRegion, live: Live) → De
         Loop(inputs, bound, _, _, body, exit, next, _, _) => shared(body.dead_plan(live.add_all(Cons(exit, next))), λ b =>
             DeadPlan(Body(b.plan), b.live.add_all(Cons(bound, inputs)))),
         Lend(views, _, arguments, _) => DeadPlan(Same, live.add_all(nodes_mentions(views_nodes(views))).add_all(views_homes(views) ++ arguments)),
+        // Its body runs on a valuation of its own: of the scope it reads its inputs.
+        Until(inputs, _, _, _, _, _, measure_at) => DeadPlan(Same, live.add_all(inputs)),
     }
 }
 

@@ -1,0 +1,134 @@
+// Probes of the unbounded loop's code (`Until`,
+// docs/language/loop-combinator-design.md §6.9; function_ir_lower_calls):
+// the entry's moves, the body, the exit's test and the jump back, with no
+// counter and no flag. Each program is lowered by evaluation, with the
+// planner's placement. The exit is tested both ways a conditional's bit is:
+// as the comparison it folds to, and as a bit in a register. The control:
+// an exit no pass computes is refused, and the report says so.
+// Tests, not library: nothing imports this module.
+import function_ir;
+import function_ir_eval;
+import function_ir_lower;
+import function_ir_lower_structured;
+import function_ir_lower_calls;
+import function_ir_compile;
+import function_ir_refusal;
+import x86_64;
+import x86_64_block;
+import x86_64_fetch;
+import x86_64_data_read;
+import x86_64_fetched_code;
+import x86_64_stack;
+import x86_64_asm;
+import x86_64_asm_runs;
+import x86_64_stack_runs;
+import bitvec;
+import bool;
+import list;
+import logic;
+import nat;
+import option;
+import string;
+
+fn word(id: Nat) → Port { Port(id := id, width := 64) }
+fn bit(id: Nat) → Port { Port(id := id, width := 1) }
+
+fn Prog::put(self p: Prog, item: Asm) → Prog { At(p, 0, item) }
+fn Prog::label(self p: Prog, name: Nat) → Prog { At(p, name, Block([])) }
+
+// ---------------------------------------------------------------------------
+// One word counted down: the exit a folded comparison
+
+// countdown(x): x less one, pass after pass, until it is zero. The exit is
+// the comparison last in the pass, so the branch is its CMP.
+fn countdown() → Function {
+    Function(parameters := [0],
+        body := Until(inputs := [0], parameters := [10],
+            body := Dataflow(Region(inputs := Ports([word(10)]),
+                nodes := [Const(width := 64, output := 11, value := 1), Sub(width := 64, output := 12, left := 10, right := 11),
+                    Const(width := 64, output := 13, value := 0), Equal(width := 64, output := 14, left := 12, right := 13)],
+                outputs := Ports([word(12), bit(14)]))),
+            exit := 14, next := [12], outputs := [1], measure := 0),
+        result := 1)
+}
+
+// The state stays in RDI, where x is: the entry moves nothing. The pass,
+// its CMP and the JNE round; the moves out and round are none, the next
+// state being where the state is. Nothing counts the passes.
+fn countdown_program() → Prog {
+    Start
+        .label(1).put(Block([]))
+        .put(Block([]))
+        .label(2)
+        .put(Block([MovRI32(Rax, BitVec::ofNat(1)), SubRR(Rdi, Rax)]))
+        .put(Block([CmpRI8(Rdi, BitVec::ofNat(0))])).put(Jcc(NE, 3))
+        .put(Block([])).put(Jmp(4))
+        .label(3).put(Block([])).put(Jmp(2))
+        .label(4)
+        .put(Block([MovRR(Rax, Rdi)])).put(Block([])).put(Ret)
+}
+
+theorem countdown_lowers(): lower_program([countdown()], plan_program([countdown()])) = Some(countdown_program()) { refl }
+theorem countdown_reports_nothing(): countdown().refused(0, countdown().plan(), 1, [], index_rooms()) =
+    "nothing: the function has code after no other" { refl }
+
+// ---------------------------------------------------------------------------
+// Two words: the exit a bit in a register
+
+// total(n): n + (n - 1) + … + 1, the state the count and the sum. The
+// comparison is not last in its pass, so its bit is set in a register and
+// the branch tests that.
+fn total() → Function {
+    Function(parameters := [0],
+        body := Sequence(
+            Region(inputs := Ports([word(0)]), nodes := [Const(width := 64, output := 1, value := 0)],
+                outputs := Ports([word(0), word(1)])),
+            Until(inputs := [0, 1], parameters := [10, 11],
+                body := Dataflow(Region(inputs := Ports([word(10), word(11)]),
+                    nodes := [Const(width := 64, output := 12, value := 1), Sub(width := 64, output := 13, left := 10, right := 12),
+                        Const(width := 64, output := 14, value := 0), Equal(width := 64, output := 15, left := 13, right := 14),
+                        Add(width := 64, output := 16, left := 11, right := 10)],
+                    outputs := Ports([word(13), word(16), bit(15)]))),
+                exit := 15, next := [13, 16], outputs := [2, 3], measure := 0)),
+        result := 3)
+}
+
+// How many of a program's items are a JE: the TEST of a bit's branch.
+fn Prog::bit_branches(self p: Prog) → Nat {
+    match p {
+        Start => 0,
+        At(before, _, item) => match item { Jcc(cc, _) => match cc { E => before.bit_branches() + 1, _ => before.bit_branches() }, _ => before.bit_branches() },
+    }
+}
+
+theorem total_lowers(): lower_program([total()], plan_program([total()])).map(λ p => p.bit_branches()) = Some(1) { refl }
+theorem countdown_tests_no_bit(): countdown_program().bit_branches() = 0 { refl }
+
+// The function meets its contract: a run that returns, returns what the
+// loop's meaning says. That it returns is the hypothesis the meaning
+// carries (`until_defined`), not something the code counts.
+theorem total_calls<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64), stack: Stack<M>(fetch, data),
+    program: Prog, lowered: lower_program([total()], plan_program([total()])) = Some(program)):
+    Site<M>(fetch, data, program, last, origin).Calls(stack, program_callees([total()]), program_room([total()]), 1) {
+    lower_program_correct<M>([total()], plan_program([total()]), program, lowered, fetch, data, last, origin, stack)
+}
+
+// ---------------------------------------------------------------------------
+// The control: an exit no pass computes
+
+// The exit names an id the pass never binds: no register holds it and the
+// file knows no comparison it is, so the pass's end has no test.
+fn stray() → Function {
+    Function(parameters := [0],
+        body := Until(inputs := [0], parameters := [10],
+            body := Dataflow(Region(inputs := Ports([word(10)]),
+                nodes := [Const(width := 64, output := 11, value := 1), Sub(width := 64, output := 12, left := 10, right := 11)],
+                outputs := Ports([word(12)]))),
+            exit := 99, next := [12], outputs := [1], measure := 0),
+        result := 1)
+}
+
+theorem stray_refused(): lower_program([stray()], plan_program([stray()])) = None { refl }
+theorem stray_names_the_exit(): stray().refused(0, stray().plan(), 1, [], index_rooms()) =
+    "the end of an unbounded loop's pass: its exit bit 99 is in no register, nor a comparison the registers hold the operands of, "
+        ++ "where rax holds 11; rdi holds 12; " { refl }

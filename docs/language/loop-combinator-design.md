@@ -3,11 +3,12 @@
 Status: **rounds 1, 2 and 3a merged** (the combinator and its rule; a
 `while` outside a `runtime fn` elaborates to it, §5; the reflector read a
 twin of the step, §6.1); **stages 3b and 3c built** (one loop node in the
-runtime terms, §6.2; one over a span, §6.3); **stage 3d in review** (a span
+runtime terms, §6.2; one over a span, §6.3); **stages 3d to 3f in review** (a span
 loop's state of several words, a loop that only reads its span, and a
-statement `if` that joins inside a pass, §6.4). What is left of round 3,
-and the fork it met, decided 2026-11-24, is §6.5; rounds 4 and 5 (§8) are the rest of the
-migration. Thread "Rebuild loops on
+statement `if` that joins inside a pass, §6.4; one pointwise pin on every
+route, and uniqueness of a well-founded fixpoint, §6.6). The fork round 3
+met, decided 2026-11-24, is §6.5, and what is left of the round, 3g and 3h,
+follows it (3g's node, lowering and soundness built, §6.8); rounds 4 and 5 (§8) are the rest of the migration. Thread "Rebuild loops on
 one combinator", 2026-11-19, from the dogfooding review
 (`docs/native/dogfooding-plan.md`, PR #804).
 
@@ -458,6 +459,11 @@ over its span:
   node, the shared control language of the dogfooding plan §5.3b. Copying
   the tail was chosen for passes because their tail is short (the next
   state, a counter's increment), and it needs no new meaning or proof.
+  **Accepted as the stopgap (Minus, 2026-11-24).** Its cost: a pass with
+  several joins in sequence copies the rest of the pass at each one, so
+  its code grows exponentially in the number of joins in a row (nested
+  joins, a join inside an arm, copy only their own arm's tail). The span
+  language's join node (dogfooding plan §5.3b) remains the real fix.
 - A generator's request budget is ten times a tactic's
   (`GENERATOR_REQUEST_BUDGET`, `crates/elab/src/host.rs`): the insert row,
   three arms of stores, made more than ten thousand requests.
@@ -579,6 +585,548 @@ Stages, each leaving the gates green:
 Round 4 (the loop files onto the node) follows as planned, and joins the
 same rule: a record or span loop's pin is pointwise like every other.
 
+### 6.6 Stages 3e and 3f as built
+
+**3e: one pin, pointwise, on every route.** The measurement this stage was
+for came out as hoped: **one congruence lemma per statement form, none per
+function.**
+
+| Route | Pin before | Pin now | Congruence it needs |
+|---|---|---|---|
+| plain and own-callee (`Setup::compile`) | an equation of curried functions per file (`Setup::at_every`, `lent_every`), or `Setup::Pinned` in a second constructor (`compile_recursive`) | `Setup::Pinned` only, one constructor; `Setup::alike_every` (`Ty::alike_refl`) where the body is the meaning | `Ty::answers_words_alike` (existed); `Setup::agrees_also` derives from it |
+| span and `Bytes(n)` (`FFun::compile`) | an equation per rest of file and own span | `FFun::Pinned`: `Ty::AlikeTo` over the words; `FFun::source_alike` by conversion, `FFun::pinned_of_eq` for a function written out over its bytes (its equation read pointwise) | `FTm::answers_alike` (new) |
+| laid record (`rt_held`) | at a given environment, own span and record | unchanged: already pointwise | none |
+| `Io` programs (`f::bridge`) | per `io` and buffers | unchanged | none |
+| measured (`Fun::Guarded`, `FFun::compile_counted`) | its own | unchanged: deleted in 3h | — |
+
+Generic: `Ty::alike_refl`, `Ty::AlikeTo`, `Ty::alike_to_refl`,
+`Ty::alike_to_of_eq` (`rt_lower.hthr`). Removed: `Setup::plain_agrees`,
+`Setup::compile_recursive`, `Setup::at_every`, `Setup::lent_every`
+(`recursive_agrees` is now `Setup::agrees`, `plain_agrees_also`
+`Setup::agrees_also`). The kernel's work is the same: the pin's check
+still compares the function with its reflection's meaning by conversion,
+now under `Ty::Alike`'s binders instead of as an equation of functions.
+One diagnostic changed: a wrong claim about a runtime fn's program
+(`runtime_sint_tests`' `zext32_is_not_sext`) is still refused by the kernel,
+but the elaborator's probe that words a mismatch (it compares the program
+spelled by name with the agreement's program spelled out) now runs past its
+budget, so the refusal is the kernel's own message; that row expects
+`(kernel)` now.
+
+**3f: uniqueness of a well-founded fixpoint** (`loop.hthr`). A recursion
+over `A` with measure `m` is a step `F: (a: A) → ((b: A) → m(b) < m(a) →
+B) → B`. `fixpoint_unique(m, F, ext, f, g, fe, ge, a): f(a) = g(a)` where
+`f` and `g` each satisfy `x(a) = F(a, λ b _ => x(b))` and `ext:
+FixpointExt(m, F)` says the step reads its recursion only at its values
+(there is no funext, so this is a hypothesis; for a reflection's meaning
+it is proved once over the term language, for a function by its `f::ext`
+companion). It is the bounded induction `Loop::unique_within` was, over
+any step. `Loop::unique` is restated as its case at `Loop::fix`, the
+loop's step as a recursion's (`Loop::fix_ext`), with `Loop::run_unfold`
+as the loop's equation; `Loop::unique_within` is gone.
+
+**What 3g needs, found on the way.** The loop node of §6.2 is
+`Iterate(init, test, body)`: one test, and a stop answers the state. A
+tail recursion written by hand has several exits, each answering its own
+value, and several calls of itself. Two ways to read it into the node:
+(a) a state that is an enum `Go(args) | Out(r)` (the node carries an enum
+as its tag word and slots), its test `is Go`, its body the recursion's
+body with `Again(ā)` as `Go(ā)` and a returned value as `Out(e)`; or (b)
+a node whose body's leaves are `Again(ā)` and `Done(e)`, the shape §6
+first drew, with a meaning, lowering and soundness of its own. (a) reuses
+everything the node has; its one new piece is the enum, which is not a
+type the program declares, so the table needs an entry the generator
+makes. (b) is the cleaner node and is new proof work in `rt_lower`.
+
+**Decided (the main session, 2026-11-24, under Minus's principle of the
+most elegant method and the least special-casing; for Minus to revisit):
+(b), as the one node, not a second one.** (a)'s enum is a type only the
+generator knows. A node whose body's leaves are `Again(ā)` and `Done(e)` is
+the combinator's own `Pass` shape: a `while`, which elaborates to
+`Loop(m, step).run(init)` with a step returning `Again` or `Done`, reflects
+to it, and `Iterate` (one test, a stop answering the state) is its special
+case. So 3g builds that node in `rt_lower` (meaning, lowering, soundness:
+the pass relation of §6, proved once), moves `while` and the span loops
+onto it, and 3h deletes `Iterate` with `Tm::lower_tail` and `Fun::Guarded`;
+`Iterate` stays only while the migration needs it. Where the proofs come
+easiest as a generalisation of `Iterate`'s (a test and a stop as a step of
+two leaves), they are written that way. The pin is then `fixpoint_unique` at `f`'s step (from its `f::ext`) and the
+meaning's (one-pass unfolding by conversion, `FixpointExt` once over
+`Loop::steps` within `Loop::passes()`, by `Loop::steps_stays`).
+
+### 6.7 3g's node: what already exists
+
+Reading `rt_loop.hthr` for the node's proofs: **the pass with `Again` and
+`Done` leaves is already built, as tail mode.** `Tm::tail_sem` is a pass's
+meaning with its calls of itself (`Call(0, ā)`) answered by a continuation
+`again` and every other leaf a value: exactly `Again(ā)` and `Done(e)`.
+`Tm::lower_tail` is that pass's lowering (a leaf that goes round moves `ā`
+to the loop's next ports with the flag 0, one that leaves moves its value
+with the flag 1), and `Tm::tail_sound` its soundness for any `again`: the
+pass relation of §6, proved once. What makes it "tail mode" rather than
+the node is only where it sits: it is a whole function's shape
+(`Fun.shape() = Measured`), and the loop around the pass is justified by
+`Fun::Guarded` (the function's `f::ext` and `f::irrel`) instead of by the
+pin.
+
+So 3g is mostly moving, not building:
+
+1. **The node is a term.** `Tm::Loop(inits, body)`: the state's words are
+   variables `inits`, `body` sees them as its innermost variables, and a
+   leaf of `body` that goes round is a new leaf `Again(ā)` (not `Call(0,
+   …)`, which inside a function names the function). Its meaning is
+   `Loop::steps(Loop::passes(), …)` of the pass `body.tail_sem` with
+   `again` the next state: `Step`'s `Next` on `Again`, `Stop` on `Done`
+   (the state type then carries the answer: `Step<S>` is generalised to
+   `Pass`'s two payloads, `Next(s) | Stop(r)`, as `loop.hthr`'s `Pass`
+   already is). Its lowering is `lower_tail` inside a FunctionIR loop
+   region, as `Tm::lower_iterate` places `Iterate`'s pass; its soundness
+   is `tail_sound` per pass and `Tm::iterate_holds`'s induction on the
+   passes, generalised from a test and a stop to the two leaves.
+2. **A written tail recursion reflects to `Loop(params, body)`**: its body
+   once, a call of itself in tail position an `Again` leaf, so the function
+   is plain (`Fun.shape() = Plain`, no `Measured` shape). Its pin is
+   `fixpoint_unique` at `f`'s step (`f::ext`) and at the meaning's
+   (`Loop::steps` within the measure by `Loop::steps_stays`, its
+   `FixpointExt` once over `tail_sem`).
+3. **`while`** reflects to the same node (`Step::turn`'s test and stop are
+   a `Pass` of two leaves), then `Iterate` goes; then the span language's
+   `FTm::Loop` the same way (its `FTm::Again` leaf exists already).
+4. **3h**: `Fun.shape()`'s `Measured`, `Fun::Guarded`, `rt_loop`'s two
+   loop theorems and the measured `FFun` path are deleted. `lower_tail`
+   and `tail_sound` are not deleted but renamed as the node's pass
+   (`Tm::lower_pass`, `Tm::pass_sound`): tail mode as a *function's* mode
+   is what goes.
+
+The one genuinely new proof is step 1's loop over passes with an answer
+leaf, which `iterate_holds` gives the shape of.
+
+**Accepted (Minus, 2026-11-24).** `Tm::lower_tail` and `Tm::tail_sound`
+stay, renamed `Tm::lower_pass` and `Tm::pass_sound`, as the node's pass.
+What 3h deletes is tail mode as a mode of a whole function: the `Measured`
+shape, `Fun::Guarded`, `rt_loop`'s two loop theorems and the measured
+`FFun` path.
+
+**What building it found (3g, 2026-11-24).** Four things the plan above
+did not see, from reading the code the node has to sit in:
+
+1. **The node's meaning cannot call `tail_sem`.** `Tm::tail_sem` is
+   defined over `Tm::sem` (a leaf's value is `Tm::sem` of it), so
+   `Tm::sem`'s own case for the node cannot be written through it: the
+   two would recurse into each other across modules, and the node's body
+   is not a direct subterm of `tail_sem`'s leaves. The term language needs
+   what a denotational semantics of loops with labels has: the meaning of
+   a term *under the continuation of the innermost loop around it*.
+   `Tm::sem_in(t, w, lab)` is that meaning (`Again(res, ā)` answers
+   `lab(res, ā's words)`), and `Tm::sem(t, w)` is `t.sem_in(w,
+   Tm::no_label(w.tys))`, so every existing statement about `Tm::sem`
+   still holds by conversion. A structural recursion may pass a changed
+   argument to its recursive call inside a function it hands a combinator
+   (a loop's body read under a new label), which is what the node's case
+   does. The label is a separate argument, not a field of `World`: a
+   term's code (`Tm::ty`) must not depend on it, or every statement about
+   a loop body's meaning would be between two types.
+2. **Running out of passes cannot answer the state.** `Iterate`'s stop
+   answers the state, so a loop out of fuel answers what a stop would, and
+   a measure at most the fuel suffices (`Loop::steps_stays`). A `Done(e)`
+   leaf answers a value the state does not hold, so the fixpoint pin needs
+   the measure *below* the fuel, and a word's `toNat` reaches `2^64 - 1`,
+   the passes a FunctionIR loop can count. The measured route meets the
+   same edge with one more pass after the loop is exhausted
+   (`Fun::meas_tail2`); the node does the same (its meaning's out-of-fuel
+   answer is one more pass), which lowers the pass twice. A loop node in a
+   pass's second copy is copied again, so code grows exponentially in the
+   nesting of answering loops; a `while` (whose stops answer the state)
+   needs no second copy.
+3. **The first customers are not on the `Tm` route.**
+   `Bytes::port_set_insert` is a span function (`FFun`, its tail call
+   lowered by `rt_file_loop`'s measured path) and `WordMap::insert_at`
+   (and the ports' `WordMap` probes) are laid-record functions whose tail
+   pass is `rt_held_loop`'s. A node in `Tm` serves neither: they need the
+   node in `FTm`, which is round 4's work (§8). On the `Tm` route, the
+   written tail recursions are word functions (`count_down`, `rsum_from`,
+   `doubled`, `i64_sum_down` in `lib/_tests/native/runtime/`), and those
+   are the node's first customers.
+4. **The state is words, at first.** Tail mode's pass moves one word per
+   argument and leaves one word; `Iterate` carries a record of words as its
+   cells. The node starts with tail mode's shape (each state variable and
+   the result held in one word), which is every written tail recursion on
+   the `Tm` route; a `while` over a record state moves onto it when the
+   pass moves cells, and until then stays on `Iterate`.
+
+### 6.8 3g as built: the node, its lowering and soundness, the pin lemma
+
+**The node** (`rt.hthr`). `Tm::Loop(inits, body)`: the state is the words
+of variables `inits`, and `body` sees the state and nothing else (bound as
+a function sees its parameters). What a loop reads of its context is a
+state word its passes hand on unchanged, so a loop carries no context and
+needs none of `Iterate`'s carry. `Tm::Again(res, args)` goes round at the
+state the variables `args` hold; it names the loop's result code so that
+no term's code depends on the loop around it. The meaning is
+`Tm::sem_in(t, w, lab)`, a term under the innermost loop's continuation
+(finding 1 of §6.7); `Tm::sem` is it at `Tm::no_label`. A loop's meaning is
+`Loop::rounds(Tm::passes(), pass, stuck, words)`, the fuel recursion
+(`loop.hthr`), its pass the body under the label `Tm::round(res, again)`,
+and past its passes one more pass whose going round answers the state's
+first word (finding 2).
+
+**One lowering for a value and a pass.** `Tm::lower` is
+`Tm::lower_in(t, w, None, …)`; `Some(PassAt(res, flag, nexts))` lowers a
+loop's pass: a leaf is checked at the loop's code and moved out with the
+flag 1 (`Tm::leaf_at`), a branch writes the flag and the next words in both
+arms (`Tm::branch_at`, tail mode's `tail_branch`), a bound term may not go
+round (`Tm::bound_at`), and `Again` moves the state's words with the flag 0
+(tail mode's `lower_again`). A value may hold a loop and a loop's leaves
+are values, so the two are one recursion, as the meaning is one with its
+label. Its soundness is one induction over both modes
+(`Tm::lower_in_sound`): a pass leaves the term's meaning under the loop's
+label whatever the continuation (`Tm::PassHolds`); a term that goes round
+no loop of its own means the same under any label
+(`Tm::sem_in_unlabelled`). Tail mode's pass helpers moved from `rt_loop`
+to `rt_lower` for it; tail mode itself (`lower_tail`, `tail_sound`) is
+untouched and goes with the measured shape in 3h.
+
+**The region** (`Tm::loop_region`): a FunctionIR loop of `Tm::passes()`
+passes over the state's words (`Tm::loop_core`), and where it runs out a
+second loop node of one pass, so that the extra pass runs on its own
+parameters as every pass does and needs no frame reasoning; the answer is
+the first output of whichever ran last. Its soundness (`Tm::loop_sound`)
+is the pass's (`Tm::core_pass`) and an induction over the passes
+(`Tm::rounds_agree`, `Tm::core_runs`), never a measure: the measure
+appears only in the pin. Finding 2's cost is the pass lowered twice; a
+loop in a loop's pass is lowered twice per copy.
+
+**The pin lemma** (`loop.hthr`, `Loop::rounds_agree`): a run whose every
+round, its recursion answered by anything that agrees with `f` below the
+measure, is `f`, is `f` wherever the measure is at most the fuel. It is
+the fuel side of `fixpoint_unique`, and its one per-function hypothesis is
+the shape `Fun::Guarded` has today, which a function's `f::ext` and
+`f::irrel` give. A measure that is a word's `toNat` is at most
+`Tm::passes()` (`Tm::word_within`).
+
+**Probe** (`lib/_tests/native/runtime/rt_loop_tests.hthr`): `count_down`
+written as the node lowers, its meaning is `count_down` by
+`Loop::rounds_agree` with the pass from `count_down::ext` and
+`count_down::irrel`, and a wrong pass is refused.
+
+**A conversion trap.** Two loops' meanings that differ only in an argument
+their passes never read (two labels) ran the kernel out of fuel when
+compared by `refl`: it unrolled `Loop::rounds` at its numeral fuel. Each
+side's one-step unfolding is its own lemma (`Tm::sem_in_loop`) and the two
+are compared through it.
+
+**A written tail recursion on the node (step 2).** A measured recursion
+lent nothing, of 64-bit words, is reflected as one node over its
+parameters (`Fun::as_node`, `rt_loop.hthr`): its body once, each call of
+itself in tail position `Again` (`Tm::again_of`), so the function is plain
+and the generator's judgment reads the body as a pass. Its instance
+(`runtime_node_instance`, `runtime.hthr`) pins it at each file and word:
+the meaning is the node's rounds (`Tm::sem_in_loop`), which are the
+function (`Setup::node_means`, `Loop::rounds_agree` at the function's
+words) from the node's pass, `Setup::NodePass`, which the generator proves
+from `f::ext` and `f::irrel` exactly as it proves `Guarded`, and the
+measure a word's `toNat` (`Tm::word_within`). No `f::reflects` is
+published for it: the pin is the theorem. `runtime_loop_tests`'
+`count_down`, `count_down_odd` and `count_up_to_64` compile this way, and
+`examples/x86-native/loop_measure.hthr`'s `triangle` over `count_down`
+compiles to certified x86 (217 bytes; the extra pass is a second copy of
+the loop's body).
+
+**A second conversion trap, found by the pin.** A cast of a loop's meaning
+compared with the meaning itself (`cast(ty, W64, sem(node)) = sem(node)`)
+ran the kernel out of fuel: reducing the cast forces the meaning's head,
+and the meaning's head is the loop's next pass, at a numeral fuel, without
+end. The same comparison between two casts is argument by argument. So the
+pin ends in `Ty::cast_self`, spelled so that its statement has the
+meaning's own cast, and the kernel never reduces a node's meaning in a pin.
+The rule for any proof about a node: never let the kernel reduce
+`Tm::sem` of a `Loop` past its head; state the node's meaning through
+`Tm::sem_in_loop` and compare loops at `Loop::rounds`.
+
+Still on the measured route (`Fun::Guarded`, tail mode): a recursion lent
+a span (the homes it keeps), one whose words are not all 64-bit (records
+held in a word, narrower words), and every span, laid-record and `Bytes(n)`
+recursion (finding 3). Those are what 3h's deletion waits on.
+
+**Still to do in 3g:** `while` onto the node (step 3), and the node's pin
+for words that are not 64-bit (the boundary's casts). What step 3 needs,
+found while building step 1:
+
+- *A record state and a record answer.* A `while`'s state is the record
+  `f#State` and its answer is that state; the node's state is words and
+  its answer one word. Either the pass learns to leave several words (a
+  `Done` leaf moving each word of a record, `PassHolds` over a record
+  answer), or the reflector spells the state as its fields and the code
+  after the loop reads the fields off the node's words. The first keeps
+  the node one node; the second keeps the pass one word and needs the
+  answer to be a field read, which a `while` whose value is used whole is
+  not.
+- *The pin is no longer `refl`.* A `while`'s function is written with
+  `Loop::steps`, whose stop answers the state, so its meaning equals the
+  node's rounds only where the measure bounds the passes; the pin becomes
+  `Loop::steps_stays` and `Loop::rounds_agree` meeting at `Loop::run`
+  (both are `l.run` within the measure), proved once for a `Step::turn`
+  step. That is a theorem per loop the elaborator already has the pieces
+  of (`f::loop::runs`).
+- Once both are done, `Iterate` and its carry (`Tm::carry`,
+  `Tm::iterate_holds`) can go, and the span language's `FTm::Loop` follows
+  the same way in round 4.
+
+### 6.9 The pass budget is a proof, not code; a pass of several words
+
+**The principle** (Minus, 2026-11-24; `docs/compilation-vision.md`,
+settled principle 13): a runtime check is a proof checked at another time,
+and the proof takes primacy. A loop states its termination as an
+obligation (a measure that decreases on every pass that goes round),
+discharged once; a case the obligation rules out is absurd and emits no
+code. A loop counted to a literal bound is a helper that discharges the
+obligation for code that wants one, not the primitive.
+
+**Where the counter lives: in the code, all the way down.** §6.8's extra
+pass is not only in the node's meaning:
+
+- FunctionIR's `Loop` takes the bound as an input port, binds the passes
+  left to `count` on every pass and answers an `exhausted` bit; `LoopRuns`
+  recurses on the passes left.
+- The allocator emits the count's test and decrement on every pass
+  (`loop_zero`, `loop_down`, `loop_stop` in `crates/cli/src/native/allocator.rs`).
+- The x86 proofs (`native_compile_structured`, `native_structured_meaning`)
+  relate the machine's loop to FunctionIR's evaluator, which is total
+  because of the count (`loop_eval(…, remaining, …)`).
+
+The extra pass cannot simply go while the counter stays. With the count at
+`2^64 - 1`, `loop_runs_unexhausted` refutes exhaustion only for a measure
+below the passes left. A measure that is a 64-bit word's `toNat` reaches
+`2^64 - 1`, and its last pass (the one that leaves) is the `2^64`-th.
+
+**Decided** (Minus, 2026-11-24): the primitive changes first, before
+`while`, the `FTm` node and 3h. The evidence: `while` onto the node needs
+a record answer, which is the multi-word exit in both arms of the
+exhaustion branch, and its pin is off by one because of the extra pass
+(`rounds(N)` with the extra pass is `Loop::steps(N + 1)`). Every stage
+built before the change would be built around the extra pass and then
+reworked.
+
+**The change**, in rounds, each leaving the gates green:
+
+- **Round A:** FunctionIR's `Loop` without bound, count and exhausted,
+  with its relational meaning, the evaluator and the passes. Today's
+  counted users are rewritten onto the helper.
+- **Round B:** the native structured layer and its proofs, termination as
+  a hypothesis of the lowering's soundness. The `runtime fn` layer
+  discharges it from the measure.
+- **Round C:** the allocator, the emitter and the decoder (`loop_zero`,
+  `loop_down` and `loop_stop` go), the remaining loop producers, and the
+  linked assembly regenerated.
+- **Round D:** the node without its extra pass, then `while`, the `FTm`
+  node and 3h.
+
+What each piece of the change is:
+
+1. FunctionIR's `Loop` loses `bound`, `count` and `exhausted`. Its meaning
+   becomes a relation, the loop ends after some number of passes, with no
+   case for running out. A run that halts then has its result.
+2. Termination becomes a hypothesis of the lowering's soundness, which the
+   runtime-fn layer discharges once from the node's measure (the pin
+   already has it through `Loop::rounds_agree`). The machine-level proof
+   inducts on the passes the relation gives.
+3. Today's counted loop becomes a helper: an ordinary state word,
+   decremented in the body, whose exit is taken at zero. It discharges the
+   obligation for the loops that want a literal bound: the lexer, crypto,
+   and the bytes, held and file loops.
+4. The node loses its extra pass and its second core. Nested loops stop
+   doubling, and a loop's code is its body and the jump back.
+
+The work is several rounds, not one:
+
+- FunctionIR's core, its evaluator and its passes. Most passes lose three
+  fields mechanically; the relational meaning and the evaluator are the
+  risk.
+- The native structured layer and its proofs.
+- The allocator, the emitter and the certificate's decoder.
+- Every loop producer, then the linked assembly regenerated.
+
+**Round A as built: `Until`, FunctionIR's loop with no bound.** The
+counted `Loop` is not changed in place. A second constructor,
+`Until(inputs, parameters, body, exit, next, outputs)`, stands beside it.
+Its producers move onto it round by round, and `Loop` goes last, so each
+round stays green. (`Repeat` was taken: it is a native statement's.)
+
+- *Meaning.* `UntilHolds` is some number of passes (`UntilRuns`, which
+  has no case for none) from the inputs to the outputs. The file-threaded
+  relation is `UntilRunsOver`.
+- *Evaluation.* `until_eval` runs at a fuel that is the meaning's, not the
+  code's: `until_passes()`, which is `2^64`. Running out evaluates to the
+  state it got to, and that state is never read.
+- *Termination.* Running out is not *defined*. `until_defined` is false
+  at no fuel, and `defined_over`, which every soundness theorem already
+  takes, carries it, so the region's termination is the hypothesis §6.9
+  asks for. `until_defined_of_measure` discharges it once: a pass defined
+  wherever an invariant holds, and a measure that the passes going round
+  lower. `until_word_within` gives that a 64-bit word's `toNat` is within
+  the fuel.
+- *Not total.* `total_at`, `quiet` and `placeless` are false for `Until`,
+  since its termination is never a property of its nodes, and so are their
+  lemmas.
+- *The passes.* Analyses read its body. Replay, inlining and the
+  optimizer's plans take it whole (`Same`, `Stay`), for now.
+- *Code.* None in round A: the native layers refused it until round B,
+  below. It is spelled with tag 9.
+- *A probe split.* `uneven_shallow_exits` (native_compile_tests) sat at the
+  kernel's budget. One more constructor in every match tipped it over by
+  a sliver, so it is now stage theorems.
+
+**Round B as built: `Until`'s code, with no counter.**
+
+- *The function path* (`function_ir_lower_calls`, the lowering runtime
+  functions compile through). The entry moves the inputs into the state's
+  registers. A pass is the body, then the exit test (`File::branch_test`);
+  leaving moves `next` into the state and jumps out, and going round moves
+  them and jumps to the head. There is no counter, no flag and no
+  exhausted bit.
+  - The machine proof (`until_emits`, `until_rounds`, `until_close_emits`)
+    inducts on the passes `∃ n. UntilRunsOver` gives, and the zero case is
+    absurd. It is smaller than the counted loop's, and so is each step's
+    cost.
+  - The planner places the state alone (`File::until_places`).
+  - A pass sees the homes the loop carries in (`until_carries`), but no
+    homes are carried out yet.
+  - Probe `function_ir_until_tests`: a countdown lowers by `refl` to
+    `SUB; CMP; JNE` and its jumps, with no counter. A loop whose exit is
+    no comparison tests a bit. A stray exit is refused by name.
+- *The statement path* (`native_compile_structured` and the layers under
+  it). A region holding an `Until` scopes, passes the allocator's check
+  (its loop set keyed by its exit id) and is emitted with its machine
+  proof (`Target::until_head`, `until_goes`). Termination is the region's
+  hypothesis: `StructuredRegion::Ok` takes `until_halts`, which is
+  `until_run_defined` from every state.
+- *Open: a statement cannot hold an `Until` yet.* A statement's meaning
+  (`Stmt::denote`'s `Compute`) has no hypothesis and no meaning for a loop
+  that does not end. `native_compile_correct` is cited by the ELF theorem
+  whose call the Rust emitter writes. So `scopes` refuses an `Until`
+  (`until_free`) until one of these is chosen:
+  - (a) `Compute` gets a meaning that can stop short (fuel, or a `Cut`).
+  - (b) The compile's correctness and the ELF theorem take a termination
+    hypothesis, which changes the call Rust writes.
+  - (c) A termination check the compile decides.
+
+  The native tools (`native_build`) are the counted loop's only
+  statement-level producer, so this decides how they leave `Loop` in
+  round C.
+- *Decided (Minus, 2026-11-25): every loop carries its measure.* The
+  obligation is on the primitive (vision principle 13). The FunctionIR
+  `Until`, at both levels, and the runtime node `Tm::Loop` each carry a
+  measure over their state. Its decrease on every pass that goes round is
+  proved where the loop is built: by evaluation where the measure and the
+  step are closed, by a carried proof otherwise.
+  - Definedness is then generic at every level: `until_halts` follows from
+    the carried measure by `until_defined_of_measure`. Neither the
+    compile's correctness nor the ELF theorem takes a hypothesis, and the
+    Rust emitter's call does not change.
+  - Not (a): pure regions stay total, and a program that runs forever has
+    the statement-level `Repeat`. Not (b): that puts the obligation on the
+    program rather than on the loop that needs it.
+  - The counted loop is the helper. A counter word is its own measure, so
+    `native_build`'s loops move onto `Until` with a counter in their state,
+    and `Loop` goes as planned.
+  - Round D: the node carries its measure, and `rt_lower_defined` stays
+    generic.
+- *Rust.* The region printer reads tag 9. The allocator does not, since no
+  statement reaches it with an `Until`.
+
+**Round C as built so far.**
+
+- *The measure.* `Until` carries a seventh field, `measure`: the position
+  of the parameter it falls on. Both spellings write it and the Rust
+  printer reads it. No meaning reads it; it says where the check looks.
+- *The counted check* (`function_ir_counted`). A pass that counts is
+  `Compose(work, Dataflow(leaf))`, where `work` writes no part of the
+  counter and the leaf is exactly `counted_nodes(p, q, exit, t)`:
+  `t := 1; q := p - t; t := 0; t := (q = t); exit := exit | t`. `p` is the
+  parameter at `measure` (none before it) and `q` the next word there.
+  `StructuredRegion::counts` decides it by evaluation, and
+  `counts_halts` turns the verdict into `until_halts`. The measure is the
+  counter less one, so a loop entered at zero wraps and still ends within
+  `until_passes()`. The file-threaded `until_run_defined_of_measure`
+  carries it.
+- *Statements.* `scopes` asks `until_counted` where it asked
+  `until_free`. `ok_of_scoped` proves an `Until`'s ending from the check,
+  and needs no hypothesis. A `BitOr` of two clean bits is clean
+  (`Scope::clean`), so the counted exit bit scopes.
+- *A layout fix.* Round B's statement code jumped back to the head
+  conditionally. A `Jcc` lands only ahead (`item_lands`), so no program
+  holding one laid out. It went unnoticed because `scopes` refused every
+  such statement. The code now jumps ahead to the jump back, as the
+  counted `Loop`'s does, and `counted_compiles` checks a whole source.
+- *`native_build`.* `Passes` lowers to a counted `Until` over the counter,
+  `ran_out` and the state, behind a test of its bound. Each pass sets
+  `ran_out` to the negation of `stop`, so the last pass leaves it 1
+  exactly where the passes ran out.
+- *A limit of the measure.* `Until`'s measure is a parameter's position,
+  so a measure such as `(n - i).toNat()` needs a state word holding it,
+  recomputed on every pass. That is enough for a first version: the
+  counted helper and a `decreases` measure that is one word both fit.
+  Whether a measure written as an expression of the state is wanted later
+  is open.
+- *The runtime producers: held for a decision.* Every runtime producer of
+  `Loop` is already replaced or deleted in round D:
+  - `Iterate` goes when `while` reflects to the node;
+  - the node carries its measure;
+  - `rt_loop`'s fuel and measured theorems and the measured `FFun` path go
+    in 3h;
+  - `FTm::Loop` goes onto the `FTm` node.
+
+  So porting them in round C builds them twice, whether onto a derived
+  `counted_loop` or directly onto measure-carrying `Until`s. The direct
+  route cannot reach `Iterate`, which has no measure, nor the node, until
+  round D gives it one. The order proposed instead:
+  - round C closes with what is built;
+  - round D's node lowers straight to an `Until` carrying the node's
+    measure (the direct route, for the one producer that stays);
+  - deleting `Loop`, the allocator's `loop_zero`, `loop_down` and
+    `loop_stop`, and regenerating linked follow 3h, once nothing makes a
+    `Loop`.
+
+**Built: a pass that answers several words** (step 3's first half, kept
+as small as the extra pass allows).
+
+- *The answer.* A node's answer is a `Ty::Answer`: a 64-bit word, or a
+  record of 64-bit words with one field at least. It is held at its ids
+  (`Ty::ids`), and the leaf moves them to the first of the next words.
+  Every other next word gets a copy of the first id (`Tm::fill`), so a
+  branch's arms both write each one.
+- *The statement.* The pass's statement is in words: `Tm::leaves`, at
+  `Ty::result_words`, takes the first `res.span` next words.
+- *The extra pass.* The meaning's extra pass, going round, answers the
+  state read as the answer (`Ty::read_words`, moved into `rt`). An
+  answer's words read back as itself (`Ty::answer_round`), so the extra
+  pass's end is the state's first words (`Tm::extra_end`). An enum is not
+  an answer yet: a word past its last tag reads back as another
+  constructor.
+- *Tail mode.* Tail mode keeps its one-word `Tm::leave` and `Tm::out`
+  until 3h deletes it.
+- *The loop's exit.* After the loop, the answer is still moved out in one
+  word (`lower_loop_at` checks `res.check_one_word`). Generalizing that
+  exit is a move of each word in both of the exhaustion branch's arms, and
+  (2) deletes that branch; so it waits on (2)'s order.
+
+**What `while` onto the node still needs** (step 3's second half):
+
+- *Its state as words.* A `while` is an expression,
+  `Loop::steps(Loop::passes(), λ s => Step::turn(c, λ h => next, s), init)`,
+  over a state of any code, and its test and next state may read the
+  function's context. The node's body sees only its state (`Tm::inside`).
+  So the reflector spells the record state's fields, and every context
+  variable the loop reads, as one-word state words. It re-indexes the test
+  and the next state onto them: the test's two arms become `Again` of the
+  next fields and the read-only words, and `Make` of the fields. A context
+  word that is not one 64-bit word keeps the loop on `Iterate` until the
+  node's state widens.
+- *Its pin.* The pin is a rewrite inside f's body at the loop's position,
+  not `refl`. That position is where `Iterate`'s meaning is `Loop::steps`
+  itself. `Loop::steps_stays` and `Loop::rounds_agree` meet at `Loop::run`,
+  from `f::loop::runs`, under the congruence of the context around the loop.
+
 ## 7. Bootstrapping
 
 Minus's fear: a bug that infects the next version. The loop's meaning is
@@ -602,6 +1150,12 @@ wrong compiler.
 3. **One loop node in the shared term language** and its relation
    (§6) over `Function::run`; `runtime fn` reflection reads `Loop(…).run`;
    delete `Tm::lower_tail`, `Fun::Guarded`, `rt_loop`'s two loop theorems.
+   *Status (2026-11-24):* 3a–3f built; 3g's node, its lowering and
+   soundness, its pin lemma, and written tail recursion over 64-bit words
+   on it are built (§6.8). Left: `while` onto the node (a record state),
+   the node's pin at words that are not 64-bit, then 3h. The span and
+   laid-record recursions (the ledger's tail calls) need the node in `FTm`,
+   which is round 4.
 4. **The other four loop files onto it** (`rt_file_loop`, `rt_held_loop`,
    `rt_bytes_loop`, and `rt_io_loop` via `Io::iterate`), with the shared
    `FTm`/`ETm` core of the dogfooding plan §5.3b; delete their companions.

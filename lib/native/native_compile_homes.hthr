@@ -151,6 +151,7 @@ theorem Stmt::checked_sound(self s: Stmt, homes: Homes): (out: List<Nat>) → (l
             Lend(a, b, c, d) => λ out l same => homes.region_checked_sound(Lend(a, b, c, d), out, l, same),
             Call(a, b, c, d) => λ out l same => homes.region_checked_sound(Call(a, b, c, d), out, l, same),
             Loop(a, b, c, d, e, f, g, h, i) => λ out l same => homes.region_checked_sound(Loop(a, b, c, d, e, f, g, h, i), out, l, same),
+            Until(a, b, c, d, e, f, g) => λ out l same => homes.region_checked_sound(Until(a, b, c, d, e, f, g), out, l, same),
         },
         Invoke(shape) => λ out l found => {
             cases found as apart;
