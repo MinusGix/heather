@@ -1,0 +1,107 @@
+// Probes of the reference-cells toy (lib/native/reference_cells;
+// issues/ownership-reference-cells-spike.md): the program run on a heap,
+// each refusal by evaluation, a record holding a reference copied by its
+// type, and two blocks placed overlapping.
+import reference_cells;
+import reference_cells_x86;
+import reference_cells_bridges;
+import function_ir;
+import x86_64;
+import x86_64_lending;
+import x86_64_data_read;
+import bitvec;
+import bool;
+import list;
+import logic;
+import nat;
+import option;
+
+// Block 0: sixteen zero bytes. Block 1: the bytes 7, 8, 9, 10.
+fn zeros() → List<BitVec(8)> { List::replicate(BitVec::zero(), 16) }
+
+fn small() → List<BitVec(8)> { [BitVec::ofNat(7), BitVec::ofNat(8), BitVec::ofNat(9), BitVec::ofNat(10)] }
+
+fn heap() → Heap { Heap::of([zeros(), small()]) }
+
+// Values: 0 and 4 places in block 0, 1 a reference into block 1.
+fn values(place, target: Loc) → Nat → Value {
+    λ (x: Nat) => match x { Zero => Ref(place), Succ(a) => match a { Zero => Ref(target), Succ(_) => Ref(Loc(0, 8)) } }
+}
+
+fn start(place, target: Loc) → State { State(values(place, target), heap()) }
+
+// The word value `x` is after the run, if it ran.
+fn answer(after: Option<State>, x: Nat) → Option<Nat> {
+    match after { None => None, Some(s) => match s.values(x) { Word(word) => Some(word.toNat()), Ref(_) => None } }
+}
+
+fn refused(after: Option<State>) → Bool { match after { None => True, Some(_) => False } }
+
+// The program: a reference to byte 2 of block 1 stored at byte 0 of block
+// 0, loaded back, and the byte read through it is 9.
+theorem program_reads_nine(): answer(run(program(), start(Loc(0, 0), Loc(1, 2))), 3) = Some(9) { refl }
+
+// At any eight bytes of block 0 that fit.
+theorem program_reads_nine_at_eight(): answer(run(program(), start(Loc(0, 8), Loc(1, 2))), 3) = Some(9) { refl }
+
+// Eight bytes past the block's end: the store has no step.
+theorem program_refused_past_end(): refused(run(program(), start(Loc(0, 9), Loc(1, 2)))) = True { refl }
+
+// The control: the reference points into its own eight bytes, so the byte
+// load reads a byte a reference occupies, and has no step.
+theorem byte_of_reference_refused(): refused(run(program(), start(Loc(0, 0), Loc(0, 3)))) = True { refl }
+
+// The same block, past the reference's eight bytes: a plain byte.
+theorem byte_beside_reference(): answer(run(program(), start(Loc(0, 0), Loc(0, 8))), 3) = Some(0) { refl }
+
+// A word load of the eight bytes holding a reference has no step,
+theorem word_of_reference_refused(): refused(run([StoreRef(0, 1), LoadWord(2, 0)], start(Loc(0, 0), Loc(1, 2)))) = True { refl }
+
+// nor a reference load where no reference is,
+theorem reference_of_bytes_refused(): refused(run([LoadRef(2, 0)], start(Loc(0, 0), Loc(1, 2)))) = True { refl }
+
+// Values for stores: 0 a reference's place, 1 the reference, 2 block 0 at
+// `at`, 3 the word 5.
+fn storing(place: Loc, at: Nat) → State {
+    State(λ (x: Nat) => match x { Zero => Ref(place), Succ(a) => match a { Zero => Ref(Loc(1, 2)), Succ(b) => match b {
+        Zero => Ref(Loc(0, at)), Succ(_) => Word(BitVec::ofNat(5)) } } }, heap())
+}
+
+// nor a word stored over part of a reference: one at 4 is cut by a store
+// at 8,
+theorem cut_refused(): refused(run([StoreRef(0, 1), StoreWord(2, 3)], storing(Loc(0, 4), 8))) = True { refl }
+
+// while a word stored beside it leaves the reference to be read through,
+theorem store_beside_kept(): answer(run([StoreRef(0, 1), StoreWord(2, 3), LoadRef(4, 0), LoadByte(5, 4)], storing(Loc(0, 0), 8)), 5) = Some(9) { refl }
+
+// and a word stored over the whole of it replaces it.
+theorem whole_store_replaces(): answer(run([StoreRef(0, 1), StoreWord(2, 3), LoadWord(4, 2)], storing(Loc(0, 0), 0)), 4) = Some(5) { refl }
+
+theorem replaced_reference_gone(): refused(run([StoreRef(0, 1), StoreWord(2, 3), LoadRef(4, 0)], storing(Loc(0, 0), 0))) = True { refl }
+
+// A record holding a reference copied by its type: the reference loaded
+// from block 0 at 0 and stored at block 0 at 8, then read through there.
+// A byte-wise copy of the same eight bytes is the refused byte load above.
+fn copy() → List<Op> { [StoreRef(0, 1), LoadRef(4, 0), StoreRef(2, 4), LoadRef(5, 2), LoadByte(3, 5)] }
+
+theorem typed_copy_reads_nine(): answer(run(copy(), start(Loc(0, 0), Loc(1, 2))), 3) = Some(9) { refl }
+
+theorem copy_lowers(): lowers(copy(), λ (x: Nat) => match x { Zero => Rdi, Succ(a) => match a { Zero => Rsi, Succ(b) => match b {
+    Zero => Rdx, Succ(c) => match c { Zero => Rcx, Succ(d) => match d { Zero => R8, Succ(_) => R9 } } } } }, 6) = True { refl }
+
+// A placement putting two values in one register is refused.
+theorem shared_register_refused(): lowers(program(), λ (x: Nat) => Rax, 4) = False { refl }
+
+// Two blocks placed overlapping, block 1 at byte 8 of block 0, with
+// different bytes there: no memory injects them.
+fn overlapping(base: BitVec(64)) → Spans {
+    Spans(λ (b: Nat) => match b { Zero => base, Succ(_) => next_rip(base, 8) }, λ (b: Nat) => 16, λ (b: Nat) => True)
+}
+
+fn ones() → List<BitVec(8)> { List::replicate(BitVec::ofNat(1), 16) }
+
+theorem overlapping_not_injected<M>(data: ByteReadAccess<M>, base: BitVec(64), memory: M):
+    ¬Injected<M>(data, overlapping(base), Heap::of([zeros(), ones()]), memory) {
+    overlap_not_injected(data, overlapping(base), Heap::of([zeros(), ones()]), memory, 0, 8, 1, 0, trivial, trivial, refl, refl, refl,
+        λ same => absurd(cong_fn<Option<BitVec(8)>, Nat>(λ o => match o { None => 0, Some(byte) => byte.toNat() }, same)))
+}

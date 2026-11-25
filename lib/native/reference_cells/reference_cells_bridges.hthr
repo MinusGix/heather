@@ -1,0 +1,243 @@
+// What the reference-cells toy says of the compiler that exists
+// (issues/ownership-reference-cells-spike.md, its four questions): the toy
+// (reference_cells, reference_cells_x86) set beside FunctionIR's lowering
+// and the lending laws, statement against statement.
+//
+// - The shadow is additive (question 1). A heap of FunctionIR buffers has
+//   an empty shadow (`Heap::of`), and its injection is FunctionIR's
+//   `Stack::InMemory` both ways (`in_memory_injected`,
+//   `injected_in_memory`); the toy's word store on it is `store_span`
+//   (`store_word_of`), so the toy's store theorem gives
+//   `Stack::in_memory_span`'s conclusion for a word
+//   (`in_memory_word_stored`) with nothing about the shadow left in it.
+// - The register invariant does not split by kind (question 2). The toy's
+//   invariant, a register holds the value lowered to a word, is
+//   `function_ir_lower`'s `Held::Rep` at kind `Word` over the valuation
+//   lowered through the injection (`lowered_values`, `held_word_rep`,
+//   `registers_represent`): a reference is a word there, its target's
+//   address.
+// - A block carved after entry (question 3). Spans that are pieces of a
+//   loan's spans, written pieces apart, are a `Loan` themselves
+//   (`Loan::carve`), and every store into a piece is a store into its
+//   parent, so what a call may have done is stated over the spans it was
+//   lent (`Stack::wrote_in_parents`). Nothing is added to `Loan`.
+import reference_cells;
+import reference_cells_x86;
+import function_ir;
+import function_ir_state;
+import function_ir_lower;
+import function_ir_lower_calls;
+import x86_64;
+import x86_64_fetch;
+import x86_64_data_read;
+import x86_64_fetched_code;
+import x86_64_store;
+import x86_64_stack;
+import x86_64_lending;
+import bitvec;
+import bool;
+import list;
+import list_window;
+import logic;
+import nat;
+import option;
+import omega;
+import relation;
+import transition;
+
+// ---------------------------------------------------------------------------
+// Question 1: an empty shadow is the bytes-only statement
+
+// The file in memory is the empty-shadow heap injected,
+theorem in_memory_injected<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, stack: Stack<M>(fetch, data), lending: Lending,
+    now: Buffers(), memory: M, held: stack.InMemory(lending, now, memory)): Injected<M>(data, lending.spans(), Heap::of(now), memory) {
+    Injected(
+        sizes := λ b => held(b).left,
+        bytes := λ b k inside _ => {
+            let size: (lending.spans().size(b) = buffer_bytes(lending.buffers, b).len()) = refl;
+            held(b).right.right(k, omega(inside, held(b).left, size))
+        },
+        refs := trivial,
+    )
+}
+
+// and an empty-shadow heap injected under a loan is the file in memory.
+theorem injected_in_memory<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, {stack: Stack<M>(fetch, data)}, {top: Nat}, lending: Lending,
+    loan: Loan<M>(fetch, data, stack, top, lending.spans()), now: Buffers(), memory: M,
+    inj: Injected<M>(data, lending.spans(), Heap::of(now), memory)): stack.InMemory(lending, now, memory) {
+    λ b => ⟨inj.sizes(b), ⟨omega(loan.canonical(b), inj.sizes(b)), λ k short => inj.bytes(b, k, omega(short, inj.sizes(b)), refl)⟩⟩
+}
+
+// The toy's word store on buffers is FunctionIR's `store_span`, block for
+// block, and leaves the shadow empty.
+theorem store_word_of(now: Buffers(), loc: Loc, word: BitVec(64), inside: loc.offset < buffer_bytes(now, loc.block).len(), c: Nat):
+    Heap::of(now).store_word(loc, word).bytes(c) = Heap::of(store_span(now, loc.block, loc.offset, word_bytes(word))).bytes(c) {
+    let window = buffer_bytes(now, loc.block).put_window(loc.offset, word_bytes(word));
+    match c.eq_dec(loc.block) {
+        Inl(same) => j(sym(same), λ x _ => set_block(λ (b: Nat) => buffer_bytes(now, b), loc.block, window, x) =
+                buffer_bytes(store_span(now, loc.block, loc.offset, word_bytes(word)), x),
+            trans(set_block_here(λ (b: Nat) => buffer_bytes(now, b), loc.block, window),
+                sym(buffer_bytes_spanned(now, loc.block, loc.offset, word_bytes(word), inside)))),
+        Inr(differs) => trans(set_block_other(λ (b: Nat) => buffer_bytes(now, b), loc.block, window, c, differs),
+            sym(buffer_bytes_span_other(now, loc.block, loc.offset, word_bytes(word), c, λ same => differs(sym(same))))),
+    }
+}
+
+// An injection depends on a heap's bytes block by block.
+theorem Injected::same_bytes<M>({data: ByteReadAccess<M>}, {spans: Spans}, {heap: Heap}, {memory: M}, self inj: Injected<M>(data, spans, heap, memory),
+    other: Heap, same: (b: Nat) → other.bytes(b) = heap.bytes(b), shadow: other.shadow = heap.shadow): Injected<M>(data, spans, other, memory) {
+    Injected(
+        sizes := λ b => trans(cong_fn<List<BitVec(8)>, Nat>(λ l => l.len(), same(b)), inj.sizes(b)),
+        bytes := λ b k inside none => trans(inj.bytes(b, k, inside, trans(cong_fn<List<Entry>, Bool>(λ sh => covered(sh, b, k), sym(shadow)), none)),
+            cong_fn<List<BitVec(8)>, Option<BitVec(8)>>(λ l => l.nth(k), sym(same(b)))),
+        refs := j(sym(shadow), λ sh _ => Every(sh, λ (e: Entry) => e.Held(data, spans, memory)), inj.refs),
+    )
+}
+
+// So the toy's store theorem, at an empty shadow, is FunctionIR's: a word
+// stored into a buffer the lending lets be written leaves the file with it
+// stored in memory (`Stack::in_memory_span` at eight bytes).
+theorem in_memory_word_stored<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, {stack: Stack<M>(fetch, data)}, {top: Nat}, lending: Lending,
+    loan: Loan<M>(fetch, data, stack, top, lending.spans()), now: Buffers(), memory: M, held: stack.InMemory(lending, now, memory),
+    b, k: Nat, written: lending.written(b) = True, fits: k + 8 <= buffer_bytes(now, b).len(), word: BitVec(64)):
+    stack.InMemory(lending, store_span(now, b, k, word_bytes(word)), stack.writes.store(memory, lending.spans().byte(b, k), word_bytes(word))) {
+    let loc = Loc(b, k);
+    let ok: (Heap::of(now).cell(loc) = True) = trans(Heap::of_cell(now, loc), leb_true(k + 8, buffer_bytes(now, b).len(), fits));
+    let stored = loan.store_word_injected(Heap::of(now), memory, in_memory_injected(stack, lending, now, memory, held), loc, written, ok, word);
+    injected_in_memory(lending, loan, store_span(now, b, k, word_bytes(word)), stack.writes.store(memory, lending.spans().byte(b, k), word_bytes(word)),
+        stored.same_bytes(Heap::of(store_span(now, b, k, word_bytes(word))), λ c => sym(store_word_of(now, loc, word, omega(fits), c)), refl))
+}
+
+// ---------------------------------------------------------------------------
+// Question 2: a register holds the lowered valuation's word
+
+// The valuation with every value lowered through the injection: a
+// reference is its target's address.
+fn lowered_values(spans: Spans, values: Nat → Value) → Valuation() {
+    λ (width: Nat) (id: Nat) => BitVec::ofNat(values(id).lower(spans).toNat())
+}
+
+// FunctionIR's register invariant at kind `Word`, over the lowered
+// valuation, is the toy's: the register holds the lowered value.
+theorem held_word_rep(spans: Spans, values: Nat → Value, x: Nat, word: BitVec(64)):
+    (Held(x, Word).Rep(lowered_values(spans, values), word) → word = values(x).lower(spans)) ∧
+        (word = values(x).lower(spans) → Held(x, Word).Rep(lowered_values(spans, values), word)) {
+    let back: (BitVec::ofNat(values(x).lower(spans).toNat()) = values(x).lower(spans)) = BitVec::ofNat_toNat(64, values(x).lower(spans));
+    ⟨λ rep => trans(sym(rep), back), λ here => trans(back, sym(here))⟩
+}
+
+theorem registers_represent(spans: Spans, reg: Nat → Gpr, count: Nat, values: Nat → Value, gprs: Gprs,
+    held: RegistersHold(spans, reg, count, values, gprs), x: Nat, below: x < count):
+    Held(x, Word).Rep(lowered_values(spans, values), read_gpr(reg(x), gprs)) {
+    held_word_rep(spans, values, x, read_gpr(reg(x), gprs)).right(held(x, below))
+}
+
+// ---------------------------------------------------------------------------
+// Question 3: spans carved from lent spans
+
+// Each of `pieces` lies at `offset(b)` of span `parent(b)`, inside it; one
+// lent to write is a piece of one lent to write, and apart from every
+// other piece of its parent.
+record Carved(spans, pieces: Spans) {
+    parent: Nat → Nat,
+    offset: Nat → Nat,
+    at: (b: Nat) → pieces.at(b) = spans.byte(parent(b), offset(b)),
+    inside: (b: Nat) → offset(b) + pieces.size(b) <= spans.size(parent(b)),
+    written: (b: Nat) → pieces.written(b) = True → spans.written(parent(b)) = True,
+    apart: (b, c: Nat) → pieces.written(b) = True → b ≠ c → 0 < pieces.size(b) → 0 < pieces.size(c) → parent(b) = parent(c) →
+        (offset(b) + pieces.size(b) <= offset(c)) ∨ (offset(c) + pieces.size(c) <= offset(b)),
+}
+
+theorem Carved::byte({spans, pieces: Spans}, self carved: Carved(spans, pieces), b, k: Nat):
+    pieces.byte(b, k) = spans.byte(carved.parent(b), carved.offset(b) + k) {
+    trans(cong_fn<BitVec(64), BitVec(64)>(λ a => next_rip(a, k), carved.at(b)), rip_compose(spans.at(carved.parent(b)), carved.offset(b), k))
+}
+
+theorem Carved::byte_from({spans, pieces: Spans}, self carved: Carved(spans, pieces), b, k, t: Nat):
+    pieces.byte(b, k + t) = spans.byte(carved.parent(b), carved.offset(b) + k + t) {
+    trans(carved.byte(b, k + t), cong_fn<Nat, BitVec(64)>(λ n => spans.byte(carved.parent(b), n), omega()))
+}
+
+// Pieces carved from a loan's spans are lent under the same stack: a block
+// obtained after entry, carved from a supply span, needs no new law.
+theorem Loan::carve<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, {stack: Stack<M>(fetch, data)}, {top: Nat}, {spans: Spans},
+    self loan: Loan<M>(fetch, data, stack, top, spans), pieces: Spans, carved: Carved(spans, pieces)): Loan<M>(fetch, data, stack, top, pieces) {
+    let p = carved.parent;
+    let o = carved.offset;
+    Loan(
+        room := loan.room,
+        canonical := λ b => {
+            let room = loan.canonical(p(b));
+            let top_fits: (Nat::pow(2, 47) < Nat::pow(2, 64)) = Nat::leb_sound(Nat::pow(2, 47) + 1, Nat::pow(2, 64), trivial);
+            let value: (spans.byte(p(b), o(b)).toNat() = spans.at(p(b)).toNat() + o(b)) =
+                BitVec::offset_toNat(64, spans.at(p(b)), o(b), omega(room, carved.inside(b), top_fits));
+            j(sym(carved.at(b)), λ a _ => a.toNat() + pieces.size(b) <= Nat::pow(2, 47), omega(value, room, carved.inside(b)))
+        },
+        under := λ memory k below word b i short =>
+            j(sym(carved.byte(b, i)), λ a _ => data.read(stack.writes.store(memory, next_rip(stack.low, k), word_bytes(word)), a) = data.read(memory, a),
+                loan.under(memory, k, below, word, p(b), o(b) + i, omega(short, carved.inside(b)))),
+        writable := λ memory b k written inside bytes fits =>
+            j(sym(carved.byte(b, k)), λ a _ => stack.writes.writable(memory, a, bytes.len()),
+                loan.writable(memory, p(b), o(b) + k, carved.written(b, written), omega(inside, carved.inside(b)), bytes, omega(fits, carved.inside(b)))),
+        stored := λ memory b k written inside bytes fits t short =>
+            j(sym(carved.byte(b, k)), λ a _ => data.read(stack.writes.store(memory, a, bytes), pieces.byte(b, k + t)) = bytes.nth(t),
+                j(sym(carved.byte_from(b, k, t)), λ y _ => data.read(stack.writes.store(memory, spans.byte(p(b), o(b) + k), bytes), y) = bytes.nth(t),
+                    loan.stored(memory, p(b), o(b) + k, carved.written(b, written), omega(inside, carved.inside(b)), bytes, omega(fits, carved.inside(b)),
+                        t, short))),
+        apart := λ memory b k written inside bytes fits c i short other => {
+            let order: ((p(b) ≠ p(c)) ∨ ((o(c) + i < o(b) + k) ∨ (o(b) + k + bytes.len() <= o(c) + i))) = match p(b).eq_dec(p(c)) {
+                Inr(differs) => Inl(differs),
+                Inl(same_parent) => match b.eq_dec(c) {
+                    Inl(same) => {
+                        let same_offset: (o(b) = o(c)) = cong_fn<Nat, Nat>(λ n => o(n), same);
+                        match other {
+                            Inl(differs) => false_elim(differs(same)),
+                            Inr(side) => match side {
+                                Inl(below) => Inr(Inl(omega(below, same_offset))),
+                                Inr(above) => Inr(Inr(omega(above, same_offset))),
+                            },
+                        }
+                    },
+                    Inr(differs) => match carved.apart(b, c, written, differs, omega(inside), omega(short), same_parent) {
+                        Inl(below) => Inr(Inr(omega(below, fits))),
+                        Inr(above) => Inr(Inl(omega(above, short))),
+                    },
+                },
+            };
+            j(sym(carved.byte(b, k)), λ a _ => data.read(stack.writes.store(memory, a, bytes), pieces.byte(c, i)) = data.read(memory, pieces.byte(c, i)),
+                j(sym(carved.byte(c, i)), λ y _ => data.read(stack.writes.store(memory, spans.byte(p(b), o(b) + k), bytes), y) = data.read(memory, y),
+                    loan.apart(memory, p(b), o(b) + k, carved.written(b, written), omega(inside, carved.inside(b)), bytes, omega(fits, carved.inside(b)),
+                        p(c), o(c) + i, omega(short, carved.inside(c)), order)))
+        },
+        keeps := λ memory b k written inside bytes fits i below =>
+            j(sym(carved.byte(b, k)), λ a _ => read_word(data, stack.writes.store(memory, a, bytes), next_rip(stack.low, i)) =
+                    read_word(data, memory, next_rip(stack.low, i)),
+                loan.keeps(memory, p(b), o(b) + k, carved.written(b, written), omega(inside, carved.inside(b)), bytes, omega(fits, carved.inside(b)), i, below)),
+        keeps_code := λ memory b k written inside bytes fits code at resident =>
+            j(sym(carved.byte(b, k)), λ a _ => CodeResident(fetch, stack.writes.store(memory, a, bytes), code, at),
+                loan.keeps_code(memory, p(b), o(b) + k, carved.written(b, written), omega(inside, carved.inside(b)), bytes, omega(fits, carved.inside(b)),
+                    code, at, resident)),
+    )
+}
+
+// A store into a piece is one into its parent, so what a call that stores
+// into pieces may have done is what one lent their parents may: the
+// footprint stays the one stated at entry.
+theorem Stack::wrote_in_parents<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), i: Nat,
+    spans, pieces: Spans, carved: Carved(spans, pieces), before, after: M, wrote: stack.WroteIn(i, pieces, before, after)):
+    stack.WroteIn(i, spans, before, after) {
+    Star::monotone(λ (m: M) (n: M) => stack.Stores(i, pieces, m, n), λ (m: M) (n: M) => stack.Stores(i, spans, m, n),
+        λ m n step => match step {
+            Inl(own) => Inl(own),
+            Inr(put) => {
+                let b = put.witness;
+                let k = put.proof.witness;
+                let fits = carved.inside(b);
+                Inr(Exists(carved.parent(b), Exists(carved.offset(b) + k,
+                    ⟨⟨carved.written(b, put.proof.proof.left.left), omega(put.proof.proof.left.right, fits)⟩,
+                     Exists(put.proof.proof.right.witness, ⟨omega(put.proof.proof.right.proof.left, fits),
+                        trans(put.proof.proof.right.proof.right,
+                            cong_fn<BitVec(64), M>(λ a => stack.writes.store(m, a, put.proof.proof.right.witness), carved.byte(b, k)))⟩)⟩)))
+            },
+        }, before, after, wrote)
+}
