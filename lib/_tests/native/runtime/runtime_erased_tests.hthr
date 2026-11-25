@@ -1,5 +1,5 @@
 // Probes for erased parameters of a `runtime fn` (issues/runtime-erased-parameters.md,
-// issues/runtime-erased-pure-shadow.md):
+// issues/runtime-erased-pure-shadow.md, issues/runtime-record-calls-erased.md):
 // a parameter whose type is a proposition (`∥P∥`) or `Erased<A>` is no word
 // of the code, wherever it stands, and what the generator publishes holds at
 // every value of it. Nothing here is proved by hand: each theorem restates or
@@ -122,17 +122,98 @@ runtime fn Slots::gen_of(self s: Slots, g: Erased<u64>) → u64 { g.value }
 // expect-error: was left to its default
 fn get_untested(s: Slots, i: u64) → u64 { s.get(i, 0) }
 
-// A function of the record that calls one of the record taking a proof is
-// not taken yet: its meaning names the callee as a function of the record
-// and words (issues/runtime-record-calls-erased.md). One calling a function
-// of words that takes a proof is (`Slots::halve`, below).
-// expect-error: takes an erased parameter
-runtime fn Slots::get_first(self s: Slots) → u64 { s.get(0, 0) }
+// A call of a function of the record whose proof is missing, in a function
+// of the record: no test bounds the index.
+// expect-error: was left to its default
+runtime fn Slots::get_unbounded(self s: Slots, i: u64) → u64 { s.get(i, 0) }
 
 // A loop over an erased parameter waits for the loop combinator.
 // expect-error: a loop that takes an erased parameter
 runtime fn Slots::sum_from(self s: Slots, i, acc: u64, g: Erased<u64>) → u64 decreases (4 - i).toNat() {
     if h: i < 4 { s.sum_from(i + 1, acc + s.heap.at(i), g) } else { acc }
+}
+
+// ---------------------------------------------------------------------------
+// A function of the record calling one of the record that takes a proof
+// (issues/runtime-record-calls-erased.md): the callee is written out over
+// its record, `T::n::words`, a function of the record and the code's words
+// alone, which the caller's mark names; what the mark owes is
+// `T::n::runs_words`, which takes no proof. The code calls `T::n::bytes`
+// and passes nothing for the proof.
+
+// What the callee publishes beside `runs_held`: its function written out,
+// which is `Slots::get` at every proof (by conversion), and its code's
+// agreement with it.
+fn get_words_code() → (Slots → u64 → u64 → Mutated<Slots, u64>) { Slots::get::words }
+
+theorem slots_get_written(s: Slots, i, k: u64, p: ∥i.toNat() < 4∥): Slots::get::words(s, i, k) = Mutated(s, Slots::get(s, i, k, inside := p)) { refl }
+
+theorem slots_set_written(s: Slots, i, x: u64, p: ∥i.toNat() < 4∥): Slots::set::words(s, i, x) = Slots::set(s, i, x, inside := p) { refl }
+
+theorem slots_get_words_held(own: List<u8>, s: Slots, length, i, k: u64, holds: rt_held::Stored::Holds(Slots::stored(), own, length, s)):
+    Slots::get::words(s, i, k).value = Slots::get::bytes(own, length, i, k).value {
+    Slots::get::runs_words(own, s, length, i, k, holds).value
+}
+
+// At literal operands the proof is found from the literals.
+runtime fn Slots::get_first(self s: Slots) → u64 { s.get(0, 0) }
+
+theorem slots_get_first_runs(): Slots::get_first::bytes(SLOTS(), w(40)).value = w(1) { refl }
+
+theorem slots_get_first_held(own: List<u8>, s: Slots, length: u64, holds: rt_held::Stored::Holds(Slots::stored(), own, length, s)):
+    Slots::get_first(s) = Slots::get_first::bytes(own, length).value {
+    Slots::get_first::runs_held(own, s, length, holds).value
+}
+
+// In a checking position, at an open index: the proofs are found from the
+// caller's own test, a reader's and a writer's, the second after the first
+// changed nothing.
+runtime fn Slots::bump(mut self s: Slots, i: u64) → u64 {
+    if h: i < 4 {
+        let v = s.get(i, 0);
+        s.set(i, v + 1)
+    } else { 0 }
+}
+
+// Element 2 is 3: the store answers it and leaves 4.
+theorem slots_bump_runs(): Slots::bump::bytes(SLOTS(), w(40), w(2)).value = w(3) ∧
+    Slots::get::bytes(Slots::bump::bytes(SLOTS(), w(40), w(2)).after, w(40), w(2), w(0)).value = w(4) ∧
+    Slots::bump::bytes(SLOTS(), w(40), w(9)) = Mutated(SLOTS(), w(0)) {
+    ⟨refl, ⟨refl, refl⟩⟩
+}
+
+theorem slots_bump_held(own: List<u8>, s: Slots, length, i: u64, holds: rt_held::Stored::Holds(Slots::stored(), own, length, s)):
+    Slots::bump(s, i).value = Slots::bump::bytes(own, length, i).value ∧
+    rt_held::Stored::Holds(Slots::stored(), Slots::bump::bytes(own, length, i).after, length, Slots::bump(s, i).after) {
+    let ran = Slots::bump::runs_held(own, s, length, i, holds);
+    ⟨ran.value, ran.holds⟩
+}
+
+// A caller that takes the proof itself and passes it on is written out in
+// turn, its mark naming the callee's function written out; and its own
+// caller compiles.
+runtime fn Slots::get_on(self s: Slots, i: u64, inside: ∥i.toNat() < 4∥ := bv_omega) → u64 { s.get(i, 10) }
+
+theorem slots_get_on_written(s: Slots, i: u64, p: ∥i.toNat() < 4∥): Slots::get_on::words(s, i) = Mutated(s, Slots::get_on(s, i, inside := p)) { refl }
+
+runtime fn Slots::get_last(self s: Slots) → u64 { s.get_on(3) }
+
+theorem slots_get_last_runs(): Slots::get_last::bytes(SLOTS(), w(40)).value = w(14) { refl }
+
+theorem slots_get_last_held(own: List<u8>, s: Slots, length: u64, holds: rt_held::Stored::Holds(Slots::stored(), own, length, s)):
+    Slots::get_last(s) = Slots::get_last::bytes(own, length).value {
+    Slots::get_last::runs_held(own, s, length, holds).value
+}
+
+// An erased datum passed on: the caller holds a generation and hands it
+// over, and neither's code has a word for it.
+runtime fn Slots::get_at_first(self s: Slots, g: Erased<u64>) → u64 { s.get_at(g, 0) }
+
+theorem slots_get_at_first_runs(): Slots::get_at_first::bytes(SLOTS(), w(40)).value = w(1) { refl }
+
+theorem slots_get_at_first_held(own: List<u8>, s: Slots, length: u64, g: Erased<u64>, holds: rt_held::Stored::Holds(Slots::stored(), own, length, s)):
+    Slots::get_at_first(s, g) = Slots::get_at_first::bytes(own, length).value {
+    Slots::get_at_first::runs_held(own, s, length, g, holds).value
 }
 
 // ---------------------------------------------------------------------------

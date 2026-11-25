@@ -507,6 +507,54 @@ theorem port_arena_window_held(own: List<u8>, a: Arena, length, base, count, i, 
         Arena::store::runs_held(own, a, length, base, count, i, x, inside, fits, holds).holds⟩
 }
 
+// A compiled caller of the window's `read` and `store` with found proofs
+// (issues/runtime-record-calls-erased.md), the shape of a push over handles:
+// the caller carries that the window fits the heap, as a handle would, and
+// tests the index itself. `bv_omega` finds both proofs where the calls are
+// written; the code passes the window's words and nothing for them (the
+// callees are named in the meaning by their functions written out over the
+// record, `Arena::read::words`). The window is tested as a sum of naturals
+// in the proof, not as `base + count <= 16` in the code: a sum of words
+// may wrap, and `bv_omega` does not read a bound through one.
+runtime fn Arena::port_bump(mut self a: Arena, base, count, i: u64, fits: ∥base.toNat() + count.toNat() <= 16∥ := bv_omega) → u64 {
+    if inside: i < count {
+        let old = a.read(base, count, i);
+        a.store(base, count, i, old + 1)
+    } else { 0 }
+}
+
+// The vector of two at 3: element 1 is 8, answered, and left as 9; past
+// the count nothing changes.
+theorem port_arena_bump_runs(): Arena::port_bump::bytes(PORT_VEC_TWO(), 144, 3, 2, 1).value = 8 ∧
+    Arena::read::bytes(Arena::port_bump::bytes(PORT_VEC_TWO(), 144, 3, 2, 1).after, 144, 3, 2, 1).value = 9 ∧
+    Arena::port_bump::bytes(PORT_VEC_TWO(), 144, 3, 2, 2) = Mutated(PORT_VEC_TWO(), 0) {
+    ⟨refl, ⟨refl, refl⟩⟩
+}
+
+// What it publishes, at every arena, window, index and proof of the fit.
+theorem port_arena_bump_held(own: List<u8>, a: Arena, length, base, count, i: u64, fits: ∥base.toNat() + count.toNat() <= 16∥,
+    holds: rt_held::Stored::Holds(Arena::stored(), own, length, a)):
+    Arena::port_bump(a, base, count, i, fits := fits).value = Arena::port_bump::bytes(own, length, base, count, i).value ∧
+    rt_held::Stored::Holds(Arena::stored(), Arena::port_bump::bytes(own, length, base, count, i).after, length, Arena::port_bump(a, base, count, i, fits := fits).after) {
+    let ran = Arena::port_bump::runs_held(own, a, length, base, count, i, fits, holds);
+    ⟨ran.value, ran.holds⟩
+}
+
+// A window of literal words: both proofs found from the literals and the
+// index's test.
+runtime fn Arena::port_first(mut self a: Arena, i: u64) → u64 {
+    if inside: i < 2 { a.read(3, 2, i) } else { 0 }
+}
+
+theorem port_arena_first_runs(): Arena::port_first::bytes(PORT_VEC_TWO(), 144, 0).value = 7 ∧ Arena::port_first::bytes(PORT_VEC_TWO(), 144, 1).value = 8 {
+    ⟨refl, refl⟩
+}
+
+theorem port_arena_first_held(own: List<u8>, a: Arena, length, i: u64, holds: rt_held::Stored::Holds(Arena::stored(), own, length, a)):
+    Arena::port_first(a, i).value = Arena::port_first::bytes(own, length, i).value {
+    Arena::port_first::runs_held(own, a, length, i, holds).value
+}
+
 // What it publishes, at every arena the span holds.
 theorem port_arena_alloc_held(own: List<u8>, a: Arena, length, size: u64, holds: rt_held::Stored::Holds(Arena::stored(), own, length, a)):
     Arena::alloc(a, size).value = Arena::alloc::bytes(own, length, size).value ∧
