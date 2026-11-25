@@ -1,5 +1,6 @@
 // Probes of the bytes level (lib/native/bytes_level;
-// issues/bytes-level-language.md), each beside its control: the reference
+// issues/bytes-level-language.md, issues/bytes-level-on-the-contract.md),
+// each beside its control, on the machine contract's heap: the reference
 // experiment's program in the real language, a window passed to a callee
 // as a reference and a length, two windows of one block written by one
 // callee, a word node reading a reference refused by validity, a store
@@ -11,7 +12,8 @@ import bytes_memory;
 import bytes_level_renames;
 import bytes_level_canonical;
 import bytes_level_fuel;
-import reference_cells;
+import x86_64_memory_contract;
+import x86_64_call_contract;
 import function_ir;
 import linux_calls;
 import linux_world;
@@ -28,7 +30,7 @@ fn zeros() → List<BitVec(8)> { List::replicate(BitVec::zero(), 16) }
 
 fn small() → List<BitVec(8)> { [BitVec::ofNat(7), BitVec::ofNat(8), BitVec::ofNat(9), BitVec::ofNat(10)] }
 
-fn memory() → Memory { Memory(Heap::of([zeros(), small(), zeros()]), λ (c: Nat) (_: Nat) => c.same(2)) }
+fn memory() → Heap { Heap([zeros(), small(), zeros()], [], [[], [], List::replicate(True, 16)]) }
 
 fn blocks() → Blocks { Blocks(λ (b: Nat) => b.same(0) || b.same(2)) }
 
@@ -42,18 +44,18 @@ fn go(p: Program, f: Nat, args: List<Value>) → Ran<Answer> { run(p, blocks(), 
 // Word `i` of an answer, if the run is done and it is a word.
 fn answer_word(o: Ran<Answer>, i: Nat) → Option<Nat> {
     match o { Done(a) => match a.words.nth(i) { None => None, Some(v) => match v { Word(w) => Some(w.toNat()), Ref(_) => None } }, Exited(_, _) => None,
-        Going(_) => None, Stuck => None }
+        Going(_) => None, Stuck(_) => None }
 }
 
-fn stuck(o: Ran<Answer>) → Bool { match o { Done(_) => False, Exited(_, _) => False, Going(_) => False, Stuck => True } }
+fn stuck(o: Ran<Answer>) → Bool { match o { Done(_) => False, Exited(_, _) => False, Going(_) => False, Stuck(_) => True } }
 
-fn going(o: Ran<Answer>) → Bool { match o { Done(_) => False, Exited(_, _) => False, Going(_) => True, Stuck => False } }
+fn going(o: Ran<Answer>) → Bool { match o { Done(_) => False, Exited(_, _) => False, Going(_) => True, Stuck(_) => False } }
 
-fn exited(o: Ran<Answer>) → Option<Nat> { match o { Done(_) => None, Exited(status, _) => Some(status.toNat()), Going(_) => None, Stuck => None } }
+fn exited(o: Ran<Answer>) → Option<Nat> { match o { Done(_) => None, Exited(status, _) => Some(status.toNat()), Going(_) => None, Stuck(_) => None } }
 
 // The bytes a done run has written to `fd`.
 fn sent(o: Ran<Answer>, fd: Nat) → Option<List<BitVec(8)>> {
-    match o { Done(a) => Some(a.io.sent(BitVec::ofNat(fd))), Exited(_, _) => None, Going(_) => None, Stuck => None }
+    match o { Done(a) => Some(a.io.sent(BitVec::ofNat(fd))), Exited(_, _) => None, Going(_) => None, Stuck(_) => None }
 }
 
 fn word(x: Nat) → Value { Word(BitVec::ofNat(x)) }
@@ -92,6 +94,30 @@ theorem cells_word_argument(): stuck(go(cells_program(), 0, [word(0), Ref(Loc(1,
 
 // Control: with no fuel, nothing is called yet.
 theorem cells_no_fuel(): going(run(cells_program(), blocks(), 0, 0, cells_args(), memory(), io())) = True { refl }
+
+// From the experiment's probes (issues/ownership-reference-cells-spike.md):
+// the program at any eight bytes of block 0 that fit, and its control past
+// the block's end;
+theorem cells_read_nine_at_eight(): answer_word(go(cells_program(), 0, [Ref(Loc(0, 8)), Ref(Loc(1, 2))]), 0) = Some(9) { refl }
+
+theorem cells_past_end(): stuck(go(cells_program(), 0, [Ref(Loc(0, 9)), Ref(Loc(1, 2))])) = True { refl }
+
+// a word load of a reference's eight bytes has no meaning, and its control,
+// the word stored over the whole of the reference, reads back;
+fn word_of_reference() → Program { Program([Routine([ref_id(0), ref_id(1)], Leaf([StoreRef(0, 1), Load(8, 2, 0)]), [word_id(2)])]) }
+
+theorem word_of_reference_stuck(): stuck(go(word_of_reference(), 0, cells_args())) = True { refl }
+
+fn replacing() → Program {
+    Program([Routine([ref_id(0), ref_id(1)], Leaf([StoreRef(0, 1), Compute(Const(64, 2, 5)), Store(8, 0, 2), Load(8, 3, 0)]), [word_id(3)])])
+}
+
+theorem replaced_reads_word(): answer_word(go(replacing(), 0, cells_args()), 0) = Some(5) { refl }
+
+// and a reference's load where only bytes are has none.
+fn reference_of_bytes() → Program { Program([Routine([ref_id(0)], Leaf([LoadRef(1, 0)]), [ref_id(1)])]) }
+
+theorem reference_of_bytes_stuck(): stuck(go(reference_of_bytes(), 0, [Ref(Loc(0, 0))])) = True { refl }
 
 // ---------------------------------------------------------------------------
 // A window passed as a reference and a length to a callee that writes it
@@ -339,12 +365,13 @@ theorem swap_swap(b: Nat): swap(swap(b)) = b {
 
 fn swapping() → Renaming { Renaming(swap, swap, swap_swap, swap_swap) }
 
-fn swapped() → Memory { Memory(Heap(λ (c: Nat) => memory().heap.bytes(swap(c)), []), λ (c: Nat) (i: Nat) => memory().undefined(swap(c), i)) }
+fn swapped() → Heap { Heap([small(), zeros(), zeros()], [], [[], [], List::replicate(True, 16)]) }
 
 fn swapped_blocks() → Blocks { Blocks(λ (c: Nat) => blocks().written(swap(c))) }
 
-theorem swapped_renamed(): MemoryRenamed(swapping(), memory(), swapped()) {
-    MemoryRenamed(bytes := λ c => refl, shadow := refl, undefined := λ c i => refl)
+theorem swapped_renamed(): HeapRenamed(swapping(), memory(), swapped()) {
+    HeapRenamed(bytes := λ c => match c { Zero => refl, Succ(d) => match d { Zero => refl, Succ(_) => refl } }, shadow := refl,
+        undefined := λ c i => match c { Zero => refl, Succ(d) => match d { Zero => refl, Succ(_) => refl } })
 }
 
 theorem swapped_blocks_renamed(): BlocksRenamed(swapping(), blocks(), swapped_blocks()) { BlocksRenamed(written := λ c => refl) }
@@ -368,7 +395,7 @@ fn answers_reference() → Program {
 
 fn answer_block(o: Ran<Answer>) → Option<Nat> {
     match o { Done(a) => match a.words.nth(0) { None => None, Some(v) => match v { Word(_) => None, Ref(loc) => Some(loc.block) } }, Exited(_, _) => None,
-        Going(_) => None, Stuck => None }
+        Going(_) => None, Stuck(_) => None }
 }
 
 theorem reference_answered(): answer_block(go(answers_reference(), 0, cells_args())) = Some(1) { refl }
@@ -382,9 +409,15 @@ theorem reference_answered_renamed():
 // A heap of buffers with its undefined block zero is canonical, and the
 // program's answer, which holds a reference, is canonical too.
 theorem memory_canonical(): memory().Canonical() {
-    ⟨trivial, λ c i h => {
-        let at: (c = 2) = c.same_sound(2, h);
-        rewrite(at, byte_at_zeros(16, i))
+    ⟨trivial, λ c => match c as λ x => (i: Nat) → memory().undefined(x, i) = True → byte_at(memory().bytes(x), i) = BitVec::zero() {
+        Zero => λ i never => absurd(never),
+        Succ(d) => match d as λ y => (i: Nat) → memory().undefined(Succ(y), i) = True → byte_at(memory().bytes(Succ(y)), i) = BitVec::zero() {
+            Zero => λ i never => absurd(never),
+            Succ(e) => match e as λ z => (i: Nat) → memory().undefined(Succ(Succ(z)), i) = True → byte_at(memory().bytes(Succ(Succ(z))), i) = BitVec::zero() {
+                Zero => λ i _ => byte_at_zeros(16, i),
+                Succ(_) => λ i never => absurd(never),
+            },
+        },
     }⟩
 }
 
@@ -394,6 +427,6 @@ theorem cells_answer_canonical(a: Answer, ran: go(cells_program(), 0, cells_args
 
 // Control: an entry over bytes that are not there (block 1 has four) is no
 // canonical heap.
-fn overlong() → Memory { Memory(Heap(Heap::of([zeros(), small()]).bytes, [Entry(1, 0, Loc(0, 0))]), λ (_: Nat) (_: Nat) => False) }
+fn overlong() → Heap { Heap([zeros(), small()], [Pointer(1, 0, Loc(0, 0))], []) }
 
 theorem overlong_not_canonical(): ¬overlong().Canonical() { λ canonical => omega(canonical.left.left.left) }

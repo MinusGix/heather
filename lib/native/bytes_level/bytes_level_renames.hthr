@@ -16,7 +16,8 @@
 // are (`CallsRenamed`), and a program's table is, fuel by fuel.
 import bytes_level::{run};
 import bytes_memory;
-import reference_cells;
+import x86_64_memory_contract;
+import x86_64_call_contract;
 import function_ir;
 import function_ir_eval;
 import linux_calls;
@@ -31,6 +32,10 @@ import option;
 // ---------------------------------------------------------------------------
 // Renamed values, configurations, answers
 
+fn Value::rename(self value: Value, r: Renaming) → Value {
+    match value { Word(word) => Word(word), Ref(loc) => Ref(loc.rename(r)) }
+}
+
 fn rename_values(r: Renaming, vs: List<Value>) → List<Value> {
     match vs { Nil => Nil, Cons(v, rest) => Cons(v.rename(r), rename_values(r, rest)) }
 }
@@ -43,19 +48,19 @@ record LocalsRenamed(r: Renaming, l, renamed: Locals) {
 
 record ConfigRenamed(r: Renaming, c, renamed: Config) {
     locals: LocalsRenamed(r, c.locals, renamed.locals),
-    memory: MemoryRenamed(r, c.memory, renamed.memory),
+    memory: HeapRenamed(r, c.memory, renamed.memory),
     io: renamed.io = c.io,
 }
 
 record AnswerRenamed(r: Renaming, a, renamed: Answer) {
     words: renamed.words = rename_values(r, a.words),
-    heap: MemoryRenamed(r, a.heap, renamed.heap),
+    heap: HeapRenamed(r, a.heap, renamed.heap),
     io: renamed.io = a.io,
 }
 
 record EndedRenamed(r: Renaming, e, renamed: Ended) {
     state: renamed.state = rename_values(r, e.state),
-    memory: MemoryRenamed(r, e.memory, renamed.memory),
+    memory: HeapRenamed(r, e.memory, renamed.memory),
     io: renamed.io = e.io,
 }
 
@@ -74,10 +79,10 @@ fn ended_renamed(r: Renaming) → Ended → Ended → Type { λ (a: Ended) (b: E
 // both stuck.
 fn RanRelated<T>(R: T → T → Type, a, b: Ran<T>) → Type {
     match a {
-        Done(x) => match b { Done(y) => R(x, y), Exited(_, _) => False, Going(_) => False, Stuck => False },
-        Exited(status, io) => match b { Done(_) => False, Exited(status2, io2) => (status2 = status) ∧ (io2 = io), Going(_) => False, Stuck => False },
-        Going(io) => match b { Done(_) => False, Exited(_, _) => False, Going(io2) => io2 = io, Stuck => False },
-        Stuck => match b { Done(_) => False, Exited(_, _) => False, Going(_) => False, Stuck => True },
+        Done(x) => match b { Done(y) => R(x, y), Exited(_, _) => False, Going(_) => False, Stuck(_) => False },
+        Exited(status, io) => match b { Done(_) => False, Exited(status2, io2) => (status2 = status) ∧ (io2 = io), Going(_) => False, Stuck(_) => False },
+        Going(io) => match b { Done(_) => False, Exited(_, _) => False, Going(io2) => io2 = io, Stuck(_) => False },
+        Stuck(io) => match b { Done(_) => False, Exited(_, _) => False, Going(_) => False, Stuck(io2) => io2 = io },
     }
 }
 
@@ -88,33 +93,34 @@ theorem ran_then<A, T>(Ra: A → A → Type, R: T → T → Type, {a, b: Ran<A>}
             Done(y) => λ h => each(x, y, h),
             Exited(_, _) => λ never => false_elim(never),
             Going(_) => λ never => false_elim(never),
-            Stuck => λ never => false_elim(never),
+            Stuck(_) => λ never => false_elim(never),
         },
         Exited(_, _) => λ b0 => match b0 {
             Done(_) => λ never => false_elim(never),
             Exited(_, _) => λ h => h,
             Going(_) => λ never => false_elim(never),
-            Stuck => λ never => false_elim(never),
+            Stuck(_) => λ never => false_elim(never),
         },
         Going(_) => λ b0 => match b0 {
             Done(_) => λ never => false_elim(never),
             Exited(_, _) => λ never => false_elim(never),
             Going(_) => λ h => h,
-            Stuck => λ never => false_elim(never),
+            Stuck(_) => λ never => false_elim(never),
         },
-        Stuck => λ b0 => match b0 {
+        Stuck(_) => λ b0 => match b0 {
             Done(_) => λ never => false_elim(never),
             Exited(_, _) => λ never => false_elim(never),
             Going(_) => λ never => false_elim(never),
-            Stuck => λ _ => trivial,
+            Stuck(_) => λ h => h,
         },
     })(b, rel)
 }
 
-theorem ran_of_related<A>(Ra: A → A → Type, {o, o2: Option<A>}, rel: Related<A>(Ra, o, o2)): RanRelated<A>(Ra, Ran::of(o), Ran::of(o2)) {
-    (match o as λ a => (b: Option<A>) → Related<A>(Ra, a, b) → RanRelated<A>(Ra, Ran::of(a), Ran::of(b)) {
+theorem ran_of_related<A>(Ra: A → A → Type, {o, o2: Option<A>}, {io, io2: Io}, same: io2 = io, rel: Related<A>(Ra, o, o2)):
+    RanRelated<A>(Ra, Ran::of(o, io), Ran::of(o2, io2)) {
+    (match o as λ a => (b: Option<A>) → Related<A>(Ra, a, b) → RanRelated<A>(Ra, Ran::of(a, io), Ran::of(b, io2)) {
         None => λ b => match b {
-            None => λ _ => trivial,
+            None => λ _ => same,
             Some(_) => λ never => false_elim(never),
         },
         Some(_) => λ b => match b {
@@ -124,21 +130,21 @@ theorem ran_of_related<A>(Ra: A → A → Type, {o, o2: Option<A>}, rel: Related
     })(o2, rel)
 }
 
-theorem ran_of_then<A, T>(Ra: A → A → Type, R: T → T → Type, {o, o2: Option<A>}, rel: Related<A>(Ra, o, o2), {k, k2: A → Ran<T>},
-    each: (x, y: A) → Ra(x, y) → RanRelated<T>(R, k(x), k2(y))): RanRelated<T>(R, Ran::of(o).then(k), Ran::of(o2).then(k2)) {
-    ran_then(Ra, R, ran_of_related(Ra, rel), each)
+theorem ran_of_then<A, T>(Ra: A → A → Type, R: T → T → Type, {o, o2: Option<A>}, rel: Related<A>(Ra, o, o2), {io, io2: Io}, same: io2 = io,
+    {k, k2: A → Ran<T>}, each: (x, y: A) → Ra(x, y) → RanRelated<T>(R, k(x), k2(y))): RanRelated<T>(R, Ran::of(o, io).then(k), Ran::of(o2, io2).then(k2)) {
+    ran_then(Ra, R, ran_of_related(Ra, same, rel), each)
 }
 
 // The second the first renamed by `g`.
-theorem ran_of_map_then<A, T>(R: T → T → Type, g: A → A, {o, o2: Option<A>}, same: o2 = o.map(g), {k, k2: A → Ran<T>},
-    each: (x: A) → RanRelated<T>(R, k(x), k2(g(x)))): RanRelated<T>(R, Ran::of(o).then(k), Ran::of(o2).then(k2)) {
-    rewrite(same, match o { None => trivial, Some(x) => each(x) })
+theorem ran_of_map_then<A, T>(R: T → T → Type, g: A → A, {o, o2: Option<A>}, same: o2 = o.map(g), {io, io2: Io}, world: io2 = io,
+    {k, k2: A → Ran<T>}, each: (x: A) → RanRelated<T>(R, k(x), k2(g(x)))): RanRelated<T>(R, Ran::of(o, io).then(k), Ran::of(o2, io2).then(k2)) {
+    rewrite(same, match o { None => world, Some(x) => each(x) })
 }
 
 // The second the first.
-theorem ran_of_same_then<A, T>(R: T → T → Type, {o, o2: Option<A>}, same: o2 = o, {k, k2: A → Ran<T>},
-    each: (x: A) → RanRelated<T>(R, k(x), k2(x))): RanRelated<T>(R, Ran::of(o).then(k), Ran::of(o2).then(k2)) {
-    rewrite(same, match o { None => trivial, Some(x) => each(x) })
+theorem ran_of_same_then<A, T>(R: T → T → Type, {o, o2: Option<A>}, same: o2 = o, {io, io2: Io}, world: io2 = io,
+    {k, k2: A → Ran<T>}, each: (x: A) → RanRelated<T>(R, k(x), k2(x))): RanRelated<T>(R, Ran::of(o, io).then(k), Ran::of(o2, io2).then(k2)) {
+    rewrite(same, match o { None => world, Some(x) => each(x) })
 }
 
 // ---------------------------------------------------------------------------
@@ -221,8 +227,8 @@ theorem LocalsRenamed::words_only(r: Renaming, words: Valuation()): LocalsRename
 // A configuration with the same words and world, its references and memory
 // renamed, its blocks renamed alike.
 theorem Instr::step_renames_at(self instr: Instr, r: Renaming, blocks, blocks2: Blocks, written: BlocksRenamed(r, blocks, blocks2), c: Config,
-    refs: Nat → Option<Loc>, m: Memory, refs_renamed: (x: Nat) → refs(x) = c.locals.refs(x).map(λ (t: Loc) => t.rename(r)),
-    memory: MemoryRenamed(r, c.memory, m)):
+    refs: Nat → Option<Loc>, m: Heap, refs_renamed: (x: Nat) → refs(x) = c.locals.refs(x).map(λ (t: Loc) => t.rename(r)),
+    memory: HeapRenamed(r, c.memory, m)):
     Related<Config>(config_renamed(r), instr.step(blocks, c), instr.step(blocks2, Config(Locals(c.locals.words, refs), m, c.io))) {
     let l = Locals(c.locals.words, refs);
     let locals: LocalsRenamed(r, c.locals, l) = LocalsRenamed(words := refl, refs := refs_renamed);
@@ -238,21 +244,21 @@ theorem Instr::step_renames_at(self instr: Instr, r: Renaming, blocks, blocks2: 
             related_same_then(config_renamed(r), c.memory.load_renames(r, m, memory, loc, bytes), λ x =>
                 ConfigRenamed(locals := locals.set_word(output, λ (w: Nat) => BitVec::ofNat(x)), memory := memory, io := refl))),
         Store(bytes, place, value) => related_map_then(config_renamed(r), rename, refs_renamed(place), λ loc =>
-            related_then(memory_renamed(r), config_renamed(r),
-                c.memory.store_renames(blocks, r, m, blocks2, memory, written, loc, word_piece(bytes, c.locals.words(8 * bytes, value))),
+            related_then(heap_renamed(r), config_renamed(r),
+                c.memory.put_renames(blocks, r, m, blocks2, memory, written, loc, Piece::plain(word_piece(bytes, c.locals.words(8 * bytes, value)))),
                 λ a b h => ConfigRenamed(locals := locals, memory := h, io := refl))),
         LoadRef(output, place) => related_map_then(config_renamed(r), rename, refs_renamed(place), λ loc =>
             related_map_then(config_renamed(r), rename, c.memory.load_ref_renames(r, m, memory, loc), λ target =>
                 ConfigRenamed(locals := locals.set_ref(output, target), memory := memory, io := refl))),
         StoreRef(place, value) => related_map_then(config_renamed(r), rename, refs_renamed(place), λ loc =>
             related_map_then(config_renamed(r), rename, refs_renamed(value), λ target =>
-                related_then(memory_renamed(r), config_renamed(r), c.memory.store_ref_renames(blocks, r, m, blocks2, memory, written, loc, target),
+                related_then(heap_renamed(r), config_renamed(r), c.memory.put_renames(blocks, r, m, blocks2, memory, written, loc, Piece::reference(target)),
                     λ a b h => ConfigRenamed(locals := locals, memory := h, io := refl)))),
         Offset(output, place, amount) => related_map_then(config_renamed(r), rename, refs_renamed(place), λ loc =>
             ConfigRenamed(locals := locals.set_ref(output, Loc(loc.block, loc.offset + c.locals.word(amount).toNat())), memory := memory, io := refl)),
         Copy(target, source, length) => related_map_then(config_renamed(r), rename, refs_renamed(target), λ to =>
             related_map_then(config_renamed(r), rename, refs_renamed(source), λ from =>
-                related_then(memory_renamed(r), config_renamed(r),
+                related_then(heap_renamed(r), config_renamed(r),
                     c.memory.copy_renames(blocks, r, m, blocks2, memory, written, to, from, c.locals.word(length).toNat()),
                     λ a b h => ConfigRenamed(locals := locals, memory := h, io := refl)))),
     }
@@ -281,52 +287,52 @@ theorem run_instrs_renames(r: Renaming, blocks, blocks2: Blocks, written: Blocks
 // ---------------------------------------------------------------------------
 // System calls: the command is words and bytes, so the world is the same
 
-theorem rename_pointers_none(r: Renaming, pointers: List<Pointer>): no_pointers(rename_pointers(r, pointers)) = no_pointers(pointers) {
-    match pointers { Nil => refl, Cons(_, _) => refl }
+theorem rename_slots_none(r: Renaming, slots: List<Slot>): no_slots(rename_slots(r, slots)) = no_slots(slots) {
+    match slots { Nil => refl, Cons(_, _) => refl }
 }
 
 theorem read_landed_renames(r: Renaming, blocks, blocks2: Blocks, written: BlocksRenamed(r, blocks, blocks2), c: Config, refs: Nat → Option<Loc>,
-    m: Memory, locals: LocalsRenamed(r, c.locals, Locals(c.locals.words, refs)), memory: MemoryRenamed(r, c.memory, m), fd: BitVec(64), loc: Loc,
+    m: Heap, locals: LocalsRenamed(r, c.locals, Locals(c.locals.words, refs)), memory: HeapRenamed(r, c.memory, m), fd: BitVec(64), loc: Loc,
     n, result: Nat, answer: ReadResult):
     RanRelated<Config>(config_renamed(r), read_landed(blocks, c, fd, loc, n, result, answer),
         read_landed(blocks2, Config(Locals(c.locals.words, refs), m, c.io), fd, loc.rename(r), n, result, answer)) {
     match answer {
-        ReadBytes(bytes) => ran_of_then(memory_renamed(r), config_renamed(r),
-            c.memory.put_renames(blocks, r, m, blocks2, memory, written, loc, Piece::plain(bytes.take(n))),
+        ReadBytes(bytes) => ran_of_then(heap_renamed(r), config_renamed(r),
+            c.memory.put_renames(blocks, r, m, blocks2, memory, written, loc, Piece::plain(bytes.take(n))), refl,
             λ a b h => ConfigRenamed(locals := locals.set_word(result, word_value(count_word(bytes.take(n).len()))), memory := h, io := refl)),
-        ReadFailed(errno) => ran_of_then(memory_renamed(r), config_renamed(r), c.memory.put_renames(blocks, r, m, blocks2, memory, written, loc, Piece::undefined(n)),
+        ReadFailed(errno) => ran_of_then(heap_renamed(r), config_renamed(r), c.memory.put_renames(blocks, r, m, blocks2, memory, written, loc, Piece::undefined(n)), refl,
             λ a b h => ConfigRenamed(locals := locals.set_word(result, word_value(errno_word(errno))), memory := h, io := refl)),
     }
 }
 
 theorem SysCall::run_alike_at(self call: SysCall, r: Renaming, blocks, blocks2: Blocks, written: BlocksRenamed(r, blocks, blocks2), c: Config,
-    refs: Nat → Option<Loc>, m: Memory, refs_renamed: (x: Nat) → refs(x) = c.locals.refs(x).map(λ (t: Loc) => t.rename(r)),
-    memory: MemoryRenamed(r, c.memory, m)):
+    refs: Nat → Option<Loc>, m: Heap, refs_renamed: (x: Nat) → refs(x) = c.locals.refs(x).map(λ (t: Loc) => t.rename(r)),
+    memory: HeapRenamed(r, c.memory, m)):
     RanRelated<Config>(config_renamed(r), call.run(blocks, c), call.run(blocks2, Config(Locals(c.locals.words, refs), m, c.io))) {
     let c2 = Config(Locals(c.locals.words, refs), m, c.io);
     let locals: LocalsRenamed(r, c.locals, Locals(c.locals.words, refs)) = LocalsRenamed(words := refl, refs := refs_renamed);
     match call {
-        Read(fd, buf, len, result) => ran_of_map_then(config_renamed(r), λ (t: Loc) => t.rename(r), refs_renamed(buf), λ loc => {
+        Read(fd, buf, len, result) => ran_of_map_then(config_renamed(r), λ (t: Loc) => t.rename(r), refs_renamed(buf), refl, λ loc => {
             let n = c.locals.word(len).toNat();
             let open: (c2.memory.open(blocks2, loc.rename(r), n) = c.memory.open(blocks, loc, n)) =
-                Bool::and_cong(written.writes(loc.block), Bool::and_cong(memory.fits(loc, n), Bool::and_cong(memory.whole(loc, n),
-                    trans(cong_fn<List<Entry>, Bool>(λ sh => no_pointers(range_pointers(sh, r.there(loc.block), loc.offset, n)), memory.shadow),
-                        trans(cong_fn<List<Pointer>, Bool>(λ ps => no_pointers(ps), rename_range_pointers(r, loc.block, loc.offset, n, c.memory.heap.shadow)),
-                            rename_pointers_none(r, range_pointers(c.memory.heap.shadow, loc.block, loc.offset, n)))))));
+                Bool::and_cong(written.writes(loc.block), Bool::and_cong(memory.fits(loc, n),
+                    trans(cong_fn<List<Pointer>, Bool>(λ sh => no_slots(slots_within(sh, r.there(loc.block), loc.offset, n)), memory.shadow),
+                        trans(cong_fn<List<Slot>, Bool>(λ ss => no_slots(ss), rename_slots_within(r, loc.block, loc.offset, n, c.memory.shadow)),
+                            rename_slots_none(r, slots_within(c.memory.shadow, loc.block, loc.offset, n))))));
             j(sym(open), λ v _ => RanRelated<Config>(config_renamed(r), read_into(blocks, c, c.locals.word(fd), loc, n, result),
-                    match v { False => Stuck, True => read_landed(blocks2, c2, c.locals.word(fd), loc.rename(r), n, result,
+                    match v { False => Stuck(c.io), True => read_landed(blocks2, c2, c.locals.word(fd), loc.rename(r), n, result,
                         c.io.world(c.io.past, ReadCmd(c.locals.word(fd), n))) }),
                 match c.memory.open(blocks, loc, n) as λ v => RanRelated<Config>(config_renamed(r),
-                        match v { False => Stuck, True => read_landed(blocks, c, c.locals.word(fd), loc, n, result, c.io.world(c.io.past, ReadCmd(c.locals.word(fd), n))) },
-                        match v { False => Stuck, True => read_landed(blocks2, c2, c.locals.word(fd), loc.rename(r), n, result,
+                        match v { False => Stuck(c.io), True => read_landed(blocks, c, c.locals.word(fd), loc, n, result, c.io.world(c.io.past, ReadCmd(c.locals.word(fd), n))) },
+                        match v { False => Stuck(c.io), True => read_landed(blocks2, c2, c.locals.word(fd), loc.rename(r), n, result,
                             c.io.world(c.io.past, ReadCmd(c.locals.word(fd), n))) }) {
-                    False => trivial,
+                    False => refl,
                     True => read_landed_renames(r, blocks, blocks2, written, c, refs, m, locals, memory, c.locals.word(fd), loc, n, result,
                         c.io.world(c.io.past, ReadCmd(c.locals.word(fd), n))),
                 })
         }),
-        Write(fd, buf, len, result) => ran_of_map_then(config_renamed(r), λ (t: Loc) => t.rename(r), refs_renamed(buf), λ loc =>
-            ran_of_same_then(config_renamed(r), c.memory.read_bytes_renames(r, m, memory, loc, c.locals.word(len).toNat()), λ bytes =>
+        Write(fd, buf, len, result) => ran_of_map_then(config_renamed(r), λ (t: Loc) => t.rename(r), refs_renamed(buf), refl, λ loc =>
+            ran_of_same_then(config_renamed(r), c.memory.read_bytes_renames(r, m, memory, loc, c.locals.word(len).toNat()), refl, λ bytes =>
                 match c.io.world(c.io.past, WriteCmd(c.locals.word(fd), bytes)) as λ answer =>
                     RanRelated<Config>(config_renamed(r), write_landed(c, c.locals.word(fd), bytes, result, answer), write_landed(c2, c.locals.word(fd), bytes, result, answer)) {
                     Wrote(count) => ConfigRenamed(locals := locals.set_word(result, word_value(count_word(count))), memory := memory, io := refl),
@@ -357,15 +363,15 @@ theorem pass_locals_renames(r: Renaming, parameters: List<Typed>, state: List<Va
 theorem loop_run_renames(r: Renaming, step, step2: Nat → Config → Ran<Config>,
     steps: (n: Nat) → (c, renamed: Config) → ConfigRenamed(r, c, renamed) → RanRelated<Config>(config_renamed(r), step(n, c), step2(n, renamed)),
     parameters: List<Typed>, exit: Nat, next: List<Typed>, fuel: Nat):
-    (state: List<Value>) → (m, renamed: Memory) → (io, io2: Io) → MemoryRenamed(r, m, renamed) → io2 = io →
+    (state: List<Value>) → (m, renamed: Heap) → (io, io2: Io) → HeapRenamed(r, m, renamed) → io2 = io →
     RanRelated<Ended>(ended_renamed(r), loop_run(step, parameters, exit, next, fuel, state, m, io),
         loop_run(step2, parameters, exit, next, fuel, rename_values(r, state), renamed, io2)) {
     match fuel {
         Zero => λ state m renamed io io2 rel same => same,
-        Succ(rest) => λ state m renamed io io2 rel same => ran_of_then(locals_renamed(r), ended_renamed(r), pass_locals_renames(r, parameters, state),
+        Succ(rest) => λ state m renamed io io2 rel same => ran_of_then(locals_renamed(r), ended_renamed(r), pass_locals_renames(r, parameters, state), same,
             λ l l2 hl => ran_then(config_renamed(r), ended_renamed(r), steps(rest, Config(l, m, io), Config(l2, renamed, io2), ConfigRenamed(locals := hl, memory := rel, io := same)),
                 λ after after2 h => ran_of_map_then(ended_renamed(r), λ (xs: List<Value>) => rename_values(r, xs),
-                    read_values_renames(r, next, after.locals, after2.locals, h.locals), λ later =>
+                    read_values_renames(r, next, after.locals, after2.locals, h.locals), h.io, λ later =>
                         j(sym(h.locals.words), λ ws _ => RanRelated<Ended>(ended_renamed(r),
                                 match after.locals.words(1, exit).head_bit() {
                                     False => loop_run(step, parameters, exit, next, rest, later, after.memory, after.io),
@@ -389,7 +395,7 @@ theorem loop_run_renames(r: Renaming, step, step2: Nat → Config → Ran<Config
 // Two tables of calls alike: on renamed values, a renamed heap and one
 // world, renamed answers.
 fn CallsRenamed(r: Renaming, calls, calls2: Calls()) → Type {
-    (f: Nat) → (args: List<Value>) → (m, renamed: Memory) → MemoryRenamed(r, m, renamed) → (io, io2: Io) → io2 = io →
+    (f: Nat) → (args: List<Value>) → (m, renamed: Heap) → HeapRenamed(r, m, renamed) → (io, io2: Io) → io2 = io →
         RanRelated<Answer>(answer_renamed(r), calls(f, args, m, io), calls2(f, rename_values(r, args), renamed, io2))
 }
 
@@ -397,7 +403,7 @@ theorem Body::run_renames(self body: Body, r: Renaming, blocks, blocks2: Blocks,
     called: CallsRenamed(r, calls, calls2)): (fuel: Nat) → (c, renamed: Config) → ConfigRenamed(r, c, renamed) →
     RanRelated<Config>(config_renamed(r), body.run(blocks, calls, fuel, c), body.run(blocks2, calls2, fuel, renamed)) {
     match body {
-        Leaf(instrs) => λ fuel c renamed rel => ran_of_related(config_renamed(r), run_instrs_renames(r, blocks, blocks2, written, instrs, c, renamed, rel)),
+        Leaf(instrs) => λ fuel c renamed rel => ran_of_related(config_renamed(r), rel.io, run_instrs_renames(r, blocks, blocks2, written, instrs, c, renamed, rel)),
         Seq(first, rest) => λ fuel c renamed rel => ran_then(config_renamed(r), config_renamed(r),
             first.run_renames(r, blocks, blocks2, written, calls, calls2, called, fuel, c, renamed, rel),
             λ a b h => rest.run_renames(r, blocks, blocks2, written, calls, calls2, called, fuel, a, b, h)),
@@ -410,19 +416,19 @@ theorem Body::run_renames(self body: Body, r: Renaming, blocks, blocks2: Blocks,
                     False => no.run_renames(r, blocks, blocks2, written, calls, calls2, called, fuel, c, renamed, rel),
                 }),
         Call(callee, arguments, results) => λ fuel c renamed rel => ran_of_map_then(config_renamed(r), λ (xs: List<Value>) => rename_values(r, xs),
-            read_values_renames(r, arguments, c.locals, renamed.locals, rel.locals), λ args =>
+            read_values_renames(r, arguments, c.locals, renamed.locals, rel.locals), rel.io, λ args =>
                 ran_then(answer_renamed(r), config_renamed(r), called(callee, args, c.memory, renamed.memory, rel.memory, c.io, renamed.io, rel.io),
                     λ a b h => rewrite(h.words, ran_of_then(locals_renamed(r), config_renamed(r),
-                        bind_values_renames(r, results, a.words, c.locals, renamed.locals, rel.locals),
+                        bind_values_renames(r, results, a.words, c.locals, renamed.locals, rel.locals), h.io,
                         λ l l2 hl => ConfigRenamed(locals := hl, memory := h.heap, io := h.io))))),
         Loop(inputs, parameters, inner, exit, next, outputs) => λ fuel c renamed rel =>
-            ran_of_map_then(config_renamed(r), λ (xs: List<Value>) => rename_values(r, xs), read_values_renames(r, inputs, c.locals, renamed.locals, rel.locals),
+            ran_of_map_then(config_renamed(r), λ (xs: List<Value>) => rename_values(r, xs), read_values_renames(r, inputs, c.locals, renamed.locals, rel.locals), rel.io,
                 λ state => ran_then(ended_renamed(r), config_renamed(r),
                     loop_run_renames(r, λ (n: Nat) (pass: Config) => inner.run(blocks, calls, n, pass), λ (n: Nat) (pass: Config) => inner.run(blocks2, calls2, n, pass),
                         λ n a b h => inner.run_renames(r, blocks, blocks2, written, calls, calls2, called, n, a, b, h),
                         parameters, exit, next, fuel, state, c.memory, renamed.memory, c.io, renamed.io, rel.memory, rel.io),
                     λ end end2 h => rewrite(h.state, ran_of_then(locals_renamed(r), config_renamed(r),
-                        bind_values_renames(r, outputs, end.state, c.locals, renamed.locals, rel.locals),
+                        bind_values_renames(r, outputs, end.state, c.locals, renamed.locals, rel.locals), h.io,
                         λ l l2 hl => ConfigRenamed(locals := hl, memory := h.memory, io := h.io))))),
         Sys(call) => λ fuel c renamed rel => call.run_alike(r, blocks, blocks2, written, c, renamed, rel),
         Exit(status) => λ fuel c renamed rel => ⟨cong_fn<Valuation(), BitVec(64)>(λ ws => ws(64, status), rel.locals.words), rel.io⟩,
@@ -433,16 +439,16 @@ theorem Body::run_renames(self body: Body, r: Renaming, blocks, blocks2: Blocks,
 // Routines and programs
 
 theorem Routine::call_renames(self routine: Routine, r: Renaming, blocks, blocks2: Blocks, written: BlocksRenamed(r, blocks, blocks2),
-    calls, calls2: Calls(), called: CallsRenamed(r, calls, calls2), fuel: Nat, args: List<Value>, m, renamed: Memory, rel: MemoryRenamed(r, m, renamed),
+    calls, calls2: Calls(), called: CallsRenamed(r, calls, calls2), fuel: Nat, args: List<Value>, m, renamed: Heap, rel: HeapRenamed(r, m, renamed),
     io, io2: Io, same: io2 = io):
     RanRelated<Answer>(answer_renamed(r), routine.call(blocks, calls, fuel, args, m, io), routine.call(blocks2, calls2, fuel, rename_values(r, args), renamed, io2)) {
     ran_of_then(locals_renamed(r), answer_renamed(r),
-        bind_values_renames(r, routine.parameters, args, Locals::empty(), Locals::empty(), LocalsRenamed::words_only(r, Valuation::zero())),
+        bind_values_renames(r, routine.parameters, args, Locals::empty(), Locals::empty(), LocalsRenamed::words_only(r, Valuation::zero())), same,
         λ l l2 hl => ran_then(config_renamed(r), answer_renamed(r),
             routine.body.run_renames(r, blocks, blocks2, written, calls, calls2, called, fuel, Config(l, m, io), Config(l2, renamed, io2),
                 ConfigRenamed(locals := hl, memory := rel, io := same)),
             λ after after2 h => ran_of_map_then(answer_renamed(r), λ (xs: List<Value>) => rename_values(r, xs),
-                read_values_renames(r, routine.results, after.locals, after2.locals, h.locals),
+                read_values_renames(r, routine.results, after.locals, after2.locals, h.locals), h.io,
                 λ words => AnswerRenamed(words := refl, heap := h.memory, io := h.io))))
 }
 
@@ -451,9 +457,9 @@ theorem program_renames(routines: List<Routine>, r: Renaming, blocks, blocks2: B
     match fuel {
         Zero => λ f args m renamed rel io io2 same => same,
         Succ(rest) => λ f args m renamed rel io io2 same => match routines.nth(f) as λ o => RanRelated<Answer>(answer_renamed(r),
-                match o { None => Stuck, Some(routine) => routine.call(blocks, program_calls(routines, blocks, rest), rest, args, m, io) },
-                match o { None => Stuck, Some(routine) => routine.call(blocks2, program_calls(routines, blocks2, rest), rest, rename_values(r, args), renamed, io2) }) {
-            None => trivial,
+                match o { None => Stuck(io), Some(routine) => routine.call(blocks, program_calls(routines, blocks, rest), rest, args, m, io) },
+                match o { None => Stuck(io2), Some(routine) => routine.call(blocks2, program_calls(routines, blocks2, rest), rest, rename_values(r, args), renamed, io2) }) {
+            None => same,
             Some(routine) => routine.call_renames(r, blocks, blocks2, written, program_calls(routines, blocks, rest), program_calls(routines, blocks2, rest),
                 program_renames(routines, r, blocks, blocks2, written, rest), rest, args, m, renamed, rel, io, io2, same),
         },
@@ -464,7 +470,7 @@ theorem program_renames(routines: List<Routine>, r: Renaming, blocks, blocks2: B
 // renamed alike, is the run renamed: the meaning is unchanged by renaming
 // blocks, at every fuel.
 theorem run_renames(r: Renaming, p: Program, blocks, blocks2: Blocks, written: BlocksRenamed(r, blocks, blocks2), fuel, f: Nat, args: List<Value>,
-    heap, renamed: Memory, rel: MemoryRenamed(r, heap, renamed), io: Io):
+    heap, renamed: Heap, rel: HeapRenamed(r, heap, renamed), io: Io):
     RanRelated<Answer>(answer_renamed(r), run(p, blocks, fuel, f, args, heap, io), run(p, blocks2, fuel, f, rename_values(r, args), renamed, io)) {
     program_renames(p.routines, r, blocks, blocks2, written, fuel, f, args, heap, renamed, rel, io, io, refl)
 }
@@ -502,25 +508,25 @@ theorem related_shown(r: Renaming): (a, b: Ran<Answer>) → RanRelated<Answer>(a
             Done(_) => λ h => rewrite(h.words, word_parts_rename(r, x.words), h.io, refl),
             Exited(_, _) => λ never => false_elim(never),
             Going(_) => λ never => false_elim(never),
-            Stuck => λ never => false_elim(never),
+            Stuck(_) => λ never => false_elim(never),
         },
         Exited(_, _) => λ b => match b {
             Done(_) => λ never => false_elim(never),
             Exited(_, _) => λ h => rewrite(h.left, h.right, refl),
             Going(_) => λ never => false_elim(never),
-            Stuck => λ never => false_elim(never),
+            Stuck(_) => λ never => false_elim(never),
         },
         Going(io) => λ b => match b {
             Done(_) => λ never => false_elim(never),
             Exited(_, _) => λ never => false_elim(never),
             Going(io2) => λ (h: io2 = io) => rewrite(h, refl),
-            Stuck => λ never => false_elim(never),
+            Stuck(_) => λ never => false_elim(never),
         },
-        Stuck => λ b => match b {
+        Stuck(io) => λ b => match b {
             Done(_) => λ never => false_elim(never),
             Exited(_, _) => λ never => false_elim(never),
             Going(_) => λ never => false_elim(never),
-            Stuck => λ _ => refl,
+            Stuck(io2) => λ (h: io2 = io) => rewrite(h, refl),
         },
     }
 }
@@ -528,7 +534,7 @@ theorem related_shown(r: Renaming): (a, b: Ran<Answer>) → RanRelated<Answer>(a
 // So the words a run answers, how it ends and the world it leaves are the
 // same under any renaming of the blocks it starts with, at every fuel.
 theorem run_words_alike(r: Renaming, p: Program, blocks, blocks2: Blocks, written: BlocksRenamed(r, blocks, blocks2), fuel, f: Nat, args: List<Value>,
-    heap, renamed: Memory, rel: MemoryRenamed(r, heap, renamed), io: Io):
+    heap, renamed: Heap, rel: HeapRenamed(r, heap, renamed), io: Io):
     shown(run(p, blocks2, fuel, f, rename_values(r, args), renamed, io)) = shown(run(p, blocks, fuel, f, args, heap, io)) {
     related_shown(r, run(p, blocks, fuel, f, args, heap, io), run(p, blocks2, fuel, f, rename_values(r, args), renamed, io),
         run_renames(r, p, blocks, blocks2, written, fuel, f, args, heap, renamed, rel, io))

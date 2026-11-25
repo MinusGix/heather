@@ -1,0 +1,225 @@
+// The call contract (docs/language/ownership-design.md §17.2, §18.1, §18.2;
+// issues/bytes-level-on-the-contract.md): what a routine's meaning answers,
+// and what that asks of its code at the machine (`Site::Meets`).
+//
+// - A value is a word or a reference (`Value`: a block and a byte offset),
+//   lowered to a word by where the blocks lie (`Value::lower`: a reference
+//   is its target's address). An answer is the values, the heap
+//   (x86_64_memory_contract's `Heap`) and the world (linux_world's `Io`).
+//   A run at some fuel comes to one of four outcomes (`Ran`): done with a
+//   value, exited with a status and the world, still going with the world
+//   so far, or stuck where it has no meaning, with the world it was stuck
+//   in. Every outcome carries a history (`Ran::past`): the exchanges made by
+//   then, newest first.
+// - `Site::Meets`: a meaning over fuel (`Calls()` at each fuel, the bytes
+//   level's `run`), met by the code at its labels, over one lending for the
+//   whole run, with the world in the machine's state as in the meaning's.
+//   Entered with the arguments passed, the heap injected and the world `io`,
+//   at every fuel: where the meaning is done, the code returns with the
+//   answer's words in place, the kept registers kept, its stores inside the
+//   lending, the answer's heap injected and the answer's world; where it has
+//   exited, the code makes the exit call with that status and world; and
+//   every world the code reaches before it returns or exits is a prefix of a
+//   history the meaning reaches. The machine's world is the Linux model's
+//   (linux_x86_64_io: a step of the machine between system calls, and at
+//   one, the request `LinuxRequests` reads, answered by the world, every
+//   resumption `linux_answered` allows).
+//
+// This is the contract's second module and not part of the first because
+// FunctionIR's lowering imports the first and spells FunctionIR's own
+// `Word` and `Answer` bare: the meaning's names here would be ambiguous
+// there. Only the bytes level and its lowering import this one.
+import x86_64_memory_contract;
+import x86_64;
+import x86_64_fetch;
+import x86_64_data_read;
+import x86_64_store;
+import x86_64_stack;
+import x86_64_kept;
+import x86_64_asm;
+import x86_64_asm_runs;
+import x86_64_stack_runs;
+import linux_calls;
+import linux_world;
+import linux_x86_64_io;
+import transition;
+import bitvec;
+import list;
+import logic;
+import nat;
+import option;
+
+// ---------------------------------------------------------------------------
+// Values, answers, outcomes
+
+inductive Value { Word(word: BitVec(64)), Ref(loc: Loc) }
+
+// A value as the machine holds it: a word as itself, a reference as its
+// target's address.
+fn Value::lower(self value: Value, spans: Spans) → BitVec(64) { match value { Word(word) => word, Ref(loc) => loc.address(spans) } }
+
+fn lower_values(spans: Spans, values: List<Value>) → List<BitVec(64)> {
+    match values { Nil => Nil, Cons(v, rest) => Cons(v.lower(spans), lower_values(spans, rest)) }
+}
+
+// What a call answers: its values, the heap and the world.
+record Answer { words: List<Value>, heap: Heap, io: Io }
+
+// What a run comes to at some fuel: done with a value, exited with a status,
+// still going with the world so far, or stuck where it has no meaning, with
+// the world it got stuck in.
+inductive Ran<T> { Done(value: T), Exited(status: BitVec(64), io: Io), Going(io: Io), Stuck(io: Io) }
+
+fn Ran::then<T, U>(self r: Ran<T>, k: T → Ran<U>) → Ran<U> {
+    match r { Done(v) => k(v), Exited(status, io) => Exited(status, io), Going(io) => Going(io), Stuck(io) => Stuck(io) }
+}
+
+// A partial step at the world `io`: stuck there where it has no meaning.
+fn Ran::of<T>(o: Option<T>, io: Io) → Ran<T> { match o { None => Stuck(io), Some(v) => Done(v) } }
+
+// What a program's routines answer at one fuel: routine `f` on values, a
+// heap and the world.
+fn Calls() → Type { Nat → List<Value> → Heap → Io → Ran<Answer> }
+
+// The world after one exchange.
+fn Io::exchanged(self io: Io, cmd: LinuxCmd<Nat>, answer: cmd.Resp()) → Io { Io(io.world, Cons(Exchange(cmd, answer), io.past)) }
+
+// The exchanges a run has made by where it is, stuck or not,
+fn Ran::past(self r: Ran<Answer>) → List<Exchange> {
+    match r { Done(a) => a.io.past, Exited(_, io) => io.past, Going(io) => io.past, Stuck(io) => io.past }
+}
+
+// those of a run that has a meaning there,
+fn history(r: Ran<Answer>) → Option<List<Exchange>> {
+    match r { Done(a) => Some(a.io.past), Exited(_, io) => Some(io.past), Going(io) => Some(io.past), Stuck(_) => None }
+}
+
+// and those a run got stuck after.
+fn stuck_after(r: Ran<Answer>) → Option<List<Exchange>> {
+    match r { Done(_) => None, Exited(_, _) => None, Going(_) => None, Stuck(io) => Some(io.past) }
+}
+
+// `later` is `earlier` with more exchanges after it (newest first).
+fn Extends(later, earlier: List<Exchange>) → Type { Exists<List<Exchange>>(λ extra => later = extra ++ earlier) }
+
+// A world whose every answer is one Linux may give.
+fn Io::Answerable(self io: Io) → Type { (past: List<Exchange>) → (c: LinuxCmd<Nat>) → c.Answers(io.world(past, c)) }
+
+// ---------------------------------------------------------------------------
+// The machine with the world
+
+// The machine's state and the world, as the meaning's configuration has
+// it: what the code has asked so far is `io.past`.
+record Running<M> { state: MachineState<M>, io: Io }
+
+// Linux's model of the process at a site: its fetch and data, and the
+// stack's writes (linux_x86_64_io's `LinuxIo`).
+fn Site::linux<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data)) → LinuxIo<M> {
+    LinuxIo(site.fetch, site.data, stack.writes.writable, stack.writes.store)
+}
+
+// The world's answer to `c`.
+fn Io::answer(self io: Io, c: LinuxCmd<Nat>) → c.Resp() { io.world(io.past, c) }
+
+// At `at` the code makes the system call `c` the Linux model reads off its
+// registers and memory, with its buffers writable, and the world answers as
+// Linux may.
+fn Site::Asks<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), at: Running<M>, c: LinuxCmd<Nat>) → Type {
+    LinuxSyscallAt(site.linux(stack), at.state) ∧ (LinuxRequests(site.linux(stack), at.state, c) ∧ c.Answers(at.io.answer(c)))
+}
+
+// One step of the machine and the world: a step of the code (a fetched
+// step, a store, a stack form), the world unchanged; or a system call the
+// world answers, the process resumed as Linux may (whatever a failed call
+// leaves and RCX and R11) and the exchange recorded.
+fn Site::Step<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), before, after: Running<M>) → Type {
+    (MachineStep(site.fetch, site.data, stack.writes, before.state, after.state) ∧ (after.io = before.io)) ∨
+        Exists<LinuxCmd<Nat>>(λ c => site.Asks(stack, before, c) ∧ ((after.io = before.io.exchanged(c, before.io.answer(c))) ∧
+            Exists<List<BitVec(8)>>(λ junk => LinuxLeaves(c, before.io.answer(c), junk) ∧ Exists<BitVec(64)>(λ rcx => Exists<BitVec(64)>(λ r11 =>
+                after.state = linux_answered(site.linux(stack), before.state, c, before.io.answer(c), junk, rcx, r11))))))
+}
+
+// The code performs `goal` from `from`, making at most `calls` system
+// calls: it steps to a state meeting `goal`, or to a system call the world
+// answers and from every state Linux may resume it in, the exchange
+// recorded, performs `goal` again. (Linux's model is a claim over every
+// resumption, `LinuxResumes`, as `RunsAs` reads it.)
+fn Site::Performs<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), goal: Running<M> → Type, calls: Nat) → Running<M> → Type {
+    match calls {
+        Zero => λ from => Exists<MachineState<M>>(λ t => MachineSteps(site.fetch, site.data, stack.writes, from.state, t) ∧ goal(Running(t, from.io))),
+        Succ(more) => λ from => Exists<MachineState<M>>(λ t => MachineSteps(site.fetch, site.data, stack.writes, from.state, t) ∧
+            (goal(Running(t, from.io)) ∨ Exists<LinuxCmd<Nat>>(λ c => site.Asks(stack, Running(t, from.io), c) ∧
+                LinuxResumes(site.linux(stack), t, c, from.io.answer(c),
+                    λ u => site.Performs(stack, goal, more, Running(u, from.io.exchanged(c, from.io.answer(c)))))))),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The contract
+
+// Routine `f` entered at stack offset `i`, as every clause of the contract
+// takes it: at its label, the program resident, the stack pointer at `i`
+// with room for the return address `ret` there, the arguments passed as
+// words, room for its frames below (`rooms(f)`) and the lending's words
+// above (`top`), the heap injected, and the world one Linux may be.
+fn Site::Entering<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), spans: Spans, top: Nat, rooms: Nat → Nat, bound: Nat,
+    clause: Nat → List<Value> → Heap → Io → MachineState<M> → Nat → BitVec(64) → Type) → Type {
+    (f: Nat) → f + 1 <= bound → (args: List<Value>) → (heap: Heap) → (io: Io) → io.Answerable() →
+    (s: MachineState<M>) → s.rip = next_rip(site.origin, asm_labels(site.program)(f + 1)) → site.Resident(s.memory) →
+    (i: Nat) → read_gpr(Rsp, s.gprs) = stack.at(i) → i + 8 <= stack.size →
+    stack.Passed(lower_values(spans, args), i, s) → rooms(f) <= i → i + 8 <= top → Injected<M>(site.data, spans, heap, s.memory) →
+    (ret: BitVec(64)) → read_word(site.data, s.memory, stack.at(i)) = Some(ret) → clause(f, args, heap, io, s, i, ret)
+}
+
+// Returned with `a`: at the return address, the program resident, the stack
+// pointer just above it, the answer's words lowered in RAX and
+// `answer_registers()`, the callee-saved registers kept, its stores inside
+// the lending, the answer's heap injected, and the answer's world.
+fn Site::Returned<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), spans: Spans, s: MachineState<M>, i: Nat, ret: BitVec(64),
+    a: Answer, r: Running<M>) → Type {
+    ((r.state.rip = ret) ∧ (site.Resident(r.state.memory) ∧ (read_gpr(Rsp, r.state.gprs) = stack.at(i + 8)))) ∧
+    ((ArgsIn(lower_values(spans, a.words), Cons(Rax, answer_registers()), r.state.gprs) ∧ Kept(callee_kept(), s.gprs, r.state.gprs)) ∧
+        ((stack.WroteIn(i, spans, s.memory, r.state.memory) ∧ Injected<M>(site.data, spans, a.heap, r.state.memory)) ∧ (r.io = a.io)))
+}
+
+// Done: wherever the meaning is done at some fuel, the code returns with it.
+fn Site::MeetsDone<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), spans: Spans, top: Nat, rooms: Nat → Nat, bound: Nat,
+    meaning: Nat → Calls()) → Type {
+    site.Entering(stack, spans, top, rooms, bound, λ f args heap io s i ret => (n: Nat) → (a: Answer) → meaning(n, f, args, heap, io) = Done(a) →
+        Exists<Nat>(λ calls => site.Performs(stack, λ r => site.Returned(stack, spans, s, i, ret, a, r), calls, Running(s, io))))
+}
+
+// Exited: wherever the meaning exits at some fuel, the code makes the exit
+// call with that status, in that world.
+fn Site::MeetsExited<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), spans: Spans, top: Nat, rooms: Nat → Nat, bound: Nat,
+    meaning: Nat → Calls()) → Type {
+    site.Entering(stack, spans, top, rooms, bound, λ f args heap io s i ret => (n: Nat) → (status: BitVec(64)) → (o: Io) →
+        meaning(n, f, args, heap, io) = Exited(status, o) →
+        Exists<Nat>(λ calls => site.Performs(stack, λ r => (LinuxSyscallAt(site.linux(stack), r.state) ∧ LinuxExits(r.state, status)) ∧ (r.io = o), calls,
+            Running(s, io))))
+}
+
+// The code has not yet returned to `ret`.
+fn Site::Before<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), i: Nat, ret: BitVec(64), r: Running<M>) → Type {
+    ¬((r.state.rip = ret) ∧ (read_gpr(Rsp, r.state.gprs) = stack.at(i + 8)))
+}
+
+// Going: every world the code reaches before it returns or exits is a
+// prefix of a history the meaning reaches. (An exit resumes nothing, so no
+// step leaves it.)
+fn Site::MeetsGoing<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), spans: Spans, top: Nat, rooms: Nat → Nat, bound: Nat,
+    meaning: Nat → Calls()) → Type {
+    site.Entering(stack, spans, top, rooms, bound, λ f args heap io s i ret => (r: Running<M>) →
+        Star(λ (a: Running<M>) (b: Running<M>) => site.Before(stack, i, ret, a) ∧ site.Step(stack, a, b), Running(s, io), r) →
+        Exists<Nat>(λ n => Exists<List<Exchange>>(λ h => (history(meaning(n, f, args, heap, io)) = Some(h)) ∧ Extends(h, r.io.past))))
+}
+
+// The contract, over one lending for the whole run, for every routine
+// below `bound` and every fuel: done, exited, going. That the code left
+// alone what it was not lent is not said here: the injection after the call
+// pins every byte of every block, so it is a fact about the answer's heap.
+fn Site::Meets<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), spans: Spans, top: Nat, rooms: Nat → Nat, bound: Nat,
+    meaning: Nat → Calls()) → Type {
+    site.MeetsDone(stack, spans, top, rooms, bound, meaning) ∧
+        (site.MeetsExited(stack, spans, top, rooms, bound, meaning) ∧ site.MeetsGoing(stack, spans, top, rooms, bound, meaning))
+}

@@ -11,7 +11,8 @@
 // carries "below" across one (`below_then`).
 import bytes_level::{run};
 import bytes_memory;
-import reference_cells;
+import x86_64_memory_contract;
+import x86_64_call_contract;
 import function_ir;
 import function_ir_eval;
 import linux_world;
@@ -24,11 +25,11 @@ import option;
 
 // `b` is `a` with more fuel: the same, unless `a` was still going.
 fn Ran::Below<T>(self a: Ran<T>, b: Ran<T>) → Type {
-    match a { Done(v) => b = Done(v), Exited(status, io) => b = Exited(status, io), Going(_) => True, Stuck => b = Stuck }
+    match a { Done(v) => b = Done(v), Exited(status, io) => b = Exited(status, io), Going(_) => True, Stuck(io) => b = Stuck(io) }
 }
 
 theorem Ran::below_refl<T>(self a: Ran<T>): a.Below(a) {
-    match a { Done(_) => refl, Exited(_, _) => refl, Going(_) => trivial, Stuck => refl }
+    match a { Done(_) => refl, Exited(_, _) => refl, Going(_) => trivial, Stuck(_) => refl }
 }
 
 theorem below_then<T, U>({a, b: Ran<T>}, below: a.Below(b), {k, k2: T → Ran<U>}, each: (x: T) → k(x).Below(k2(x))): a.then(k).Below(b.then(k2)) {
@@ -36,27 +37,27 @@ theorem below_then<T, U>({a, b: Ran<T>}, below: a.Below(b), {k, k2: T → Ran<U>
         Done(v) => λ (same: b = Done(v)) => rewrite(same, each(v)),
         Exited(status, io) => λ (same: b = Exited(status, io)) => rewrite(same, refl),
         Going(_) => λ _ => trivial,
-        Stuck => λ (same: b = Stuck) => rewrite(same, refl),
+        Stuck(io) => λ (same: b = Stuck(io)) => rewrite(same, refl),
     })(below)
 }
 
-theorem below_of_then<A, T>(o: Option<A>, {k, k2: A → Ran<T>}, each: (x: A) → k(x).Below(k2(x))): Ran::of(o).then(k).Below(Ran::of(o).then(k2)) {
-    below_then(Ran::of(o).below_refl(), each)
+theorem below_of_then<A, T>(o: Option<A>, io: Io, {k, k2: A → Ran<T>}, each: (x: A) → k(x).Below(k2(x))): Ran::of(o, io).then(k).Below(Ran::of(o, io).then(k2)) {
+    below_then(Ran::of(o, io).below_refl(), each)
 }
 
 // Two tables of calls, the second with more fuel.
 fn CallsBelow(calls, calls2: Calls()) → Type {
-    (f: Nat) → (args: List<Value>) → (heap: Memory) → (io: Io) → calls(f, args, heap, io).Below(calls2(f, args, heap, io))
+    (f: Nat) → (args: List<Value>) → (heap: Heap) → (io: Io) → calls(f, args, heap, io).Below(calls2(f, args, heap, io))
 }
 
 theorem loop_run_below(step, step2: Nat → Config → Ran<Config>, steps: (n: Nat) → (c: Config) → step(n, c).Below(step2(n + 1, c)),
     parameters: List<Typed>, exit: Nat, next: List<Typed>, fuel: Nat):
-    (state: List<Value>) → (m: Memory) → (io: Io) →
+    (state: List<Value>) → (m: Heap) → (io: Io) →
     loop_run(step, parameters, exit, next, fuel, state, m, io).Below(loop_run(step2, parameters, exit, next, fuel + 1, state, m, io)) {
     match fuel {
         Zero => λ state m io => trivial,
-        Succ(rest) => λ state m io => below_of_then(pass_locals(parameters, state), λ l =>
-            below_then(steps(rest, Config(l, m, io)), λ after => below_of_then(read_values(next, after.locals), λ later =>
+        Succ(rest) => λ state m io => below_of_then(pass_locals(parameters, state), io, λ l =>
+            below_then(steps(rest, Config(l, m, io)), λ after => below_of_then(read_values(next, after.locals), after.io, λ later =>
                 match after.locals.words(1, exit).head_bit() {
                     False => loop_run_below(step, step2, steps, parameters, exit, next, rest, later, after.memory, after.io),
                     True => refl,
@@ -68,7 +69,7 @@ theorem loop_run_below(step, step2: Nat → Config → Ran<Config>, steps: (n: N
 theorem Body::run_below(self body: Body, blocks: Blocks, calls, calls2: Calls(), below: CallsBelow(calls, calls2)):
     (fuel: Nat) → (c: Config) → body.run(blocks, calls, fuel, c).Below(body.run(blocks, calls2, fuel + 1, c)) {
     match body {
-        Leaf(instrs) => λ fuel c => Ran::of(run_instrs(blocks, instrs, c)).below_refl(),
+        Leaf(instrs) => λ fuel c => Ran::of(run_instrs(blocks, instrs, c), c.io).below_refl(),
         Seq(first, rest) => λ fuel c => below_then(first.run_below(blocks, calls, calls2, below, fuel, c),
             λ mid => rest.run_below(blocks, calls, calls2, below, fuel, mid)),
         Branch(condition, yes, no) => λ fuel c => match c.locals.words(1, condition).head_bit() as λ v =>
@@ -77,31 +78,31 @@ theorem Body::run_below(self body: Body, blocks: Blocks, calls, calls2: Calls(),
             True => yes.run_below(blocks, calls, calls2, below, fuel, c),
             False => no.run_below(blocks, calls, calls2, below, fuel, c),
         },
-        Call(callee, arguments, results) => λ fuel c => below_of_then(read_values(arguments, c.locals), λ args =>
-            below_then(below(callee, args, c.memory, c.io), λ answer => Ran::of(bind_values(results, answer.words, c.locals)).then(λ (l: Locals) =>
+        Call(callee, arguments, results) => λ fuel c => below_of_then(read_values(arguments, c.locals), c.io, λ args =>
+            below_then(below(callee, args, c.memory, c.io), λ answer => Ran::of(bind_values(results, answer.words, c.locals), answer.io).then(λ (l: Locals) =>
                 Done(Config(l, answer.heap, answer.io))).below_refl())),
-        Loop(inputs, parameters, inner, exit, next, outputs) => λ fuel c => below_of_then(read_values(inputs, c.locals), λ state =>
+        Loop(inputs, parameters, inner, exit, next, outputs) => λ fuel c => below_of_then(read_values(inputs, c.locals), c.io, λ state =>
             below_then(loop_run_below(λ (n: Nat) (pass: Config) => inner.run(blocks, calls, n, pass), λ (n: Nat) (pass: Config) => inner.run(blocks, calls2, n, pass),
                     λ n pass => inner.run_below(blocks, calls, calls2, below, n, pass), parameters, exit, next, fuel, state, c.memory, c.io),
-                λ end => Ran::of(bind_values(outputs, end.state, c.locals)).then(λ (l: Locals) => Done(Config(l, end.memory, end.io))).below_refl())),
+                λ end => Ran::of(bind_values(outputs, end.state, c.locals), end.io).then(λ (l: Locals) => Done(Config(l, end.memory, end.io))).below_refl())),
         Sys(call) => λ fuel c => call.run(blocks, c).below_refl(),
         Exit(_) => λ fuel c => refl,
     }
 }
 
 theorem Routine::call_below(self routine: Routine, blocks: Blocks, calls, calls2: Calls(), below: CallsBelow(calls, calls2), fuel: Nat,
-    args: List<Value>, heap: Memory, io: Io): routine.call(blocks, calls, fuel, args, heap, io).Below(routine.call(blocks, calls2, fuel + 1, args, heap, io)) {
-    below_of_then(bind_values(routine.parameters, args, Locals::empty()), λ l =>
+    args: List<Value>, heap: Heap, io: Io): routine.call(blocks, calls, fuel, args, heap, io).Below(routine.call(blocks, calls2, fuel + 1, args, heap, io)) {
+    below_of_then(bind_values(routine.parameters, args, Locals::empty()), io, λ l =>
         below_then(routine.body.run_below(blocks, calls, calls2, below, fuel, Config(l, heap, io)), λ after =>
-            Ran::of(read_values(routine.results, after.locals)).then(λ (words: List<Value>) => Done(Answer(words, after.memory, after.io))).below_refl()))
+            Ran::of(read_values(routine.results, after.locals), after.io).then(λ (words: List<Value>) => Done(Answer(words, after.memory, after.io))).below_refl()))
 }
 
 theorem program_below(routines: List<Routine>, blocks: Blocks, fuel: Nat): CallsBelow(program_calls(routines, blocks, fuel), program_calls(routines, blocks, fuel + 1)) {
     match fuel {
         Zero => λ f args heap io => trivial,
         Succ(rest) => λ f args heap io => match routines.nth(f) as λ o =>
-                (match o { None => Stuck, Some(routine) => routine.call(blocks, program_calls(routines, blocks, rest), rest, args, heap, io) }).Below(
-                    match o { None => Stuck, Some(routine) => routine.call(blocks, program_calls(routines, blocks, rest + 1), rest + 1, args, heap, io) }) {
+                (match o { None => Stuck(io), Some(routine) => routine.call(blocks, program_calls(routines, blocks, rest), rest, args, heap, io) }).Below(
+                    match o { None => Stuck(io), Some(routine) => routine.call(blocks, program_calls(routines, blocks, rest + 1), rest + 1, args, heap, io) }) {
             None => refl,
             Some(routine) => routine.call_below(blocks, program_calls(routines, blocks, rest), program_calls(routines, blocks, rest + 1),
                 program_below(routines, blocks, rest), rest, args, heap, io),
@@ -110,7 +111,7 @@ theorem program_below(routines: List<Routine>, blocks: Blocks, fuel: Nat): Calls
 }
 
 // One more fuel: the same outcome unless the run was still going.
-theorem run_monotone(p: Program, blocks: Blocks, fuel, f: Nat, args: List<Value>, heap: Memory, io: Io):
+theorem run_monotone(p: Program, blocks: Blocks, fuel, f: Nat, args: List<Value>, heap: Heap, io: Io):
     run(p, blocks, fuel, f, args, heap, io).Below(run(p, blocks, fuel + 1, f, args, heap, io)) {
     program_below(p.routines, blocks, fuel, f, args, heap, io)
 }
@@ -121,12 +122,12 @@ theorem below_trans<T>({a, b, c: Ran<T>}, ab: a.Below(b), bc: b.Below(c)): a.Bel
         Done(v) => λ (same: b = Done(v)) => j(same, λ x _ => x.Below(c), bc),
         Exited(status, io) => λ (same: b = Exited(status, io)) => j(same, λ x _ => x.Below(c), bc),
         Going(_) => λ _ => trivial,
-        Stuck => λ (same: b = Stuck) => j(same, λ x _ => x.Below(c), bc),
+        Stuck(io) => λ (same: b = Stuck(io)) => j(same, λ x _ => x.Below(c), bc),
     })(ab)
 }
 
 // Any more fuel: a run that is done, exited or stuck stays so.
-theorem run_settled(p: Program, blocks: Blocks, fuel, f: Nat, args: List<Value>, heap: Memory, io: Io, more: Nat):
+theorem run_settled(p: Program, blocks: Blocks, fuel, f: Nat, args: List<Value>, heap: Heap, io: Io, more: Nat):
     run(p, blocks, fuel, f, args, heap, io).Below(run(p, blocks, fuel + more, f, args, heap, io)) {
     match more {
         Zero => run(p, blocks, fuel, f, args, heap, io).below_refl(),
