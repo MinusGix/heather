@@ -1,0 +1,301 @@
+// Steps typed by construction, the two ways the surface can write them, and
+// what each is refused (issues/reflected-languages-typed-by-construction.md).
+// `lib/lang/ownership/steps.hthr` is untyped; these pin why.
+//
+// - **Indexed by types**: a step's source and target as an index. `Type`
+//   itself is not an index type, but a declared index whose constructor
+//   holds two types is, so the family, a chain of them (the intermediate
+//   type a field: the existential), their denotation as a `Path` and the
+//   decider all check, and the decider evaluates by `refl`. What fails is
+//   every proof that compares two steps from one source: inverting a step
+//   at a source `List<x>` needs `Pair<a, b> = List<x>` refuted and
+//   `List<x> = List<y>` to give `x = y`, and no type former is provably
+//   injective or disjoint (`type_step_inversion` below).
+// - **Indexed by codes**: a data universe of shapes (a mutual group, since
+//   `List<Shape>` inside `Shape` is nested), its decoding by large
+//   elimination, and the same family over codes. Everything above checks,
+//   the window's denotation is the library's `Path::window` with its laws
+//   unconditional, and a step's inversion is a convoy closed by `absurd` on
+//   the codes (`seq_step_kind`).
+import logic;
+import bool;
+import nat;
+import option;
+import list;
+import vector;
+import store;
+import path;
+import list_path;
+import store_path;
+import span_set;
+
+// ---------------------------------------------------------------------------
+// Indexed by types
+
+// expect-error: an index is a `Nat` or a previously declared inductive
+inductive TStepBare: (s: Type) → Type {
+    TBElem(t: Type, i: Nat): TStepBare(List<t>),
+}
+
+// A source and a target, as an index.
+inductive TyIx { Ix(s: Type, t: Type), NoIx }
+
+fn TyIx::src(st: TyIx) → Type { match st { Ix(s, _) => s, NoIx => True } }
+fn TyIx::tgt(st: TyIx) → Type { match st { Ix(_, t) => t, NoIx => True } }
+
+inductive TStep: (st: TyIx) → Type {
+    TElem(t: Type, i: Nat): TStep(Ix(List<t>, t)),
+    TFst(a: Type, b: Type): TStep(Ix(Pair<a, b>, a)),
+    TSnd(a: Type, b: Type): TStep(Ix(Pair<a, b>, b)),
+}
+
+// The existential over each intermediate type is the field `m`.
+inductive TSteps: (st: TyIx) → Type {
+    TNil(s: Type): TSteps(Ix(s, s)),
+    TCons(s: Type, m: Type, t: Type, a: TStep(Ix(s, m)), rest: TSteps(Ix(m, t))): TSteps(Ix(s, t)),
+}
+
+fn pfst<A, B>() → Path<Pair<A, B>, A> { Path<Pair<A, B>, A>(get := λ (p: Pair<A, B>) => Some(p.fst), set := λ (p: Pair<A, B>) => λ (v: A) => Pair(v, p.snd)) }
+fn psnd<A, B>() → Path<Pair<A, B>, B> { Path<Pair<A, B>, B>(get := λ (p: Pair<A, B>) => Some(p.snd), set := λ (p: Pair<A, B>) => λ (v: B) => Pair(p.fst, v)) }
+
+fn TStep::path(st: TyIx, a: TStep(st)) → Path<TyIx::src(st), TyIx::tgt(st)> {
+    match a { TElem(_, i) => Path::elem(i), TFst(_, _) => pfst(), TSnd(_, _) => psnd() }
+}
+
+fn TSteps::path(st: TyIx, xs: TSteps(st)) → Path<TyIx::src(st), TyIx::tgt(st)> {
+    match xs {
+        TNil(_) => Path::id(),
+        TCons(s, m, t, a, rest) => TStep::path(Ix(s, m), a).then(TSteps::path(Ix(m, t), rest)),
+    }
+}
+
+fn tstep_same(st1: TyIx, a: TStep(st1), st2: TyIx, b: TStep(st2)) → Bool {
+    match a {
+        TElem(_, i) => match b { TElem(_, j) => i.same(j), _ => False },
+        TFst(_, _) => match b { TFst(_, _) => True, _ => False },
+        TSnd(_, _) => match b { TSnd(_, _) => True, _ => False },
+    }
+}
+
+fn tstep_apart(st1: TyIx, a: TStep(st1), st2: TyIx, b: TStep(st2)) → Bool {
+    match a {
+        TElem(_, i) => match b { TElem(_, j) => !i.same(j), _ => False },
+        TFst(_, _) => match b { TSnd(_, _) => True, _ => False },
+        TSnd(_, _) => match b { TFst(_, _) => True, _ => False },
+    }
+}
+
+fn tsteps_apart(st1: TyIx, xs: TSteps(st1)) → (st2: TyIx) → TSteps(st2) → Bool {
+    match xs {
+        TNil(_) => λ st2 ys => False,
+        TCons(s, m, t, a, xr) => λ st2 ys => match ys {
+            TNil(_) => False,
+            TCons(s2, m2, t2, b, yr) => match tstep_same(Ix(s, m), a, Ix(s2, m2), b) {
+                True => tsteps_apart(Ix(m, t), xr, Ix(m2, t2), yr),
+                False => tstep_apart(Ix(s, m), a, Ix(s2, m2), b),
+            },
+        },
+    }
+}
+
+// `p.fst[0]` and `p.fst[1]` of a pair of a list and a word: apart, by evaluation.
+theorem type_steps_verdict():
+    tsteps_apart(Ix(Pair<List<Nat>, Nat>, Nat),
+        TCons(Pair<List<Nat>, Nat>, List<Nat>, Nat, TFst(List<Nat>, Nat), TCons(List<Nat>, Nat, Nat, TElem(Nat, 0), TNil(Nat))),
+        Ix(Pair<List<Nat>, Nat>, Nat),
+        TCons(Pair<List<Nat>, Nat>, List<Nat>, Nat, TFst(List<Nat>, Nat), TCons(List<Nat>, Nat, Nat, TElem(Nat, 1), TNil(Nat)))) = True
+{ refl }
+
+// The denotation reads through, by evaluation.
+theorem type_steps_read():
+    TSteps::path(Ix(Pair<List<Nat>, Nat>, Nat),
+        TCons(Pair<List<Nat>, Nat>, List<Nat>, Nat, TFst(List<Nat>, Nat), TCons(List<Nat>, Nat, Nat, TElem(Nat, 1), TNil(Nat)))).get(Pair([4, 5], 6)) = Some(5)
+{ refl }
+
+fn TStep::is_elem(st: TyIx, b: TStep(st)) → Bool { match b { TElem(_, _) => True, TFst(_, _) => False, TSnd(_, _) => False } }
+
+// Inversion at a source type: the convoy's impossible arms owe
+// `Pair<a, b> = List<x>` refuted, which no type former's disjointness gives.
+// expect-error: `absurd` needs an equation at a declared inductive type
+theorem type_step_inversion(x, B: Type, b: TStep(Ix(List<x>, B))): TStep::is_elem(Ix(List<x>, B), b) = True {
+    (match b as λ st z => TyIx::src(st) = List<x> → TStep::is_elem(st, z) = True {
+        TElem(_, _) => λ _ => refl,
+        TFst(_, _) => λ no => absurd(no),
+        TSnd(_, _) => λ no => absurd(no),
+    })(refl)
+}
+
+// ---------------------------------------------------------------------------
+// Indexed by codes
+
+// expect-error: nested recursion (`Rose { Node(A, List Rose) }`) is not lowered yet
+inductive NestedShape { NWord, NRec(fs: List<NestedShape>) }
+
+inductive Shape { SWord, SSeq(a: Shape), SVec(n: Nat, a: Shape), SRec(fs: Shapes), STag(cs: Shapes), SMap(a: Shape) }
+inductive Shapes { SNil, SCons(h: Shape, t: Shapes) }
+
+// A member of a group is not an index type.
+// expect-error: `Shapes` cannot be used here
+inductive Mem(t: Shape): (fs: Shapes) → Type {
+    MHere(r: Shapes): Mem(t)(SCons(t, r)),
+    MThere(h: Shape, r: Shapes, m: Mem(t)(r)): Mem(t)(SCons(h, r)),
+}
+
+inductive Never {}
+
+// The decoding, one function per member of the group: a list of shapes is a
+// product or a sum.
+fn Shape::el(self c: Shape) → Type {
+    match c {
+        SWord => Nat,
+        SSeq(a) => List<a.el()>,
+        SVec(n, a) => [a.el(); n],
+        SRec(fs) => Shapes::el(fs, False),
+        STag(cs) => Shapes::el(cs, True),
+        SMap(a) => Store<a.el()>,
+    }
+}
+fn Shapes::el(fs: Shapes, sum: Bool) → Type {
+    match fs {
+        SNil => match sum { False => (0 = 0), True => Never },
+        SCons(h, t) => match sum { False => Pair<h.el(), Shapes::el(t, False)>, True => Or<h.el(), Shapes::el(t, True)> },
+    }
+}
+
+// The shape at a position, a word past the end.
+fn Shapes::at(fs: Shapes, i: Nat) → Shape { match fs { SNil => SWord, SCons(h, t) => match i { Zero => h, Succ(k) => Shapes::at(t, k) } } }
+
+inductive CIx { Cx(s: Shape, t: Shape), NoCx }
+fn CIx::src(st: CIx) → Shape { match st { Cx(s, _) => s, NoCx => SWord } }
+fn CIx::tgt(st: CIx) → Shape { match st { Cx(_, t) => t, NoCx => SWord } }
+
+inductive CStep: (st: CIx) → Type {
+    CField(fs: Shapes, i: Nat): CStep(Cx(SRec(fs), Shapes::at(fs, i))),
+    CElem(a: Shape, i: Nat): CStep(Cx(SSeq(a), a)),
+    CWindow(a: Shape, lo: Nat, n: Nat): CStep(Cx(SSeq(a), SVec(n, a))),
+    CKey(a: Shape, k: Key): CStep(Cx(SMap(a), a)),
+    CVariant(cs: Shapes, c: Nat): CStep(Cx(STag(cs), Shapes::at(cs, c))),
+}
+
+inductive CSteps: (st: CIx) → Type {
+    CNil(s: Shape): CSteps(Cx(s, s)),
+    CCons(s: Shape, m: Shape, t: Shape, a: CStep(Cx(s, m)), rest: CSteps(Cx(m, t))): CSteps(Cx(s, t)),
+}
+
+fn pinl<A, B>() → Path<Or<A, B>, A> {
+    Path<Or<A, B>, A>(get := λ (p: Or<A, B>) => match p { Inl(x) => Some(x), Inr(_) => None }, set := λ (p: Or<A, B>) => λ (v: A) => match p { Inl(_) => Inl(v), Inr(y) => Inr(y) })
+}
+fn pinr<A, B>() → Path<Or<A, B>, B> {
+    Path<Or<A, B>, B>(get := λ (p: Or<A, B>) => match p { Inr(y) => Some(y), Inl(_) => None }, set := λ (p: Or<A, B>) => λ (v: B) => match p { Inr(_) => Inr(v), Inl(x) => Inl(x) })
+}
+fn pnone<S, V>() → Path<S, V> { Path<S, V>(get := λ (s: S) => None, set := λ (s: S) => λ (v: V) => s) }
+
+fn Shapes::field_path(fs: Shapes, i: Nat) → Path<Shapes::el(fs, False), Shapes::at(fs, i).el()> {
+    match fs {
+        SNil => pnone<(0 = 0), Nat>(),
+        SCons(h, t) => match i { Zero => pfst<h.el(), Shapes::el(t, False)>(), Succ(k) => psnd<h.el(), Shapes::el(t, False)>().then(Shapes::field_path(t, k)) },
+    }
+}
+
+fn Shapes::alt_path(cs: Shapes, c: Nat) → Path<Shapes::el(cs, True), Shapes::at(cs, c).el()> {
+    match cs {
+        SNil => pnone<Never, Nat>(),
+        SCons(h, t) => match c { Zero => pinl<h.el(), Shapes::el(t, True)>(), Succ(k) => pinr<h.el(), Shapes::el(t, True)>().then(Shapes::alt_path(t, k)) },
+    }
+}
+
+// Each step is the library's path at the decoded types: the window is
+// `Path::window`, a vector of its length, lawful everywhere.
+fn CStep::path(st: CIx, a: CStep(st)) → Path<CIx::src(st).el(), CIx::tgt(st).el()> {
+    match a {
+        CField(fs, i) => Shapes::field_path(fs, i),
+        CElem(x, i) => Path::elem<x.el()>(i),
+        CWindow(x, lo, n) => Path::window<x.el()>(lo, n),
+        CKey(x, k) => Store::key_path<x.el()>(k),
+        CVariant(cs, c) => Shapes::alt_path(cs, c),
+    }
+}
+
+fn CSteps::path(st: CIx, xs: CSteps(st)) → Path<CIx::src(st).el(), CIx::tgt(st).el()> {
+    match xs {
+        CNil(s) => Path::id<s.el()>(),
+        CCons(s, m, t, a, rest) => CStep::path(Cx(s, m), a).then(CSteps::path(Cx(m, t), rest)),
+    }
+}
+
+fn cstep_same(st1: CIx, a: CStep(st1), st2: CIx, b: CStep(st2)) → Bool {
+    match a {
+        CField(_, i) => match b { CField(_, j) => i.same(j), _ => False },
+        CElem(_, i) => match b { CElem(_, j) => i.same(j), _ => False },
+        CWindow(_, lo, n) => match b { CWindow(_, lo2, n2) => lo.same(lo2) && n.same(n2), _ => False },
+        CKey(_, k) => match b { CKey(_, l) => k.same(l), _ => False },
+        CVariant(_, c) => match b { CVariant(_, d) => c.same(d), _ => False },
+    }
+}
+
+fn cstep_apart(st1: CIx, a: CStep(st1), st2: CIx, b: CStep(st2)) → Bool {
+    match a {
+        CField(_, i) => match b { CField(_, j) => !i.same(j), _ => False },
+        CElem(_, i) => match b { CElem(_, j) => Span(i, 1).apart(Span(j, 1)), CWindow(_, lo, n) => Span(i, 1).apart(Span(lo, n)), _ => False },
+        CWindow(_, lo, n) => match b { CElem(_, j) => Span(lo, n).apart(Span(j, 1)), CWindow(_, lo2, n2) => Span(lo, n).apart(Span(lo2, n2)), _ => False },
+        CKey(_, k) => match b { CKey(_, l) => k.apart(l), _ => False },
+        CVariant(_, c) => match b { CVariant(_, d) => !c.same(d), _ => False },
+    }
+}
+
+fn csteps_apart(st1: CIx, xs: CSteps(st1)) → (st2: CIx) → CSteps(st2) → Bool {
+    match xs {
+        CNil(_) => λ st2 ys => False,
+        CCons(s, m, t, a, xr) => λ st2 ys => match ys {
+            CNil(_) => False,
+            CCons(s2, m2, t2, b, yr) => match cstep_same(Cx(s, m), a, Cx(s2, m2), b) {
+                True => csteps_apart(Cx(m, t), xr, Cx(m2, t2), yr),
+                False => cstep_apart(Cx(s, m), a, Cx(s2, m2), b),
+            },
+        },
+    }
+}
+
+// `split_at_mut` under a field: `r.0[0..4]` and `r.0[4..8]`.
+fn two_seqs() → Shapes { SCons(SSeq(SWord), SCons(SSeq(SWord), SNil)) }
+fn split_half(lo: Nat) → CSteps(Cx(SRec(two_seqs()), SVec(4, SWord))) {
+    CCons(SRec(two_seqs()), SSeq(SWord), SVec(4, SWord), CField(two_seqs(), 0), CCons(SSeq(SWord), SVec(4, SWord), SVec(4, SWord), CWindow(SWord, lo, 4), CNil(SVec(4, SWord))))
+}
+theorem code_split_verdict(): csteps_apart(Cx(SRec(two_seqs()), SVec(4, SWord)), split_half(0), Cx(SRec(two_seqs()), SVec(4, SWord)), split_half(4)) = True { refl }
+
+// The negative control: overlapping halves are not found apart.
+theorem code_overlap_verdict(): csteps_apart(Cx(SRec(two_seqs()), SVec(4, SWord)), split_half(0), Cx(SRec(two_seqs()), SVec(4, SWord)), split_half(2)) = False { refl }
+
+// The window reads a vector of its length, by evaluation.
+theorem code_window_read(): CSteps::path(Cx(SRec(two_seqs()), SVec(4, SWord)), split_half(1)).get(Pair([0, 1, 2, 3, 4, 5], Pair([9], refl))).map(vector_entries) = Some([1, 2, 3, 4]) { refl }
+
+// Once two steps are aligned at one open code, apartness is the library's,
+// with no fit: two elements, two windows.
+theorem code_elems_apart(x: Shape, i, j: Nat, v: Span(i, 1).apart(Span(j, 1)).IsTrue()):
+    Apart<List<x.el()>, x.el(), x.el()>(CStep::path(Cx(SSeq(x), x), CElem(x, i)), CStep::path(Cx(SSeq(x), x), CElem(x, j)))
+{
+    PathIn::apart_sound(Path::elem_in<x.el()>(i), Path::elem_in<x.el()>(j), v)
+}
+
+theorem code_windows_apart(x: Shape, lo, n, lo2, n2: Nat, v: Span(lo, n).apart(Span(lo2, n2)).IsTrue()):
+    Apart<List<x.el()>, [x.el(); n], [x.el(); n2]>(CStep::path(Cx(SSeq(x), SVec(n, x)), CWindow(x, lo, n)), CStep::path(Cx(SSeq(x), SVec(n2, x)), CWindow(x, lo2, n2)))
+{
+    PathIn::apart_sound(Path::window_in<x.el()>(lo, n), Path::window_in<x.el()>(lo2, n2), v)
+}
+
+fn CStep::is_seq(st: CIx, b: CStep(st)) → Bool {
+    match b { CElem(_, _) => True, CWindow(_, _, _) => True, CField(_, _) => False, CKey(_, _) => False, CVariant(_, _) => False }
+}
+
+// Inversion at a source code, by a convoy: the impossible arms are refuted
+// on the codes. A `match` at the index itself must still write them
+// (no inversion at an index constructor with payload arguments).
+theorem seq_step_kind(x, B: Shape, b: CStep(Cx(SSeq(x), B))): CStep::is_seq(Cx(SSeq(x), B), b) = True {
+    (match b as λ st z => CIx::src(st) = SSeq(x) → CStep::is_seq(st, z) = True {
+        CElem(_, _) => λ _ => refl,
+        CWindow(_, _, _) => λ _ => refl,
+        CField(_, _) => λ no => absurd(no),
+        CKey(_, _) => λ no => absurd(no),
+        CVariant(_, _) => λ no => absurd(no),
+    })(refl)
+}
