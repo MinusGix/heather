@@ -1584,7 +1584,7 @@ second compiler goes, which is where `native-one-compiler` was heading.
 
 Not yet known: whether the structured-control lowering and the frame proofs
 are generic in the body's invariant, so cited, or must be redone. Reading
-those two proofs opens stage 2.
+those two proofs opens stage 2. (Read: §17.6.)
 
 ### 17.5 Stages
 
@@ -1611,3 +1611,77 @@ the held meaning; stage 5's scratch build is its test.
 
 The experiments' modules (`place_check`, `call_check`, `reference_cells`)
 are deleted when the real modules exist.
+
+### 17.6 Stage 2's language as built (2026-11-25)
+
+`lib/native/bytes_level/` (`issues/bytes-level-language.md` has the log,
+`lib/_tests/native/bytes_level/` the probes).
+
+**The reading.** The structured lowering (`function_ir_lower_structured`)
+is about words and control only: its invariant is registers alone. The
+call, loop and frame proofs of `function_ir_lower_calls` reach memory
+through one clause, `Stack::Trail` in `EmitsOver`, and use it only for
+its stability under the frame's own stores. So they can be cited by a new
+memory layer once that clause is a parameter with that one law. Whether
+to make that generalisation is open (the issue's log states it exactly).
+`StructuredRegion` itself is not reused: its leaves have buffer nodes and
+its meaning is relational. The new language states its own regions with
+the same shapes so that the lowering can reuse the emission and the
+word-and-control theorems.
+
+**The language** (`bytes_level`). Values are words and references
+(`reference_cells`' `Value`, until the heap's move). A routine's ids hold
+words in a FunctionIR valuation, so a wrapped node (`Compute`) runs as
+FunctionIR's evaluator runs it, unedited, and references beside them.
+Nodes: `Compute`, a load and a store of 1, 2, 4 or 8 bytes, a reference's
+load and store, `Offset` and a typed `Copy`. Regions: a leaf, a sequence,
+a branch, a call and a bounded loop, as FunctionIR's. One meaning,
+`run(p, f, args, heap) → Option<Answer>`; `Calls()`; `Refines`. Validity
+checks every id's kind (`Program::valid`), and that check is what replaces
+`placeless`. Placelessness is `run_renames` and `run_words_alike`
+(`bytes_level_renames`), proved once for the language, routine by routine
+and level by level.
+
+**Choices this made**, each the default taken where §17.2–17.3 left it
+open:
+
+- *Which blocks may be written is part of the heap* (`Memory`: the heap
+  and `written`). With references, which block a store hits is dynamic,
+  so no static check can stand for "the stores were inside the lending";
+  a store into a block the run may not write has no meaning. It is fixed
+  for a run, as the blocks are, and folds into the heap type when that
+  moves beside `Injected`.
+- *Every memory operation is a take or a put of a piece* (bytes and the
+  references wholly among them, at offsets of their own). A word's load
+  is a take holding no reference. A reference's load is a take of eight
+  bytes holding one at its start. A store is a put of bytes, a
+  reference's store a put of eight zero bytes holding it, and a typed
+  copy a take and a put. So there are two site facts and two renaming
+  lemmas, and each lowering lemma will be one `Injected` lemma per
+  primitive.
+- *Canonical by construction*: a reference's bytes are zero
+  (`Memory::Canonical`, kept by take, put, store and copy). That entries
+  are apart from each other is kept by construction too but not yet
+  stated; the passes' congruence needs it (`issues/bytes-level-passes.md`).
+- *`Refines` compares heaps as they read* (`Memory::Same`: the same bytes,
+  the same entries, the same blocks writable). There is no function
+  extensionality, and a heap's blocks are a function.
+- *Widths stay FunctionIR's*: validity checks kinds, not the widths of
+  word nodes, which the leaf's lowering tracks as it does today.
+- *`Offset` adds a word as a number*: a reference below its block's start
+  is not expressible yet. A window is carved forward from a base.
+- *A call of the system* is a callee kind (`Callee::System`) over an empty
+  `Syscall`. Where the world is designed its cases land there, answered by
+  its model, which `Calls` then carries.
+
+**Cost** (shapes, `--timings` per declaration). Each module's own
+declarations check in well under a second in all, and none is costly; the
+renaming proof is linear in the language's constructors. `run` on the
+probes is a few thousand kernel steps per run, linear in the nodes
+executed.
+
+**What follows.** The lowering under `Site::Meets`
+(`issues/bytes-level-lowering.md`), the translation of FunctionIR programs
+and the comparison over `crates/linked`'s exports
+(`issues/bytes-level-translation.md`), and the passes
+(`issues/bytes-level-passes.md`).
