@@ -531,6 +531,49 @@ explicit memory model, with its provenance questions, and is deferred.
 - **Drop** means nothing, so values are affine by default and a leak is
   never unsound. A capability that must not be dropped says so in its type.
 
+**Built (2026-11-25, `ownership-copy-clone`).** What the build settled:
+
+- *The classes* (`lib/std/core/clone.hthr`) are the relation-indexed chain
+  of `algebra_rel`: `Clone<A>` is the operation alone, `CloneRel<A>(same)`
+  adds `clone(x) ≈ x` at the type's own equivalence, and `ExactClone<A>` is
+  `CloneRel` at `RelId`, so its law is `clone(x) = x` by unfolding
+  (`ExactClone::clone_eq`, which `simp_only` reads at an open carrier and
+  a concrete one). The note's "exact clone" is kept as the name: `Exact` is
+  already the library's word for "loses nothing" (`Stored::Exact`), and an
+  adjective on the parent is how a chain member is spelled (`CommMonoid`).
+  Drop has no class, said where the classes are declared.
+- *`Copy` is indexed by a representation*, `Copy<A>(rep)`
+  (`lib/lang/facts/copy.hthr`): an `rt` code at a table (`Rep::Code`), a
+  `Stored` codec (`Rep::Bytes`), or nothing (`Rep::Absent`, erased data).
+  Over codes the statement is `Ty::Copy` and the judgment's question
+  `Ty::copies`, proved to reflect it; an instance at a code is the
+  decider's verdict and gives it back (`Copy::of_code`,
+  `Copy::code_copies`), so the two askers have one answer. The decider
+  agrees with `Ty::holds_bytes` at every code that names no table entry,
+  never contradicts its "may hold" at a record, and at an enum agrees where
+  the payload's slots copy (an enum with a buffer slot is where
+  `holds_bytes` is the wrong one: `holds-bytes-enum-payload`).
+- *Every codec copies* (`Stored::copies`: a copy of a value's bytes reads
+  the value), and the negative control is that **no codec holds an
+  unbounded type** (`Stored::unbounded`, by pigeonhole over the codec's
+  bytes): not a byte list, not a store (`Store::no_codec`,
+  `lib/std/data/store_copy.hthr`). A key copies at its code, a record of two
+  counts. A `Count` copies though `Nat` is unbounded, because its code
+  holds only what fits a word: the code's meaning, not the codec's.
+- *Copy derives the exact clone*: a representation read back is the value
+  (`Rep::copy_eq`), so `Copy::exact_clone` builds `ExactClone` from a
+  copyable representation, compiled as the copy of its words. Words, `Bool`,
+  counts, keys and `Erased<A>` whatever `A` are derived so; a laid record
+  by `generate laid_copy("T")` beside it and two `instance` lines, because a
+  generator cannot yet register an instance at a named carrier
+  (`generated-instance-at-named-carrier`; the join into `laid` is
+  `laid-publishes-copy`). An exact clone does not need `Copy`: a list's
+  and a store's clones are exact though neither copies.
+- *Slack*: the word map registers `CloneRel<WordMap>(WordMap::SameRows)`, a
+  clone that copies only the live rows and zeroes the rest, equal under
+  `WordMap::abs` and provably not exact
+  (`lib/native/runtime/word_map_clone.hthr`).
+
 ### 10.9 Closures, and what concurrency asks now
 
 A closure is a record of its captures and code, so it is the stored-borrow
@@ -573,7 +616,7 @@ Read off the code on 2026-11-24.
 | Footprints | `Span`, `SpanSet` with deciders (`span_set.hthr`); the separation algebra over them, fractions, an access map and the store frame theorem (`docs/library/separation-algebra-design.md`, built 2026-11-24 in the first wave). |
 | `mut` in the surface | A parser desugaring; the AST's `Param` has no mode, and a `mut self` method is known by its `Mutated` result type alone. `&` is an infix token only. **Since built** (`ownership-parameter-modes`, `sequencing-surface-design.md` §24): `Param::mode`, `x: &T` and `x: &mut T` on any parameter, `&mut place` at a call, the modes readable by a generator (`tactic::modes`). |
 | Erased parameters | A parameter whose type is a proposition (`∥P∥`) or `Erased<A>` is no word of the code wherever it stands, in a function of a laid record and one of a `Bytes(n)`; a call's erased arguments are dropped at any position. The arena's `read` and `store` are `runtime fn`s keeping their found proofs (`runtime-erased-parameters`, §13 item 8). A plain function of words, a span writer, and a compiled caller of a function that takes one are refused by name (`runtime-erased-pure-shadow`). |
-| `Copy`, `Clone` | No class. |
+| `Copy`, `Clone` | No class. **Since built** (`ownership-copy-clone`, §10.8): `Clone`, `CloneRel`, `ExactClone`; `Copy<A>(rep)` over codes, codecs and erased data, with the decider on `Ty`. |
 
 In flux, and to be worked around rather than through: the loop combinator's
 rounds (`loops-on-one-combinator`), and one control language for `FTm` and
