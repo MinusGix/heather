@@ -1013,6 +1013,24 @@ round stays green. (`Repeat` was taken: it is a native statement's.)
   The native tools (`native_build`) are the counted loop's only
   statement-level producer, so this decides how they leave `Loop` in
   round C.
+- *Decided (Minus, 2026-11-25): every loop carries its measure.* The
+  obligation is on the primitive (vision principle 13). The FunctionIR
+  `Until`, at both levels, and the runtime node `Tm::Loop` each carry a
+  measure over their state. Its decrease on every pass that goes round is
+  proved where the loop is built: by evaluation where the measure and the
+  step are closed, by a carried proof otherwise.
+  - Definedness is then generic at every level: `until_halts` follows from
+    the carried measure by `until_defined_of_measure`. Neither the
+    compile's correctness nor the ELF theorem takes a hypothesis, and the
+    Rust emitter's call does not change.
+  - Not (a): pure regions stay total, and a program that runs forever has
+    the statement-level `Repeat`. Not (b): that puts the obligation on the
+    program rather than on the loop that needs it.
+  - The counted loop is the helper. A counter word is its own measure, so
+    `native_build`'s loops move onto `Until` with a counter in their state,
+    and `Loop` goes as planned.
+  - Round D: the node carries its measure, and `rt_lower_defined` stays
+    generic.
 - *Rust.* The region printer reads tag 9. The allocator does not, since no
   statement reaches it with an `Until`.
 
