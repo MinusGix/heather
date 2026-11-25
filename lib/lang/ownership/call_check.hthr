@@ -1,15 +1,17 @@
 // The ownership checker over a function and the functions it calls: write
-// views held across statements, read views, calls that lend a write view or
-// answer a read view, and the once-theorem over all of them
-// (docs/language/ownership-design.md §15.3, §15.6;
+// views held across statements, read views, branches that join, calls that
+// lend a write view, answer a read view placed by their signature, or
+// consume a collection of stored write references, and the once-theorem
+// over all of them (docs/language/ownership-design.md §15.3, §15.6;
 // issues/ownership-checker-call-and-write-view.md,
 // issues/ownership-checker-loans-and-joins.md).
 //
-// A function takes one list parameter, to read or to write (its `Mode`),
+// A function takes one list parameter, to read or to write, or `n` write
+// references stored in a collection, lent into an erased owner (its `Mode`),
 // and words, and answers a word or a read view of its parameter. The
 // parameter is a place, the function's one object: a write to it is
-// `x := x.set(i, v)` in the meaning. Its body binds, in order, views and
-// words:
+// `x := x.set(i, v)` in the meaning. Its body is a tree of statements and
+// branches (`Body`); a statement binds, in order, views and words:
 //
 // - `Set(i, v)` is `x[i] := v`; `Get(z, i)` reads `x[i]`.
 // - `View(t, md, lo, n)` is `let t = &x[lo..lo+n]` (`md = Reads`) or
@@ -26,6 +28,9 @@
 //   write views `ts` stored in a collection and given to `g`, which
 //   consumes them, taking `x` as an erased in-out owner.
 //
+// `If(test, a, b, rest)` runs the arm the test picks, then `rest`; the arms
+// bind as many words and views as each other.
+//
 // `mean_fn` is the meaning: lists are values, a view is its window's value,
 // and a write view is its value and an erased slot, the place it goes back
 // to (§15.2). Write-back is eager: after `Put` or `CallMut` the place is
@@ -34,29 +39,33 @@
 // of the file, a base and a length) with no copy; a view is the reference
 // narrowed, a write through it is a store in place, and a view a callee
 // answers is two words relative to the reference it was given, which the
-// caller rebases. Both are stated over a `World`, the meanings and runs of
-// the functions called, so a body's meaning and run never see a callee's
-// body.
+// caller rebases. A lending function's run is given the references it is
+// lent and no reference to its owner. Both are stated over a `World`, the
+// meanings and runs of the functions called, so a body's meaning and run
+// never see a callee's body.
 //
 // `check_fn` reads the signatures only. Its state is the one object's live
-// views, each with its mode and the region it covers (a window, or the
-// whole object for a view a callee answered): a place is `out` while a
-// live write view covers it and `frozen` while a read view does. An access
-// to write (a `Set`, a new write view) needs every live view apart from it;
-// an access to read (a `Get`, a new read view) needs every live write view
-// apart from it: decided at literals, deferred as a residual otherwise. A
-// write view itself is written through freely; a call defers its callee's
-// precondition.
+// views, each with its mode and the region it covers (a window, the whole
+// object, or a union from a join): a place is `out` while a live write view
+// covers it and `frozen` while a read view does. An access to write (a
+// `Set`, a new write view) needs every live view apart from it; an access to
+// read (a `Get`, a new read view) needs every live write view apart from it:
+// decided at literals, deferred as a residual otherwise. A write view itself
+// is written through freely; a call defers its callee's precondition; a
+// join is the meet of the arms' live views, and an arm's residuals are owed
+// under its test.
 //
-// `FnSafe(sig, pre, mean, run)` is what a function promises a caller: from
-// any file, a reference in bounds and words meeting `pre`, the run answers
-// the meaning's word, its reference's window holds the meaning's value
-// afterwards and the file is unchanged outside it, and a view it answers
-// lies inside the reference and reads the meaning's view value.
-// `check_sound` gives `FnSafe` of a function whose verdict is `Some(rs)`,
-// whose residuals hold under its precondition, in any world whose functions
-// it calls are `FnSafe`. `prog_sound` ties the knot: in the world of a
-// program at any depth of calls, every function is `FnSafe`.
+// `FnSafe(sig, pre, post, mean, run)` is what a function promises a caller:
+// from any file, a reference in bounds, references lent as its mode says and
+// words meeting `pre`, the run answers the meaning's word, which meets
+// `post`; its reference's window holds the meaning's value afterwards and
+// the file is unchanged outside it (and, for a lending function, outside
+// the references it was lent); and a view it answers lies in its
+// signature's region and reads the meaning's view value. `check_sound`
+// gives `FnSafe` of a function whose verdict is `Some(rs)`, whose residuals
+// hold under its precondition, in any world whose functions it calls are
+// `FnSafe`. `prog_sound` ties the knot: in the world of a program at any
+// depth of calls, every function is `FnSafe`.
 import logic;
 import bool;
 import nat;

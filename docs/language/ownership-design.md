@@ -1294,8 +1294,8 @@ with `clobber_control` (the run reads 9, the meaning 6).
 rest)`, the arms binding as many words and views as each other (an arm's
 words are the join's values, as a phi's). The checker joins the arms'
 places by the meet above; a residual of an arm is `Under(test, arm, owed)`,
-which holds where the test answering otherwise or the owed holding, so the
-residual is closed data whose hypothesis is the test. The proof needed
+which holds wherever the test gives the other answer or the owed holds, so
+the residual is closed data whose hypothesis is the test. The proof needed
 nothing per arm that survives the join: the arm taken has the invariant at
 its own places (by the same induction), and `Sim::weaken` gives it at the
 meet's, since the meet only drops views and a union region covers each
@@ -1394,7 +1394,9 @@ Still open:
 3. That the inference rule's answer checks whenever any annotation does
    (§15.3): argued, to be proved with the judgment.
 4. Whether an owner may read a part it has lent to write, which eager
-   write-back would make sound. Kept refused at first.
+   write-back would make sound. Kept refused at first. (The fourth
+   experiment proves it sound, `Sim::owner_reads`: with eager write-back
+   the owner's buffer holds the viewer's value inside the out window.)
 5. The order in which the levels are built and the customers ported.
 
 ### 15.8 What a signature records
