@@ -6,25 +6,31 @@
 // data, compared by evaluation, where a `Path` (`path.hthr`) is a pair of
 // functions and cannot be compared at all.
 //
-// - **Untyped steps, a model that denotes them.** A step does not carry its
-//   source and target types: a field step goes from a record to one of its
-//   fields, and an inductive family indexed by types is a universe above
-//   what the kernel evaluates cheaply. A `StepModel<S>` gives each step with
-//   its atoms read (a `Sel`) a path in one value type `S`, in which a step
-//   that does not fit the value reads nothing; `Steps::denote` composes
-//   them by `Path::then`. Its laws (`StepModelLaws`) are what the decider's
-//   soundness reads of a model: each step lawful where what it writes fits
-//   (`PathLawsOn`), every write keeping every step's fit, and two steps
-//   whose selections are apart `Apart`. `value_steps.hthr` is the model over
-//   a universe of values, built from the library's paths.
+// - **Untyped steps, a total model that denotes them.** A step does not
+//   carry its source and target types: a field step goes from a record to
+//   one of its fields, and an inductive family indexed by types is a
+//   universe above what the kernel evaluates cheaply. A `StepModel<S>`
+//   gives each step with its atoms read (a `Sel`) a total read `at` and a
+//   total modification `over` of one value type `S`, a Boolean "this step
+//   fits this owner", and a relative fit `like` (what is written there is
+//   like what was read there: for a typed value its code, for a window its
+//   length). `Steps::at` and `Steps::over` compose them. Its laws
+//   (`StepModelLaws`) are what the decider's soundness reads of a model:
+//   where a step fits, a modification whose result is like what was read
+//   is read back, two are one, and a modification reads only what was read;
+//   where it does not fit it modifies nothing; every modification keeps an
+//   owner like what it was like; and two steps whose selections are apart
+//   are apart (`ApartAt`). Nothing is read through an `Option` and no
+//   inhabitant is asked (docs/language/ownership-design.md §21.1).
 // - **The decider** `Steps::apart(xs, ys)` walks the common prefix and
 //   compares the first steps that differ: no (`None`: one list is a prefix
 //   of the other, or the first difference overlaps or mixes kinds), yes
 //   (`Some(Nil)`), or yes owing obligations over the atoms (`Some(rs)`)
 //   where an index or a key is open. It reads no value and no word.
 // - **Sound** (`Steps::apart_sound`): a verdict and its obligations holding
-//   at the words give `Apart` of the two denotations, by `Apart::under_on`
-//   down the common prefix and `Apart::then_both` after the difference.
+//   at the words give the two places apart (`Steps::Apart`), by
+//   `ApartAt::under` down the common prefix and `ApartAt::then_both` after
+//   the difference.
 // - **Where it is complete**: on closed steps it never owes anything
 //   (`Steps::apart_closed`), and two step lists that first differ at a pair
 //   of steps whose closed selections are apart are found apart
@@ -41,7 +47,6 @@ import option;
 import list;
 import span_set;
 import store;
-import path;
 import store_path;
 import atom;
 
@@ -117,17 +122,46 @@ fn Sel::apart(self a, b: Sel) → Bool {
 // ---------------------------------------------------------------------------
 // A model, and the denotation
 
-record StepModel<S> { path: Sel → Path<S, S>, fits: Sel → S → Bool }
+// Each selection as a total read and a total modification of one value
+// type `S`; whether the step fits an owner; and whether a value written
+// there is like the value read there (for a typed value, the same code; for
+// a window, the same length).
+record StepModel<S> { at: Sel → S → S, over: Sel → (S → S) → S → S, fits: Sel → S → Bool, like: Sel → S → S → Bool }
 
-record StepModelLaws<S>(m: StepModel<S>) {
-    laws: (a: Sel) → PathLawsOn<S, S>(m.path(a), m.fits(a)),
-    keeps: (a, b: Sel) → Path::KeepsFit(m.path(b), m.fits(a)),
-    apart: (a, b: Sel) → a.apart(b).IsTrue() → Apart<S, S, S>(m.path(a), m.path(b)),
+// Two places of one owner apart: a modification through either leaves the
+// other's read, and the two modifications commute.
+record ApartAt<S>(at1: S → S, over1: (S → S) → S → S, at2: S → S, over2: (S → S) → S → S) {
+    left_after_right: (g: S → S) → (s: S) → at1(over2(g, s)) = at1(s),
+    right_after_left: (g: S → S) → (s: S) → at2(over1(g, s)) = at2(s),
+    commute: (f, g: S → S) → (s: S) → over1(f, over2(g, s)) = over2(g, over1(f, s)),
 }
 
-// The steps from the root, the first outermost.
-fn Steps::denote<S>(m: StepModel<S>, ws: List<Nat>, xs: List<Step>) → Path<S, S> {
-    match xs { Nil => Path::id<S>(), Cons(a, rest) => m.path(a.sel(ws)).then(Steps::denote(m, ws, rest)) }
+// The laws hold where the step fits, relative to what it read there. A step
+// that does not fit modifies nothing; what it reads there is the model's
+// own (the soundness below never reads it).
+record StepModelLaws<S>(m: StepModel<S>) {
+    still: (a: Sel) → (g: S → S) → (s: S) → m.fits(a, s) = False → m.over(a, g, s) = s,
+    over_at: (a: Sel) → (g: S → S) → (s: S) → m.fits(a, s) = True → m.like(a, m.at(a, s), g(m.at(a, s))) = True → m.at(a, m.over(a, g, s)) = g(m.at(a, s)),
+    over_over: (a: Sel) → (g, h: S → S) → (s: S) → m.fits(a, s) = True → m.like(a, m.at(a, s), g(m.at(a, s))) = True →
+        m.like(a, m.at(a, s), h(g(m.at(a, s)))) = True → m.over(a, h, m.over(a, g, s)) = m.over(a, λ x => h(g(x)), s),
+    over_read: (a: Sel) → (g, h: S → S) → (s: S) → g(m.at(a, s)) = h(m.at(a, s)) → m.over(a, g, s) = m.over(a, h, s),
+    like_refl: (a: Sel) → (x: S) → m.like(a, x, x) = True,
+    keeps: (a, b: Sel) → (x, s: S) → m.like(a, x, s) = True → (g: S → S) → m.like(a, x, m.over(b, g, s)) = True,
+    apart: (a, b: Sel) → a.apart(b).IsTrue() → ApartAt<S>(m.at(a), m.over(a), m.at(b), m.over(b)),
+}
+
+// The steps from the root, the first outermost: read, and modified.
+fn Steps::at<S>(m: StepModel<S>, ws: List<Nat>, xs: List<Step>, s: S) → S {
+    match xs { Nil => s, Cons(a, rest) => Steps::at(m, ws, rest, m.at(a.sel(ws), s)) }
+}
+
+fn Steps::over<S>(m: StepModel<S>, ws: List<Nat>, xs: List<Step>, g: S → S, s: S) → S {
+    match xs { Nil => g(s), Cons(a, rest) => m.over(a.sel(ws), λ x => Steps::over(m, ws, rest, g, x), s) }
+}
+
+// Two places apart, as the denotation of their steps.
+fn Steps::Apart<S>(m: StepModel<S>, ws: List<Nat>, xs, ys: List<Step>) → Type {
+    ApartAt<S>(λ s => Steps::at(m, ws, xs, s), λ g s => Steps::over(m, ws, xs, g, s), λ s => Steps::at(m, ws, ys, s), λ g s => Steps::over(m, ws, ys, g, s))
 }
 
 // ---------------------------------------------------------------------------
@@ -240,49 +274,118 @@ theorem Step::apart_sound(self a, b: Step, ws: List<Nat>, rs: List<Obligation>, 
     })(ok)
 }
 
-// Steps after a first step: their writes keep every fit, as the first
-// step's do.
-theorem Steps::keeps_fit<S>(m: StepModel<S>, ml: StepModelLaws<S>(m), ws: List<Nat>, f: Sel, a: Step, rest: List<Step>):
-    Path::KeepsFit(Steps::denote(m, ws, Cons(a, rest)), m.fits(f))
-{
-    Path::then_keeps_fit(m.path(a.sel(ws)), Steps::denote(m, ws, rest), m.fits(f), ml.keeps(f, a.sel(ws)))
+// A modification through `xs` keeps an owner like what it was like at `f`.
+fn Steps::Keeps<S>(m: StepModel<S>, ws: List<Nat>, f: Sel, xs: List<Step>) → Type {
+    (x, s: S) → m.like(f, x, s) = True → (g: S → S) → m.like(f, x, Steps::over(m, ws, xs, g, s)) = True
 }
 
-// Where the decider answers yes, neither list is empty: both keep every fit.
+// Steps after a first step keep it, as the first step's modification does.
+theorem Steps::keeps<S>(m: StepModel<S>, ml: StepModelLaws<S>(m), ws: List<Nat>, f: Sel, a: Step, rest: List<Step>): Steps::Keeps(m, ws, f, Cons(a, rest)) {
+    λ x s h g => ml.keeps(f, a.sel(ws), x, s, h, λ y => Steps::over(m, ws, rest, g, y))
+}
+
+// Where the decider answers yes, neither list is empty: both keep it.
 theorem Steps::verdict_keeps<S>(m: StepModel<S>, ml: StepModelLaws<S>(m), ws: List<Nat>, f: Sel, xs: List<Step>):
-    (ys: List<Step>) → (rs: List<Obligation>) → Steps::apart(xs, ys) = Some(rs) →
-        And<Path::KeepsFit(Steps::denote(m, ws, xs), m.fits(f)), Path::KeepsFit(Steps::denote(m, ws, ys), m.fits(f))>
+    (ys: List<Step>) → (rs: List<Obligation>) → Steps::apart(xs, ys) = Some(rs) → And<Steps::Keeps(m, ws, f, xs), Steps::Keeps(m, ws, f, ys)>
 {
     match xs {
         Nil => λ ys rs no => absurd(no),
         Cons(a, xr) => λ ys => match ys {
             Nil => λ rs no => absurd(no),
-            Cons(b, yr) => λ rs _ => And(Steps::keeps_fit(m, ml, ws, f, a, xr), Steps::keeps_fit(m, ml, ws, f, b, yr)),
+            Cons(b, yr) => λ rs _ => And(Steps::keeps(m, ml, ws, f, a, xr), Steps::keeps(m, ml, ws, f, b, yr)),
         },
     }
 }
 
+// A read under the step after a modification under it that leaves the
+// inner read.
+theorem ApartAt::under_read<S>(m: StepModel<S>, ml: StepModelLaws<S>(m), a: Sel, {at1: S → S}, {over2: (S → S) → S → S}, inner: (g: S → S) → (s: S) → at1(over2(g, s)) = at1(s),
+    k2: (x, s: S) → m.like(a, x, s) = True → (g: S → S) → m.like(a, x, over2(g, s)) = True, g: S → S, s: S):
+    at1(m.at(a, m.over(a, λ x => over2(g, x), s))) = at1(m.at(a, s))
+{
+    (match m.fits(a, s) as λ c => m.fits(a, s) = c → at1(m.at(a, m.over(a, λ x => over2(g, x), s))) = at1(m.at(a, s)) {
+        True => λ e => {
+            let r = m.at(a, s);
+            let back: (m.at(a, m.over(a, λ x => over2(g, x), s)) = over2(g, r)) = ml.over_at(a, λ x => over2(g, x), s, e, k2(r, r, ml.like_refl(a, r), g));
+            trans(cong_fn(at1, back), inner(g, r))
+        },
+        False => λ e => cong_fn(λ (t: S) => at1(m.at(a, t)), ml.still(a, λ x => over2(g, x), s, e)),
+    })(refl)
+}
+
+theorem ApartAt::under_commute<S>(m: StepModel<S>, ml: StepModelLaws<S>(m), a: Sel, {over1, over2: (S → S) → S → S},
+    inner: (f, g: S → S) → (s: S) → over1(f, over2(g, s)) = over2(g, over1(f, s)),
+    k1: (x, s: S) → m.like(a, x, s) = True → (g: S → S) → m.like(a, x, over1(g, s)) = True,
+    k2: (x, s: S) → m.like(a, x, s) = True → (g: S → S) → m.like(a, x, over2(g, s)) = True, f, g: S → S, s: S):
+    m.over(a, λ x => over1(f, x), m.over(a, λ x => over2(g, x), s)) = m.over(a, λ x => over2(g, x), m.over(a, λ x => over1(f, x), s))
+{
+    (match m.fits(a, s) as λ c => m.fits(a, s) = c →
+            m.over(a, λ x => over1(f, x), m.over(a, λ x => over2(g, x), s)) = m.over(a, λ x => over2(g, x), m.over(a, λ x => over1(f, x), s)) {
+        True => λ e => {
+            let r = m.at(a, s);
+            let lg: (m.like(a, r, over2(g, r)) = True) = k2(r, r, ml.like_refl(a, r), g);
+            let lf: (m.like(a, r, over1(f, r)) = True) = k1(r, r, ml.like_refl(a, r), f);
+            let lfg: (m.like(a, r, over1(f, over2(g, r))) = True) = k1(r, over2(g, r), lg, f);
+            let lgf: (m.like(a, r, over2(g, over1(f, r))) = True) = k2(r, over1(f, r), lf, g);
+            let left: (m.over(a, λ x => over1(f, x), m.over(a, λ x => over2(g, x), s)) = m.over(a, λ x => over1(f, over2(g, x)), s)) =
+                ml.over_over(a, λ x => over2(g, x), λ x => over1(f, x), s, e, lg, lfg);
+            let right: (m.over(a, λ x => over2(g, x), m.over(a, λ x => over1(f, x), s)) = m.over(a, λ x => over2(g, over1(f, x)), s)) =
+                ml.over_over(a, λ x => over1(f, x), λ x => over2(g, x), s, e, lf, lgf);
+            trans(left, trans(ml.over_read(a, λ x => over1(f, over2(g, x)), λ x => over2(g, over1(f, x)), s, inner(f, g, r)), sym(right)))
+        },
+        False => λ e => {
+            let sg: (m.over(a, λ x => over2(g, x), s) = s) = ml.still(a, λ x => over2(g, x), s, e);
+            let sf: (m.over(a, λ x => over1(f, x), s) = s) = ml.still(a, λ x => over1(f, x), s, e);
+            trans(cong_fn(λ (t: S) => m.over(a, λ x => over1(f, x), t), sg), trans(sf, trans(sym(sg), cong_fn(λ (t: S) => m.over(a, λ x => over2(g, x), t), sym(sf)))))
+        },
+    })(refl)
+}
+
+// Under one step: two places apart inside, each keeping what the step read
+// like itself, are apart after it. Where the step does not fit, neither
+// modification does anything.
+theorem ApartAt::under<S>(m: StepModel<S>, ml: StepModelLaws<S>(m), a: Sel, {at1, at2: S → S}, {over1, over2: (S → S) → S → S}, inner: ApartAt<S>(at1, over1, at2, over2),
+    k1: (x, s: S) → m.like(a, x, s) = True → (g: S → S) → m.like(a, x, over1(g, s)) = True,
+    k2: (x, s: S) → m.like(a, x, s) = True → (g: S → S) → m.like(a, x, over2(g, s)) = True):
+    ApartAt<S>(λ s => at1(m.at(a, s)), λ g s => m.over(a, λ x => over1(g, x), s), λ s => at2(m.at(a, s)), λ g s => m.over(a, λ x => over2(g, x), s))
+{
+    ApartAt(
+        λ g s => ApartAt::under_read(m, ml, a, inner.left_after_right, k2, g, s),
+        λ g s => ApartAt::under_read(m, ml, a, inner.right_after_left, k1, g, s),
+        λ f g s => ApartAt::under_commute(m, ml, a, inner.commute, k1, k2, f, g, s),
+    )
+}
+
+// After two steps apart, whatever follows each.
+theorem ApartAt::then_both<S>(m: StepModel<S>, a, b: Sel, ap: ApartAt<S>(m.at(a), m.over(a), m.at(b), m.over(b)), at1, at2: S → S, over1, over2: (S → S) → S → S):
+    ApartAt<S>(λ s => at1(m.at(a, s)), λ g s => m.over(a, λ x => over1(g, x), s), λ s => at2(m.at(b, s)), λ g s => m.over(b, λ x => over2(g, x), s))
+{
+    ApartAt(
+        λ g s => cong_fn(at1, ap.left_after_right(λ x => over2(g, x), s)),
+        λ g s => cong_fn(at2, ap.right_after_left(λ x => over1(g, x), s)),
+        λ f g s => ap.commute(λ x => over1(f, x), λ x => over2(g, x), s),
+    )
+}
+
 // The decider is sound: a verdict, and its obligations holding at the
-// words, give the two denotations apart.
+// words, give the two places apart.
 theorem Steps::apart_sound<S>(m: StepModel<S>, ml: StepModelLaws<S>(m), ws: List<Nat>, xs: List<Step>):
-    (ys: List<Step>) → (rs: List<Obligation>) → Steps::apart(xs, ys) = Some(rs) → Obligation::All(rs, ws) →
-        Apart<S, S, S>(Steps::denote(m, ws, xs), Steps::denote(m, ws, ys))
+    (ys: List<Step>) → (rs: List<Obligation>) → Steps::apart(xs, ys) = Some(rs) → Obligation::All(rs, ws) → Steps::Apart(m, ws, xs, ys)
 {
     match xs {
         Nil => λ ys rs no _ => absurd(no),
         Cons(a, xr) => λ ys => match ys {
             Nil => λ rs no _ => absurd(no),
             Cons(b, yr) => λ rs => (match a.same(b) as λ c => a.same(b) = c → (match c { True => Steps::apart(xr, yr), False => a.apart(b) }) = Some(rs) →
-                    Obligation::All(rs, ws) → Apart<S, S, S>(Steps::denote(m, ws, Cons(a, xr)), Steps::denote(m, ws, Cons(b, yr))) {
+                    Obligation::All(rs, ws) → Steps::Apart(m, ws, Cons(a, xr), Cons(b, yr)) {
                 True => λ e ok hold => {
                     let same: (a = b) = a.same_sound(b, e);
                     let fit = Steps::verdict_keeps(m, ml, ws, a.sel(ws), xr, yr, rs, ok);
-                    let here: Apart<S, S, S>(m.path(a.sel(ws)).then(Steps::denote(m, ws, xr)), m.path(a.sel(ws)).then(Steps::denote(m, ws, yr))) =
-                        Apart::under_on(m.path(a.sel(ws)), m.fits(a.sel(ws)), ml.laws(a.sel(ws)), Steps::apart_sound(m, ml, ws, xr, yr, rs, ok, hold), fit.left, fit.right);
-                    j(same, λ c _ => Apart<S, S, S>(m.path(a.sel(ws)).then(Steps::denote(m, ws, xr)), m.path(c.sel(ws)).then(Steps::denote(m, ws, yr))), here)
+                    let here: Steps::Apart(m, ws, Cons(a, xr), Cons(a, yr)) = ApartAt::under(m, ml, a.sel(ws), Steps::apart_sound(m, ml, ws, xr, yr, rs, ok, hold), fit.left, fit.right);
+                    j(same, λ c _ => Steps::Apart(m, ws, Cons(a, xr), Cons(c, yr)), here)
                 },
-                False => λ e ok hold =>
-                    Apart::then_both(ml.apart(a.sel(ws), b.sel(ws), a.apart_sound(b, ws, rs, ok, hold)), Steps::denote(m, ws, xr), Steps::denote(m, ws, yr)),
+                False => λ e ok hold => ApartAt::then_both(m, a.sel(ws), b.sel(ws), ml.apart(a.sel(ws), b.sel(ws), a.apart_sound(b, ws, rs, ok, hold)),
+                    λ s => Steps::at(m, ws, xr, s), λ s => Steps::at(m, ws, yr, s), λ g s => Steps::over(m, ws, xr, g, s), λ g s => Steps::over(m, ws, yr, g, s)),
             })(refl)
         },
     }
@@ -371,7 +474,7 @@ theorem Steps::apart_at_difference(pre: List<Step>, a, b: Step, xr, yr: List<Ste
 theorem Step::apart_complete(self a, b: Step, ca: a.closed() = True, cb: b.closed() = True, verdict: a.sel(Nil).apart(b.sel(Nil)) = True): a.apart(b) = Some(Nil) {
     (match a as λ x => x.closed() = True → x.sel(Nil).apart(b.sel(Nil)) = True → x.apart(b) = Some(Nil) {
         SField(i) => λ _ => (match b as λ y => y.closed() = True → SField(i).sel(Nil).apart(y.sel(Nil)) = True → SField(i).apart(y) = Some(Nil) {
-            SField(k) => λ _ v => j(sym(v), λ t _ => t.then(Some(Nil<Obligation>)) = Some(Nil<Obligation>), refl),
+            SField(_) => λ _ v => j(sym(v), λ t _ => t.then(Some(Nil<Obligation>)) = Some(Nil<Obligation>), refl),
             SElem(_) => λ _ no => absurd(no), SWindow(_, _) => λ _ no => absurd(no), SKey(_, _) => λ _ no => absurd(no), SVariant(_) => λ _ no => absurd(no),
         })(cb),
         SElem(i) => λ ci => (match b as λ y => y.closed() = True → SElem(i).sel(Nil).apart(y.sel(Nil)) = True → SElem(i).apart(y) = Some(Nil) {
@@ -404,7 +507,7 @@ theorem Step::apart_complete(self a, b: Step, ca: a.closed() = True, cb: b.close
             })(cb)
         },
         SVariant(c) => λ _ => (match b as λ y => y.closed() = True → SVariant(c).sel(Nil).apart(y.sel(Nil)) = True → SVariant(c).apart(y) = Some(Nil) {
-            SVariant(d) => λ _ v => j(sym(v), λ t _ => t.then(Some(Nil<Obligation>)) = Some(Nil<Obligation>), refl),
+            SVariant(_) => λ _ v => j(sym(v), λ t _ => t.then(Some(Nil<Obligation>)) = Some(Nil<Obligation>), refl),
             SField(_) => λ _ no => absurd(no), SElem(_) => λ _ no => absurd(no), SWindow(_, _) => λ _ no => absurd(no), SKey(_, _) => λ _ no => absurd(no),
         })(cb),
     })(ca, verdict)

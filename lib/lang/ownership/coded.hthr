@@ -60,6 +60,7 @@ import list_path;
 import store_path;
 import atom;
 import steps;
+import value_steps;
 
 // ---------------------------------------------------------------------------
 // Codes, and their decision
@@ -413,7 +414,7 @@ fn mean_word(tys: Nat → Type, strs: Strs(tys), w: World(tys), f: Func, objs: L
 //
 // Each selection is a `Path<Dyn, Dyn>`: its read the part with its code
 // where the step fits the owner's code (`None` otherwise), its write the
-// meaning's modification. That instantiates `StepModel<Dyn>`. Its laws do
+// meaning's modification. That instantiates `PathModel<Dyn>`. Its laws do
 // not hold for any fit: `StepModelLaws` asks `PathLawsOn(path(a), fits(a))`
 // with `fits(a): Dyn → Bool` a property of the written value alone, and
 // `reads_fit` makes every value read through the step fit. An element of a
@@ -486,7 +487,7 @@ fn Dyn::fits(tys: Nat → Type, sel: Sel, a, w: Dyn(tys)) → Bool {
 }
 
 // The absolute model: no fit over the written value alone makes it lawful.
-fn Dyn::model(tys: Nat → Type, strs: Strs(tys)) → StepModel<Dyn(tys)> { StepModel<Dyn(tys)>(λ sel => Dyn::path(tys, strs, sel), λ _ _ => True) }
+fn Dyn::model(tys: Nat → Type, strs: Strs(tys)) → PathModel<Dyn(tys)> { PathModel<Dyn(tys)>(λ sel => Dyn::path(tys, strs, sel), λ _ _ => True) }
 
 fn Dyn::no_tys() → Nat → Type { λ _ => True }
 
@@ -507,7 +508,7 @@ theorem Dyn::elem_not_lawful(fits: Dyn(Dyn::no_tys()) → Bool): ¬PathLawsOn<Dy
 
 // So `StepModelLaws` at `Dyn` is false for every model built of these
 // steps, whatever its fits.
-theorem Dyn::model_not_lawful(fits: Sel → Dyn(Dyn::no_tys()) → Bool): ¬StepModelLaws<Dyn(Dyn::no_tys())>(StepModel<Dyn(Dyn::no_tys())>(λ sel => Dyn::path(Dyn::no_tys(), Dyn::no_strs(), sel), fits)) {
+theorem Dyn::model_not_lawful(fits: Sel → Dyn(Dyn::no_tys()) → Bool): ¬PathModelLaws<Dyn(Dyn::no_tys())>(PathModel<Dyn(Dyn::no_tys())>(λ sel => Dyn::path(Dyn::no_tys(), Dyn::no_strs(), sel), fits)) {
     λ ml => Dyn::elem_not_lawful(fits(OnSeq(SeqOne(0))), ml.laws(OnSeq(SeqOne(0))))
 }
 
@@ -552,12 +553,12 @@ record StepModelLawsRel<S>(m: StepModelRel<S>) {
 }
 
 // The denotation is `steps.hthr`'s: it reads only the paths.
-fn StepModelRel::steps<S>(self m: StepModelRel<S>) → StepModel<S> { StepModel<S>(m.path, λ _ _ => True) }
+fn StepModelRel::steps<S>(self m: StepModelRel<S>) → PathModel<S> { PathModel<S>(m.path, λ _ _ => True) }
 
-fn StepModelRel::of<S>(m: StepModel<S>) → StepModelRel<S> { StepModelRel<S>(m.path, λ a _ w => m.fits(a)(w)) }
+fn StepModelRel::of<S>(m: PathModel<S>) → StepModelRel<S> { StepModelRel<S>(m.path, λ a _ w => m.fits(a)(w)) }
 
 // Nothing is lost: a model lawful as `steps.hthr` states it is lawful here.
-theorem StepModelLawsRel::of_laws<S>(m: StepModel<S>, ml: StepModelLaws<S>(m)): StepModelLawsRel<S>(StepModelRel::of(m)) {
+theorem StepModelLawsRel::of_laws<S>(m: PathModel<S>, ml: PathModelLaws<S>(m)): StepModelLawsRel<S>(StepModelRel::of(m)) {
     StepModelLawsRel(λ a => PathLawsRel::of_on(ml.laws(a)), λ a b => Path::keeps_fit_rel_of(m.path(b), m.fits(a), ml.keeps(a, b)), ml.apart)
 }
 
@@ -621,14 +622,14 @@ theorem Path::then_keeps_fit_rel<S, A, B>(p: Path<S, A>, q: Path<A, B>, fits: S 
 }
 
 theorem Steps::keeps_fit_rel<S>(m: StepModelRel<S>, ml: StepModelLawsRel<S>(m), ws: List<Nat>, f: Sel, a: Step, rest: List<Step>):
-    Path::KeepsFitRel(Steps::denote(m.steps(), ws, Cons(a, rest)), m.fits(f))
+    Path::KeepsFitRel(PathModel::denote(m.steps(), ws, Cons(a, rest)), m.fits(f))
 {
-    Path::then_keeps_fit_rel(m.path(a.sel(ws)), Steps::denote(m.steps(), ws, rest), m.fits(f), ml.keeps(f, a.sel(ws)))
+    Path::then_keeps_fit_rel(m.path(a.sel(ws)), PathModel::denote(m.steps(), ws, rest), m.fits(f), ml.keeps(f, a.sel(ws)))
 }
 
 theorem Steps::verdict_keeps_rel<S>(m: StepModelRel<S>, ml: StepModelLawsRel<S>(m), ws: List<Nat>, f: Sel, xs: List<Step>):
     (ys: List<Step>) → (rs: List<Obligation>) → Steps::apart(xs, ys) = Some(rs) →
-        And<Path::KeepsFitRel(Steps::denote(m.steps(), ws, xs), m.fits(f)), Path::KeepsFitRel(Steps::denote(m.steps(), ws, ys), m.fits(f))>
+        And<Path::KeepsFitRel(PathModel::denote(m.steps(), ws, xs), m.fits(f)), Path::KeepsFitRel(PathModel::denote(m.steps(), ws, ys), m.fits(f))>
 {
     match xs {
         Nil => λ ys rs no => absurd(no),
@@ -643,23 +644,23 @@ theorem Steps::verdict_keeps_rel<S>(m: StepModelRel<S>, ml: StepModelLawsRel<S>(
 // proof, with `Apart::under_rel` for `Apart::under_on`.
 theorem Steps::apart_sound_rel<S>(m: StepModelRel<S>, ml: StepModelLawsRel<S>(m), ws: List<Nat>, xs: List<Step>):
     (ys: List<Step>) → (rs: List<Obligation>) → Steps::apart(xs, ys) = Some(rs) → Obligation::All(rs, ws) →
-        Apart<S, S, S>(Steps::denote(m.steps(), ws, xs), Steps::denote(m.steps(), ws, ys))
+        Apart<S, S, S>(PathModel::denote(m.steps(), ws, xs), PathModel::denote(m.steps(), ws, ys))
 {
     match xs {
         Nil => λ ys rs no _ => absurd(no),
         Cons(a, xr) => λ ys => match ys {
             Nil => λ rs no _ => absurd(no),
             Cons(b, yr) => λ rs => (match a.same(b) as λ c => a.same(b) = c → (match c { True => Steps::apart(xr, yr), False => a.apart(b) }) = Some(rs) →
-                    Obligation::All(rs, ws) → Apart<S, S, S>(Steps::denote(m.steps(), ws, Cons(a, xr)), Steps::denote(m.steps(), ws, Cons(b, yr))) {
+                    Obligation::All(rs, ws) → Apart<S, S, S>(PathModel::denote(m.steps(), ws, Cons(a, xr)), PathModel::denote(m.steps(), ws, Cons(b, yr))) {
                 True => λ e ok hold => {
                     let same: (a = b) = a.same_sound(b, e);
                     let fit = Steps::verdict_keeps_rel(m, ml, ws, a.sel(ws), xr, yr, rs, ok);
-                    let here: Apart<S, S, S>(m.path(a.sel(ws)).then(Steps::denote(m.steps(), ws, xr)), m.path(a.sel(ws)).then(Steps::denote(m.steps(), ws, yr))) =
+                    let here: Apart<S, S, S>(m.path(a.sel(ws)).then(PathModel::denote(m.steps(), ws, xr)), m.path(a.sel(ws)).then(PathModel::denote(m.steps(), ws, yr))) =
                         Apart::under_rel(m.path(a.sel(ws)), m.fits(a.sel(ws)), ml.laws(a.sel(ws)), Steps::apart_sound_rel(m, ml, ws, xr, yr, rs, ok, hold), fit.left, fit.right);
-                    j(same, λ c _ => Apart<S, S, S>(m.path(a.sel(ws)).then(Steps::denote(m.steps(), ws, xr)), m.path(c.sel(ws)).then(Steps::denote(m.steps(), ws, yr))), here)
+                    j(same, λ c _ => Apart<S, S, S>(m.path(a.sel(ws)).then(PathModel::denote(m.steps(), ws, xr)), m.path(c.sel(ws)).then(PathModel::denote(m.steps(), ws, yr))), here)
                 },
                 False => λ e ok hold =>
-                    Apart::then_both(ml.apart(a.sel(ws), b.sel(ws), a.apart_sound(b, ws, rs, ok, hold)), Steps::denote(m.steps(), ws, xr), Steps::denote(m.steps(), ws, yr)),
+                    Apart::then_both(ml.apart(a.sel(ws), b.sel(ws), a.apart_sound(b, ws, rs, ok, hold)), PathModel::denote(m.steps(), ws, xr), PathModel::denote(m.steps(), ws, yr)),
             })(refl)
         },
     }
@@ -1089,7 +1090,7 @@ theorem Dyn::model_laws_rel(tys: Nat → Type, strs: Strs(tys), sl: StrsLaws(tys
 // `Dyn` apart.
 theorem Dyn::apart(tys: Nat → Type, strs: Strs(tys), sl: StrsLaws(tys, strs), ws: List<Nat>, xs, ys: List<Step>, rs: List<Obligation>,
     ok: Steps::apart(xs, ys) = Some(rs), hold: Obligation::All(rs, ws)):
-    Apart<Dyn(tys), Dyn(tys), Dyn(tys)>(Steps::denote(Dyn::model_rel(tys, strs).steps(), ws, xs), Steps::denote(Dyn::model_rel(tys, strs).steps(), ws, ys))
+    Apart<Dyn(tys), Dyn(tys), Dyn(tys)>(PathModel::denote(Dyn::model_rel(tys, strs).steps(), ws, xs), PathModel::denote(Dyn::model_rel(tys, strs).steps(), ws, ys))
 {
     Steps::apart_sound_rel(Dyn::model_rel(tys, strs), Dyn::model_laws_rel(tys, strs, sl), ws, xs, ys, rs, ok, hold)
 }
@@ -1107,11 +1108,11 @@ theorem Dyn::apart(tys: Nat → Type, strs: Strs(tys), sl: StrsLaws(tys, strs), 
 record View { b: Nat, steps: List<Step> }
 
 fn View::read<S>(self r: View, m: StepModelRel<S>, ws: List<Nat>, heap: List<S>) → Option<S> {
-    heap.nth(r.b).and_then(λ o => Steps::denote(m.steps(), ws, r.steps).get(o))
+    heap.nth(r.b).and_then(λ o => PathModel::denote(m.steps(), ws, r.steps).get(o))
 }
 
 fn View::write<S>(self r: View, m: StepModelRel<S>, ws: List<Nat>, heap: List<S>, x: S) → List<S> {
-    heap.update(r.b, λ o => Steps::denote(m.steps(), ws, r.steps).set(o, x))
+    heap.update(r.b, λ o => PathModel::denote(m.steps(), ws, r.steps).set(o, x))
 }
 
 theorem List::nth_update_map<A>(self xs: List<A>): (i: Nat) → (f: A → A) → xs.update(i, f).nth(i) = xs.nth(i).map(f) {
@@ -1126,13 +1127,13 @@ inductive ViewsApart(ws: List<Nat>, r, r2: View) {
 }
 
 theorem View::same_block<S>(m: StepModelRel<S>, ws: List<Nat>, heap: List<S>, r, r2: View, x: S, same: r2.b = r.b,
-    ap: Apart<S, S, S>(Steps::denote(m.steps(), ws, r2.steps), Steps::denote(m.steps(), ws, r.steps))): r2.read(m, ws, r.write(m, ws, heap, x)) = r2.read(m, ws, heap)
+    ap: Apart<S, S, S>(PathModel::denote(m.steps(), ws, r2.steps), PathModel::denote(m.steps(), ws, r.steps))): r2.read(m, ws, r.write(m, ws, heap, x)) = r2.read(m, ws, heap)
 {
-    let f = λ (o: S) => Steps::denote(m.steps(), ws, r.steps).set(o, x);
+    let f = λ (o: S) => PathModel::denote(m.steps(), ws, r.steps).set(o, x);
     let at: (heap.update(r.b, f).nth(r2.b) = heap.nth(r2.b).map(f)) =
         j(same, λ c _ => heap.update(c, f).nth(r2.b) = heap.nth(r2.b).map(f), heap.nth_update_map(r2.b, f));
-    trans(cong_fn(λ (o: Option<S>) => o.and_then(λ y => Steps::denote(m.steps(), ws, r2.steps).get(y)), at),
-        (match heap.nth(r2.b) as λ o => o.map(f).and_then(λ y => Steps::denote(m.steps(), ws, r2.steps).get(y)) = o.and_then(λ y => Steps::denote(m.steps(), ws, r2.steps).get(y)) {
+    trans(cong_fn(λ (o: Option<S>) => o.and_then(λ y => PathModel::denote(m.steps(), ws, r2.steps).get(y)), at),
+        (match heap.nth(r2.b) as λ o => o.map(f).and_then(λ y => PathModel::denote(m.steps(), ws, r2.steps).get(y)) = o.and_then(λ y => PathModel::denote(m.steps(), ws, r2.steps).get(y)) {
             Some(y) => ap.left_after_right(y, x),
             None => refl,
         }))
@@ -1143,8 +1144,8 @@ theorem View::write_keeps<S>(m: StepModelRel<S>, ml: StepModelLawsRel<S>(m), ws:
     r2.read(m, ws, r.write(m, ws, heap, x)) = r2.read(m, ws, heap)
 {
     match apart {
-        Blocks(ne) => cong_fn(λ (o: Option<S>) => o.and_then(λ y => Steps::denote(m.steps(), ws, r2.steps).get(y)),
-            heap.nth_update_other(r.b, λ o => Steps::denote(m.steps(), ws, r.steps).set(o, x), r2.b, ne)),
+        Blocks(ne) => cong_fn(λ (o: Option<S>) => o.and_then(λ y => PathModel::denote(m.steps(), ws, r2.steps).get(y)),
+            heap.nth_update_other(r.b, λ o => PathModel::denote(m.steps(), ws, r.steps).set(o, x), r2.b, ne)),
         Places(same, rs, ok, hold) => View::same_block(m, ws, heap, r, r2, x, same, Steps::apart_sound_rel(m, ml, ws, r2.steps, r.steps, rs, ok, hold)),
     }
 }

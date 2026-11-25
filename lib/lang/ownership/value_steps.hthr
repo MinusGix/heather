@@ -45,6 +45,79 @@ import store_path;
 import atom;
 import steps;
 
+// ---------------------------------------------------------------------------
+// The path model this module was built for
+//
+// `steps.hthr`'s first model, each selection a `Path` lawful where what it
+// writes fits (`PathLawsOn`), with its soundness. `steps.hthr` now holds the
+// total model of docs/language/ownership-design.md §21.1; this one stays
+// only as long as this experiment module does (§21.1: `Val` has no
+// customer after it, and its probes are restated at `Dyn`).
+
+record PathModel<S> { path: Sel → Path<S, S>, fits: Sel → S → Bool }
+
+record PathModelLaws<S>(m: PathModel<S>) {
+    laws: (a: Sel) → PathLawsOn<S, S>(m.path(a), m.fits(a)),
+    keeps: (a, b: Sel) → Path::KeepsFit(m.path(b), m.fits(a)),
+    apart: (a, b: Sel) → a.apart(b).IsTrue() → Apart<S, S, S>(m.path(a), m.path(b)),
+}
+
+// The steps from the root, the first outermost.
+fn PathModel::denote<S>(m: PathModel<S>, ws: List<Nat>, xs: List<Step>) → Path<S, S> {
+    match xs { Nil => Path::id<S>(), Cons(a, rest) => m.path(a.sel(ws)).then(PathModel::denote(m, ws, rest)) }
+}
+
+// Steps after a first step: their writes keep every fit, as the first
+// step's do.
+theorem PathModel::keeps_fit<S>(m: PathModel<S>, ml: PathModelLaws<S>(m), ws: List<Nat>, f: Sel, a: Step, rest: List<Step>):
+    Path::KeepsFit(PathModel::denote(m, ws, Cons(a, rest)), m.fits(f))
+{
+    Path::then_keeps_fit(m.path(a.sel(ws)), PathModel::denote(m, ws, rest), m.fits(f), ml.keeps(f, a.sel(ws)))
+}
+
+// Where the decider answers yes, neither list is empty: both keep every fit.
+theorem PathModel::verdict_keeps<S>(m: PathModel<S>, ml: PathModelLaws<S>(m), ws: List<Nat>, f: Sel, xs: List<Step>):
+    (ys: List<Step>) → (rs: List<Obligation>) → Steps::apart(xs, ys) = Some(rs) →
+        And<Path::KeepsFit(PathModel::denote(m, ws, xs), m.fits(f)), Path::KeepsFit(PathModel::denote(m, ws, ys), m.fits(f))>
+{
+    match xs {
+        Nil => λ ys rs no => absurd(no),
+        Cons(a, xr) => λ ys => match ys {
+            Nil => λ rs no => absurd(no),
+            Cons(b, yr) => λ rs _ => And(PathModel::keeps_fit(m, ml, ws, f, a, xr), PathModel::keeps_fit(m, ml, ws, f, b, yr)),
+        },
+    }
+}
+
+// The decider is sound: a verdict, and its obligations holding at the
+// words, give the two denotations apart.
+theorem PathModel::apart_sound<S>(m: PathModel<S>, ml: PathModelLaws<S>(m), ws: List<Nat>, xs: List<Step>):
+    (ys: List<Step>) → (rs: List<Obligation>) → Steps::apart(xs, ys) = Some(rs) → Obligation::All(rs, ws) →
+        Apart<S, S, S>(PathModel::denote(m, ws, xs), PathModel::denote(m, ws, ys))
+{
+    match xs {
+        Nil => λ ys rs no _ => absurd(no),
+        Cons(a, xr) => λ ys => match ys {
+            Nil => λ rs no _ => absurd(no),
+            Cons(b, yr) => λ rs => (match a.same(b) as λ c => a.same(b) = c → (match c { True => Steps::apart(xr, yr), False => a.apart(b) }) = Some(rs) →
+                    Obligation::All(rs, ws) → Apart<S, S, S>(PathModel::denote(m, ws, Cons(a, xr)), PathModel::denote(m, ws, Cons(b, yr))) {
+                True => λ e ok hold => {
+                    let same: (a = b) = a.same_sound(b, e);
+                    let fit = PathModel::verdict_keeps(m, ml, ws, a.sel(ws), xr, yr, rs, ok);
+                    let here: Apart<S, S, S>(m.path(a.sel(ws)).then(PathModel::denote(m, ws, xr)), m.path(a.sel(ws)).then(PathModel::denote(m, ws, yr))) =
+                        Apart::under_on(m.path(a.sel(ws)), m.fits(a.sel(ws)), ml.laws(a.sel(ws)), PathModel::apart_sound(m, ml, ws, xr, yr, rs, ok, hold), fit.left, fit.right);
+                    j(same, λ c _ => Apart<S, S, S>(m.path(a.sel(ws)).then(PathModel::denote(m, ws, xr)), m.path(c.sel(ws)).then(PathModel::denote(m, ws, yr))), here)
+                },
+                False => λ e ok hold =>
+                    Apart::then_both(ml.apart(a.sel(ws), b.sel(ws), a.apart_sound(b, ws, rs, ok, hold)), PathModel::denote(m, ws, xr), PathModel::denote(m, ws, yr)),
+            })(refl)
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Values
+
 inductive Val { VWord(n: Nat), VSeq(xs: Vals), VRec(fs: Vals), VTag(c: Nat, v: Val), VMap(slots: VSlots) }
 inductive Vals { VNil, VCons(head: Val, tail: Vals) }
 inductive VSlots { SlotsEnd, SlotLive(gen: Nat, value: Val, rest: VSlots), SlotFree(gen: Nat, rest: VSlots) }
@@ -344,7 +417,7 @@ fn Val::step_fits(x: SeqSel) → Val → Bool { match x { SeqOne(_) => λ (_: Va
 
 fn Val::sel_fits(a: Sel) → Val → Bool { match a { OnSeq(x) => Val::step_fits(x), _ => λ (_: Val) => True } }
 
-fn Val::model() → StepModel<Val> { StepModel<Val>(Val::sel_path, Val::sel_fits) }
+fn Val::model() → PathModel<Val> { PathModel<Val>(Val::sel_path, Val::sel_fits) }
 
 theorem Val::seq_step_laws(x: SeqSel): PathLawsOn<List<Val>, Val>(Val::seq_step(x), Val::step_fits(x)) {
     match x {
@@ -415,17 +488,17 @@ theorem Val::sel_apart(a, b: Sel): a.apart(b).IsTrue() → Apart<Val, Val, Val>(
     }
 }
 
-theorem Val::model_laws(): StepModelLaws<Val>(Val::model()) { StepModelLaws(Val::sel_laws, Val::keeps, Val::sel_apart) }
+theorem Val::model_laws(): PathModelLaws<Val>(Val::model()) { PathModelLaws(Val::sel_laws, Val::keeps, Val::sel_apart) }
 
 // A place's path in the universe, at the words.
-fn Val::place(ws: List<Nat>, xs: List<Step>) → Path<Val, Val> { Steps::denote(Val::model(), ws, xs) }
+fn Val::place(ws: List<Nat>, xs: List<Step>) → Path<Val, Val> { PathModel::denote(Val::model(), ws, xs) }
 
 // The decider's verdict, its obligations holding, gives the two places
 // apart.
 theorem Val::apart(ws: List<Nat>, xs, ys: List<Step>, rs: List<Obligation>, ok: Steps::apart(xs, ys) = Some(rs), hold: Obligation::All(rs, ws)):
     Apart<Val, Val, Val>(Val::place(ws, xs), Val::place(ws, ys))
 {
-    Steps::apart_sound(Val::model(), Val::model_laws(), ws, xs, ys, rs, ok, hold)
+    PathModel::apart_sound(Val::model(), Val::model_laws(), ws, xs, ys, rs, ok, hold)
 }
 
 // ---------------------------------------------------------------------------

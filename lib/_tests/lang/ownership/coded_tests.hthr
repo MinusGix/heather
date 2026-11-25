@@ -229,7 +229,7 @@ theorem get_x_val(ps: List<Point>): (i: Nat) → val_word(Val::place([i], [SElem
 theorem val_model_laws_rel(): StepModelLawsRel<Val>(StepModelRel::of(Val::model())) { StepModelLawsRel::of_laws(Val::model(), Val::model_laws()) }
 
 theorem val_split_apart_rel(k, m: Nat):
-    Apart<Val, Val, Val>(Steps::denote(StepModelRel::of(Val::model()).steps(), [k, m], Val::split_left()), Steps::denote(StepModelRel::of(Val::model()).steps(), [k, m], Val::split_right()))
+    Apart<Val, Val, Val>(PathModel::denote(StepModelRel::of(Val::model()).steps(), [k, m], Val::split_left()), PathModel::denote(StepModelRel::of(Val::model()).steps(), [k, m], Val::split_right()))
 {
     let owed: Span(0, k).apart(Span(k, m)).IsTrue() = omega;
     Steps::apart_sound_rel(StepModelRel::of(Val::model()), val_model_laws_rel(), [k, m], Val::split_left(), Val::split_right(), [Spans(Lit(0), Var(0), Var(0), Var(1))], Val::split_verdict(),
@@ -284,7 +284,7 @@ theorem Point::fields_laws(): FieldsLaws(pt_tys(), Point, [Point::fx(), Point::f
 
 theorem pt_strs_laws(): StrsLaws(pt_tys(), pt_strs()) { λ k => match k { Zero => Point::fields_laws(), Succ(_) => trivial } }
 
-fn pt_place(ws: List<Nat>, xs: List<Step>) → Path<Dyn(pt_tys()), Dyn(pt_tys())> { Steps::denote(Dyn::model_rel(pt_tys(), pt_strs()).steps(), ws, xs) }
+fn pt_place(ws: List<Nat>, xs: List<Step>) → Path<Dyn(pt_tys()), Dyn(pt_tys())> { PathModel::denote(Dyn::model_rel(pt_tys(), pt_strs()).steps(), ws, xs) }
 
 // `ps[i].x` and `ps[i].y`: the decider walks the common element and finds
 // the fields apart, owing nothing.
