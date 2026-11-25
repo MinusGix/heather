@@ -299,3 +299,71 @@ tables by evaluation. A `Domain`'s constructors are `FiniteDomain` and
   from reducing (`none_h_sign`); leave the motive to inference there.
 - A `let` bound to a lambda whose branches return different matches needs
   its type written (`inf_or` in `none_ok`).
+
+## 6. Round 2 as landed (`p3109-projection`, 2026-11-25)
+
+Module: `lib/std/num/float/project.hthr`, plus `Finite::fast_two_sum_sat`
+at the end of `eft.hthr`. Tests: `lib/_tests/std/num/float/project_tests.hthr`
+and the saturated Fast2Sum cases in `eft_tests.hthr`.
+
+**Saturation beside `RoundsTo`, not inside it.** `RoundsTo` stays what it
+was: `SatNone` at a format with infinities, `SatFinite` at one without.
+The projection is stated next to it:
+
+- `OverUp(mode, x)` / `OverDown(mode, x)`: rounding to precision leaves the
+  finite range. They are literally `RoundsTo`'s infinite clauses
+  (`inf_over_up`, `over_up_rounds` and their mirrors), so at a format with
+  infinities they are exactly where `RoundsTo` overflows, and every
+  existing overflow lemma is about them.
+- `sat_up(sat)` / `sat_down(sat)`: report §4.7.5 for a finite input. The
+  extreme finite float for `SatFinite` and `SatPropagate`. For `SatNone`,
+  the infinity where there is one, else NaN. A format with neither (OCP
+  FP6/FP4) saturates.
+- `project(mode, sat, x)` decides the two, else `round_rat`; `Projects` is
+  the relation and `project_correct` the bridge. `project_in_range` is
+  FLoPS's Lemma 4 (inside `[-max, max]` the projection is the rounding, by
+  computation), `project_none` says `SatNone` at a format with infinities is
+  a correct rounding everywhere, and `project_faithful` is FLoPS's Lemma 5
+  (a finite projection is the greatest float below or the least above, the
+  saturated ends included).
+
+Rejected: a saturation argument on `RoundsTo`. Every theorem about it
+would have grown a case, for a distinction only the range's edges see.
+
+**Unsigned (D2).** `project_unsigned` projects in the envelope and sends a
+negative result to `unsigned_low(mode, sat)`: zero under the saturating
+modes, and under `SatNone` zero toward zero or upward and NaN otherwise
+(`Mlo = 0`). `project_unsigned_nonneg`: the result is never negative and
+never `-∞`.
+
+**Round to odd** (`round_odd`): truncate, and step away from zero when
+that was inexact and landed on an even code; `round_odd_faithful`. It is a
+function beside `Mode`, not a `Mode` constructor, for the same reason as
+saturation. What is not yet proved: "an even result is exact" inside the
+range, and the double-rounding theorem; the tests pin the saturation
+caveat (E4M3 returns its even largest float for 460, inexactly).
+
+**Stochastic rounding** (`round_sr_a`, `_b`, `_c`): P3109's three
+`RoundAway` rules. `ν·2^N` is computed exactly from the truncation `d` as
+`(|x| - |d|)·2^(N - q(d))`, which needs no case for subnormals or precision
+one because `d`'s quantum is the spacing above it. Each draw goes through
+`round_dir` and is faithful. `Nat::count_away_all` is the count the
+expectations rest on: at `⌊ν·2^N⌋ = k`, exactly `k` of the `2^N` draws step
+away under variant A.
+
+**Fast2Sum** (`fast_two_sum_sat`, FLoPS Theorem 12): positive `b <= a`
+whose sum reaches the largest float `M`, with the sum saturated to `M` by
+any mode. Then `M - a` is a Sterbenz difference and `b - (M - a)` lies on
+`b`'s grid between 0 and `b`, so both subtractions are exact in any
+modes. The negative side is the mirror and is not stated separately.
+
+**Observations.**
+
+- `Fin(f)` in a type position resolves to the index type `Fin(n)`; inside a
+  motive write `Float::Fin(f)`.
+- A nested `match` whose result is the body of a function in the goal
+  (`project_correct`) needs the motive spelled out; one level works by
+  inference.
+- `omega` cannot read the literal a reduced motive leaves in the goal
+  (`count_away_eq`); a typed `let` restating the goal fixes it.
+

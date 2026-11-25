@@ -39,3 +39,7 @@ reason.
 
 - **[[finite-probability]]** owns finitely supported distributions and
   expectation. Assumed here: only an expectation over a uniform finite draw.
+
+## Log
+
+- 2026-11-25: Pointwise layer landed (design §6): `round_sr_a`/`_b`/`_c` follow the report's `RoundAway` rules, with `ν·2^N` computed exactly from the truncation; every draw is faithful (`round_dir_faithful`). `Nat::count_away_all` gives variant A's count of away-steps (`⌊ν·2^N⌋` of `2^N`). Still open: the expectation statements and the `O(√n)` bound, on [[finite-probability]]; and the variants through `project`'s saturation.

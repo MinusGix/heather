@@ -1,6 +1,6 @@
 ---
 title: Fast2Sum's exact overflow error under saturation
-status: open
+status: closed
 labels: [mathematics,floating-point]
 area: mathematics
 milestone: [math-float,p3109-projection]
@@ -45,3 +45,4 @@ proof never went through that bound, so only precision one
 ## Log
 
 - 2026-11-25: The nearest-mode half is confirmed by evaluation: `lib/_tests/std/num/float/eft_tests.hthr` runs `Finite::fast_two_sum_exact` at E4M3 (416 + 64 saturates to 448, error 32) and E2M1 (4 + 4 saturates to 6, error 2). The directed-`s` theorem is still open; it wants [[float-saturation-modes]] for the format-with-infinities case.
+- 2026-11-25: LANDED: `Finite::fast_two_sum_sat` (end of `eft.hthr`) for positive `b <= a` whose sum reaches the largest float `M` and was saturated to it in any mode: `M - a` and `b - (M - a)` are exact in any modes. Tests at E4M3 (directed subtractions) and P3109 Binary8p3se (sum projected upward with SatFinite). The negative side is the mirror and is not stated separately.

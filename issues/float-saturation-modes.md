@@ -1,6 +1,6 @@
 ---
 title: Saturation as an operation parameter
-status: open
+status: closed
 labels: [mathematics,floating-point]
 area: mathematics
 milestone: [p3109-projection]
@@ -51,3 +51,7 @@ to the other saturations ([[float-fast2sum-saturated]]).
 
 - **[[float-p3109]]** owns the P3109 mapping. Assumed here: only the three
   saturation behaviours above.
+
+## Log
+
+- 2026-11-25: LANDED in `lib/std/num/float/project.hthr` (docs/library/float-p3109-design.md §6): `Sat`, `OverUp`/`OverDown`, `sat_up`/`sat_down`, `project` with `Projects`/`project_correct`, `project_in_range` (FLoPS Lemma 4), `project_none` (SatNone is IEEE at a format with infinities), `project_faithful` (Lemma 5), and the unsigned projection with `project_unsigned_nonneg`. Shape differs from the issue's sketch: saturation sits beside `RoundsTo` rather than as its argument, since `RoundsTo` already is SatNone/SatFinite and only the range's edges differ. Not done: projection of infinite inputs (`SatPropagate` differs from `SatFinite` only there); it belongs with the operations on special values.

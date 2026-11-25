@@ -40,3 +40,7 @@ design §5.4 had in mind.
 
 - **[[float-saturation-modes]]** owns saturation as a parameter. Assumed
   here: only that a projection can saturate in a format with infinities.
+
+## Log
+
+- 2026-11-25: Partly landed (design §6): `Format::round_odd` (truncate, step away when inexact on an even code; a function beside `Mode`, not a constructor) and `round_odd_faithful`; tests pin both parities, precision one, and the saturation caveat (E4M3 gives its even largest float 448 for 460). Still open: "even implies exact" inside the range (needs the step's parity from `UpIs` at the half-unit level), the double-rounding theorem, and round-to-odd through `project`'s saturation modes.
