@@ -26,12 +26,25 @@
 //   along a place of closed codes every code stays closed and every
 //   dispatch reduces, and what is left is the native operation on the
 //   value inside: `ps[i].x` is `ps.nth(i).unwrap_or(d).x`.
-// - **The step model.** `Dyn::path` is each selection as a `Path<Dyn, Dyn>`,
-//   for `steps.hthr`'s `StepModel<Dyn>`. Its laws as `StepModelLaws` states
-//   them cannot hold: a fit there is a property of the written value alone
-//   (`fits: Sel → S → Bool`), and here whether a write is read back depends
-//   on the code of the part it replaces. `Dyn::elem_not_lawful` is the
-//   refutation, for every fit.
+// - **The step model.** `Dyn::path` is each selection as a `Path<Dyn, Dyn>`:
+//   the owner's code dispatches to a native part (`Dyn::part`: an element is
+//   `Path::elem`, a window the library's window as a list, a field the
+//   structure's path), and a write decides the written value's code once,
+//   outside the part. Its laws as `StepModelLaws` states them cannot hold: a
+//   fit there is a property of the written value alone (`fits: Sel → S →
+//   Bool`), and here whether a write is read back depends on the code of the
+//   part it replaces (`Dyn::elem_not_lawful`, for every fit).
+// - **Laws relative to the read.** With the fit comparing the written value
+//   to what the step read (`PathLawsRel`, `StepModelLawsRel`), every model
+//   lawful as `steps.hthr` states it stays lawful (`StepModelLawsRel::of_laws`),
+//   the decider stays sound by the same proof (`Steps::apart_sound_rel`), and
+//   `Dyn`'s model is lawful from the structures' laws alone
+//   (`Dyn::model_laws_rel`): each part's laws carry over through the tag, a
+//   write keeps the owner's code by construction, and two selections apart
+//   are apart by the parts' spans or the fields' apartness.
+// - **A branch that names its output** (`Join`): each arm's bindings end with
+//   it, the output is the convoy of the arms' values, and what follows runs
+//   once, as a source's `let x = if h: … else …; rest` does.
 import logic;
 import bool;
 import nat;
@@ -265,7 +278,13 @@ inductive Stmt { Get(p: Place), Put(p: Place, v: Src), Add(a: Atom, b: Atom), Ca
 // A branch's test: the word `a` is below the length at `p`.
 inductive Cond { LtLen(a: Atom, p: Place) }
 
-inductive Body { End, Do(o: Stmt, rest: Body), If(cd: Cond, a: Body, b: Body, rest: Body) }
+// `If` carries what follows into each arm. `Join` names its output: each
+// arm runs from the branch's state and its bindings end with it; after
+// the join the output is the convoy of the arms' values, the term a
+// source's `let x = if h: … { … } else { … }; rest` elaborates to, and
+// `rest` runs once. The arms here bind words only; the objects pass
+// through.
+inductive Body { End, Do(o: Stmt, rest: Body), If(cd: Cond, a: Body, b: Body, rest: Body), Join(cd: Cond, a: Body, wa: Atom, b: Body, wb: Atom, rest: Body) }
 
 fn seq(ops: List<Stmt>) → Body { match ops { Nil => End, Cons(o, rest) => Do(o, seq(rest)) } }
 
@@ -303,12 +322,19 @@ fn Cond::test(self cd: Cond, tys: Nat → Type, strs: Strs(tys), s: Sem(tys)) �
     match cd { LtLen(a, p) => decide_bit<a.at(s.words) < Dyn::size(tys, p.val(tys, strs, s))>() }
 }
 
-fn mean_then<R>(tys: Nat → Type, strs: Strs(tys), w: World(tys), ops: Body, s: Sem(tys), k: Sem(tys) → R) → R {
+// After a join: the branch's state with its output bound, the convoy of
+// what each arm's state reads (each arm's state an argument, so evaluated
+// once).
+fn Sem::joined(tys: Nat → Type, s: Sem(tys), t: Bool, sa: Sem(tys), wa: Atom, sb: Sem(tys), wb: Atom) → Sem(tys) { Sem::bind(tys, s, convoy(t, wa.at(sa.words), wb.at(sb.words))) }
+
+fn mean_then(R: Type, tys: Nat → Type, strs: Strs(tys), w: World(tys), ops: Body, s: Sem(tys), k: Sem(tys) → R) → R {
     match ops {
         End => k(s),
-        Do(o, rest) => mean_then(tys, strs, w, rest, o.eval1(tys, strs, w, s), k),
-        If(cd, a, b, rest) => convoy(cd.test(tys, strs, s), mean_then(tys, strs, w, a, s, λ x => mean_then(tys, strs, w, rest, x, k)),
-            mean_then(tys, strs, w, b, s, λ x => mean_then(tys, strs, w, rest, x, k))),
+        Do(o, rest) => mean_then(R, tys, strs, w, rest, o.eval1(tys, strs, w, s), k),
+        If(cd, a, b, rest) => convoy(cd.test(tys, strs, s), mean_then(R, tys, strs, w, a, s, λ x => mean_then(R, tys, strs, w, rest, x, k)),
+            mean_then(R, tys, strs, w, b, s, λ x => mean_then(R, tys, strs, w, rest, x, k))),
+        Join(cd, a, wa, b, wb, rest) =>
+            mean_then(R, tys, strs, w, rest, Sem::joined(tys, s, cd.test(tys, strs, s), mean_then(Sem(tys), tys, strs, w, a, s, λ x => x), wa, mean_then(Sem(tys), tys, strs, w, b, s, λ x => x), wb), k),
     }
 }
 
@@ -321,7 +347,7 @@ fn Ret::out(self r: Ret, tys: Nat → Type, strs: Strs(tys), s: Sem(tys)) → MO
 }
 
 fn mean_fn(tys: Nat → Type, strs: Strs(tys), w: World(tys), f: Func, objs: List<Dyn(tys)>, ws: List<Nat>) → MOut(tys) {
-    mean_then(tys, strs, w, f.body, Sem(objs, Env::start(ws)), λ s => f.ret.out(tys, strs, s))
+    mean_then(MOut(tys), tys, strs, w, f.body, Sem(objs, Env::start(ws)), λ s => f.ret.out(tys, strs, s))
 }
 
 // ---------------------------------------------------------------------------
@@ -350,7 +376,7 @@ theorem cases(c: Bool, {x, y: Type}, yes: c = True → x, no: c = False → y): 
     (match c as λ d => c = d → Cases(d, x, y) { True => λ e => yes(e), False => λ e => no(e) })(refl)
 }
 
-inductive Owes { OEnd, ODo(here: List<Owed>, rest: Owes), OIf(a: Owes, b: Owes, rest: Owes) }
+inductive Owes { OEnd, ODo(here: List<Owed>, rest: Owes), OIf(a: Owes, b: Owes, rest: Owes), OJoin(a: Owes, b: Owes, rest: Owes) }
 
 fn Owes::Holds(self d: Owes, tys: Nat → Type, strs: Strs(tys), w: World(tys), pres: Pres(tys), ops: Body, s: Sem(tys), after: Sem(tys) → Type) → Type {
     match ops {
@@ -359,6 +385,12 @@ fn Owes::Holds(self d: Owes, tys: Nat → Type, strs: Strs(tys), w: World(tys), 
         If(cd, a, b, r) => match d {
             OIf(da, db, dr) => Cases(cd.test(tys, strs, s), da.Holds(tys, strs, w, pres, a, s, λ x => dr.Holds(tys, strs, w, pres, r, x, after)),
                 db.Holds(tys, strs, w, pres, b, s, λ x => dr.Holds(tys, strs, w, pres, r, x, after))),
+            _ => False,
+        },
+        Join(cd, a, wa, b, wb, r) => match d {
+            OJoin(da, db, dr) => Cases(cd.test(tys, strs, s), da.Holds(tys, strs, w, pres, a, s, λ _ => True), db.Holds(tys, strs, w, pres, b, s, λ _ => True)) ∧
+                dr.Holds(tys, strs, w, pres, r,
+                    Sem::joined(tys, s, cd.test(tys, strs, s), mean_then(Sem(tys), tys, strs, w, a, s, λ x => x), wa, mean_then(Sem(tys), tys, strs, w, b, s, λ x => x), wb), after),
             _ => False,
         },
     }
@@ -372,7 +404,7 @@ fn Owes::Due(self d: Owes, tys: Nat → Type, strs: Strs(tys), w: World(tys), pr
 // then a convoy at `Nat`, as the source's `if h:` is, where `.word` of
 // `mean_fn`'s would project out of a convoy over the whole output and stop.
 fn mean_word(tys: Nat → Type, strs: Strs(tys), w: World(tys), f: Func, objs: List<Dyn(tys)>, ws: List<Nat>) → Nat {
-    mean_then(tys, strs, w, f.body, Sem(objs, Env::start(ws)), λ s => f.ret.out(tys, strs, s).word)
+    mean_then(Nat, tys, strs, w, f.body, Sem(objs, Env::start(ws)), λ s => f.ret.out(tys, strs, s).word)
 }
 
 // ---------------------------------------------------------------------------
@@ -919,10 +951,10 @@ fn Dyn::OptApart(tys: Nat → Type, {c: Shape}, o1, o2: Option<Part(tys, c)>) �
 theorem Dyn::opt_apart_symm(tys: Nat → Type, {c: Shape}, o1, o2: Option<Part(tys, c)>, ap: Dyn::OptApart(tys, o1, o2)): Dyn::OptApart(tys, o2, o1) {
     (match o1 as λ x1 => Dyn::OptApart(tys, x1, o2) → Dyn::OptApart(tys, o2, x1) {
         None => λ _ => match o2 { Some(_) => trivial, None => trivial },
-        Some(p1) => λ a1 => (match o2 as λ x2 => Dyn::OptApart(tys, Some(p1), x2) → Dyn::OptApart(tys, x2, Some(p1)) {
+        Some(_) => match o2 {
             None => λ _ => trivial,
             Some(_) => λ a2 => Apart::symm(a2),
-        })(a1),
+        },
     })(ap)
 }
 
@@ -940,10 +972,10 @@ theorem Dyn::opt_after(tys: Nat → Type, {c: Shape}, o1, o2: Option<Part(tys, c
 {
     (match o1 as λ x1 => Dyn::OptApart(tys, x1, o2) → Dyn::take(tys, x1, Dyn::put(tys, o2, v, w)) = Dyn::take(tys, x1, v) {
         None => λ _ => refl,
-        Some(p1) => λ a1 => (match o2 as λ x2 => Dyn::OptApart(tys, Some(p1), x2) → Dyn::take_in(tys, p1, Dyn::put(tys, x2, v, w)) = Dyn::take_in(tys, p1, v) {
+        Some(p1) => match o2 {
             None => λ _ => refl,
             Some(p2) => λ a2 => Dyn::in_after(tys, p1, p2, a2, v, w),
-        })(a1),
+        },
     })(ap)
 }
 
@@ -968,11 +1000,10 @@ theorem Dyn::opt_commute(tys: Nat → Type, {c: Shape}, o1, o2: Option<Part(tys,
 {
     (match o1 as λ x1 => Dyn::OptApart(tys, x1, o2) → Dyn::put(tys, x1, Dyn::put(tys, o2, v, w2), w1) = Dyn::put(tys, o2, Dyn::put(tys, x1, v, w1), w2) {
         None => λ _ => refl,
-        Some(p1) => λ a1 => (match o2 as λ x2 => Dyn::OptApart(tys, Some(p1), x2) →
-                Dyn::put_in(tys, p1, Dyn::put(tys, x2, v, w2), w1) = Dyn::put(tys, x2, Dyn::put_in(tys, p1, v, w1), w2) {
+        Some(p1) => match o2 {
             None => λ _ => refl,
             Some(p2) => λ a2 => Dyn::in_commute(tys, p1, p2, a2, v, w1, w2),
-        })(a1),
+        },
     })(ap)
 }
 
@@ -1016,24 +1047,23 @@ theorem Dyn::parts_apart(tys: Nat → Type, strs: Strs(tys), sl: StrsLaws(tys, s
     λ c => match c {
         SWord => trivial,
         SSeq(x) => (match a as λ a2 => a2.apart(b).IsTrue() → Dyn::OptApart(tys, Dyn::part(tys, strs, a2, SSeq(x)), Dyn::part(tys, strs, b, SSeq(x))) {
-            OnSeq(qa) => λ va => (match b as λ b2 => OnSeq(qa).apart(b2).IsTrue() → Dyn::OptApart(tys, Some(Dyn::seq_part(tys, strs, x, qa)), Dyn::part(tys, strs, b2, SSeq(x))) {
+            OnSeq(qa) => match b {
                 OnSeq(qb) => λ v2 => PathIn::apart_sound(Dyn::seq_part_in(tys, strs, x, qa), Dyn::seq_part_in(tys, strs, x, qb), v2),
                 OnField(_) => λ _ => trivial,
                 OnKey(_) => λ _ => trivial,
                 OnVariant(_) => λ _ => trivial,
-            })(va),
+            },
             OnField(_) => λ _ => trivial,
             OnKey(_) => λ _ => trivial,
             OnVariant(_) => λ _ => trivial,
         })(v),
         SNamed(k) => (match a as λ a2 => a2.apart(b).IsTrue() → Dyn::OptApart(tys, Dyn::part(tys, strs, a2, SNamed(k)), Dyn::part(tys, strs, b, SNamed(k))) {
-            OnField(i) => λ va => (match b as λ b2 => OnField(i).apart(b2).IsTrue() →
-                    Dyn::OptApart(tys, Dyn::field_part(tys, k, strs(k), i), Dyn::part(tys, strs, b2, SNamed(k))) {
+            OnField(i) => match b {
                 OnField(l) => λ v2 => Dyn::fields_apart(tys, k, i, l, Dyn::span_ne(i, l, v2), strs(k), sl(k)),
                 OnSeq(_) => λ _ => Dyn::opt_apart_none(tys, Dyn::field_part(tys, k, strs(k), i)),
                 OnKey(_) => λ _ => Dyn::opt_apart_none(tys, Dyn::field_part(tys, k, strs(k), i)),
                 OnVariant(_) => λ _ => Dyn::opt_apart_none(tys, Dyn::field_part(tys, k, strs(k), i)),
-            })(va),
+            },
             OnSeq(_) => λ _ => trivial,
             OnKey(_) => λ _ => trivial,
             OnVariant(_) => λ _ => trivial,

@@ -298,3 +298,114 @@ theorem elems_x_apart(i, l: Nat, ne: ¬(i = l)): Apart<Dyn(pt_tys()), Dyn(pt_tys
     let owed: Span(i, 1).apart(Span(l, 1)).IsTrue() = omega(ne);
     Dyn::apart(pt_tys(), pt_strs(), pt_strs_laws(), [i, l], [SElem(Var(0)), SField(0)], [SElem(Var(1)), SField(0)], [Spans(Var(0), Lit(1), Var(1), Lit(1))], refl, And(owed, trivial))
 }
+
+// ---------------------------------------------------------------------------
+// A function that continues after its `if`: the branch names its output,
+// the joined word is the convoy of the arms' words (the term the source's
+// `let a = if h: … else …` elaborates to), and what follows runs once.
+//    `fn after_join(ps, i) → Nat { let a = if h: i < ps.len() { ps[i].x } else { 0 }; ps[a].y }`
+
+fn after_join(ps: List<Point>, i: Nat) → Nat {
+    let a = if h: i < ps.len() { get_x(ps, i) } else { 0 };
+    ps.nth(a).unwrap_or(Point::origin()).y
+}
+
+fn after_join_r() → Func {
+    Func(Join(LtLen(Var(0), Place(0, Nil)), seq([Get(x_of(0, Var(0)))]), Var(1), seq(Nil), Lit(0), seq([Get(Place(0, [SElem(Var(1)), SField(1)]))])), RWord(Var(2)))
+}
+
+theorem after_join_reflects(ps: List<Point>, i: Nat): word_pt(after_join_r(), ps, [i]) = after_join(ps, i) { refl }
+
+// The whole output pins too: the join leaves no convoy over the record.
+theorem after_join_whole(ps: List<Point>, i: Nat): mean_pt(after_join_r(), ps, [i]).word = after_join(ps, i) { refl }
+
+// The arm's bound is the `if`'s evidence; the read after the join owes its
+// bound at the joined word, which the source must prove of the convoy.
+fn after_join_owes() → Owes { OJoin(ODo([Inside(Place(0, Nil), Var(0))], OEnd), OEnd, ODo([Inside(Place(0, Nil), Var(1))], OEnd)) }
+
+theorem after_join_site(ps: List<Point>, i: Nat, next: ∥(if h: i < ps.len() { get_x(ps, i) } else { 0 }) < ps.len()∥): due_pt(after_join_owes(), after_join_r(), ps, [i]) {
+    ⟨cases(decide_bit<(i < ps.len())>(), λ e => ⟨squash(decide_true<(i < ps.len())>(e)), trivial⟩, λ _ => trivial), ⟨next, trivial⟩⟩
+}
+
+// The control: the read after the join is of `.y`, not `.x`.
+fn after_join_x(ps: List<Point>, i: Nat) → Nat {
+    let a = if h: i < ps.len() { get_x(ps, i) } else { 0 };
+    ps.nth(a).unwrap_or(Point::origin()).x
+}
+
+// expect-error(kernel)
+theorem after_join_not_x(ps: List<Point>, i: Nat): word_pt(after_join_r(), ps, [i]) = after_join_x(ps, i) { refl }
+
+// ---------------------------------------------------------------------------
+// How a real source spells an element read, against the total read
+//
+// `Vec::at` and `Bytes::at` (`stored_words.hthr`, `bytes.hthr`) take the
+// bound as a squashed parameter their body does not read: the body is the
+// total read with 0 past the end. That spelling pins by `refl` (the proof
+// is never looked at). A read that consumes its proof (`vector_index` at
+// the proof, what `Vec::at_index` relates `Vec::at` to; here a recursion on
+// the list) is not a conversion: it is one library lemma per site.
+
+// The `Vec::at` shape, over a list of words.
+fn List::at_word(self xs: List<Nat>, i: Nat, inside: ∥i < xs.len()∥) → Nat { xs.nth(i).unwrap_or(0) }
+
+fn read_w_r() → Func { Func(seq([Get(Place(0, [SElem(Var(0))]))]), RWord(Var(1))) }
+
+theorem read_w_reflects(xs: List<Nat>, i: Nat, inside: ∥i < xs.len()∥):
+    mean_word(pt_tys(), pt_strs(), pt_world(), read_w_r(), [Dyn(SSeq(SWord), xs)], [i]) = xs.at_word(i, inside)
+{ refl }
+
+// A read that consumes its proof.
+theorem List::nil_not_below<A>(i: Nat, inside: i < List::len(Nil<A>)): False { omega(inside) }
+
+theorem List::below_tail<A>(h: A, t: List<A>, k: Nat, inside: Succ(k) < List::len(Cons(h, t))): k < t.len() { omega(inside) }
+
+fn List::at_below<A>(self xs: List<A>) → (i: Nat) → i < xs.len() → A {
+    match xs {
+        Nil => λ i inside => false_elim(List::nil_not_below<A>(i, inside)),
+        Cons(h, t) => λ i => match i { Zero => λ _ => h, Succ(k) => λ inside => t.at_below(k, List::below_tail(h, t, k, inside)) },
+    }
+}
+
+fn get_x_below(ps: List<Point>, i: Nat, inside: i < ps.len()) → Nat { ps.at_below(i, inside).x }
+
+// expect-error(kernel)
+theorem get_x_below_refl(ps: List<Point>, i: Nat, inside: i < ps.len()): word_pt(get_x_r(), ps, [i]) = get_x_below(ps, i, inside) { refl }
+
+// The library lemma it takes: under the bound, the read is the total read
+// at any inhabitant.
+theorem List::at_below_total<A>(self xs: List<A>): (i: Nat) → (inside: i < xs.len()) → (d: A) → xs.at_below(i, inside) = xs.nth(i).unwrap_or(d) {
+    match xs {
+        Nil => λ i inside d => false_elim(List::nil_not_below<A>(i, inside)),
+        Cons(h, t) => λ i => match i { Zero => λ _ _ => refl, Succ(k) => λ inside d => t.at_below_total(k, List::below_tail(h, t, k, inside), d) },
+    }
+}
+
+theorem get_x_below_pin(ps: List<Point>, i: Nat, inside: i < ps.len()): word_pt(get_x_r(), ps, [i]) = get_x_below(ps, i, inside) {
+    cong_fn(λ (p: Point) => p.x, sym(ps.at_below_total(i, inside, Point::origin())))
+}
+
+// ---------------------------------------------------------------------------
+// The open `T` with the inhabitant only in the pin's statement: the
+// function takes no `T`. A write that reads nothing at `T` pins at every
+// inhabitant by `refl`; a read at `T` does not, since the meaning's read
+// is `unwrap_or(d)` and the source has no `d` to spell: it takes the
+// proof-consuming read and the lemma above.
+
+fn put_elem<T>(xs: List<T>, i: Nat, x: T) → List<T> { xs.update(i, λ _ => x) }
+
+// `xs[i] := x` with `x` a second object, the element at its root.
+fn put_elem_r() → Func { Func(seq([Put(Place(0, [SElem(Var(0))]), FromPlace(Place(1, Nil)))]), RWord(Lit(0))) }
+
+theorem put_elem_reflects<T>(xs: List<T>, i: Nat, x: T): (d: T) →
+    Dyn::as_code(t_tys(T), t_strs(T, d), SSeq(SNamed(0)), obj_at(t_tys(T), mean_fn(t_tys(T), t_strs(T, d), no_world(T), put_elem_r(), [Dyn(SSeq(SNamed(0)), xs), Dyn(SNamed(0), x)], [i]).objs, 0))
+        = put_elem(xs, i, x)
+{ λ d => refl }
+
+fn copy_below<T>(xs: List<T>, i, j: Nat, inside: j < xs.len()) → List<T> { xs.update(i, λ _ => xs.at_below(j, inside)) }
+
+theorem copy_below_pin<T>(xs: List<T>, i, j: Nat, inside: j < xs.len()): (d: T) →
+    Dyn::as_code(t_tys(T), t_strs(T, d), SSeq(SNamed(0)), obj_at(t_tys(T), mean_t(T, d, copy_elem_r(), xs, [i, j]).objs, 0)) = copy_below(xs, i, j, inside)
+{
+    λ d => cong_fn(λ (y: T) => xs.update(i, λ _ => y), sym(xs.at_below_total(j, inside, d)))
+}
