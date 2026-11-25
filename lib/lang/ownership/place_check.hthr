@@ -229,11 +229,11 @@ fn check(f: Prog, plan: List<Nat>) → Option<List<Residual>> {
 // ---------------------------------------------------------------------------
 // Small facts the simulation reads
 
-theorem Holders::put_here(h: Holders(), b, x: Nat): Holders::put(h, b, x)(b) = Some(x) {
+theorem Holders::put_here(h: Holders(), b, x: Nat): Holders::put(h, b, x, b) = Some(x) {
     j(sym(b.same_self()), λ q _ => (match q { True => Some(x), False => h(b) }) = Some(x), refl)
 }
 
-theorem Holders::put_other(h: Holders(), b, x, k: Nat, ne: k.same(b) = False): Holders::put(h, b, x)(k) = h(k) {
+theorem Holders::put_other(h: Holders(), b, x, k: Nat, ne: k.same(b) = False): Holders::put(h, b, x, k) = h(k) {
     j(sym(ne), λ q _ => (match q { True => Some(x), False => h(k) }) = h(k), refl)
 }
 
@@ -377,7 +377,7 @@ theorem option_map_some<A, B>(o: Option<A>, f: A → B, b: B): o.map(f) = Some(b
 theorem Residual::all_append(rs: List<Residual>): (qs: List<Residual>) → (ws: List<Nat>) → Residual::All(rs ++ qs, ws) → Residual::All(rs, ws) ∧ Residual::All(qs, ws) {
     match rs {
         Nil => λ qs ws h => ⟨trivial, h⟩,
-        Cons(r, rest) => λ qs ws h => {
+        Cons(_, rest) => λ qs ws h => {
             let p = Residual::all_append(rest, qs, ws, h.right);
             ⟨⟨h.left, p.left⟩, p.right⟩
         },
@@ -478,7 +478,7 @@ theorem frame_write(xs: List<Nat>, iv, vv, lo, n, k: Nat, a, b, c: Nat, apart: S
 {
     let d: (Span(iv, 1).Disjoint(Span(lo, n))) = λ p h1 h2 => omega(apart, ea, eb, ec, h1, h2);
     cong_fn(λ (o: Option<Nat>) => o.unwrap_or(0),
-        PathIn::agree_apart(Path::elem_in<Nat>(iv), Span(lo, n), d, xs, vv)(lo + k, Span(lo, n).has_intro(lo + k, omega(), omega(lt))))
+        PathIn::agree_apart(Path::elem_in<Nat>(iv), Span(lo, n), d, xs, vv, lo + k, Span(lo, n).has_intro(lo + k, omega(), omega(lt))))
 }
 
 // A step that stores into buffer `b` and passes it to the new name `y`:
@@ -727,7 +727,7 @@ theorem check_ops_sound(plan: List<Nat>, ops: List<Op>): (c: CState) → (s: Val
 }
 
 theorem holders_put_sound(plan: List<Nat>, g: Holders(), j0: Nat, old: (b, x: Nat) → g(b) = Some(x) → (home(plan, x) = b) ∧ (x < j0)):
-    (b, x: Nat) → Holders::put(g, home(plan, j0), j0)(b) = Some(x) → (home(plan, x) = b) ∧ (x < j0 + 1)
+    (b, x: Nat) → Holders::put(g, home(plan, j0), j0, b) = Some(x) → (home(plan, x) = b) ∧ (x < j0 + 1)
 {
     λ b x => match q: b.same(home(plan, j0)) {
         True => λ e3 => {
