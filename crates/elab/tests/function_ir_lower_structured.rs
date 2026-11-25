@@ -16,6 +16,8 @@ fn verified_structured_lowering_checks_and_lowers_the_examples() {
         ("x86_64_kept", include_str!("../../../lib/std/arch/x86_64/x86_64_kept.hthr")),
         ("x86_64_asm", include_str!("../../../lib/std/arch/x86_64/x86_64_asm.hthr")),
         ("x86_64_asm_runs", include_str!("../../../lib/std/arch/x86_64/x86_64_asm_runs.hthr")),
+        ("x86_64_stack_runs", include_str!("../../../lib/std/arch/x86_64/x86_64_stack_runs.hthr")),
+        ("x86_64_memory_contract", include_str!("../../../lib/std/arch/x86_64/x86_64_memory_contract.hthr")),
         // What the lowering's narrow widths read (`bitvec_nat` is the prefix's).
         ("function_ir_lower", include_str!("../../../lib/native/function_ir/function_ir_lower.hthr")),
         // `shared`, which the placement planner binds its plans with.

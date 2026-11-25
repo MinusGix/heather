@@ -185,7 +185,6 @@ theorem left_slot_rep(values: Valuation(), saved: List<Gpr>, before, after: Gprs
     }
 }
 
-
 theorem ports_args(values: Valuation(), ids: List<Nat>): (registers: List<Gpr>) → (gprs: Gprs) →
     PortsAt(values, word_ports(ids), registers, gprs) → ArgsIn(words_of(values, ids), registers, gprs) {
     match ids {

@@ -36,6 +36,7 @@ pub(crate) const MODULES: &[(&str, &str)] = &[
     ("x86_64_kept", include_str!("../../../lib/std/arch/x86_64/x86_64_kept.hthr")),
     ("x86_64_stack_runs", include_str!("../../../lib/std/arch/x86_64/x86_64_stack_runs.hthr")),
     ("x86_64_memory_contract", include_str!("../../../lib/std/arch/x86_64/x86_64_memory_contract.hthr")),
+    ("x86_64_memory_tiers", include_str!("../../../lib/std/arch/x86_64/x86_64_memory_tiers.hthr")),
     ("x86_64_byte_memory", include_str!("../../../lib/std/arch/x86_64/x86_64_byte_memory.hthr")),
     ("linux_x86_64_byte_memory", include_str!("../../../lib/std/os/linux/linux_x86_64_byte_memory.hthr")),
     ("linux_x86_64_image", include_str!("../../../lib/std/os/linux/linux_x86_64_image.hthr")),
