@@ -528,6 +528,18 @@ fn lend_in_bind(x: Nat) → Option<Nat> {
 }
 theorem lend_in_bind_open(x: Nat): lend_in_bind(x) = Some((x + 2) + (x + 2)) { refl }
 
+// `let _ <-` binds the answer and drops it: a `None` stops the block.
+fn none_into(acc: &mut Nat) → Option<Nat> {
+    acc := acc + 1;
+    None
+}
+fn lend_in_dropped_bind(x: Nat) → Option<Nat> {
+    let mut p = x;
+    let _ <- none_into(&mut p);
+    Some(p)
+}
+theorem lend_in_dropped_bind_open(x: Nat): lend_in_dropped_bind(x) = None { refl }
+
 // ---------------------------------------------------------------------------
 // A recursion is held to the modes its declaration wrote, as any call is,
 // though its table is not registered while its body elaborates.
