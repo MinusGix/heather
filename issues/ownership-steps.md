@@ -25,7 +25,7 @@ The module and its probes pass the library gate, the decider is proved sound and
 ## What it assumes from elsewhere
 
 - **[[ownership-library-join]]** (closed) gives keys as path steps and fields with footprints.
-- **[[ownership-checker-call-and-write-view]]** is extending the checker's experiment; this issue does not touch `lib/lang/ownership/`.
+- **[[ownership-checker-call-and-write-view]]** is extending the checker's experiment; this issue adds modules beside it (`atom`, `steps`, `value_steps`) and moves only `Atom` out of `place_check.hthr`.
 
 ## Log
 
