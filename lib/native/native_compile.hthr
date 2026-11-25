@@ -384,7 +384,7 @@ fn StructuredRegion::called(self region: StructuredRegion) → List<Nat> {
         Conditional(_, _, _, _, when_true, when_false) => when_true.called() ++ when_false.called(),
         Call(callee, _, _, _) => [callee],
         Loop(_, _, _, _, body, _, _, _, _) => body.called(),
-        Until(_, _, body, _, _, _) => body.called(),
+        Until(_, _, body, _, _, _, measure_at) => body.called(),
         Lend(_, callee, _, _) => [callee],
     }
 }
@@ -1293,7 +1293,7 @@ fn StructuredRegion::code(self region: StructuredRegion, p: Prog, layout: Layout
                 x.prog.else_label(again, leave).computes(layout, set, loop_down(count, exhausted), x.names).and_then(λ d =>
                 then(d.prog, Jmp(head)).label(leave).computes(layout, out, moves(outputs, parameters), d.names))))))))
         },
-        Until(inputs, parameters, body, exit, next, outputs) => {
+        Until(inputs, parameters, body, exit, next, outputs, measure_at) => {
             let head = Succ(names);
             let set = homes.loop_set(exit);
             let done = nodes_live_in(moves(outputs, parameters), out);
@@ -1365,7 +1365,7 @@ fn Stmt::pair_known(self first: Stmt, rest: Stmt, homes: Homes, out: List<Nat>) 
             Lend(_, _, _, _) => Nil,
             Call(_, _, _, _) => Nil,
             Loop(_, _, _, _, _, _, _, _, _) => Nil,
-            Until(_, _, _, _, _, _) => Nil,
+            Until(_, _, _, _, _, _, _) => Nil,
         },
         Invoke(_) => Nil,
         Then(_, _) => Nil,
@@ -2123,7 +2123,7 @@ fn StructuredRegion::kind(self region: StructuredRegion) → Nat {
         Lend(_, _, _, _) => 6,
         Call(_, _, _, _) => 4,
         Loop(_, _, _, _, _, _, _, _, _) => 5,
-        Until(_, _, _, _, _, _) => 7,
+        Until(_, _, _, _, _, _, _) => 7,
     }
 }
 
@@ -2157,7 +2157,7 @@ fn parts_refusal(layout: Layout, region: StructuredRegion) → List<Nat> {
             Nil => match parts_refusal(layout, body) { Nil => [13, 0, 0], Cons(reason, details) => Cons(reason, details) },
             Cons(reason, details) => Cons(reason, details),
         },
-        Until(_, _, body, exit, _, _) => match ids_refusal(layout, [exit]) {
+        Until(_, _, body, exit, _, _, measure_at) => match ids_refusal(layout, [exit]) {
             Nil => match parts_refusal(layout, body) { Nil => [13, 0, 0], Cons(reason, details) => Cons(reason, details) },
             Cons(reason, details) => Cons(reason, details),
         },
@@ -2330,7 +2330,7 @@ fn StructuredRegion::names_after(self region: StructuredRegion, names: Nat) → 
         Lend(_, _, _, _) => names,
         Call(_, _, _, _) => names,
         Loop(_, _, _, _, body, _, _, _, _) => body.names_after(Succ(Succ(Succ(Succ(names))))),
-        Until(_, _, body, _, _, _) => body.names_after(Succ(names)),
+        Until(_, _, body, _, _, _, measure_at) => body.names_after(Succ(names)),
     }
 }
 

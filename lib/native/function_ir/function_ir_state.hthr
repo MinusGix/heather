@@ -518,7 +518,7 @@ fn StructuredRegion::run(self region: StructuredRegion, call: Writers(), values:
                 values(64, bound).toNat(), words_of(values, inputs), buffers);
             State(Valuation::set(Valuation::bind(values, outputs, end.end.state), exhausted, bit_value(end.end.exhausted)), end.buffers)
         },
-        Until(inputs, parameters, body, exit, next, outputs) => {
+        Until(inputs, parameters, body, exit, next, outputs, measure_at) => {
             let end = until_run(λ (pass: Valuation()) (held: Buffers()) => body.run(call, pass, held), parameters, exit, next,
                 until_passes(), words_of(values, inputs), buffers);
             State(Valuation::bind(values, outputs, end.end.state), end.buffers)
@@ -601,7 +601,7 @@ fn StructuredRegion::run_defined(self region: StructuredRegion, call: Writers(),
             loop_run_defined(λ (pass: Valuation()) (held: Buffers()) => body.run(call, pass, held),
                 λ (pass: Valuation()) (held: Buffers()) => body.run_defined(call, defines, pass, held), parameters, count, exit, next,
                 values(64, bound).toNat(), words_of(values, inputs), buffers),
-        Until(inputs, parameters, body, exit, next, _) =>
+        Until(inputs, parameters, body, exit, next, _, measure_at) =>
             until_run_defined(λ (pass: Valuation()) (held: Buffers()) => body.run(call, pass, held),
                 λ (pass: Valuation()) (held: Buffers()) => body.run_defined(call, defines, pass, held), parameters, exit, next,
                 until_passes(), words_of(values, inputs), buffers),

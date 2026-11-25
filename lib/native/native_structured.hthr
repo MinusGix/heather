@@ -156,7 +156,7 @@ fn StructuredRegion::loop_shape(self region: StructuredRegion) → Bool {
         Conditional(_, _, _, _, _, _) => False,
         Lend(_, _, _, _) => False,
         Call(_, _, _, _) => False,
-        Until(_, _, _, _, _, _) => False,
+        Until(_, _, _, _, _, _, _) => False,
     }
 }
 
@@ -164,7 +164,7 @@ fn StructuredRegion::loop_shape(self region: StructuredRegion) → Bool {
 // counted loop's, with no count and no bit.
 fn StructuredRegion::until_shape(self region: StructuredRegion) → Bool {
     match region {
-        Until(inputs, parameters, _, exit, next, outputs) =>
+        Until(inputs, parameters, _, exit, next, outputs, measure_at) =>
             (inputs.len().matches(parameters.len()) && (next.len().matches(parameters.len()) && outputs.len().matches(parameters.len())))
             && ((distinct(parameters) && distinct(outputs)) && (absent(exit, parameters)
             && (moves_ordered(parameters, inputs) && (moves_ordered(parameters, next) && moves_ordered(outputs, parameters))))),
@@ -226,8 +226,8 @@ fn StructuredRegion::scoped(self region: StructuredRegion, s: Scope) → Option<
                 }),
             },
         // Its body sees only its parameters, as a counted loop's does.
-        Until(inputs, parameters, body, exit, next, outputs) =>
-            match s.all_defined(inputs) && Until(inputs, parameters, body, exit, next, outputs).until_shape() {
+        Until(inputs, parameters, body, exit, next, outputs, measure_at) =>
+            match s.all_defined(inputs) && Until(inputs, parameters, body, exit, next, outputs, measure_at).until_shape() {
                 False => None,
                 True => body.scoped(Scope::until_pass(parameters)).and_then(λ b => match b.bit(exit) && b.all_defined(next) {
                     False => None,
@@ -247,7 +247,7 @@ fn StructuredRegion::until_free(self region: StructuredRegion) → Bool {
         Lend(_, _, _, _) => True,
         Call(_, _, _, _) => True,
         Loop(_, _, _, _, body, _, _, _, _) => body.until_free(),
-        Until(_, _, _, _, _, _) => False,
+        Until(_, _, _, _, _, _, _) => False,
     }
 }
 

@@ -97,7 +97,7 @@ fn StructuredRegion::raised(self region: StructuredRegion, by: Nat) → Structur
         Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) =>
             Loop(raised_ids(inputs, by), bound + by, parameters, count, body, exit, next, raised_ids(outputs, by), exhausted + by),
         Lend(views, callee, arguments, result) => Lend(raised_views(views, by), callee, raised_ids(arguments, by), result + by),
-        Until(inputs, parameters, body, exit, next, outputs) => Until(raised_ids(inputs, by), parameters, body, exit, next, raised_ids(outputs, by)),
+        Until(inputs, parameters, body, exit, next, outputs, measure_at) => Until(raised_ids(inputs, by), parameters, body, exit, next, raised_ids(outputs, by), measure_at),
     }
 }
 
@@ -223,7 +223,7 @@ theorem StructuredRegion::raised_runs(self region: StructuredRegion, effects: Ef
                 words_of(λ w id => values(w, id + by), outputs), words_of(values, raised_ids(outputs, by)),
                 values(1, exhausted + by).head_bit(), values(1, exhausted + by).head_bit(), before, after,
                 refl, sym(words_of_raised(values, by, inputs)), sym(words_of_raised(values, by, outputs)), refl, ran),
-        Until(inputs, parameters, body, exit, next, outputs) => λ values before after ran => {
+        Until(inputs, parameters, body, exit, next, outputs, measure_at) => λ values before after ran => {
             let pass = λ (v: Valuation()) (from: Buffers()) (to: Buffers()) => StructuredRegionRunsOver(effects, v, body, from, to);
             Exists(ran.witness, j(sym(words_of_raised(values, by, outputs)), λ x _ =>
                     UntilRunsOver(pass, parameters, exit, next, ran.witness, words_of(values, raised_ids(inputs, by)), x, before, after),
@@ -555,8 +555,8 @@ fn inline_region(callees: List<Function>, region: StructuredRegion) → Nat → 
             _ => None,
         },
         // Inlined into whole only, for now.
-        Until(inputs, parameters, body, exit, next, outputs) => λ by sites => match sites {
-            Stay => Some(Inlined(Until(inputs, parameters, body, exit, next, outputs), by)),
+        Until(inputs, parameters, body, exit, next, outputs, measure_at) => λ by sites => match sites {
+            Stay => Some(Inlined(Until(inputs, parameters, body, exit, next, outputs, measure_at), by)),
             _ => None,
         },
     }
@@ -783,10 +783,10 @@ theorem inline_region_sound(callees: List<Function>, effects: Effects(), alike: 
                 Inlined::stay_sound(effects, Lend(views, callee, arguments, result), by, under)),
             _ => λ r made under => absurd(made),
         },
-        Until(inputs, parameters, body, exit, next, outputs) => λ by sites => match sites {
-            Stay => λ r made under => j(Option::some_inj(Inlined(Until(inputs, parameters, body, exit, next, outputs), by), r, made),
-                λ x _ => x.Sound(effects, Until(inputs, parameters, body, exit, next, outputs), by),
-                Inlined::stay_sound(effects, Until(inputs, parameters, body, exit, next, outputs), by, under)),
+        Until(inputs, parameters, body, exit, next, outputs, measure_at) => λ by sites => match sites {
+            Stay => λ r made under => j(Option::some_inj(Inlined(Until(inputs, parameters, body, exit, next, outputs, measure_at), by), r, made),
+                λ x _ => x.Sound(effects, Until(inputs, parameters, body, exit, next, outputs, measure_at), by),
+                Inlined::stay_sound(effects, Until(inputs, parameters, body, exit, next, outputs, measure_at), by, under)),
             _ => λ r made under => absurd(made),
         },
     }
@@ -858,7 +858,7 @@ fn StructuredRegion::size(self region: StructuredRegion) → Nat {
         Conditional(_, _, _, _, when_true, when_false) => when_true.size() + when_false.size() + 1,
         Call(_, _, _, _) => 1,
         Loop(_, _, _, _, body, _, _, _, _) => body.size() + 1,
-        Until(_, _, body, _, _, _) => body.size() + 1,
+        Until(_, _, body, _, _, _, measure_at) => body.size() + 1,
         Lend(views, _, _, _) => views.len() + 1,
     }
 }
@@ -876,7 +876,7 @@ fn StructuredRegion::inline_all(self region: StructuredRegion, callees: List<Fun
             Some(g) => match wanted(callee, g) { False => Stay, True => Here(g.body.top(0)) },
         },
         Loop(_, _, _, _, body, _, _, _, _) => Body(body.inline_all(callees, wanted)),
-        Until(_, _, _, _, _, _) => Stay,
+        Until(_, _, _, _, _, _, _) => Stay,
         Lend(_, _, _, _) => Stay,
     }
 }

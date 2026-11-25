@@ -335,7 +335,7 @@ fn StructuredRegion::touches(self region: StructuredRegion) → List<Nat> {
         Lend(views, _, _, result) => nodes_writes(views_nodes(views)) ++ [result],
         Call(_, _, result, also) => Cons(result, also),
         Loop(_, _, parameters, count, body, _, _, outputs, exhausted) => Cons(count, Cons(exhausted, parameters ++ (outputs ++ body.touches()))),
-        Until(_, parameters, body, _, _, outputs) => parameters ++ (outputs ++ body.touches()),
+        Until(_, parameters, body, _, _, outputs, measure_at) => parameters ++ (outputs ++ body.touches()),
     }
 }
 
@@ -352,7 +352,7 @@ fn StructuredRegion::named(self region: StructuredRegion) → List<Nat> {
             nodes_words(loop_entry(bound, count, inputs, parameters)) ++ (nodes_words(loop_zero(count, exhausted)) ++
             (nodes_words(moves(parameters, next)) ++ (nodes_words(loop_stop(exhausted)) ++ (nodes_words(loop_down(count, exhausted)) ++
             (nodes_words(moves(outputs, parameters)) ++ Cons(exit, body.named())))))),
-        Until(inputs, parameters, body, exit, next, outputs) =>
+        Until(inputs, parameters, body, exit, next, outputs, measure_at) =>
             nodes_words(moves(parameters, inputs)) ++ (nodes_words(moves(parameters, next)) ++ (nodes_words(moves(outputs, parameters)) ++
             Cons(exit, body.named()))),
     }
@@ -404,7 +404,7 @@ fn Homes::region_checked(self homes: Homes, region: StructuredRegion, out: List<
             homes.leaf_checked(loop_zero(count, exhausted), Cons(exhausted, b.union(done))).and_then(λ head =>
             homes.closed(head, set, loop_entry(bound, count, inputs, parameters))))))))
         },
-        Until(inputs, parameters, body, exit, next, outputs) => {
+        Until(inputs, parameters, body, exit, next, outputs, measure_at) => {
             let set = homes.loop_set(exit);
             homes.leaf_checked(moves(outputs, parameters), out).and_then(λ done =>
             homes.leaf_checked(moves(parameters, next), Cons(exit, done.union(set))).and_then(λ after =>
@@ -551,7 +551,7 @@ fn Homes::region_needs(self homes: Homes, region: StructuredRegion, out: List<Na
             let had = match b.sets.nth(count) { None => set, Some(held) => held };
             Needs(nodes_live_in(loop_entry(bound, count, inputs, parameters), set), b.sets.put(count, had.union(head), []))
         },
-        Until(inputs, parameters, body, exit, next, outputs) => {
+        Until(inputs, parameters, body, exit, next, outputs, measure_at) => {
             let set = homes.loop_set(exit);
             let done = nodes_live_in(moves(outputs, parameters), out);
             let b = homes.region_needs(body, nodes_live_in(moves(parameters, next), Cons(exit, done.union(set))), sets);
@@ -772,7 +772,7 @@ fn Homes::region_graph(self homes: Homes, region: StructuredRegion, out: List<Na
             let head = leaf_graph(loop_zero(count, exhausted), Cons(exhausted, b.live.union(done.live)), b.of);
             leaf_graph(loop_entry(bound, count, inputs, parameters), set, head.of)
         },
-        Until(inputs, parameters, body, exit, next, outputs) => {
+        Until(inputs, parameters, body, exit, next, outputs, measure_at) => {
             let set = homes.loop_set(exit);
             let done = leaf_graph(moves(outputs, parameters), out, of);
             let moved = leaf_graph(moves(parameters, next), Cons(exit, done.live.union(set)), done.of);
@@ -843,7 +843,7 @@ fn StructuredRegion::weighed(self region: StructuredRegion, loop_weight, scale: 
                 body.weighed(loop_weight, inner, entered).bump(exit, inner));
             nodes_weights(loop_stop(exhausted) ++ moves(outputs, parameters), scale, passes)
         },
-        Until(inputs, parameters, body, exit, next, outputs) => {
+        Until(inputs, parameters, body, exit, next, outputs, measure_at) => {
             let inner = scale + loop_weight;
             let entered = nodes_weights(moves(parameters, inputs), scale, weights);
             let passes = nodes_weights(moves(parameters, next), inner, body.weighed(loop_weight, inner, entered).bump(exit, inner));
@@ -1328,7 +1328,7 @@ theorem StructuredRegion::checked_inside(self region: StructuredRegion, loops: L
                                             entry.leaf_checked_inside(loops, set, m, set_in, s0))
                                     }))))))
         },
-        Until(inputs, parameters, body, exit, next, outputs) => λ out so sw => {
+        Until(inputs, parameters, body, exit, next, outputs, measure_at) => λ out so sw => {
             let set = homes.loop_set(exit);
             let entry = moves(parameters, inputs);
             let w0 = nodes_words(entry);

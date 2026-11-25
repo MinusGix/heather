@@ -530,7 +530,7 @@ fn StructuredRegion::byte_free(self region: StructuredRegion) → Bool {
         Lend(_, _, _, _) => False,
         Call(_, _, _, _) => True,
         Loop(_, _, _, _, _, _, _, _, _) => False,
-        Until(_, _, _, _, _, _) => False,
+        Until(_, _, _, _, _, _, _) => False,
     }
 }
 
@@ -609,7 +609,7 @@ theorem StructuredRegion::eval_byte_free(self region: StructuredRegion, call: An
         Lend(_, _, _, _) => λ never => false_elim(never),
         Call(_, _, _, _) => λ _ values => refl,
         Loop(_, _, _, _, _, _, _, _, _) => λ never => false_elim(never),
-        Until(_, _, _, _, _, _) => λ never => false_elim(never),
+        Until(_, _, _, _, _, _, _) => λ never => false_elim(never),
     }
 }
 
@@ -659,7 +659,7 @@ theorem StructuredRegion::run_byte_free(self region: StructuredRegion, call: Wri
                 call(buffers, callee, words_of(values, arguments)).rest)), held),
             still(buffers, callee, fits, words_of(values, arguments))),
         Loop(_, _, _, _, _, _, _, _, _) => λ never => false_elim(never),
-        Until(_, _, _, _, _, _) => λ never => false_elim(never),
+        Until(_, _, _, _, _, _, _) => λ never => false_elim(never),
     }
 }
 
@@ -725,7 +725,7 @@ theorem StructuredRegion::written_within(self region: StructuredRegion, call: Wr
                     j(sym(word_port_ids(outputs)), λ l _ => absent(id, l).IsTrue(), parts.right),
                     Bool::is_true_and_intro(id.differs(exhausted), True, parts.left, trivial)))
         },
-        Until(_, _, _, _, _, outputs) => λ values buffers id h => j(sym(word_port_ids(outputs)), λ l _ => absent(id, l).IsTrue(), h),
+        Until(_, _, _, _, _, outputs, measure_at) => λ values buffers id h => j(sym(word_port_ids(outputs)), λ l _ => absent(id, l).IsTrue(), h),
     }
 }
 

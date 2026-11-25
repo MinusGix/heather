@@ -104,9 +104,9 @@ fn StructuredRegion::spelled_tagged(self region: StructuredRegion) → List<Nat>
         Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => Cons(5, List::append(inputs.spell_ids(),
             Cons(bound, List::append(parameters.spell_ids(), Cons(count, List::append(body.spelled_tagged(),
                 Cons(exit, List::append(next.spell_ids(), List::append(outputs.spell_ids(), [exhausted]))))))))),
-        Until(inputs, parameters, body, exit, next, outputs) => Cons(9, List::append(inputs.spell_ids(),
+        Until(inputs, parameters, body, exit, next, outputs, measure_at) => Cons(9, List::append(inputs.spell_ids(),
             List::append(parameters.spell_ids(), List::append(body.spelled_tagged(),
-                Cons(exit, List::append(next.spell_ids(), outputs.spell_ids())))))),
+                Cons(exit, List::append(next.spell_ids(), List::append(outputs.spell_ids(), [measure_at]))))))),
     }
 }
 
@@ -126,7 +126,7 @@ fn Stmt::spelled_stmt(self s: Stmt) → Option<List<Nat>> {
             Lend(_, _, _, _) => Some(Cons(7, region.spelled_tagged())),
             Call(_, _, _, _) => Some(Cons(7, region.spelled_tagged())),
             Loop(_, _, _, _, _, _, _, _, _) => Some(Cons(7, region.spelled_tagged())),
-            Until(_, _, _, _, _, _) => Some(Cons(7, region.spelled_tagged())),
+            Until(_, _, _, _, _, _, _) => Some(Cons(7, region.spelled_tagged())),
         },
         Invoke(shape) => Some(Cons(1, shape.spelled_call())),
         Then(first, rest) => Some([2]).spell_then(first.spelled_stmt()).spell_then(rest.spelled_stmt()),

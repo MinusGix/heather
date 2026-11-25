@@ -165,7 +165,7 @@ fn StructuredRegion::shown(self region: StructuredRegion) → String {
         Loop(inputs, limit, parameters, count, body, exit, next, outputs, exhausted) =>
             "loop (state " ++ refusal_numbers(parameters) ++ " from " ++ refusal_numbers(inputs) ++ "; next " ++ refusal_numbers(next)
                 ++ "; count " ++ refusal_number(count) ++ "; exit " ++ refusal_number(exit) ++ ") { " ++ body.shown() ++ "} ",
-        Until(inputs, parameters, body, exit, next, outputs) =>
+        Until(inputs, parameters, body, exit, next, outputs, measure_at) =>
             "until (state " ++ refusal_numbers(parameters) ++ " from " ++ refusal_numbers(inputs) ++ "; next " ++ refusal_numbers(next)
                 ++ "; exit " ++ refusal_number(exit) ++ ") { " ++ body.shown() ++ "} ",
     }
@@ -347,7 +347,7 @@ fn StructuredRegion::refusal(self region: StructuredRegion, saves: Nat, slots: N
                     },
                 },
             },
-        Until(inputs, parameters, body, exit, next, outputs) =>
+        Until(inputs, parameters, body, exit, next, outputs, measure_at) =>
             match file.until_entry(saves, inputs, parameters, placement) {
                 None => "the entry of an unbounded loop: an input (" ++ refusal_numbers(inputs)
                     ++ ") is in no register, or the placement has no register for each state word, where " ++ file.shown(),

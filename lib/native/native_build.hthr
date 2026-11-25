@@ -552,7 +552,7 @@ fn StructuredRegion::counts(self region: StructuredRegion) → List<Nat> {
         Lend(_, _, _, _) => [],
         Call(_, _, _, _) => [],
         Loop(_, _, _, count, body, _, _, _, _) => Cons(count, body.counts()),
-        Until(_, _, body, _, _, _) => body.counts(),
+        Until(_, _, body, _, _, _, measure_at) => body.counts(),
     }
 }
 

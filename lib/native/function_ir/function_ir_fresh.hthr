@@ -102,7 +102,7 @@ fn StructuredRegion::under(self region: StructuredRegion, b: Nat) → Bool {
                 (ids_under(Cons(count, Cons(exit, parameters)), b) && (ids_under(next, b) && body.under(b)))),
         Lend(views, _, arguments, result) => nodes_under(views_nodes(views), b) &&
             (ids_under(nodes_mentions(views_nodes(views)), b) && ids_under(Cons(result, views_homes(views) ++ arguments), b)),
-        Until(inputs, parameters, body, exit, next, outputs) =>
+        Until(inputs, parameters, body, exit, next, outputs, measure_at) =>
             ids_under(inputs, b) && (ids_under(outputs, b) && (ids_under(Cons(exit, parameters), b) && (ids_under(next, b) && body.under(b)))),
     }
 }
@@ -156,7 +156,7 @@ theorem StructuredRegion::under_mono(self region: StructuredRegion, b, c: Nat, l
                     ids_under_mono(b, c, le, nodes_mentions(views_nodes(views)), p2.left),
                     ids_under_mono(b, c, le, Cons(result, views_homes(views) ++ arguments), p2.right)))
         },
-        Until(inputs, parameters, body, exit, next, outputs) => λ under => {
+        Until(inputs, parameters, body, exit, next, outputs, measure_at) => λ under => {
             let p1 = Bool::and_true_parts(ids_under(inputs, b), ids_under(outputs, b) &&
                 (ids_under(Cons(exit, parameters), b) && (ids_under(next, b) && body.under(b))), under);
             let p2 = Bool::and_true_parts(ids_under(outputs, b), ids_under(Cons(exit, parameters), b) && (ids_under(next, b) && body.under(b)), p1.right);
@@ -390,7 +390,7 @@ theorem StructuredRegion::runs_agree(self region: StructuredRegion, effects: Eff
             Exists(mid, ⟨nodes_run_agree(values, other, b, agree, views_nodes(views), p1.left, before, mid, ran.proof.left),
                 Exists(left, ⟨Exists(rest, called), trans(ran.proof.right.proof.right, sym(put_views_agree(views, values, other, at_views, left, mid)))⟩)⟩)
         },
-        Until(inputs, parameters, body, exit, next, outputs) => λ under values other agree before after ran => {
+        Until(inputs, parameters, body, exit, next, outputs, measure_at) => λ under values other agree before after ran => {
             let p1 = Bool::and_true_parts(ids_under(inputs, b), ids_under(outputs, b) &&
                 (ids_under(Cons(exit, parameters), b) && (ids_under(next, b) && body.under(b))), under);
             let p2 = Bool::and_true_parts(ids_under(outputs, b), ids_under(Cons(exit, parameters), b) && (ids_under(next, b) && body.under(b)), p1.right);
@@ -437,7 +437,7 @@ fn StructuredRegion::top(self region: StructuredRegion, top: Nat) → Nat {
         Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) =>
             body.top(ids_top(next, ids_top(Cons(count, Cons(exit, parameters)), ids_top(outputs, ids_top(Cons(bound, Cons(exhausted, inputs)), top))))),
         Lend(views, _, arguments, result) => ids_top(Cons(result, views_homes(views) ++ arguments), ids_top(nodes_mentions(views_nodes(views)), top)),
-        Until(inputs, parameters, body, exit, next, outputs) =>
+        Until(inputs, parameters, body, exit, next, outputs, measure_at) =>
             body.top(ids_top(next, ids_top(Cons(exit, parameters), ids_top(outputs, ids_top(inputs, top))))),
     }
 }
