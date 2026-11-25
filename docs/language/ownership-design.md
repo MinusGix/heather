@@ -951,3 +951,142 @@ which is being worked out before anything more of it is built.
     10's "kept" means the lower back half's proved work is not thrown away
     without cause.
 
+
+## 15. The design as it stands (2026-11-25)
+
+One place to read the design after §14's decisions and two rounds of
+adversarial review. Where this section and §10 differ, this section holds:
+§10.3's "live path" row and §10.4's "a borrow is a path" describe keys into
+a store and level 2's references, not `&mut`; §10.7's permission tokens are
+not part of the judgment. Nothing here is built. §15.6 is the experiment
+that tests it first.
+
+### 15.1 Three levels
+
+| Level | What it has | Whose decisions |
+|---|---|---|
+| 1. Pure code | The function's own body in A-normal form; one kind of variable; no identity | the source |
+| 2. Objects | Blocks with identity and no location; references into them; `new` and `dead` | sharing: derived from the source in a strict function |
+| 3. Bytes and below | Layout, where a block lives, registers, addresses (FunctionIR, then x86) | placement: planned and checked |
+
+A type has a sharing class for level 2 (plain data, an object, an object
+that may not be dropped or duplicated) and a layout for level 3.
+
+### 15.2 What the source's ownership words mean (level 1)
+
+- `&{ρ} T` means `T`. The region `ρ` is a finite set of places (a root and
+  steps over atoms), phantom: a `region` parameter, never a value index.
+- `x: &mut T` as a parameter means `T` in and `Mutated` out.
+- A `&mut{o} T` stored in data means the value and an erased slot, the path
+  it returns to. Where its owner is not in scope (a callee that consumes a
+  collection of them) the function takes an erased in-out owner `o`.
+- **Write-back is eager**: after each statement that may change a write
+  view `x` of place `π`, the meaning has `π := x`. No point of death enters
+  the meaning, so the elaborator computes no liveness. That every later
+  placement of the write-back gives the same meaning is three facts the
+  library has (`PathLaws.set_set`, `Apart.writes_commute`,
+  `Apart.right_after_left`).
+- Mutation that tolerates aliasing is a key into a store; access is an
+  operation on the store and owes `Valid`.
+
+### 15.3 The checker
+
+An annotation (untrusted, inferred): each object binder is `own` or a view
+of a place, to read or to write; each site lists the bindings that die
+there; each signature has modes, regions, and whether a result is fresh or
+is one of its parameters.
+
+The checker is one forward pass over the body with a state per place:
+`whole`, `frozen(viewers)`, `out(viewer)` or `gone`.
+
+- A read needs no overlapping place `out` or `gone`.
+- A write or a take needs every overlapping place `whole`; a take leaves
+  `gone`.
+- A view to read adds a viewer; a view to write turns `whole` to `out`.
+- A death removes the viewer, or restores `whole`.
+- A join is the meet, with regions coarsened. A type that may not be
+  dropped may not be `gone` by weakening.
+- Overlap is decided on the places' steps where they are closed; otherwise
+  it is a residual obligation. A key access emits `Valid`; an index its
+  bound; a call the callee's precondition.
+
+A place is frozen while a live binding's type mentions it in a read region.
+A write under a frozen place is licensed where it is apart from it, so a
+view of `xs[0..8]` permits `xs[9] := s`. A collection states one region for
+all its elements; a finer one is a dependent record, never required.
+
+### 15.4 The theorems
+
+- **`check_sound`** (once): a closed verdict `check(f, ann) = Some(rs)`, by
+  evaluation and linear in `f`, and a proof of each residual under its
+  site's hypotheses, give `Safe(f, plan)`. The residuals' proofs come from
+  the proofs the source carries (§14.1) or a tactic. No separation algebra
+  is used.
+- **`Safe`** is, at each use of a place, that the place still reads its
+  value: "usable implies current".
+- **`sharing_sound`** (once): `Safe` gives that the level-2 run of the plan
+  agrees with the meaning and stores only inside what it took or was lent
+  to write.
+- **`placement_sound`** (once): layout and placement take level 2 to
+  FunctionIR with live blocks in disjoint windows. The separation algebra
+  of the first two waves (`Held`, exclusive footprints, the arena's
+  `alloc_fresh`) is this theorem's mathematics, and the parallel licence's.
+- Then the lowering as built, accepting a load or a store under a fact.
+
+A compiled function's own `check_sound` is what a caller cites for it; only
+level 2's primitives owe a hand proof that they keep what they do not need.
+
+### 15.5 Level 2, and where memory comes from
+
+```
+value ::= word | Ref(block, steps)
+steps ::= Field(i) | Elem(a) | Window(a, n) | Key(k) | Variant(c)
+ops   ::= new(shape) | load | store | narrow | dead
+```
+
+A block's cells are typed (words, bytes, references), with no layout and no
+address; the meaning is unchanged by renaming blocks. `dead` is a fact with
+no code, emitted at a death and read by placement. A stored view, a view
+chosen by a test, and a view returned into a caller's record are all a
+`Ref` held as a value.
+
+This level stands above FunctionIR, which is bytes with static buffer
+numbers. One new pass joins them: steps become byte spans (`Part`,
+`Stored`), each live block becomes a window of a supply buffer, and a `Ref`
+becomes offset words. Open: a `Ref` cell that may point into two supplies.
+
+`new` names no supply in the source or the meaning for an owned object:
+identity first appears at level 2. Whether a block is a static slot, part
+of a region or an allocator's is placement, from `new`, `dead`, size bounds
+and escape; a supply the source states is a demand. (Lean; the
+alternatives are a named supply everywhere, or a per-object free with a
+verified allocator. Minus has not settled this.) A statically sized block
+with no live reference may be moved by placement; that is never a copy.
+
+### 15.6 The first experiment
+
+One module: straight-line code over lists of numbers with in-place set,
+get, a read view of a window, and clone; `eval1` over values; `run2` over
+one buffer per object; `check` answering residuals; `check_sound`. Three
+programs: a linear one accepted with no residual; a view and a write
+accepted by one residual from a source hypothesis, with a `¬` theorem that
+the runs differ where the residual fails; a read of a name after its update
+refused, with a `¬` theorem that the refusal is not spurious.
+
+It refutes the design if the invariant needs more than the place states,
+if residuals cannot be closed data with a cheap meaning, if following a
+name through its in-place updates makes frozen tracking awkward, or if the
+kernel cannot evaluate the checker at tolerable cost. It does not test
+write views, calls, stored references or placement; the next experiment is
+one call with a `&mut` window and a returned view.
+
+### 15.7 Not settled
+
+1. Where memory comes from (§15.5), and reclamation under an inferred
+   region.
+2. A reference that may point into two supplies.
+3. That the least access for an unannotated binding is unique (a goal for
+   the judgment, not yet a property).
+4. Whether an owner may read a part it has lent to write, which eager
+   write-back would make sound.
+5. What a signature records, as data in a module's interface.
