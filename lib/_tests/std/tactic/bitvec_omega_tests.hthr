@@ -42,6 +42,12 @@ theorem literal_in_fact(i: BitVec(8), h: i.toNat() < BitVec::ofNat(200, n := 8).
 theorem lt_bit_wrong_way(i: BitVec(64), h: i.unsigned_lt_bit(BitVec::ofNat(64)) = False):
     BitVec::sub(BitVec::ofNat(64), i + 1).toNat() < BitVec::sub(BitVec::ofNat(64), i).toNat() { bv_omega }
 
+// The other branch of a test, a negated order (issues/bv-omega-negated-word-order.md).
+theorem not_le_prop(i, j: BitVec(64), h: ¬(i <= j)): j.toNat() < i.toNat() { bv_omega }
+theorem not_lt_prop(i: BitVec(64), h: ¬(i < 64)): 64 <= i.toNat() { bv_omega }
+// Under a subtraction whose no-borrow another fact gives.
+theorem not_le_sub(a, b, c: BitVec(64), room: b <= c, h: ¬(a <= c - b)): c.toNat() < a.toNat() + b.toNat() { bv_omega }
+
 // ---- Word arithmetic in the facts, used by the side conditions ----
 
 // `1 < n - i` is a fact about `toNat(n - i)`, which the side condition

@@ -67,15 +67,10 @@ theorem window_fits_false(base, len, limit: u64, no: window_fits(base, len, limi
     match window_fits_dec(base, len, limit) {
         Inl(both) => absurd(trans(sym(no), window_fits::True(base, len, limit, both))),
         Inr(neither) => match Nat::le_dec(len.toNat(), limit.toNat()) {
-            Inl(room) => match Nat::le_dec(base.toNat(), (limit - len).toNat()) {
-                Inl(under) => false_elim(neither(And(room, under))),
-                // As numbers: `bv_omega` does not read a negated comparison
-                // of words.
-                Inr(over) => {
-                    let r: (len <= limit) = room;
-                    let o: ((limit - len).toNat() < base.toNat()) = omega(over);
-                    bv_omega
-                },
+            Inl(room) => {
+                let r: (len <= limit) = room;
+                let over: (¬(base <= limit - len)) = λ under => neither(And(r, under));
+                bv_omega
             },
             Inr(past) => omega(past),
         },

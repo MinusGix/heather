@@ -176,7 +176,10 @@ way, each through its `bitvec_omega` lemma: `a.unsigned_le_bit(b)` (`<=`, or
 and `a <= b` at a word (issues/decreases-word-measures-by-hand.md). A plain
 equation of words in scope, `same: fill = 63` either way round, gives
 `fill.toNat() = 63.toNat()` (`toNat_of_eq`), which with the literal's value
-bridge refutes a branch the context rules out.
+bridge refutes a branch the context rules out. The other branch of a test,
+a negated order `¬(a <= b)` or `¬(a < b)` at a word, reads as the order the
+other way round (`unsigned_not_le_prop`, `unsigned_not_lt_prop`;
+issues/bv-omega-negated-word-order.md).
 The check that a window fits without a sum that may wrap,
 `word_fits::window_fits(base, len, limit)` (`lib/native/runtime/word_fits.hthr`),
 equal to `True` either way round, gives `toNat(base) + toNat(len) <=

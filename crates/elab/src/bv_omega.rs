@@ -1494,10 +1494,22 @@ fn window_check(elab: &Elaborator, cx: &Cx, name: &str, ty: &Type) -> Option<(Ve
 }
 
 /// A disequation of words, `d ≠ 0`, as `≠` of their values: a divisor's
-/// test that a remainder's bound reads (`division_value`).
+/// test that a remainder's bound reads (`division_value`). A negated order,
+/// `¬(a <= b)` or `¬(a < b)` as the other branch of a test states it, as
+/// the order the other way round (issues/bv-omega-negated-word-order.md).
 fn negated_word_fact(elab: &Elaborator, cx: &Cx, name: &str, ty: &Type) -> Option<WordFact> {
     let domain = crate::omega_cert::negated_domain(elab, cx, ty)?;
     let decoded = crate::inductive::decoded(&domain).into_owned();
+    if let Type::El { tm, .. } = &decoded {
+        for (test, relation, lemma) in [("unsigned_le", Relation::Lt, "unsigned_not_le_prop"), ("unsigned_lt", Relation::Le, "unsigned_not_lt_prop")] {
+            if let Some(args) = named_args(elab, tm, &format!("bitvec::BitVec::{test}")).filter(|args| args.len() == 3) {
+                if elab.key_of(&format!("bitvec_omega::{lemma}")).is_none() {
+                    return None;
+                }
+                return Some(WordFact { args: args.into_iter().cloned().collect(), relation, swapped: true, lemma, proof: name.to_string() });
+            }
+        }
+    }
     let Type::Id { lhs, rhs, .. } = &decoded else { return None };
     let width = word_width(elab, cx, &decoded, lhs)?;
     Some(WordFact { args: vec![width, Rc::clone(lhs), Rc::clone(rhs)], relation: Relation::Ne, swapped: false, lemma: "toNat_ne_of_ne", proof: name.to_string() })
