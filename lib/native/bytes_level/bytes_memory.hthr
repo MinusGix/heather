@@ -8,8 +8,9 @@
 //   (`Heap::take`) reads a piece, a put (`Heap::put`) writes one, where the
 //   range fits (`Heap::fits`: in its block, cutting no reference) and, for
 //   a put, its block may be written. A load of a word is `Heap::read_bytes`
-//   read as a number (`Heap::load`, little-endian as FunctionIR's
-//   `buffer_word`); a load of a reference is `Heap::load_ref`; a store of a
+//   read as a word (`Heap::load`, little-endian, zero above the bytes read,
+//   as the machine's loads); a store of `n` bytes writes a word's low `n`
+//   (`low_bytes`, as the machine's stores); a load of a reference is `Heap::load_ref`; a store of a
 //   word a put of `Piece::plain` bytes; a store of a reference a put of
 //   `Piece::reference`; a typed copy `Heap::copy`. Their site facts are the
 //   contract's (`Heap::take_some`, `put_some`, `read_bytes_some`,
@@ -25,6 +26,7 @@
 //   `put_renames`). Nothing here reads which block a reference names
 //   beyond following it.
 import x86_64_memory_contract;
+import x86_64;
 import x86_64_store;
 import bitvec;
 import bitvec_bytes;
@@ -63,25 +65,31 @@ theorem Heap::put_lent(self heap: Heap, blocks: Blocks, spans: Spans, lent: bloc
 // ---------------------------------------------------------------------------
 // Words in bytes
 
-// The `n` bytes from the first as a number, the first the least
-// significant: what a load of `n` bytes reads (FunctionIR's `buffer_word`).
-fn little_endian(bytes: List<BitVec(8)>, n: Nat) → Nat { BitVec::of_bytes_le(bytes.vector_of(n, BitVec::zero())).toNat() }
-
-// The `n` low bytes of a word of `8 * n` bits, the least significant first:
-// what a store of `n` bytes writes (FunctionIR's `store_word`).
-fn word_piece(n: Nat, word: BitVec(8 * n)) → List<BitVec(8)> { vector_entries(word.bytes_le(n)) }
-
-// A load: plain bytes read as a number.
-fn Heap::load(self heap: Heap, loc: Loc, n: Nat) → Option<Nat> {
-    match heap.read_bytes(loc, n) { None => None, Some(bytes) => Some(little_endian(bytes, n)) }
+// The bytes read as a word, the first the least significant, zero above
+// them: what a load of `n` bytes reads, as the machine's zero-extending
+// loads read them (`MOVZX` of a byte, `MOV` of a doubleword or a word).
+// Bytes past the end read zero (`byte_at`).
+fn word_of_bytes(bytes: List<BitVec(8)>) → BitVec(64) {
+    immediate_from_bytes(byte_at(bytes, 0), byte_at(bytes, 1), byte_at(bytes, 2), byte_at(bytes, 3), byte_at(bytes, 4), byte_at(bytes, 5),
+        byte_at(bytes, 6), byte_at(bytes, 7))
 }
 
-theorem Heap::load_some(self heap: Heap, loc: Loc, n, x: Nat, loaded: heap.load(loc, n) = Some(x)):
-    Exists<List<BitVec(8)>>(λ bytes => (heap.read_bytes(loc, n) = Some(bytes)) ∧ (little_endian(bytes, n) = x)) {
-    (match heap.read_bytes(loc, n) as λ o => heap.read_bytes(loc, n) = o → (match o { None => None, Some(bytes) => Some(little_endian(bytes, n)) }) = Some(x) →
-            Exists<List<BitVec(8)>>(λ bytes => (heap.read_bytes(loc, n) = Some(bytes)) ∧ (little_endian(bytes, n) = x)) {
+// The `n` low bytes of a word, the least significant first: what a store
+// of `n` bytes writes, as the machine's stores of a byte, a doubleword and
+// a word write a register's.
+fn low_bytes(n: Nat, word: BitVec(64)) → List<BitVec(8)> { word_bytes(word).take(n) }
+
+// A load: plain bytes read as a word.
+fn Heap::load(self heap: Heap, loc: Loc, n: Nat) → Option<BitVec(64)> {
+    match heap.read_bytes(loc, n) { None => None, Some(bytes) => Some(word_of_bytes(bytes)) }
+}
+
+theorem Heap::load_some(self heap: Heap, loc: Loc, n: Nat, x: BitVec(64), loaded: heap.load(loc, n) = Some(x)):
+    Exists<List<BitVec(8)>>(λ bytes => (heap.read_bytes(loc, n) = Some(bytes)) ∧ (word_of_bytes(bytes) = x)) {
+    (match heap.read_bytes(loc, n) as λ o => heap.read_bytes(loc, n) = o → (match o { None => None, Some(bytes) => Some(word_of_bytes(bytes)) }) = Some(x) →
+            Exists<List<BitVec(8)>>(λ bytes => (heap.read_bytes(loc, n) = Some(bytes)) ∧ (word_of_bytes(bytes) = x)) {
         None => λ _ none => absurd(none),
-        Some(bytes) => λ read some => Exists(bytes, ⟨read, Option::some_inj(little_endian(bytes, n), x, some)⟩),
+        Some(bytes) => λ read some => Exists(bytes, ⟨read, Option::some_inj(word_of_bytes(bytes), x, some)⟩),
     })(refl, loaded)
 }
 
@@ -424,7 +432,7 @@ theorem Heap::read_bytes_renames(self m: Heap, r: Renaming, renamed: Heap, rel: 
 // A load reads the same number.
 theorem Heap::load_renames(self m: Heap, r: Renaming, renamed: Heap, rel: HeapRenamed(r, m, renamed), loc: Loc, n: Nat):
     renamed.load(loc.rename(r), n) = m.load(loc, n) {
-    j(sym(m.read_bytes_renames(r, renamed, rel, loc, n)), λ o _ => (match o { None => None, Some(bytes) => Some(little_endian(bytes, n)) }) = m.load(loc, n),
+    j(sym(m.read_bytes_renames(r, renamed, rel, loc, n)), λ o _ => (match o { None => None, Some(bytes) => Some(word_of_bytes(bytes)) }) = m.load(loc, n),
         refl)
 }
 

@@ -135,8 +135,8 @@ inductive Instr {
     // The `bytes` bytes at `place`, holding no reference and none undefined,
     // as a word: the first the least significant.
     Load(bytes: Nat, output: Nat, place: Nat),
-    // The low `bytes` bytes of the word `value` (read at `8 * bytes` bits)
-    // stored at `place`.
+    // The low `bytes` bytes of the word `value` stored at `place`, as the
+    // machine's stores write a register's.
     Store(bytes: Nat, place: Nat, value: Nat),
     LoadRef(output: Nat, place: Nat),
     StoreRef(place: Nat, value: Nat),
@@ -156,9 +156,9 @@ fn Instr::step(self instr: Instr, blocks: Blocks, c: Config) → Option<Config> 
             True => Some(Config(Locals(node.step(c.locals.words), c.locals.refs), c.memory, c.io)),
         },
         Load(bytes, output, place) => c.locals.refs(place).and_then(λ (loc: Loc) =>
-            c.memory.load(loc, bytes).and_then(λ (x: Nat) => Some(Config(c.locals.set_word(output, λ (w: Nat) => BitVec::ofNat(x)), c.memory, c.io)))),
+            c.memory.load(loc, bytes).and_then(λ (x: BitVec(64)) => Some(Config(c.locals.set_word(output, word_value(x)), c.memory, c.io)))),
         Store(bytes, place, value) => c.locals.refs(place).and_then(λ (loc: Loc) =>
-            c.memory.put(blocks.written, loc, Piece::plain(word_piece(bytes, c.locals.words(8 * bytes, value)))).and_then(λ (m: Heap) => Some(Config(c.locals, m, c.io)))),
+            c.memory.put(blocks.written, loc, Piece::plain(low_bytes(bytes, c.locals.word(value)))).and_then(λ (m: Heap) => Some(Config(c.locals, m, c.io)))),
         LoadRef(output, place) => c.locals.refs(place).and_then(λ (loc: Loc) =>
             c.memory.load_ref(loc).and_then(λ (target: Loc) => Some(Config(c.locals.set_ref(output, target), c.memory, c.io)))),
         StoreRef(place, value) => c.locals.refs(place).and_then(λ (loc: Loc) => c.locals.refs(value).and_then(λ (target: Loc) =>

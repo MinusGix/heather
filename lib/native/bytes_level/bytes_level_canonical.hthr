@@ -88,9 +88,9 @@ theorem Instr::step_canonical(self instr: Instr, blocks: Blocks, c: Config, cano
         Load(_, _, _) => every_answer_any(canonical_config, λ loc => every_answer_any(canonical_config, λ x => canonical)),
         Store(bytes, _, value) => every_answer_any(canonical_config, λ loc =>
             every_answer_then(canonical_heap, canonical_config,
-                every_answer_of(canonical_heap, c.memory.put(blocks.written, loc, Piece::plain(word_piece(bytes, c.locals.words(8 * bytes, value)))),
-                    λ after stored => c.memory.put_canonical(blocks.written, loc, Piece::plain(word_piece(bytes, c.locals.words(8 * bytes, value))), after, stored,
-                        canonical, Piece::plain_canonical(word_piece(bytes, c.locals.words(8 * bytes, value))))),
+                every_answer_of(canonical_heap, c.memory.put(blocks.written, loc, Piece::plain(low_bytes(bytes, c.locals.word(value)))),
+                    λ after stored => c.memory.put_canonical(blocks.written, loc, Piece::plain(low_bytes(bytes, c.locals.word(value))), after, stored,
+                        canonical, Piece::plain_canonical(low_bytes(bytes, c.locals.word(value))))),
                 λ m h => h)),
         LoadRef(_, _) => every_answer_any(canonical_config, λ loc => every_answer_any(canonical_config, λ target => canonical)),
         StoreRef(_, _) => every_answer_any(canonical_config, λ loc => every_answer_any(canonical_config, λ target =>
