@@ -1036,9 +1036,8 @@ round stays green. (`Repeat` was taken: it is a native statement's.)
 
 **Round C as built so far.**
 
-- *The measure.* `Until` carries a seventh field, `measure`: the position
-  of the parameter it falls on. Both spellings write it and the Rust
-  printer reads it. No meaning reads it; it says where the check looks.
+- *The measure.* `Until` carried a seventh field, `measure`: the position
+  of the parameter it falls on. Round D removes it (below).
 - *The counted check* (`function_ir_counted`). A pass that counts is
   `Compose(work, Dataflow(leaf))`, where `work` writes no part of the
   counter and the leaf is exactly `counted_nodes(p, q, exit, t)`:
@@ -1062,12 +1061,8 @@ round stays green. (`Repeat` was taken: it is a native statement's.)
   `ran_out` and the state, behind a test of its bound. Each pass sets
   `ran_out` to the negation of `stop`, so the last pass leaves it 1
   exactly where the passes ran out.
-- *A limit of the measure.* `Until`'s measure is a parameter's position,
-  so a measure such as `(n - i).toNat()` needs a state word holding it,
-  recomputed on every pass. That is enough for a first version: the
-  counted helper and a `decreases` measure that is one word both fit.
-  Whether a measure written as an expression of the state is wanted later
-  is open.
+- *A measure is any function of the state, carried by the proof* (was:
+  a parameter's position; see the decision below).
 - *The runtime producers: held for a decision.* Every runtime producer of
   `Loop` is already replaced or deleted in round D:
   - `Iterate` goes when `while` reflects to the node;
@@ -1086,6 +1081,98 @@ round stays green. (`Repeat` was taken: it is a native statement's.)
   - deleting `Loop`, the allocator's `loop_zero`, `loop_down` and
     `loop_stop`, and regenerating linked follow 3h, once nothing makes a
     `Loop`.
+
+  **Decided (Minus, 2026-11-25):** this order. Round C is closed as built
+  (9720631). The counted `Loop` stays in use by the runtime producers
+  until 3h.
+
+**Round D, stage 1: the measure is evidence, not code.**
+
+*Decided (Minus, 2026-11-25).*
+
+- *The node's measure is a ghost.* It is the pin's `m`: the function's
+  `decreases` expression, any function of the state words whose value is a
+  word's `toNat` (`Setup::NodePass`, `node_means`). The compiled loop
+  computes nothing for it (vision principle 13).
+- *Its decrease comes from the pin.* A node goes round only from tail
+  position, so a pass that goes round at `xs` answers exactly `k(ys)`.
+  Suppose it went round with `m(ys) >= m(xs)`. Two continuations that agree
+  below `m` and differ at `ys` would then give `f(xs)` two values, and
+  every answer type has two. So `NodePass` alone says each pass that goes
+  round lowers `m`. One structural lemma about `Tm::loop_body` carries this
+  (it is `k` at the state the pass names, or does not read `k`), and the
+  generator owes nothing new. `rt_lower_defined` stays generic: the node's
+  case takes the pin's `m` and `NodePass`.
+- *`Until` has no `measure` field.* A measure is evidence, so it belongs
+  with the loop's definedness proof, which takes any measure function and
+  invariant already (`until_defined_of_measure`). Each producer supplies
+  its own:
+  - the node, from the pin;
+  - the counted check, from the counter its leaf names: in
+    `q := p - t`, `p` is the counter and `q` its next word, found in the
+    parameters and the next words by walking them together.
+
+  So every loop carries its measure, and no field means something only
+  sometimes.
+- *The node's meaning.* With no count and no extra pass it is
+  `Loop::rounds(2^64, pass, stuck, xs)`, where `stuck` reads the state
+  back. One `Until` matches it pass for pass, an exhausted `Until` leaving
+  the state as `stuck` does, so the code's eval needs no measure. Only its
+  definedness does.
+
+**Round D, stage 1 as built: the node is one `Until`.**
+
+- *Meaning.* `Tm::Loop`'s meaning is `Loop::rounds(Tm::rounds(), pass,
+  read_words, xs)`, where `Tm::rounds()` is `2^64`, as many as
+  `until_passes()`. Past its rounds it answers its state read back, as an
+  exhausted `Until` leaves it. The pin is `Loop::rounds_agree_below`: rounds
+  above the measure are the function, whatever answers past them. A word's
+  `toNat` is below `2^64`, so the extra pass and its off-by-one are gone.
+- *Code.* `Tm::loop_region` is one `Until` (`Tm::node_core`). It has no
+  bound word and no count, no exhausted bit, no second core and no branch
+  after it. The answer is the first output, the state's first word whether
+  the passes left or ran out (`Tm::extra_end`). The id layout is kept: the
+  bound's and count's ids are simply unused.
+- *Soundness.* `Tm::until_round_of` and `Tm::until_rounds_agree` are the
+  `Until` forms of the pass and the fuel recursion. `Tm::node_pass` is one
+  pass for any continuation, and `Tm::core_pass` is its instance at the
+  rounds. `Tm::loop_sound_at` lost its second core and its branch.
+- *Definedness.*
+  - The node's pass is `quiet`: `Tm::quiet_in` reads the `Until`'s pass.
+  - Its ending is a new premise of `Tm::DefinedHolds`, `Tm::Ends`. It is
+    structural: a term with no node owes nothing (`Tm::ends_free`, by
+    evaluation of `Tm::nodeless`). A node owes `Tm::NodeEnds`: a measure of
+    its words, at most a word's `toNat`, under which its pass is pinned
+    (`Tm::NodePass`, moved down from `Setup::NodePass`).
+  - `Tm::node_defined` turns that into `until_defined` by
+    `until_defined_of_measure`. A pass that goes round to `ys` answers its
+    continuation at `ys` (`Tm::node_pass`). Were `ys` not below the
+    measure, two continuations that agree with the pinned function below
+    it but answer `0` and `1` there would give the function two values.
+- *The generator.* A measured recursion compiled as a node gets
+  `f::ends` (`Setup::node_ends_of`): its measure, the generator's `word_within`
+  bound, and its pass pinned at the world of the empty file, all from what
+  it already builds for the pin (`runtime_node_measure`,
+  `runtime_node_pass`). `Compile::ranked_code`, `total_code`, `test_code`
+  and `walked_code` take `Compile::LoopsEnd`. A program's part reads a
+  callee's `f::ends`, its root's from the assembly, or `Compile::ends_free`.
+- *Probes.* `runtime_depth_tests`: `rsum_nodes`, a leveled recursion
+  calling the node `down_node`, is defined at no premise past its levels,
+  and agrees there. `down_node`'s code is quiet, and `ends_free` cannot
+  stand in for its measure (negative control).
+- *Certificates.* A flat program holding a node is no longer
+  `program_total`: an `Until` is defined only where it ends. The generator
+  states it defined as it does a leveled program, from each function's
+  part (`f::defined_within` at any levels, which a flat program does not
+  read). `Linked.fronts` are made for every program. The certificate
+  writer states `_defined_flat` from it and cites that where it cited
+  `program_total_defined`. `triangle` (examples/x86-native/loop_measure)
+  certifies with its node a 55-byte loop: test, add, decrement, jump back,
+  and no pass counter.
+- *Not yet covered.* A program with a node whose certificate takes
+  another shape (lent spans, a record through memory, other exported
+  entries) still cites `_defined_everywhere`, and would be refused there.
+  The gates hold none.
 
 **Built: a pass that answers several words** (step 3's first half, kept
 as small as the extra pass allows).

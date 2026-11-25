@@ -177,10 +177,10 @@ theorem count_down_node_pass(ys: List<BitVec(64)>, k: List<BitVec(64)> → BitVe
 theorem count_down_node_means(n, acc: BitVec(64)):
     Tm::sem(count_down_node(), count_down_world(), [Word(64), Word(64)], Pair(acc, Pair(n, trivial))) = count_down(n, acc) {
     trans(Tm::sem_in_loop([1, 0], count_down_pass(), count_down_world(), Tm::no_label(Table::none()), [Word(64), Word(64)], Pair(acc, Pair(n, trivial))),
-        loop::Loop::rounds_agree(count_down_measure, λ _ => True, count_down_words,
+        loop::Loop::rounds_agree_below(count_down_measure, λ _ => True, count_down_words,
             λ (k: List<BitVec(64)> → BitVec(64)) (ys: List<BitVec(64)>) => Tm::loop_body(count_down_world(), [Word(64), Word(64)], count_down_pass(), k, ys),
-            λ (ys: List<BitVec(64)>) => Ty::cast(Table::none(), Word(64), Word(64), ys.head_or(BitVec::zero())),
-            λ ys _ k a => count_down_node_pass(ys, k, λ zs lt => a(zs, trivial, lt)), Tm::passes(), [n, acc], trivial, Tm::word_within(n)))
+            λ (ys: List<BitVec(64)>) => Ty::read_words(Word(64), Table::none(), ys),
+            λ ys _ k a => count_down_node_pass(ys, k, λ zs lt => a(zs, trivial, lt)), Tm::rounds(), [n, acc], trivial, Tm::word_within(n)))
 }
 
 // A wrong pass is refused: `+` read as `-`.

@@ -1057,10 +1057,9 @@ inductive StructuredRegion {
     // the next pass's state. The final state is `outputs`. It ends only by
     // `exit`: that it ends is a proof its producer owes (a measure that
     // decreases on every pass that goes round), not a count in its code.
-    // The loop carries that measure: the parameter at `measure`, whose
-    // word's `toNat` falls on every pass that goes round (Minus,
-    // 2026-11-25; docs/language/loop-combinator-design.md §6.9).
-    Until(inputs: List<Nat>, parameters: List<Nat>, body: StructuredRegion, exit: Nat, next: List<Nat>, outputs: List<Nat>, measure: Nat),
+    // The measure is evidence, carried by that proof
+    // (`until_defined_of_measure`), not a field (Minus, 2026-11-25).
+    Until(inputs: List<Nat>, parameters: List<Nat>, body: StructuredRegion, exit: Nat, next: List<Nat>, outputs: List<Nat>),
 }
 
 // The ids a lend reads besides its arguments: each view's home, start and
@@ -1083,7 +1082,7 @@ fn structured_inputs(region: StructuredRegion) → Ports {
         Call(_, arguments, _, _) => Ports(word_ports(arguments)),
         Loop(inputs, bound, _, _, _, _, _, _, _) => Ports(word_ports(inputs ++ [bound])),
         Lend(views, _, arguments, _) => Ports(word_ports(views_reads(views) ++ arguments)),
-        Until(inputs, _, _, _, _, _, measure_at) => Ports(word_ports(inputs)),
+        Until(inputs, _, _, _, _, _) => Ports(word_ports(inputs)),
     }
 }
 
@@ -1096,7 +1095,7 @@ fn structured_outputs(region: StructuredRegion) → Ports {
         Call(_, _, result, also) => Ports(Cons(Port(id := result, width := 64), word_ports(also))),
         Loop(_, _, _, _, _, _, _, outputs, exhausted) => Ports(word_ports(outputs) ++ [Port(id := exhausted, width := 1)]),
         Lend(_, _, _, result) => Ports([Port(id := result, width := 64)]),
-        Until(_, _, _, _, _, outputs, measure_at) => Ports(word_ports(outputs)),
+        Until(_, _, _, _, _, outputs) => Ports(word_ports(outputs)),
     }
 }
 
@@ -1172,7 +1171,7 @@ fn StructuredRegionValid(region: StructuredRegion) → Type {
                 ((outputs.len() = parameters.len()) ∧ StructuredRegionValid(body))),
         Lend(views, _, arguments, result) =>
             (views_homes(views) ++ arguments).len() <= 8 ∧ PortIdAbsent(result, word_ports(views_reads(views) ++ arguments)),
-        Until(inputs, parameters, body, _, next, outputs, measure_at) =>
+        Until(inputs, parameters, body, _, next, outputs) =>
             (inputs.len() = parameters.len()) ∧ ((next.len() = parameters.len()) ∧
                 ((outputs.len() = parameters.len()) ∧ StructuredRegionValid(body))),
     }
@@ -1367,7 +1366,7 @@ fn StructuredRegionHolds(values: Valuation(), region: StructuredRegion) → Type
             LoopHolds(λ (pass: Valuation()) => StructuredRegionHolds(pass, body), values, inputs, bound, parameters, count, exit,
                 next, outputs, exhausted),
         Lend(_, _, _, _) => False,
-        Until(inputs, parameters, body, exit, next, outputs, measure_at) =>
+        Until(inputs, parameters, body, exit, next, outputs) =>
             UntilHolds(λ (pass: Valuation()) => StructuredRegionHolds(pass, body), values, inputs, parameters, exit, next, outputs),
     }
 }
@@ -1406,7 +1405,7 @@ fn StructuredRegionHoldsOver(buffers: Buffers(), callees: Callees(), values: Val
         // theorem takes this one for it: a region with a lend is not `quiet`.
         Lend(views, callee, arguments, result) => NodesHoldOver(buffers, values, views_nodes(views)) ∧
             Exists<List<BitVec(64)>>(λ rest => callees(callee, words_of(values, views_homes(views) ++ arguments), values(64, result), rest)),
-        Until(inputs, parameters, body, exit, next, outputs, measure_at) =>
+        Until(inputs, parameters, body, exit, next, outputs) =>
             UntilHolds(λ (pass: Valuation()) => StructuredRegionHoldsOver(buffers, callees, pass, body), values, inputs, parameters, exit,
                 next, outputs),
     }
@@ -1438,7 +1437,7 @@ theorem StructuredRegion::holds_in(self region: StructuredRegion, callees: Calle
                 parameters, count, exit, next, values(64, bound).toNat(), words_of(values, inputs), words_of(values, outputs),
                 values(1, exhausted).head_bit()),
         Lend(_, _, _, _) => λ never => false_elim(never),
-        Until(inputs, parameters, body, exit, next, outputs, measure_at) =>
+        Until(inputs, parameters, body, exit, next, outputs) =>
             λ held => until_holds_weaken(λ (pass: Valuation()) => StructuredRegionHolds(pass, body),
                 λ (pass: Valuation()) => StructuredRegionHoldsIn(callees, pass, body), λ pass h => body.holds_in(callees, pass, h),
                 values, inputs, parameters, exit, next, outputs, held),
