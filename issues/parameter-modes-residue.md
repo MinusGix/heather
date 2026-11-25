@@ -1,6 +1,6 @@
 ---
 title: Parameter modes: the forms ownership-parameter-modes left (method calls with paths, &mut off statements, elements apart)
-status: open
+status: closed
 labels: [ownership,language,frontend]
 area: language
 milestone: [nh-ownership]
@@ -31,3 +31,4 @@ What `ownership-parameter-modes` did not build (docs/language/sequencing-surface
   4. **A callee's own recursion is held to its modes**: `SelfRef::modes` for `PathCalls::check_modes`, and `measure::Rewrite::self_call` checks lent arguments against the parameters before a `decreases` self-call becomes the hypothesis (its measure reads a lent place's value going in, where a `\0mutarg` had reached the elaborator).
 
   Not built, re-filed in [[parameter-modes-later]] with reasons: elements apart (waits on the judgment's `Apart`; no route built), `f(&a)` (as notation it should be held to a `&` parameter on every route an argument meets its parameter; nothing carried until regions are named), generators publishing modes (a tactic-protocol change touching every `Param` builder, the `runtime` generator's included, plus the published result's nest), a lending own call as a `mut self` body's tail call, a lending statement in another carrier, a lending call in an `if` condition.
+- 2026-11-25: Verified: plain `scripts/test` (exact image policy, every library module re-elaborated with this round's elaborator) `== suite: 4139 passed, 0 failed, 3 ignored ==`; then `scripts/test --pr` on the final tree (one probe added after the plain run) `== suite: 4139 passed, 0 failed, 3 ignored ==`. The probe module also checks under `HEATHER_LEXER=linked`. Closed.

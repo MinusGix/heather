@@ -1,6 +1,6 @@
 ---
 title: A dot call of a plain-self function answering Mutated is refused as a mut self call, and under a projection the refusal is lost
-status: open
+status: closed
 labels: [frontend,diagnostics]
 area: language
 milestone: [none]
@@ -25,3 +25,4 @@ Two things to settle:
 ## Log
 
 - 2026-11-25: Fixed with [[parameter-modes-residue]] (docs/language/sequencing-surface-design.md §24.4). Settled: **a plain `self` receiver with a `Mutated` result is not a `mut self` method**. Since [[ownership-parameter-modes]] every declaration records its receiver's mode, so `refuse_unthreaded_mut_call` and the statement forms (`elaborate_mut_call`, `mut_call_part`) read that (`Members::threads_receiver`, `crates/elab/src/dispatch/member.rs`) instead of the result head: `c.tick(1).value` answers the record as `Counter::tick(c, 1).value` does, also on a `let mut` local (`let r = d.split(2);` binds the record and leaves `d`), and the statement `d.split(2);` is refused as discarding its value. Where no mode is recorded (a local function) the result head decides as before. And the refusal reaches the user under a projection: a field read whose receiver is a call refused by the elaborator reports that refusal (`dispatch/member.rs`, the `args: None` branch). Probes: `split_dotted`, `split_on_local_open`, `split_statement`, `tally_projected` in `lib/_tests/std/core/parameter_modes_tests.hthr`. The library had no dot call that relied on the old reading (a grep of every plain-`self` function answering `Mutated`; the plain suite is the evidence).
+- 2026-11-25: Verified: plain `scripts/test` (exact image policy, every library module re-elaborated with this round's elaborator) `== suite: 4139 passed, 0 failed, 3 ignored ==`; then `scripts/test --pr` on the final tree (one probe added after the plain run) `== suite: 4139 passed, 0 failed, 3 ignored ==`. The probe module also checks under `HEATHER_LEXER=linked`. Closed.
