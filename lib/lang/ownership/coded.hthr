@@ -375,3 +375,68 @@ fn Owes::Due(self d: Owes, tys: List<Type>, strs: Strs(tys), w: World(tys), pres
 fn mean_word(tys: List<Type>, strs: Strs(tys), w: World(tys), f: Func, objs: List<Dyn(tys)>, ws: List<Nat>) → Nat {
     mean_then(tys, strs, w, f.body, Sem(objs, Env::start(ws)), λ s => f.ret.out(tys, strs, s).word)
 }
+
+// ---------------------------------------------------------------------------
+// The step model at `Dyn`, and why its laws cannot hold as `steps.hthr`
+// states them
+//
+// Each selection is a `Path<Dyn, Dyn>`: its read the part with its code
+// where the step fits the owner's code (`None` otherwise), its write the
+// meaning's modification. That instantiates `StepModel<Dyn>`. Its laws do
+// not hold for any fit: `StepModelLaws` asks `PathLawsOn(path(a), fits(a))`
+// with `fits(a): Dyn → Bool` a property of the written value alone, and
+// `reads_fit` makes every value read through the step fit. An element of a
+// list of words and an element of a list of lists are both read through
+// `OnSeq(SeqOne(0))`, so both codes fit, and writing the list into the list
+// of words must then read it back (`set_get`), which a native list of
+// words cannot hold. `Dyn::elem_not_lawful` is the refutation, at the empty
+// environment. The universal `Val` passes only because a sequence there
+// holds values of any shape.
+
+fn Dyn::field_get(tys: List<Type>, {T: Type}, st: Struct(tys, T), i: Nat, v: T) → Option<Dyn(tys)> {
+    match st { Opaque(_) => None, Fields(_, fs) => match fs.nth(i) { Some(f) => f.path.get(v).map(λ y => Dyn(f.shape, y)), None => None } }
+}
+
+fn Dyn::get(tys: List<Type>, strs: Strs(tys), sel: Sel, d: Dyn(tys)) → Option<Dyn(tys)> {
+    (match d.code as λ c => El(tys, c) → Option<Dyn(tys)> {
+        SWord => λ _ => None,
+        SSeq(a) => λ v => match sel {
+            OnSeq(x) => match x {
+                SeqOne(i) => v.nth(i).map(λ y => Dyn(a, y)),
+                SeqRun(lo, n) => (lo + n).leb(List::len(v)).then(Some(Dyn(SSeq(a), v.drop(lo).take(n)))),
+            },
+            _ => None,
+        },
+        SNamed(k) => λ v => match sel { OnField(i) => Dyn::field_get(tys, strs(k), i, v), _ => None },
+    })(d.val)
+}
+
+fn Dyn::path(tys: List<Type>, strs: Strs(tys), sel: Sel) → Path<Dyn(tys), Dyn(tys)> {
+    Path<Dyn(tys), Dyn(tys)>(get := λ (d: Dyn(tys)) => Dyn::get(tys, strs, sel, d), set := λ (d: Dyn(tys)) => λ (w: Dyn(tys)) => Dyn::over(tys, strs, sel, λ _ => w, d))
+}
+
+// The write fits where the written value's code is the code of the part it
+// replaces, which a fit over the written value alone cannot say; the best
+// such fit is every value.
+fn Dyn::model(tys: List<Type>, strs: Strs(tys)) → StepModel<Dyn(tys)> { StepModel<Dyn(tys)>(λ sel => Dyn::path(tys, strs, sel), λ _ _ => True) }
+
+fn Dyn::no_strs() → Strs(Nil) { λ k => Opaque(trivial) }
+
+// No fit makes the element step lawful.
+theorem Dyn::elem_not_lawful(fits: Dyn(Nil) → Bool): ¬PathLawsOn<Dyn(Nil), Dyn(Nil)>(Dyn::path(Nil, Dyn::no_strs(), OnSeq(SeqOne(0))), fits) {
+    λ laws => {
+        let lists: Dyn(Nil) = Dyn(SSeq(SSeq(SWord)), [Nil<Nat>]);
+        let a_list: Dyn(Nil) = Dyn(SSeq(SWord), Nil);
+        let fit: (fits(a_list) = True) = laws.reads_fit(lists, a_list, refl);
+        let back: (Dyn::path(Nil, Dyn::no_strs(), OnSeq(SeqOne(0))).get(Dyn::path(Nil, Dyn::no_strs(), OnSeq(SeqOne(0))).set(Dyn(SSeq(SWord), [0]), a_list)) = Some(a_list)) =
+            laws.set_get(Dyn(SSeq(SWord), [0]), Dyn(SWord, 0), a_list, refl, fit);
+        let codes: (SWord = SSeq(SWord)) = cong_fn(λ (o: Option<Dyn(Nil)>) => o.unwrap_or(Dyn(SWord, 0)).code, back);
+        absurd(codes)
+    }
+}
+
+// So `StepModelLaws` at `Dyn` is false for every model built of these
+// steps, whatever its fits.
+theorem Dyn::model_not_lawful(fits: Sel → Dyn(Nil) → Bool): ¬StepModelLaws<Dyn(Nil)>(StepModel<Dyn(Nil)>(λ sel => Dyn::path(Nil, Dyn::no_strs(), sel), fits)) {
+    λ ml => Dyn::elem_not_lawful(fits(OnSeq(SeqOne(0))), ml.laws(OnSeq(SeqOne(0))))
+}
