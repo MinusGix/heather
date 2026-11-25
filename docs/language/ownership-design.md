@@ -1611,3 +1611,122 @@ the held meaning; stage 5's scratch build is its test.
 
 The experiments' modules (`place_check`, `call_check`, `reference_cells`)
 are deleted when the real modules exist.
+
+## 18. The world, termination, and level 2 fixed (2026-11-25)
+
+Round six of the design review. Where this section and §15.4, §15.5 or §17
+differ, this section holds.
+
+### 18.1 One meaning, clocked
+
+A run is a family over fuel with four outcomes, and the world is in its
+state beside the heap:
+
+```heather
+record Answer { words: List<Value>, heap: Heap, io: Io }
+inductive Ran { Done(a: Answer), Exited(status: BitVec(64), io: Io), Going(io: Io), Stuck }
+fn run(p, n: Nat /* fuel */, f: Nat, args: List<Value>, heap: Heap, io: Io) → Ran
+```
+
+`Going` is "not finished at this fuel, and here is the world so far";
+`Stuck` is "no meaning". The run is monotone in fuel. "No answer" for a run
+that does not end would conflate divergence with undefinedness and lose
+what a diverging run wrote; a coinductive run would make every pass a
+proof up to silent steps. This does not change the surface's meaning (an
+unmeasured loop over the world is `Io → Partial<…>`, Minus 2026-11-03): the
+reflected levels are that meaning observed at a count, and one pin theorem
+per function connects them.
+
+- **A pass's theorem has three clauses**: every finished run of its input is
+  one of its output at some fuel; every history the input reaches while
+  going is a prefix of one the output reaches; and the converse unless the
+  input is stuck.
+- **Every loop is a plain loop**: no bound operand, counter or exhausted
+  output at the bytes level. The fuel gives the meaning's totality; that a
+  program ends is a separate fact, from its measure. The two loop meanings
+  (bounded in FunctionIR, iterated in `Source`) become one.
+- **Calls spend fuel**, so a program is tied by fuel and not by levels.
+- **Fuel is the step meter**: a time bound is "done at a fuel below a
+  bound", the judgment of §15.9 over steps.
+
+### 18.2 The world
+
+- **Level 1**: `Io` as built, a type that may not be duplicated or dropped.
+  A system call is an operation whose meaning is `Io::call`. `write` and a
+  path take a read view. `read_into` takes its window by value and answers
+  the filled window and a count, or a failure: **a failed read takes the
+  window**, so the place must be written before it is read again. The
+  meaning never sees what a failed read left behind, so the copy through a
+  scratch range that every read pays today goes, and the Linux model does
+  not change. A descriptor is plain data; a file that must be closed is a
+  library type that may not be dropped, around the word.
+- **Below**: the world has no block and no bytes. A system call is a node
+  whose meaning builds the command from words and the heap's bytes at a
+  window, asks the world, records the exchange and decodes the answer. A
+  renaming of blocks is the identity on the world, since a command carries
+  bytes and words and never a reference (the kind check enforces it).
+- **A byte is plain, part of a reference, or undefined.** The injection
+  constrains only the defined; a store defines; a load of an undefined byte
+  has no meaning and owes "defined", which the place state supplies. A
+  fresh block, a dead one and a window after a failed read are undefined.
+- **The machine**: one step lemma for the system-call node, whose
+  conclusion holds for every answer and resumption the Linux model allows.
+  The whole-program theorem: at every fuel, the trace the code has
+  performed is the history the meaning has reached, and an exit ends it.
+- **Deleted with the tools' move**: the program compiler and its scratch
+  range, `Source` and its denotations, the builder, the effect terms.
+  **Kept**: `Io`, the world's model, the machine's Linux model and its
+  determinism, the image and start-up, the contract record, and `Partial`
+  with `Io::against` as the surface's meaning and the bridge to a spec
+  written as a tree.
+
+### 18.3 Level 2, fixed
+
+- **No intermediate `Safe`.** Both experiments proved one theorem: a
+  verdict and its residuals give agreement of the run and the meaning,
+  stated as a function's safety (`FnSafe`). So §15.4's `check_sound` and
+  `sharing_sound` are one theorem, stated at level 2.
+- **The heap** is a list of blocks, each live with an object or dead; a
+  fresh block is the next index. An object is the universal value of
+  `value_steps.hthr` with three more leaves: an owning reference to a
+  block, a view (a block and selectors), and a taken cell.
+- **Operations**: make a block; load and store at a selector; narrow a
+  view; a death (the block and every block it owns); calls, primitives and
+  system calls. Anything not defined is stuck.
+- **There is no plan beyond the annotation.** An in-place operation's result
+  is its operand's name with a store; a fresh result makes a block; a view
+  narrows; a write-back is nothing; a listed death of an owner is a death.
+  The experiments' buffer plan existed because their file was allocated in
+  advance.
+- **A level-2 value reads a level-1 value** by resolving owning references
+  and views through the heap, with the block count as fuel since ownership
+  is a tree.
+- **A function's safety**: its answer reads the meaning's; each written
+  parameter reads the meaning's value after (the eager write-back); the
+  heap is unchanged outside what was lent, which for a window is one lens
+  equation; a returned view's selectors extend its parameter's; its events
+  are well formed. A postcondition is one more field.
+
+### 18.4 Three things not yet tested, and their tests
+
+1. **Discharging a residual from the source's own proof.** Every experiment
+   used a hand-written term. For a real function, a hypothesis about the
+   function's variables must become the obligation at the reflected
+   environment, through the pin, at a cost the kernel accepts, by a term a
+   generator could write. Test: one function with a found proof, its body
+   written by hand in the checker's language, its residual discharged from
+   its own hypothesis.
+2. **Loops.** A place state stable at the loop's head in one pass;
+   residuals that hold at every pass and not "at the words the meaning ends
+   with"; soundness by induction on fuel. Test: one loop added to the
+   checker's fragment, writing an element while a view of a later window is
+   held, its residual from the loop's guard.
+3. **Where a growable container lives.** A list has no capacity. Either
+   level 1 is over representation types only (a vector is a record of an
+   array, a length and a capacity; `push` and `grow` are ordinary code; a
+   list is reached through an abstraction function above), or each
+   container brings its own reading at level 2. Lean: the first, which
+   makes level 2 structural and turns "a push with room keeps a held
+   element" into the checker run on `push`'s body. It revises §10.6's
+   "capacity is a fact about a home": at this level it is a field. Test:
+   the arena vector's push and a caller holding an element view, by hand.
