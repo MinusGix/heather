@@ -5,25 +5,31 @@
 // (docs/language/sequencing-surface-design.md §5, §14, §19, §22), so each
 // reading is one structural recursion and a pin is a conversion.
 //
-// - **One environment of `Dyn`s**, newest first: a variable is a de Bruijn
-//   index, a word is a `Dyn` like any other value, and an atom of a step
-//   reads the environment's words as indices (`Dyn::ixs`).
+// - **One environment of `Dyn`s** (`Env`): the arguments by position and
+//   the locals newest first (`Arg(i)`, `Loc(j)`), a word a `Dyn` like any
+//   other value. An atom of a step reads the arguments' then the locals'
+//   words as indices (`Env::ixs`). Nothing reaches the environment but
+//   through `Env::push`, `Env::get`, `Env::set` and their laws, so another
+//   representation touches no statement.
 // - **Statements** bind their value (a word primitive, a read, a view, a
 //   take, a fresh object, a call's results) or write a place of a variable
 //   in place; a death changes nothing in the meaning.
 // - **A join** (`Join(test, yes, no, outs, rest)`) is the surface's. Where
 //   every leaf of both arms is a `Yield`, its meaning is one convoy over the
-//   packed outputs, `convoy(test, pack(yes), pack(no))`, each output the
-//   `Dyn` of its recorded code and its projection, and `rest` is read once
-//   after it. Where an arm has another leaf (an early return on an inner
+//   packed outputs, `convoy(test, pack(yes), pack(no))` at the yes arm's
+//   codes (the no arm's values cast to them, the yes arm's value where a
+//   code differs), each output the `Dyn` of its code and its projection,
+//   and `rest` is read once after it. Where an arm has another leaf (an early return on an inner
 //   path), `rest` is bound once as a function of the outputs and each
 //   `Yield` calls it; the surface copies `rest` into each arm that falls
 //   through (§22 items 5 and 8), which is the same term after β.
 // - **A loop is a function** whose body has a `Jump`: its own call, last.
-// - **An ill-coded body or call has no meaning**: where a cast can fail (an
-//   operand of a word primitive or a test, a join's output, a callee's
-//   answer) the meaning fails, and nowhere else. At closed codes every such
-//   cast is `Some` by evaluation, so a pin reads `= Some(…)` and is `refl`.
+// - **An ill-coded body has a junk meaning, never a missing one**: an
+//   operand of a word primitive or a test that is not a word of the first's
+//   width reads the word zero; an ill-coded call answers no results, and a
+//   binder with no result binds the word zero `Dyn`. Nothing is optional,
+//   so a pin is `mean(…) = the source's term`. The check refuses an
+//   ill-coded body from codes alone (`verdict.hthr`, `Func::coded`).
 import logic;
 import bool;
 import nat;
@@ -39,8 +45,10 @@ import shape;
 // ---------------------------------------------------------------------------
 // The text
 
-// A variable (newest first) and steps.
-record Place { root: Nat, steps: List<Step> }
+// A variable: an argument by position, or a local, newest first.
+inductive Var { Arg(i: Nat), Loc(j: Nat) }
+
+record Place { root: Var, steps: List<Step> }
 
 inductive Mode { Reading, Writing }
 
@@ -48,13 +56,13 @@ inductive Prim { PAdd, PSub, PMul }
 
 inductive Stmt {
     // A word primitive on two variables of one width.
-    Op(op: Prim, a: Nat, b: Nat),
+    Op(op: Prim, a: Var, b: Var),
     // A literal word.
     Lit(w: Width, n: Nat),
     // A read (a copy) of a place.
     Read(p: Place),
     // A write of a variable's value at a place.
-    Write(p: Place, v: Nat),
+    Write(p: Place, v: Var),
     // A view of a place, to read or to write: its value, written back by
     // the writes the reflector places after each statement that changes it
     // (§15.2's eager write-back).
@@ -62,26 +70,25 @@ inductive Stmt {
     // A take of a place.
     Take(p: Place),
     // A fresh object of code `c`: `n` copies of `v`.
-    Fresh(c: Shape, n: Nat, v: Nat),
-    // A call, binding the callee's results.
-    Call(g: Nat, args: List<Nat>),
+    Fresh(c: Shape, n: Var, v: Var),
+    // A call, binding the callee's `n` results.
+    Call(g: Nat, args: List<Var>, n: Nat),
     // A death of a place.
     Death(p: Place),
 }
 
 // A join's test, as the source's `if h: a < b` decides it.
-inductive Test { TLt(a: Nat, b: Nat), TLe(a: Nat, b: Nat) }
+inductive Test { TLt(a: Var, b: Var), TLe(a: Var, b: Var) }
 
 inductive Body {
     // The function's results.
-    Ret(results: List<Nat>),
+    Ret(results: List<Var>),
     // To the enclosing join.
-    Yield(outs: List<Nat>),
+    Yield(outs: List<Var>),
     Do(s: Stmt, rest: Body),
-    // `outs`: the joined outputs' codes, in first-assignment order.
-    Join(t: Test, yes: Body, no: Body, outs: List<Shape>, rest: Body),
+    Join(t: Test, yes: Body, no: Body, rest: Body),
     // The function's own call, last.
-    Jump(args: List<Nat>),
+    Jump(args: List<Var>),
 }
 
 fn seq(ss: List<Stmt>, last: Body) → Body { match ss { Nil => last, Cons(s, rest) => Do(s, seq(rest, last)) } }
@@ -90,11 +97,11 @@ fn seq(ss: List<Stmt>, last: Body) → Body { match ss { Nil => last, Cons(s, re
 // body with none has every leaf a `Yield`, and a join of two such arms is
 // one convoy.
 fn Body::exits(self b: Body) → Bool {
-    match b { Ret(_) => True, Yield(_) => False, Do(_, rest) => rest.exits(), Join(_, y, n, _, rest) => y.exits() || n.exits() || rest.exits(), Jump(_) => True }
+    match b { Ret(_) => True, Yield(_) => False, Do(_, rest) => rest.exits(), Join(_, y, n, rest) => y.exits() || n.exits() || rest.exits(), Jump(_) => True }
 }
 
-// What a signature records (§15.8), as far as the meaning reads it; the
-// regions, the parts written and the cost are item 5's.
+// What a signature records (§15.8), as far as the meaning and the check
+// read it; the regions, the parts written and the cost are later.
 inductive PMode { ByTake, ByRead, ByWrite }
 
 inductive Origin { OFresh, OParam(i: Nat), OView(i: Nat, steps: List<Step>) }
@@ -106,6 +113,63 @@ record Result { code: Shape, origin: Origin }
 record Sig { params: List<Param>, results: List<Result> }
 
 record Func { sig: Sig, body: Body }
+
+// ---------------------------------------------------------------------------
+// The environment
+
+record Env(tys: Nat → Type) { args: List<Dyn(tys)>, locs: List<Dyn(tys)> }
+
+fn Env::start(tys: Nat → Type, args: List<Dyn(tys)>) → Env(tys) { Env(args, Nil) }
+
+fn Env::push(tys: Nat → Type, e: Env(tys), d: Dyn(tys)) → Env(tys) { Env(e.args, Cons(d, e.locs)) }
+
+fn Env::push_all(tys: Nat → Type, e: Env(tys), ds: List<Dyn(tys)>) → Env(tys) { match ds { Nil => e, Cons(d, rest) => Env::push_all(tys, Env::push(tys, e, d), rest) } }
+
+fn Env::get(tys: Nat → Type, e: Env(tys), v: Var) → Dyn(tys) {
+    match v { Arg(i) => e.args.nth(i).unwrap_or(Dyn::none(tys)), Loc(j) => e.locs.nth(j).unwrap_or(Dyn::none(tys)) }
+}
+
+fn Env::set(tys: Nat → Type, e: Env(tys), v: Var, f: Dyn(tys) → Dyn(tys)) → Env(tys) {
+    match v { Arg(i) => Env(e.args.update(i, f), e.locs), Loc(j) => Env(e.args, e.locs.update(j, f)) }
+}
+
+// The words an atom reads: the arguments', then the locals', as indices.
+fn Env::ixs(tys: Nat → Type, e: Env(tys)) → List<Ix> { Dyn::ixs(tys, e.args) ++ Dyn::ixs(tys, e.locs) }
+
+// The laws every theorem reaches the environment through.
+theorem Env::get_push_here(tys: Nat → Type, e: Env(tys), d: Dyn(tys)): Env::get(tys, Env::push(tys, e, d), Loc(0)) = d { refl }
+
+theorem Env::get_push_below(tys: Nat → Type, e: Env(tys), d: Dyn(tys), j: Nat): Env::get(tys, Env::push(tys, e, d), Loc(j + 1)) = Env::get(tys, e, Loc(j)) { refl }
+
+theorem Env::get_push_arg(tys: Nat → Type, e: Env(tys), d: Dyn(tys), i: Nat): Env::get(tys, Env::push(tys, e, d), Arg(i)) = Env::get(tys, e, Arg(i)) { refl }
+
+fn Place::val(self p: Place, tys: Nat → Type, strs: Strs(tys), e: Env(tys)) → Dyn(tys) {
+    Dyn::read(tys, strs, Env::ixs(tys, e), p.steps, Env::get(tys, e, p.root))
+}
+
+// A callee's meaning, by its index: from the values passed, its results.
+// An ill-coded argument list answers no results. A recursive function's
+// world holds the function itself.
+fn Callees(tys: Nat → Type) → Type { Nat → List<Dyn(tys)> → List<Dyn(tys)> }
+
+// The `n` results of a call: what the callee answered, the word zero past
+// its end.
+fn Dyn::take_n(tys: Nat → Type, rs: List<Dyn(tys)>, n: Nat) → List<Dyn(tys)> {
+    match n { Zero => Nil, Succ(k) => match rs { Cons(r, rest) => Cons(r, Dyn::take_n(tys, rest, k)), Nil => Cons(Dyn::none(tys), Dyn::take_n(tys, Nil, k)) } }
+}
+
+// A fresh object: `n` copies of `v`, where `c` is a sequence and `v` of its
+// element's code; the word zero otherwise.
+fn Dyn::fresh(tys: Nat → Type, strs: Strs(tys), c: Shape, n, v: Dyn(tys)) → Dyn(tys) {
+    match c {
+        SWord(_) => Dyn::none(tys),
+        SNamed(k) => match strs(k).kind {
+            Sequence(q) => match Dyn::get(tys, q.elem, v) { Some(x) => Dyn(SNamed(k), q.make(Dyn::ix(tys, n), x)), None => Dyn::none(tys) },
+            Opaque => Dyn::none(tys),
+            Record(_) => Dyn::none(tys),
+        },
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Words
@@ -127,45 +191,18 @@ fn Width::le(w: Width, a, b: Word(w)) → Bool {
     (match w as λ v => Word(v) → Word(v) → Bool { WNat => λ x y => decide_bit<x <= y>(), WBits(_) => λ x y => decide_bit<x.unsigned_le(y)>() })(a, b)
 }
 
-// Two words of one width, through `f`; nothing where the second is not of
-// the first's width or the first is not a word.
-fn Dyn::words<R>(tys: Nat → Type, x, y: Dyn(tys), f: (w: Width) → Word(w) → Word(w) → R) → Option<R> {
-    (match x.code as λ c => El(tys, c) → Option<R> {
-        SWord(w) => λ a => match Dyn::get(tys, SWord(w), y) { Some(b) => Some(f(w, a, b)), None => None },
-        SNamed(_) => λ _ => None,
+// Two words at the first's width, through `f`: a second that is not of it
+// reads the word zero there, and a first that is not a word is the word
+// zero.
+fn Dyn::words<R>(tys: Nat → Type, x, y: Dyn(tys), f: (w: Width) → Word(w) → Word(w) → R) → R {
+    (match x.code as λ c => El(tys, c) → R {
+        SWord(w) => λ a => f(w, a, Dyn::back(tys, SWord(w), y, Width::of_nat(w, 0))),
+        SNamed(_) => λ _ => f(WNat, 0, Dyn::back(tys, SWord(WNat), y, 0)),
     })(x.val)
 }
 
 // ---------------------------------------------------------------------------
-// The environment
-
-fn Dyn::at_var(tys: Nat → Type, env: List<Dyn(tys)>, x: Nat) → Dyn(tys) { env.nth(x).unwrap_or(Dyn::none(tys)) }
-
-fn Dyn::push_all(tys: Nat → Type, env: List<Dyn(tys)>, ds: List<Dyn(tys)>) → List<Dyn(tys)> { match ds { Nil => env, Cons(d, rest) => Dyn::push_all(tys, Cons(d, env), rest) } }
-
-fn Place::val(self p: Place, tys: Nat → Type, strs: Strs(tys), env: List<Dyn(tys)>) → Dyn(tys) {
-    Dyn::read(tys, strs, Dyn::ixs(tys, env), p.steps, Dyn::at_var(tys, env, p.root))
-}
-
-// A callee's meaning, by its index: from the values passed, its results,
-// or nothing (an ill-coded call). A recursive function's world holds the
-// function itself.
-fn Callees(tys: Nat → Type) → Type { Nat → List<Dyn(tys)> → Option<List<Dyn(tys)>> }
-
-// A fresh object: `n` copies of `v`, where `c` is a sequence.
-fn Dyn::fresh(tys: Nat → Type, strs: Strs(tys), c: Shape, n, v: Dyn(tys)) → Option<Dyn(tys)> {
-    match c {
-        SWord(_) => None,
-        SNamed(k) => match strs(k).kind {
-            Sequence(q) => match Dyn::get(tys, q.elem, v) { Some(x) => Some(Dyn(SNamed(k), q.make(Dyn::ix(tys, n), x))), None => None },
-            Opaque => None,
-            Record(_) => None,
-        },
-    }
-}
-
-// ---------------------------------------------------------------------------
-// The meaning, in continuation form
+// Stage lemmas for the pins
 
 // What `if h: c { y } else { n }` elaborates to: a match on the test's bit
 // that hands each arm the bit's equation.
@@ -193,105 +230,92 @@ theorem List::foldl_same<A, B>(self xs: List<A>, f, g: B → A → B, same: (b: 
     match xs { Nil => λ z => refl, Cons(h, t) => λ z => trans(cong_fn(λ (b: B) => t.foldl(f, b), same(z, h)), t.foldl_same(f, g, same, g(z, h))) }
 }
 
-fn Test::bit(self t: Test, tys: Nat → Type, env: List<Dyn(tys)>) → Option<Bool> {
+// ---------------------------------------------------------------------------
+// Joins
+
+fn Test::bit(self t: Test, tys: Nat → Type, e: Env(tys)) → Bool {
     match t {
-        TLt(a, b) => Dyn::words(tys, Dyn::at_var(tys, env, a), Dyn::at_var(tys, env, b), Width::lt),
-        TLe(a, b) => Dyn::words(tys, Dyn::at_var(tys, env, a), Dyn::at_var(tys, env, b), Width::le),
+        TLt(a, b) => Dyn::words(tys, Env::get(tys, e, a), Env::get(tys, e, b), Width::lt),
+        TLe(a, b) => Dyn::words(tys, Env::get(tys, e, a), Env::get(tys, e, b), Width::le),
     }
 }
 
-// The packed outputs' type: one output is its value, several the nested
-// `Mutated` of their values in order.
-fn Pack(tys: Nat → Type, cs: List<Shape>) → Type {
-    match cs { Nil => True, Cons(c, rest) => match rest { Nil => El(tys, c), Cons(_, _) => Mutated<El(tys, c), Pack(tys, rest)> } }
+// The packed outputs' type at the yes arm's values' codes: one output is
+// its value, several the nested `Mutated` of their values in order.
+fn Pack(tys: Nat → Type, ds: List<Dyn(tys)>) → Type {
+    match ds { Nil => True, Cons(d, rest) => match rest { Nil => El(tys, d.code), Cons(_, _) => Mutated<El(tys, d.code), Pack(tys, rest)> } }
 }
 
-// An arm's yielded values at the recorded codes, or nothing.
-fn Pack::of1(tys: Nat → Type, c: Shape, rest: List<Shape>, ds: List<Dyn(tys)>) → Option<Pack(tys, Cons(c, rest))> {
+// The no arm's values at the yes arm's codes, each the yes arm's value
+// where its code differs.
+fn Pack::at1(tys: Nat → Type, rest: List<Dyn(tys)>) → (d: Dyn(tys)) → List<Dyn(tys)> → Pack(tys, Cons(d, rest)) {
     match rest {
-        Nil => match ds { Cons(d, _) => Dyn::get(tys, c, d), Nil => None },
-        Cons(c2, r2) => match ds {
-            Cons(d, ds2) => match Dyn::get(tys, c, d) {
-                Some(x) => match Pack::of1(tys, c2, r2, ds2) { Some(p) => Some(Mutated(x, p)), None => None },
-                None => None,
-            },
-            Nil => None,
+        Nil => λ d ns => match ns { Cons(n, _) => Dyn::back(tys, d.code, n, d.val), Nil => d.val },
+        Cons(d2, r2) => λ d ns => match ns {
+            Cons(n, ns2) => Mutated(Dyn::back(tys, d.code, n, d.val), Pack::at1(tys, r2, d2, ns2)),
+            Nil => Mutated(d.val, Pack::at1(tys, r2, d2, Nil)),
         },
     }
 }
 
-fn Pack::of(tys: Nat → Type, cs: List<Shape>, ds: List<Dyn(tys)>) → Option<Pack(tys, cs)> {
-    match cs { Nil => Some(trivial), Cons(c, rest) => Pack::of1(tys, c, rest, ds) }
+fn Pack::at(tys: Nat → Type, ys: List<Dyn(tys)>, ns: List<Dyn(tys)>) → Pack(tys, ys) {
+    (match ys as λ ys2 => Pack(tys, ys2) { Nil => trivial, Cons(d, rest) => Pack::at1(tys, rest, d, ns) })
 }
 
-// The outputs, each the `Dyn` of its code and its projection.
-fn Pack::outs1(tys: Nat → Type, rest: List<Shape>) → (c: Shape) → Pack(tys, Cons(c, rest)) → List<Dyn(tys)> {
+// The outputs, each the `Dyn` of the yes arm's code and its projection.
+fn Pack::outs1(tys: Nat → Type, rest: List<Dyn(tys)>) → (d: Dyn(tys)) → Pack(tys, Cons(d, rest)) → List<Dyn(tys)> {
     match rest {
-        Nil => λ c x => [Dyn(c, x)],
-        Cons(c2, r2) => λ c m => Cons(Dyn(c, m.after), Pack::outs1(tys, r2, c2, m.value)),
+        Nil => λ d x => [Dyn(d.code, x)],
+        Cons(d2, r2) => λ d m => Cons(Dyn(d.code, m.after), Pack::outs1(tys, r2, d2, m.value)),
     }
 }
 
-fn Pack::outs(tys: Nat → Type, cs: List<Shape>, j: Pack(tys, cs)) → List<Dyn(tys)> {
-    (match cs as λ cs2 => Pack(tys, cs2) → List<Dyn(tys)> { Nil => λ _ => Nil, Cons(c, rest) => λ x => Pack::outs1(tys, rest, c, x) })(j)
+fn Pack::outs(tys: Nat → Type, ys: List<Dyn(tys)>, j: Pack(tys, ys)) → List<Dyn(tys)> {
+    (match ys as λ ys2 => Pack(tys, ys2) → List<Dyn(tys)> { Nil => λ _ => Nil, Cons(d, rest) => λ x => Pack::outs1(tys, rest, d, x) })(j)
 }
 
-// The state after a join of two yielding arms: each arm's outputs at the
-// recorded codes (or no meaning), then one convoy over the packed outputs,
-// each output the `Dyn` of its code and its projection, bound once.
-fn Body::joined(tys: Nat → Type, c: Bool, ya, na: Option<List<Dyn(tys)>>, outs: List<Shape>, env: List<Dyn(tys)>) → Option<List<Dyn(tys)>> {
-    match ya.and_then(λ ds => Pack::of(tys, outs, ds)) {
-        None => None,
-        Some(py) => match na.and_then(λ ds => Pack::of(tys, outs, ds)) {
-            None => None,
-            Some(pn) => Some(Dyn::push_all(tys, env, Pack::outs(tys, outs, convoy(c, py, pn)))),
-        },
-    }
-}
+// The outputs after a join of two yielding arms: one convoy over the
+// packed outputs, at the yes arm's codes.
+fn Body::joined(tys: Nat → Type, c: Bool, ys, ns: List<Dyn(tys)>) → List<Dyn(tys)> { Pack::outs(tys, ys, convoy(c, Pack::at(tys, ys, ys), Pack::at(tys, ys, ns))) }
 
-fn Stmt::eval(self s: Stmt, R: Type, tys: Nat → Type, strs: Strs(tys), w: Callees(tys), env: List<Dyn(tys)>, k: List<Dyn(tys)> → R, fail: R) → R {
+// ---------------------------------------------------------------------------
+// The meaning, in continuation form
+
+fn Stmt::eval(self s: Stmt, R: Type, tys: Nat → Type, strs: Strs(tys), w: Callees(tys), e: Env(tys), k: Env(tys) → R) → R {
     match s {
-        Op(op, a, b) => match Dyn::words<Dyn(tys)>(tys, Dyn::at_var(tys, env, a), Dyn::at_var(tys, env, b), λ wd x y => Dyn(SWord(wd), Width::op(wd, op, x, y))) { Some(d) => k(Cons(d, env)), None => fail },
-        Lit(wd, n) => k(Cons(Dyn(SWord(wd), Width::of_nat(wd, n)), env)),
-        Read(p) => k(Cons(p.val(tys, strs, env), env)),
-        Write(p, v) => k(env.update(p.root, λ d => Dyn::write(tys, strs, Dyn::ixs(tys, env), p.steps, λ _ => Dyn::at_var(tys, env, v), d))),
-        View(p, _) => k(Cons(p.val(tys, strs, env), env)),
-        Take(p) => k(Cons(p.val(tys, strs, env), env)),
-        Fresh(c, n, v) => match Dyn::fresh(tys, strs, c, Dyn::at_var(tys, env, n), Dyn::at_var(tys, env, v)) { Some(d) => k(Cons(d, env)), None => fail },
-        Call(g, args) => match w(g, args.map(λ x => Dyn::at_var(tys, env, x))) { Some(rs) => k(Dyn::push_all(tys, env, rs)), None => fail },
-        Death(_) => k(env),
+        Op(op, a, b) => k(Env::push(tys, e, Dyn::words<Dyn(tys)>(tys, Env::get(tys, e, a), Env::get(tys, e, b), λ wd x y => Dyn(SWord(wd), Width::op(wd, op, x, y))))),
+        Lit(wd, n) => k(Env::push(tys, e, Dyn(SWord(wd), Width::of_nat(wd, n)))),
+        Read(p) => k(Env::push(tys, e, p.val(tys, strs, e))),
+        Write(p, v) => k(Env::set(tys, e, p.root, λ d => Dyn::write(tys, strs, Env::ixs(tys, e), p.steps, λ _ => Env::get(tys, e, v), d))),
+        View(p, _) => k(Env::push(tys, e, p.val(tys, strs, e))),
+        Take(p) => k(Env::push(tys, e, p.val(tys, strs, e))),
+        Fresh(c, n, v) => k(Env::push(tys, e, Dyn::fresh(tys, strs, c, Env::get(tys, e, n), Env::get(tys, e, v)))),
+        Call(g, args, n) => k(Env::push_all(tys, e, Dyn::take_n(tys, w(g, args.map(λ x => Env::get(tys, e, x))), n))),
+        Death(_) => k(e),
     }
 }
 
 // The meaning of a body: its results to `ret`, an arm's outputs to `yld`.
 // `me` is the function's own index in the world, which a `Jump` calls.
-fn Body::mean(self b: Body, R: Type, tys: Nat → Type, strs: Strs(tys), w: Callees(tys), me: Nat, env: List<Dyn(tys)>,
-    ret: List<Dyn(tys)> → R, yld: List<Dyn(tys)> → R, fail: R) → R
-{
+fn Body::mean(self b: Body, R: Type, tys: Nat → Type, strs: Strs(tys), w: Callees(tys), me: Nat, e: Env(tys), ret: List<Dyn(tys)> → R, yld: List<Dyn(tys)> → R) → R {
     match b {
-        Ret(rs) => ret(rs.map(λ x => Dyn::at_var(tys, env, x))),
-        Yield(os) => yld(os.map(λ x => Dyn::at_var(tys, env, x))),
-        Do(s, rest) => s.eval(R, tys, strs, w, env, λ e => rest.mean(R, tys, strs, w, me, e, ret, yld, fail), fail),
-        Jump(args) => match w(me, args.map(λ x => Dyn::at_var(tys, env, x))) { Some(rs) => ret(rs), None => fail },
-        Join(t, yes, no, outs, rest) => match t.bit(tys, env) {
-            None => fail,
-            Some(c) => match yes.exits() || no.exits() {
-                False => match Body::joined(tys, c, yes.mean(Option<List<Dyn(tys)>>, tys, strs, w, me, env, λ _ => None, λ ds => Some(ds), None),
-                        no.mean(Option<List<Dyn(tys)>>, tys, strs, w, me, env, λ _ => None, λ ds => Some(ds), None), outs, env) {
-                    Some(e) => rest.mean(R, tys, strs, w, me, e, ret, yld, fail),
-                    None => fail,
-                },
-                True => {
-                    let after = λ (ds: List<Dyn(tys)>) => rest.mean(R, tys, strs, w, me, Dyn::push_all(tys, env, ds), ret, yld, fail);
-                    convoy(c, yes.mean(R, tys, strs, w, me, env, ret, after, fail), no.mean(R, tys, strs, w, me, env, ret, after, fail))
-                },
+        Ret(rs) => ret(rs.map(λ x => Env::get(tys, e, x))),
+        Yield(os) => yld(os.map(λ x => Env::get(tys, e, x))),
+        Do(s, rest) => s.eval(R, tys, strs, w, e, λ e2 => rest.mean(R, tys, strs, w, me, e2, ret, yld)),
+        Jump(args) => ret(w(me, args.map(λ x => Env::get(tys, e, x)))),
+        Join(t, yes, no, rest) => match yes.exits() || no.exits() {
+            False => rest.mean(R, tys, strs, w, me,
+                Env::push_all(tys, e, Body::joined(tys, t.bit(tys, e), yes.mean(List<Dyn(tys)>, tys, strs, w, me, e, λ _ => Nil, λ ds => ds), no.mean(List<Dyn(tys)>, tys, strs, w, me, e, λ _ => Nil, λ ds => ds))),
+                ret, yld),
+            True => {
+                let after = λ (ds: List<Dyn(tys)>) => rest.mean(R, tys, strs, w, me, Env::push_all(tys, e, ds), ret, yld);
+                convoy(t.bit(tys, e), yes.mean(R, tys, strs, w, me, e, ret, after), no.mean(R, tys, strs, w, me, e, ret, after))
             },
         },
     }
 }
 
-// A function's meaning: from its arguments (the first parameter oldest),
-// its results, or nothing.
-fn Func::denote(self f: Func, tys: Nat → Type, strs: Strs(tys), w: Callees(tys), me: Nat, args: List<Dyn(tys)>) → Option<List<Dyn(tys)>> {
-    f.body.mean(Option<List<Dyn(tys)>>, tys, strs, w, me, Dyn::push_all(tys, Nil, args), λ rs => Some(rs), λ _ => None, None)
+// A function's meaning: from its arguments, its results.
+fn Func::denote(self f: Func, tys: Nat → Type, strs: Strs(tys), w: Callees(tys), me: Nat, args: List<Dyn(tys)>) → List<Dyn(tys)> {
+    f.body.mean(List<Dyn(tys)>, tys, strs, w, me, Env::start(tys, args), λ rs => rs, λ _ => Nil)
 }

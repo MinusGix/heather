@@ -35,36 +35,36 @@ fn nats(xs: List<Nat>) → Dyn(tys()) { Dyn(SNamed(0), xs) }
 // as the list's own total accessor reads.
 fn pick(xs: List<Nat>, i: Nat, inside: ∥i < xs.len()∥) → Nat { xs.nth(i).unwrap_or(0) }
 
-fn pick_r() → Func { Func(Sig([Param(SNamed(0), ByRead), Param(SWord(WNat), ByTake)], [Result(SWord(WNat), OFresh)]), seq([Read(Place(1, [SElem(Var(0))]))], Ret([0]))) }
+fn pick_r() → Func { Func(Sig([Param(SNamed(0), ByRead), Param(SWord(WNat), ByTake)], [Result(SWord(WNat), OFresh)]), seq([Read(Place(Arg(0), [SElem(Var(1))]))], Ret([Loc(0)]))) }
 
-fn pick_ctx(xs: List<Nat>, i: Nat) → Ctx(tys()) { Ctx(strs(), λ _ _ => None, 0, λ _ _ => True, λ _ _ => 0, [nats(xs), nat(i)]) }
+fn pick_ctx(xs: List<Nat>, i: Nat) → Ctx(tys()) { Ctx(strs(), λ _ _ => Nil, 0, λ _ _ => True, λ _ _ => 0, [nats(xs), nat(i)]) }
 
-fn pick_env(xs: List<Nat>, i: Nat) → List<Dyn(tys())> { Dyn::push_all(tys(), Nil, [nats(xs), nat(i)]) }
+fn pick_env(xs: List<Nat>, i: Nat) → Env(tys()) { Env::start(tys(), [nats(xs), nat(i)]) }
 
-theorem pick_means(xs: List<Nat>, i: Nat, inside: ∥i < xs.len()∥): pick_r().denote(tys(), strs(), λ _ _ => None, 0, [nats(xs), nat(i)]) = Some([nat(pick(xs, i, inside))]) { refl }
+theorem pick_means(xs: List<Nat>, i: Nat, inside: ∥i < xs.len()∥): pick_r().denote(tys(), strs(), λ _ _ => Nil, 0, [nats(xs), nat(i)]) = [nat(pick(xs, i, inside))] { refl }
 
 // ---------------------------------------------------------------------------
 // The residual kinds, each the source's proposition by conversion
 
 // An element read owes its accessor's bound: the source's own hypothesis.
-theorem access_is_bound(xs: List<Nat>, i: Nat): RAccess(Place(1, [SElem(Var(0))])).Holds(tys(), pick_ctx(xs, i), pick_env(xs, i)) = (∥i < xs.len()∥) { refl }
+theorem access_is_bound(xs: List<Nat>, i: Nat): RAccess(Place(Arg(0), [SElem(Var(1))])).Holds(tys(), pick_ctx(xs, i), pick_env(xs, i)) = (∥i < xs.len()∥) { refl }
 
 // Two windows apart: a disjunction naming its sides.
-theorem apart_is_sides(xs: List<Nat>, i: Nat): RApart(Lit(0), Var(0), Var(0), Lit(1)).Holds(tys(), pick_ctx(xs, i), pick_env(xs, i)) = ((0 + i <= i) ∨ (i + 1 <= 0)) { refl }
+theorem apart_is_sides(xs: List<Nat>, i: Nat): RApart(Lit(0), Var(1), Var(1), Lit(1)).Holds(tys(), pick_ctx(xs, i), pick_env(xs, i)) = ((0 + i <= i) ∨ (i + 1 <= 0)) { refl }
 
 // A write of a whole place: what is written fits what was there.
-theorem fits_is_same(xs: List<Nat>, i: Nat): RFits(Place(1, Nil), 1).Holds(tys(), pick_ctx(xs, i), pick_env(xs, i)) = Dyn::Fits(tys(), strs(), nats(xs), nats(xs)) { refl }
+theorem fits_is_same(xs: List<Nat>, i: Nat): RFits(Place(Arg(0), Nil), Arg(0)).Holds(tys(), pick_ctx(xs, i), pick_env(xs, i)) = Dyn::Fits(tys(), strs(), nats(xs), nats(xs)) { refl }
 
 // A callee's precondition at the values passed, and a measure.
-theorem pre_is_callee(xs: List<Nat>, i: Nat): RPre(3, [0]).Holds(tys(), pick_ctx(xs, i), pick_env(xs, i)) = True { refl }
+theorem pre_is_callee(xs: List<Nat>, i: Nat): RPre(3, [Arg(1)]).Holds(tys(), pick_ctx(xs, i), pick_env(xs, i)) = True { refl }
 
-theorem measure_is_below(xs: List<Nat>, i: Nat): RMeasure(0, [0, 1]).Holds(tys(), pick_ctx(xs, i), pick_env(xs, i)) = (0 < 0) { refl }
+theorem measure_is_below(xs: List<Nat>, i: Nat): RMeasure(0, [Arg(0), Arg(1)]).Holds(tys(), pick_ctx(xs, i), pick_env(xs, i)) = (0 < 0) { refl }
 
 // ---------------------------------------------------------------------------
 // The verdict's tree, owed along the meaning: discharged by the source's
 // proof, placed
 
-fn pick_owes() → Owes { ODo([RAccess(Place(1, [SElem(Var(0))]))], OEnd) }
+fn pick_owes() → Owes { ODo([RAccess(Place(Arg(0), [SElem(Var(1))]))], OEnd) }
 
 theorem pick_due(xs: List<Nat>, i: Nat, inside: ∥i < xs.len()∥): pick_owes().Due(tys(), pick_ctx(xs, i), pick_r()) { ⟨inside, trivial⟩ }
 
@@ -92,12 +92,14 @@ theorem ref_reads(xs: List<Nat>): Value::read(tys(), Refer(Ref(0, [SElem(Lit(2))
 // A program, a function's safety, `check_sound`: their types at `pick`
 
 fn pick_prog(run: Run(tys())) → Prog(tys()) {
-    Prog(strs(), λ _ => pick_r(), λ _ _ => None, λ _ _ => True, λ _ => Some(λ _ _ => 0), run, λ _ _ _ => True)
+    Prog(strs(), λ _ => pick_r(), λ _ _ => Nil, λ _ _ => True, λ _ => Some(λ _ _ => 0), run, λ _ _ _ => True)
 }
 
 fn pick_safety(run: Run(tys())) → Type { Safety(tys(), pick_prog(run), 0) }
 
-fn pick_check_sound(check: Checker()) → Type<1> { CheckSound(tys(), check) }
+fn pick_check_sound(check: Checker(tys())) → Type<1> { CheckSound(tys(), check) }
+
+fn pick_check_refuses(check: Checker(tys())) → Type<1> { CheckRefusesIllCoded(tys(), check) }
 
 // The control: a run that is stuck is not safe.
 theorem stuck_not_safe(io: Io): ¬pick_safety(λ _ _ _ _ _ => Stuck) {
@@ -107,3 +109,37 @@ theorem stuck_not_safe(io: Io): ¬pick_safety(λ _ _ _ _ _ => Stuck) {
         clauses.left(refl)
     }
 }
+
+// ---------------------------------------------------------------------------
+// The check's refusals, from codes alone: the meaning of each is junk
+
+fn sigs() → Nat → Sig { λ g => match g { Zero => Sig([Param(SNamed(0), ByRead), Param(SWord(WNat), ByTake)], [Result(SWord(WNat), OFresh)]), Succ(_) => Sig(Nil, Nil) } }
+
+theorem pick_coded(): pick_r().coded(tys(), strs(), sigs(), 0) = True { refl }
+
+// A join whose arms yield a number and a list.
+fn ill_join_r() → Func { Func(pick_r().sig, Join(TLt(Arg(1), Arg(1)), Yield([Arg(1)]), Yield([Arg(0)]), Ret([Loc(0)]))) }
+
+theorem ill_join_refused(): ill_join_r().coded(tys(), strs(), sigs(), 0) = False { refl }
+
+// The same join yielding one code is accepted.
+fn good_join_r() → Func { Func(pick_r().sig, Join(TLt(Arg(1), Arg(1)), Yield([Arg(1)]), seq([Lit(WNat, 0)], Yield([Loc(0)])), Ret([Loc(0)]))) }
+
+theorem good_join_coded(): good_join_r().coded(tys(), strs(), sigs(), 0) = True { refl }
+
+// A call of `pick` (callee 0) with its arguments swapped.
+fn ill_call_r() → Func { Func(pick_r().sig, seq([Call(0, [Arg(1), Arg(0)], 1)], Ret([Loc(0)]))) }
+
+theorem ill_call_refused(): ill_call_r().coded(tys(), strs(), sigs(), 0) = False { refl }
+
+fn good_call_r() → Func { Func(pick_r().sig, seq([Call(0, [Arg(0), Arg(1)], 1)], Ret([Loc(0)]))) }
+
+theorem good_call_coded(): good_call_r().coded(tys(), strs(), sigs(), 0) = True { refl }
+
+// A word primitive on a list.
+fn ill_word_r() → Func { Func(pick_r().sig, seq([Op(PAdd, Arg(0), Arg(1))], Ret([Loc(0)]))) }
+
+theorem ill_word_refused(): ill_word_r().coded(tys(), strs(), sigs(), 0) = False { refl }
+
+// Its junk meaning: a list is not a word, so the sum is `0 + i`.
+theorem ill_word_junk(xs: List<Nat>, i: Nat): ill_word_r().denote(tys(), strs(), λ _ _ => Nil, 0, [nats(xs), nat(i)]) = [nat(0 + i)] { refl }

@@ -20,6 +20,10 @@
 //   from its measure on; where it is done, its results read the meaning's
 //   and the heap outside what was lent is unchanged; where an unmeasured run
 //   is going, its history is a prefix of one the meaning reaches.
+// - **The check's refusals** (`Func::coded`, `CheckRefusesIllCoded`): from
+//   codes alone, a word primitive or test at a non-word, a join whose arms
+//   yield different codes, a call whose arguments' codes are not its
+//   signature's, and the like; the meaning of what it refuses is junk.
 // - **`check_sound`** (`CheckSound`): a checker's verdict, and its residuals
 //   holding along the meaning, give the function's safety.
 import logic;
@@ -42,10 +46,10 @@ import linux_world;
 
 inductive Residual {
     RApart(lo1: Atom, n1: Atom, lo2: Atom, n2: Atom),
-    RPre(g: Nat, args: List<Nat>),
+    RPre(g: Nat, args: List<Var>),
     RAccess(p: Place),
-    RFits(p: Place, v: Nat),
-    RMeasure(g: Nat, args: List<Nat>),
+    RFits(p: Place, v: Var),
+    RMeasure(g: Nat, args: List<Var>),
 }
 
 // Each callee's precondition at the values passed, and each function's
@@ -82,23 +86,23 @@ fn Dyn::Fits(tys: Nat → Type, strs: Strs(tys), old, new: Dyn(tys)) → Type { 
 // arguments, which a measure is compared against.
 record Ctx(tys: Nat → Type) { strs: Strs(tys), w: Callees(tys), me: Nat, pres: Pres(tys), need: Need(tys), args: List<Dyn(tys)> }
 
-fn Residual::Holds(self r: Residual, tys: Nat → Type, cx: Ctx(tys), env: List<Dyn(tys)>) → Type {
+fn Residual::Holds(self r: Residual, tys: Nat → Type, cx: Ctx(tys), env: Env(tys)) → Type {
     match r {
         RApart(lo1, n1, lo2, n2) => {
-            let ns = Ix::nats(Dyn::ixs(tys, env));
+            let ns = Ix::nats(Env::ixs(tys, env));
             (lo1.val(ns) + n1.val(ns) <= lo2.val(ns)) ∨ (lo2.val(ns) + n2.val(ns) <= lo1.val(ns))
         },
-        RPre(g, args) => cx.pres(g, args.map(λ x => Dyn::at_var(tys, env, x))),
+        RPre(g, args) => cx.pres(g, args.map(λ x => Env::get(tys, env, x))),
         RAccess(p) => match Steps::last(p.steps) {
-            Some(a) => Dyn::pre(tys, cx.strs, a.sel(Dyn::ixs(tys, env)), Place(p.root, Steps::init(p.steps)).val(tys, cx.strs, env)),
+            Some(a) => Dyn::pre(tys, cx.strs, a.sel(Env::ixs(tys, env)), Place(p.root, Steps::init(p.steps)).val(tys, cx.strs, env)),
             None => True,
         },
-        RFits(p, v) => Dyn::Fits(tys, cx.strs, p.val(tys, cx.strs, env), Dyn::at_var(tys, env, v)),
-        RMeasure(g, args) => cx.need(g, args.map(λ x => Dyn::at_var(tys, env, x))) < cx.need(cx.me, cx.args),
+        RFits(p, v) => Dyn::Fits(tys, cx.strs, p.val(tys, cx.strs, env), Env::get(tys, env, v)),
+        RMeasure(g, args) => cx.need(g, args.map(λ x => Env::get(tys, env, x))) < cx.need(cx.me, cx.args),
     }
 }
 
-fn Residual::All(rs: List<Residual>, tys: Nat → Type, cx: Ctx(tys), env: List<Dyn(tys)>, tail: Type) → Type {
+fn Residual::All(rs: List<Residual>, tys: Nat → Type, cx: Ctx(tys), env: Env(tys), tail: Type) → Type {
     match rs { Nil => tail, Cons(r, rest) => r.Holds(tys, cx, env) ∧ Residual::All(rest, tys, cx, env, tail) }
 }
 
@@ -113,34 +117,24 @@ fn Cases(c: Bool, x, y: Type) → Type { match c { True => x, False => y } }
 // the state after it; a join's arms under their sides of the test; after a
 // join of two yielding arms, what follows once at the joined state; after
 // one whose arm leaves, at each `Yield`, which is where the meaning reads
-// what follows. A verdict not in the body's shape owes `False`; a state
-// with no meaning owes nothing.
-fn Owes::Holds(self d: Owes, tys: Nat → Type, cx: Ctx(tys), b: Body, env: List<Dyn(tys)>, after: List<Dyn(tys)> → Type) → Type {
+// what follows. A verdict not in the body's shape owes `False`.
+fn Owes::Holds(self d: Owes, tys: Nat → Type, cx: Ctx(tys), b: Body, env: Env(tys), after: List<Dyn(tys)> → Type) → Type {
     match b {
         Ret(_) => True,
-        Yield(os) => after(os.map(λ x => Dyn::at_var(tys, env, x))),
+        Yield(os) => after(os.map(λ x => Env::get(tys, env, x))),
         Jump(_) => match d { OJump(here) => Residual::All(here, tys, cx, env, True), _ => False },
         Do(s, rest) => match d {
-            ODo(here, dr) => Residual::All(here, tys, cx, env, match s.eval(Option<List<Dyn(tys)>>, tys, cx.strs, cx.w, env, λ e => Some(e), None) {
-                Some(e) => dr.Holds(tys, cx, rest, e, after),
-                None => True,
-            }),
+            ODo(here, dr) => Residual::All(here, tys, cx, env, dr.Holds(tys, cx, rest, s.eval(Env(tys), tys, cx.strs, cx.w, env, λ e => e), after)),
             _ => False,
         },
-        Join(t, yes, no, outs, rest) => match d {
-            OJoin(dy, dn, dr) => match t.bit(tys, env) {
-                None => True,
-                Some(c) => match yes.exits() || no.exits() {
-                    False => Cases(c, dy.Holds(tys, cx, yes, env, λ _ => True), dn.Holds(tys, cx, no, env, λ _ => True)) ∧
-                        (match Body::joined(tys, c, yes.mean(Option<List<Dyn(tys)>>, tys, cx.strs, cx.w, cx.me, env, λ _ => None, λ ds => Some(ds), None),
-                                no.mean(Option<List<Dyn(tys)>>, tys, cx.strs, cx.w, cx.me, env, λ _ => None, λ ds => Some(ds), None), outs, env) as λ _ => Type {
-                            Some(e) => dr.Holds(tys, cx, rest, e, after),
-                            None => True,
-                        }),
-                    True => {
-                        let next = λ (ds: List<Dyn(tys)>) => dr.Holds(tys, cx, rest, Dyn::push_all(tys, env, ds), after);
-                        Cases(c, dy.Holds(tys, cx, yes, env, next), dn.Holds(tys, cx, no, env, next))
-                    },
+        Join(t, yes, no, rest) => match d {
+            OJoin(dy, dn, dr) => match yes.exits() || no.exits() {
+                False => Cases(t.bit(tys, env), dy.Holds(tys, cx, yes, env, λ _ => True), dn.Holds(tys, cx, no, env, λ _ => True)) ∧
+                    dr.Holds(tys, cx, rest, Env::push_all(tys, env, Body::joined(tys, t.bit(tys, env),
+                        yes.mean(List<Dyn(tys)>, tys, cx.strs, cx.w, cx.me, env, λ _ => Nil, λ ds => ds), no.mean(List<Dyn(tys)>, tys, cx.strs, cx.w, cx.me, env, λ _ => Nil, λ ds => ds))), after),
+                True => {
+                    let next = λ (ds: List<Dyn(tys)>) => dr.Holds(tys, cx, rest, Env::push_all(tys, env, ds), after);
+                    Cases(t.bit(tys, env), dy.Holds(tys, cx, yes, env, next), dn.Holds(tys, cx, no, env, next))
                 },
             },
             _ => False,
@@ -149,7 +143,7 @@ fn Owes::Holds(self d: Owes, tys: Nat → Type, cx: Ctx(tys), b: Body, env: List
 }
 
 // What a function owes at its arguments.
-fn Owes::Due(self d: Owes, tys: Nat → Type, cx: Ctx(tys), f: Func) → Type { d.Holds(tys, cx, f.body, Dyn::push_all(tys, Nil, cx.args), λ _ => True) }
+fn Owes::Due(self d: Owes, tys: Nat → Type, cx: Ctx(tys), f: Func) → Type { d.Holds(tys, cx, f.body, Env::start(tys, cx.args), λ _ => True) }
 
 // ---------------------------------------------------------------------------
 // A program, a function's safety, and `check_sound`
@@ -195,20 +189,125 @@ fn SafeAt(tys: Nat → Type, p: Prog(tys), g: Nat, fuel: Nat) → Type {
         ¬(p.run(fuel, g, vs, h, io) = Stuck) ∧
         ((match p.need(g) as λ _ => Type { Some(n) => n(g, ds) <= fuel → Exists<Answer(tys)>(λ a => p.run(fuel, g, vs, h, io) = Done(a)), None => True }) ∧
         (((a: Answer(tys)) → p.run(fuel, g, vs, h, io) = Done(a) →
-            Exists<List<Dyn(tys)>>(λ rs => ((p.fns(g)).denote(tys, p.strs, p.w, g, ds) = Some(rs)) ∧ (Value::ReadAll(tys, p.strs, a.heap, depth, a.results, rs) ∧ Heap::Frame(tys, h, a.heap, λ b => Value::lends(tys, vs, b))))) ∧
+            Value::ReadAll(tys, p.strs, a.heap, depth, a.results, (p.fns(g)).denote(tys, p.strs, p.w, g, ds)) ∧ Heap::Frame(tys, h, a.heap, λ b => Value::lends(tys, vs, b))) ∧
         (match p.need(g) as λ _ => Type { Some(_) => True, None => (io2: Io) → p.run(fuel, g, vs, h, io) = Going(io2) → p.reaches(g, ds, io2.past) })))
 }
 
 // Safety relative to the callees' at less fuel.
 fn Safety(tys: Nat → Type, p: Prog(tys), g: Nat) → Type { (fuel: Nat) → ((g2, k: Nat) → k < fuel → SafeAt(tys, p, g2, k)) → SafeAt(tys, p, g, fuel) }
 
-// A checker: from the program's signatures, a function's verdict, or a
-// refusal.
-fn Checker() → Type { (Nat → Sig) → Func → Option<Owes> }
+// ---------------------------------------------------------------------------
+// The check's refusals from codes alone
+//
+// The meaning of an ill-coded body is junk, never missing; what makes that
+// sound is that the check refuses it, statically: a word primitive or a
+// test at a non-word or at two widths, a join whose arms yield different
+// codes, a call whose arguments' codes are not its signature's, a fresh
+// object of a non-sequence or of another element, a write of another code.
+// The codes the body does not compute are recorded at a call's results (the
+// callee's signature) and a fresh object's code; every other variable's
+// code is static because every arm of every join yields closed codes.
+
+record CEnv { args: List<Shape>, locs: List<Shape> }
+
+fn CEnv::get(self ce: CEnv, v: Var) → Shape { match v { Arg(i) => ce.args.nth(i).unwrap_or(SWord(WNat)), Loc(j) => ce.locs.nth(j).unwrap_or(SWord(WNat)) } }
+
+fn CEnv::push(self ce: CEnv, c: Shape) → CEnv { CEnv(ce.args, Cons(c, ce.locs)) }
+
+fn CEnv::push_all(self ce: CEnv, cs: List<Shape>) → CEnv { match cs { Nil => ce, Cons(c, rest) => ce.push(c).push_all(rest) } }
+
+// The code a step reaches from an owner's code: its part's, or the word's
+// where it has none (as the meaning reads).
+fn Shape::step(tys: Nat → Type, strs: Strs(tys), a: Step, c: Shape) → Shape { match Dyn::part(tys, strs, a.sel(Nil), c) { Some(pt) => pt.t, None => SWord(WNat) } }
+
+fn Shape::steps(tys: Nat → Type, strs: Strs(tys), xs: List<Step>, c: Shape) → Shape { match xs { Nil => c, Cons(a, rest) => Shape::steps(tys, strs, rest, Shape::step(tys, strs, a, c)) } }
+
+fn CEnv::place(self ce: CEnv, tys: Nat → Type, strs: Strs(tys), p: Place) → Shape { Shape::steps(tys, strs, p.steps, ce.get(p.root)) }
+
+fn Shape::same_list(xs, ys: List<Shape>) → Bool {
+    match xs { Nil => match ys { Nil => True, Cons(_, _) => False }, Cons(x, xr) => match ys { Nil => False, Cons(y, yr) => x.same(y) && Shape::same_list(xr, yr) } }
+}
+
+fn Shape::all_same(first: List<Shape>, rest: List<List<Shape>>) → Bool { match rest { Nil => True, Cons(r, rr) => Shape::same_list(first, r) && Shape::all_same(first, rr) } }
+
+fn Shape::is_word(self c: Shape) → Bool { match c { SWord(_) => True, SNamed(_) => False } }
+
+fn Sig::param_codes(self s: Sig) → List<Shape> { s.params.map(λ p => p.code) }
+
+fn Sig::result_codes(self s: Sig) → List<Shape> { s.results.map(λ r => r.code) }
+
+fn Stmt::code_step(self s: Stmt, tys: Nat → Type, strs: Strs(tys), sigs: Nat → Sig, ce: CEnv) → Option<CEnv> {
+    match s {
+        Op(_, a, b) => match ce.get(a).is_word() && ce.get(b).same(ce.get(a)) { True => Some(ce.push(ce.get(a))), False => None },
+        Lit(w, _) => Some(ce.push(SWord(w))),
+        Read(p) => Some(ce.push(ce.place(tys, strs, p))),
+        Write(p, v) => match ce.get(v).same(ce.place(tys, strs, p)) { True => Some(ce), False => None },
+        View(p, _) => Some(ce.push(ce.place(tys, strs, p))),
+        Take(p) => Some(ce.push(ce.place(tys, strs, p))),
+        Fresh(c, n, v) => match c {
+            SWord(_) => None,
+            SNamed(k) => match strs(k).kind {
+                Sequence(q) => match ce.get(n).is_word() && ce.get(v).same(q.elem) { True => Some(ce.push(c)), False => None },
+                Opaque => None,
+                Record(_) => None,
+            },
+        },
+        Call(g, args, n) => match Shape::same_list(args.map(λ x => ce.get(x)), sigs(g).param_codes()) && n.same(sigs(g).results.len()) {
+            True => Some(ce.push_all(sigs(g).result_codes())),
+            False => None,
+        },
+        Death(_) => Some(ce),
+    }
+}
+
+fn Test::code_ok(self t: Test, ce: CEnv) → Bool {
+    match t { TLt(a, b) => ce.get(a).is_word() && ce.get(b).same(ce.get(a)), TLe(a, b) => ce.get(a).is_word() && ce.get(b).same(ce.get(a)) }
+}
+
+// A body's codes: refused (`None`), or the codes its `Yield`s give its
+// enclosing join, each one list per leaf.
+fn Body::code_walk(self b: Body, tys: Nat → Type, strs: Strs(tys), sigs: Nat → Sig, me: Nat, ce: CEnv) → Option<List<List<Shape>>> {
+    match b {
+        Ret(_) => Some(Nil),
+        Yield(os) => Some([os.map(λ x => ce.get(x))]),
+        Jump(args) => match Shape::same_list(args.map(λ x => ce.get(x)), sigs(me).param_codes()) { True => Some(Nil), False => None },
+        Do(s, rest) => match s.code_step(tys, strs, sigs, ce) { Some(ce2) => rest.code_walk(tys, strs, sigs, me, ce2), None => None },
+        Join(t, yes, no, rest) => match t.code_ok(ce) {
+            False => None,
+            True => match yes.code_walk(tys, strs, sigs, me, ce) {
+                None => None,
+                Some(ya) => match no.code_walk(tys, strs, sigs, me, ce) {
+                    None => None,
+                    Some(na) => match ya ++ na {
+                        Nil => rest.code_walk(tys, strs, sigs, me, ce),
+                        Cons(first, others) => match Shape::all_same(first, others) { True => rest.code_walk(tys, strs, sigs, me, ce.push_all(first)), False => None },
+                    },
+                },
+            },
+        },
+    }
+}
+
+fn Func::coded(self f: Func, tys: Nat → Type, strs: Strs(tys), sigs: Nat → Sig, me: Nat) → Bool {
+    match f.body.code_walk(tys, strs, sigs, me, CEnv(f.sig.param_codes(), Nil)) { Some(_) => True, None => False }
+}
+
+// ---------------------------------------------------------------------------
+// The checker, and what is stated of it
+
+// A checker: from the environment's structures, the program's signatures
+// and a function's index, its verdict, or a refusal.
+fn Checker(tys: Nat → Type) → Type<1> { Strs(tys) → (Nat → Sig) → Nat → Func → Option<Owes> }
+
+// The check refuses an ill-coded function: part of `check`, not a second
+// pass.
+fn CheckRefusesIllCoded(tys: Nat → Type, check: Checker(tys)) → Type<1> {
+    (strs: Strs(tys)) → (sigs: Nat → Sig) → (g: Nat) → (f: Func) → f.coded(tys, strs, sigs, g) = False → check(strs, sigs, g, f) = None
+}
 
 // `check_sound`: a verdict, and what it owes holding at every argument the
 // function is run at, give the function's safety.
-fn CheckSound(tys: Nat → Type, check: Checker()) → Type<1> {
-    (p: Prog(tys)) → (g: Nat) → (d: Owes) → check(λ g2 => (p.fns(g2)).sig, p.fns(g)) = Some(d) →
+fn CheckSound(tys: Nat → Type, check: Checker(tys)) → Type<1> {
+    (p: Prog(tys)) → (g: Nat) → (d: Owes) → check(p.strs, λ g2 => (p.fns(g2)).sig, g, p.fns(g)) = Some(d) →
         ((args: List<Dyn(tys)>) → d.Due(tys, Prog::ctx(tys, p, g, args), p.fns(g))) → Safety(tys, p, g)
 }

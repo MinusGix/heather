@@ -267,3 +267,21 @@ theorem same_element_not_apart(n: u64): ¬apart_at(n, Nil, [SElem(Lit(3))], [SEl
         absurd(one)
     }
 }
+
+// ---------------------------------------------------------------------------
+// The sequence twin of `absent_field` (shape_tests): an element past the end
+// against a write of one inside. They are apart at every value, and at a
+// value too short for the first, its read answers the accessor's pad before
+// and after the write, independent of what was written.
+
+theorem past_end_apart(n: u64): apart_at(n, Nil, [SElem(Lit(9))], [SElem(Lit(0))]) {
+    Dyn::apart(tys(n), strs(n), strs_laws(n), Nil, [SElem(Lit(9))], [SElem(Lit(0))], Nil, refl, trivial)
+}
+
+theorem past_end_reads_pad(n: u64, v: Nat): rd(n, Nil, [SElem(Lit(9))], wr(n, Nil, [SElem(Lit(0))], λ _ => Dyn(nat_s(), v), Dyn(nats_s(), [1, 2, 3]))) = Dyn(nat_s(), 0) { refl }
+
+theorem past_end_kept(n: u64, g: Dyn(tys(n)) → Dyn(tys(n)), xs: List<Nat>):
+    rd(n, Nil, [SElem(Lit(9))], wr(n, Nil, [SElem(Lit(0))], g, Dyn(nats_s(), xs))) = rd(n, Nil, [SElem(Lit(9))], Dyn(nats_s(), xs))
+{
+    past_end_apart(n).left_after_right(g, Dyn(nats_s(), xs))
+}

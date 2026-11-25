@@ -70,3 +70,10 @@ Items 1 to 6 have landed with `scripts/test --pr` green, or the package stopped 
   - Keys and variants (`value_steps.hthr`'s last two customers) are outside the first fragment (§21.1) and are not restated.
   - **Retired**: `value_steps.hthr` and its tests. The legacy path model moved to `coded.hthr` until item 3 retires it.
   - `scripts/test --pr`: `== suite: 3518 passed, 0 failed, 2 ignored ==`.
+- 2026-11-25: **Items 3, 5 and 6 landed, item 3 reworked to the coordinator's decisions** (`body.hthr`, `level2.hthr`, `verdict.hthr`; probes `body_tests.hthr`, `interfaces_tests.hthr`; §22 updated).
+  - **The meaning is total.** The optional meaning is taken out. A join's codes come from its yes arm, and the no arm is cast with the yes value as fallback. A callee is `List<Dyn> → List<Dyn>`, an ill-coded call answers no results, and a missing result binds the word-zero `Dyn`. Every pin is `mean(…) = the source's term`.
+  - **The code check** `Func::coded` refuses an ill-coded join, a call whose argument codes are not its signature's, and a word primitive or test at a non-word. Each has a `= False` probe beside an accepted twin, and each junk meaning is pinned (`join_ill_coded_junk`, `call_ill_junk`, `ill_word_junk`). `CheckRefusesIllCoded` ties a checker to it.
+  - **The environment** is `Var { Arg(i), Loc(j) }`, reached only through `Env::push`/`Env::get` and their laws. The long-lived local is filed as [[ownership-long-lived-local]] with its measured shape. Item 4 rerun on this environment: unchanged, since the object is a local and sinks (§22.3).
+  - `guarded_whole` now pins its whole answer. `early` (an inner return) still pins only through a word continuation.
+  - **D's sequence twin**: `past_end_apart`, `past_end_reads_pad`, `past_end_kept` (`sequences_tests`).
+  - **Retired (item 6)**: `coded.hthr` and its probes, and `PathLawsOn`/`KeepsFit` from `lib/std/machine/path.hthr`.

@@ -2938,9 +2938,9 @@ decided it; "pending" is reported and not yet decided.
 | `lib/lang/ownership/steps.hthr` | Steps, `Ix`, selections, the decider; the total step model (`StepModel { at, over, fits, like }`, `StepModelLaws`, `ApartAt`) and `Steps::apart_sound` over it |
 | `lib/lang/ownership/shape.hthr` | `Shape { SWord(Width), SNamed(k) }`, `El`, `Dyn`, `Struct { sharing, pad, kind }` (opaque, record, sequence with windows), the kinds' laws, `Dyn`'s model and `Dyn::model_laws` from the structures' laws alone |
 | `lib/lang/ownership/sequences.hthr` | `List<A>` (with windows), `[A; n]` and `Bytes(n)` as sequences; unique identity proofs at `Nat` for `Bytes`'s length proof |
-| `lib/lang/ownership/body.hthr` | `Place`, `Stmt`, `Body`, a signature record, `Func`, the meaning in continuation form, and two stage lemmas (`dconvoy_map`, `List::foldl_same`) |
+| `lib/lang/ownership/body.hthr` | `Var { Arg(i), Loc(j) }`, the environment `Env` and its laws, `Place`, `Stmt`, `Body`, a signature record, `Func`, the total meaning in continuation form, and the stage lemmas (`dconvoy_map`, `List::foldl_same`) |
 | `lib/lang/ownership/level2.hthr` | Heap, blocks, objects with holes, values and references, a canonical reference, an object read as a value, the run's outcome and signature (definitions only) |
-| `lib/lang/ownership/verdict.hthr` | The residual kinds, the verdict's tree and what it owes along the meaning, a program, `SafeAt`/`Safety`, `Checker` and `CheckSound` (`Type`-valued definitions only) |
+| `lib/lang/ownership/verdict.hthr` | The residual kinds, the verdict's tree and what it owes along the meaning, a program, `SafeAt`/`Safety`; the code check `Func::coded` (a `Bool`, computed); `Checker`, `CheckRefusesIllCoded` and `CheckSound` (`Type`-valued definitions only) |
 
 Probes: `lib/_tests/lang/ownership/{shape,sequences,body,interfaces}_tests.hthr`.
 Retired: `value_steps.hthr`, `coded.hthr` and their probes, and
@@ -2954,11 +2954,14 @@ Retired: `value_steps.hthr`, `coded.hthr` and their probes, and
 - **An unfit step does not read its owner back** (agreed, withdrawn from
   §21.1). Soundness never reads an unfit step. Reading the owner back
   would make a read's code the bound's decision, stuck at an open index.
-- **A step with no part at the owner's code reads the word 0** (pending).
-  An owner-back read is unsound beside a write. `[SField(2)]` and
-  `[SField(0)]` on a record of two fields are found apart, yet a write
-  through field 0 changes what field 2 reads. The word 0 is a value of a
-  word code, asked of no type.
+- **An unfit read answers a value independent of the owner** (agreed,
+  decision D): the word 0 for a step with no part at the owner's code, and
+  for a sequence the accessor's pad. An owner-back read is unsound beside a
+  write. `[SField(2)]` and `[SField(0)]` on a record of two fields are found
+  apart, yet a write through field 0 would change what field 2 read back.
+  The probes are `absent_field` (shape) and its sequence twin
+  `past_end_apart`/`past_end_kept` (an element past the end against a
+  write of one inside).
 - **The index is the variable's own value** (agreed, decision B). A
   selection's index is an `Ix`, a number or a word at a width. An instance
   reads it at its accessor's own type, and the decider reads it through
@@ -2973,14 +2976,37 @@ Retired: `value_steps.hthr`, `coded.hthr` and their probes, and
   - A read through a proof-consuming accessor pins by one library lemma
     per site (`copy_below_pin`).
   - No real type was excluded for want of a pad in this package.
-- **The meaning is optional only where a cast can fail** (agreed): an
-  operand of a word primitive or a test, a join's output, a callee's
-  answer. The codes are decided outside the convoy.
-  - A pin reads `= Some([...])`.
-  - A function ending in a branch pins through the continuation (`R = Nat`,
-    `fail = 0`), as the sixth experiment's `mean_word` did. `Some` of the
-    whole answer is refused there, because the meaning's convoy is over the
-    answer.
+- **The meaning is total; nothing is optional and nothing is recorded**
+  (agreed; the optional meaning first built here is taken out).
+  - Every pin is `mean(…) = the source's term`.
+  - A join's codes come from its yes arm. The no arm's values are cast to
+    them, with the yes value as the fallback.
+  - A callee in the world is `List<Dyn> → List<Dyn>`. An ill-coded call
+    answers no results, and a binder with no result binds the word-zero
+    `Dyn`.
+  - A word primitive or test at a non-word reads the word 0 there.
+  - Ill-coded bodies therefore have a meaning, and it is junk. The probes
+    `join_ill_coded_junk`, `call_ill_junk` and `ill_word_junk` pin it.
+- **The code check refuses, from codes alone, what the casts would cover**
+  (agreed). `Func::coded` walks the body with each variable's code and
+  refuses:
+  - a join whose arms yield different codes;
+  - a call whose argument codes are not its signature's parameters;
+  - a word primitive or test at a non-word.
+
+  Each refusal has a `= False` probe beside an accepted twin
+  (`interfaces_tests`). `CheckRefusesIllCoded` states that a checker's
+  verdict implies `coded`.
+- **A variable's code is static** because every arm of every join yields
+  closed codes, read off the yes arm, and no statement's code depends on a
+  value. Two statements record a code not computed from their operands:
+  `Fresh(c, …)` names its object's code, and a call's results take their
+  signature's result codes.
+- **A join binds what follows once** (agreed, decision C). A packed join
+  in tail position followed by `Ret` now pins its whole answer
+  (`guarded_whole`). A join with an inner return still pins only through a
+  word continuation (`early`); its whole answer is refused (`early_whole`),
+  because the meaning's convoy is over the answer.
 - **The surface has no join point** (agreed). A statement `if` with a
   return on an inner path copies what follows into each arm that falls
   through (`sequencing-surface-design.md` §22 items 5 and 8). The meaning
@@ -2997,8 +3023,15 @@ Retired: `value_steps.hthr`, `coded.hthr` and their probes, and
 - **A `for` is the fold of its step.** The step is a function pinned by
   `refl`. The loop is the fold of the step's meaning, related to the
   source's fold by `List::foldl_same`.
-- **Variables are de Bruijn indices into one newest-first list of `Dyn`s**
-  (pending, §22.3).
+- **Variables are `Arg(i)` or `Loc(j)`** (agreed, conditionally). An
+  environment holds the arguments by position and the locals newest-first.
+  Every theorem reaches it only through `Env::push`, `Env::get` and the
+  laws (`get_push_here`, `get_push_below`, `get_push_arg`). An index atom
+  `Var(w)` reads argument `w` below the argument count and local `w − A`
+  above it (`Env::ixs`). A local that lives long, such as a taken object,
+  still sinks one deeper with each binding: the issue
+  `ownership-long-lived-local` holds its measured shape. An indexed
+  environment is not built.
 - **Level 2 and the verdict are definitions.**
   - `SafeAt` states four clauses at each fuel:
     - the run is not stuck;
@@ -3017,8 +3050,9 @@ Retired: `value_steps.hthr`, `coded.hthr` and their probes, and
 
 Kernel steps, width one, a fresh cache per run, read with `scripts/timings`.
 
-- **The option** costs a factor of 1.01 to 1.09. That is an optioned
-  meaning against a copy with fallbacks and no failure, on the same bodies.
+- **The option** cost a factor of 1.01 to 1.09 before it was taken out.
+  That was an optioned meaning against a copy with fallbacks and no
+  failure, on the same bodies.
 - **One newest-first list of variables is quadratic.**
   - A variable that lives long, such as a parameter or an object, sinks one
     deeper with every binding.
@@ -3026,7 +3060,10 @@ Kernel steps, width one, a fresh cache per run, read with `scripts/timings`.
     N = 32 to 256.
   - N reads of a list at the last read's index: 20k, 47k, 122k, 357k.
   - With arguments addressed by position and locals newest-first, both are
-    exactly linear: 8.4k to 64k, and 17k to 129k.
+    exactly linear: 8.4k to 64k, and 17k to 129k. On the built `Arg`/`Loc`
+    environment: 8.0k, 15.5k, 30.8k, 61.6k, and 18.7k, 36.8k, 73.4k, 146k.
+  - A long-lived local is not: the same chain over a list first taken into
+    a local costs 23k, 52k, 133k, 379k. Each binding pushes it one deeper.
 - **One environment against two** (§21.5 probe 2), with a `[u64; 16]`
   object and `u64` words. N rounds of a read at the last word's `toNat`
   plus one:
@@ -3040,6 +3077,20 @@ Kernel steps, width one, a fresh cache per run, read with `scripts/timings`.
 
   Two (objects apart from words) is exactly linear. One is superlinear and
   needs more than the default budget at 256.
+
+  Rerun on the built `Arg`/`Loc` environment, with the object taken from
+  an argument into a local:
+
+  | N | one | two |
+  |---|---|---|
+  | 32 | 128k | 117k |
+  | 64 | 280k | 236k |
+  | 128 | 660k | 485k |
+  | 256 | 2.76M (out of fuel) | 1.02M |
+
+  The result is unchanged. Splitting arguments from locals does not help
+  here, because the object is a local and sinks with each word bound. This
+  is the long-lived local's shape again.
 - **Joins in sequence.**
   - Independent packed joins: 10.6k, 22.9k, 53.9k, 141k at K = 4 to 32. That
     is mildly superlinear, from the same variable depth; the source alone
