@@ -68,7 +68,7 @@ fn total(qs: List<Point>) → Nat { match qs { Nil => 0, Cons(q, r) => q.x + tot
 
 fn as_pts(d: Dyn(tys())) → Option<List<Point>> { Dyn::get(tys(), pts_s(), d) }
 
-fn world() → World(tys()) {
+fn world() → Callees(tys()) {
     λ g ds => match g {
         Zero => match ds { Cons(d, _) => Dyn::get(tys(), pt_s(), d).map(λ (p: Point) => [nat(p.x - p.y)]), Nil => None },
         Succ(g1) => match g1 {
@@ -367,7 +367,7 @@ fn drain_r() → Func {
 }
 
 // The world: callee 5 is the loop.
-fn loop_world() → World(tys()) {
+fn loop_world() → Callees(tys()) {
     λ g ds => match g { Zero => match ds { Cons(d, _) => Dyn::get(tys(), nat_s(), d).map(λ (i: Nat) => [nat(drain_loop().run(drain::State(i)).i)]), Nil => None }, Succ(_) => None }
 }
 

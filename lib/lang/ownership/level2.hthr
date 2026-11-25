@@ -1,0 +1,117 @@
+// Level 2's interfaces, as definitions (docs/language/ownership-design.md
+// §21.3 third bullet, §18.1; issues/ownership-interfaces.md). Nothing is
+// proved over them in this package.
+//
+// - **A heap** is a list of blocks, each dead or live with an object.
+// - **An object** is a `Dyn` and its holes: steps, closed in the run, at
+//   which the value is not here but owned (in a block it owns), viewed (a
+//   block and steps it does not own: a stored view, §15.2) or taken. A
+//   nested part whose sharing class is "object" is always an owned hole.
+// - **A variable** holds a plain value or a reference, a block and steps.
+//   **A reference is canonical**: no step before its last lands on a hole
+//   of its block, so two references are compared in one block's steps or
+//   are in different blocks.
+// - **Reading an object as a value** fills its owned and viewed holes. It
+//   is defined except at taken places, and its fuel is the number of owned
+//   holes plus the views' depth, since only ownership is a tree.
+// - **The run** takes fuel and answers the bytes level's outcome (§18.1):
+//   done with an answer, exited with a status, going with the world so far,
+//   or stuck. A call spends one fuel.
+import logic;
+import bool;
+import nat;
+import option;
+import list;
+import bitvec;
+import span_set;
+import store;
+import atom;
+import steps;
+import shape;
+import body;
+import linux_world;
+
+// ---------------------------------------------------------------------------
+// Objects, blocks, references
+
+// What is at a hole's steps instead of the value.
+inductive Hole { Owned(b: Nat), Viewed(b: Nat, steps: List<Step>), Taken }
+
+record HoleAt { at: List<Step>, hole: Hole }
+
+record Obj(tys: Nat → Type) { val: Dyn(tys), holes: List<HoleAt> }
+
+inductive Block(tys: Nat → Type) { Dead, Live(o: Obj(tys)) }
+
+fn Heap(tys: Nat → Type) → Type { List<Block(tys)> }
+
+record Ref { b: Nat, steps: List<Step> }
+
+inductive Value(tys: Nat → Type) { Plain(d: Dyn(tys)), Refer(r: Ref) }
+
+fn Heap::obj(tys: Nat → Type, h: Heap(tys), b: Nat) → Option<Obj(tys)> {
+    match h.nth(b) { Some(bl) => match bl { Live(o) => Some(o), Dead => None }, None => None }
+}
+
+// Whether `xs` is a proper prefix of `ys`, step by step.
+fn Steps::prefix(xs, ys: List<Step>) → Bool {
+    match xs { Nil => match ys { Nil => False, Cons(_, _) => True }, Cons(a, xr) => match ys { Nil => False, Cons(b, yr) => a.same(b) && Steps::prefix(xr, yr) } }
+}
+
+// No hole of the block lies on a proper prefix of the reference's steps.
+fn Ref::Canonical(tys: Nat → Type, h: Heap(tys), r: Ref) → Type {
+    (o: Obj(tys)) → Heap::obj(tys, h, r.b) = Some(o) → (k: Nat) → (ha: HoleAt) → o.holes.nth(k) = Some(ha) → Steps::prefix(ha.at, r.steps) = False
+}
+
+// ---------------------------------------------------------------------------
+// Reading an object as a value
+
+// A hole filled: owned and viewed holes by what their block holds there;
+// a taken place has no value.
+fn Obj::fill(tys: Nat → Type, strs: Strs(tys), h: Heap(tys), fuel: Nat, d: Dyn(tys), hs: List<HoleAt>) → Option<Dyn(tys)> {
+    match fuel {
+        Zero => match hs { Nil => Some(d), Cons(_, _) => None },
+        Succ(f) => match hs {
+            Nil => Some(d),
+            Cons(ha, rest) => match ha.hole {
+                Taken => None,
+                Owned(b) => match Heap::obj(tys, h, b) {
+                    Some(o) => match Obj::fill(tys, strs, h, f, o.val, o.holes) {
+                        Some(v) => Obj::fill(tys, strs, h, f, Dyn::write(tys, strs, Nil, ha.at, λ _ => v, d), rest),
+                        None => None,
+                    },
+                    None => None,
+                },
+                Viewed(b, ss) => match Heap::obj(tys, h, b) {
+                    Some(o) => match Obj::fill(tys, strs, h, f, o.val, o.holes) {
+                        Some(v) => Obj::fill(tys, strs, h, f, Dyn::write(tys, strs, Nil, ha.at, λ _ => Dyn::read(tys, strs, Nil, ss, v), d), rest),
+                        None => None,
+                    },
+                    None => None,
+                },
+            },
+        },
+    }
+}
+
+fn Obj::read(tys: Nat → Type, strs: Strs(tys), h: Heap(tys), fuel: Nat, o: Obj(tys)) → Option<Dyn(tys)> { Obj::fill(tys, strs, h, fuel, o.val, o.holes) }
+
+// A value as the meaning reads it: a plain value itself, a reference the
+// value at its steps in its block's object read as a value.
+fn Value::read(tys: Nat → Type, self v: Value(tys), strs: Strs(tys), h: Heap(tys), fuel: Nat) → Option<Dyn(tys)> {
+    match v {
+        Plain(d) => Some(d),
+        Refer(r) => match Heap::obj(tys, h, r.b) { Some(o) => Obj::read(tys, strs, h, fuel, o).map(λ d => Dyn::read(tys, strs, Nil, r.steps, d)), None => None },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The run's outcome, and its signature
+
+record Answer(tys: Nat → Type) { results: List<Value(tys)>, heap: Heap(tys), io: Io }
+
+inductive Ran(tys: Nat → Type) { Done(a: Answer(tys)), Exited(status: u64, io: Io), Going(io: Io), Stuck }
+
+// A run of a program's functions: at a fuel, the function's index, its
+// arguments, the heap and the world.
+fn Run(tys: Nat → Type) → Type { (fuel: Nat) → (g: Nat) → List<Value(tys)> → Heap(tys) → Io → Ran(tys) }

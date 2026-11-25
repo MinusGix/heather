@@ -150,7 +150,7 @@ fn Place::val(self p: Place, tys: Nat → Type, strs: Strs(tys), env: List<Dyn(t
 // A callee's meaning, by its index: from the values passed, its results,
 // or nothing (an ill-coded call). A recursive function's world holds the
 // function itself.
-fn World(tys: Nat → Type) → Type { Nat → List<Dyn(tys)> → Option<List<Dyn(tys)>> }
+fn Callees(tys: Nat → Type) → Type { Nat → List<Dyn(tys)> → Option<List<Dyn(tys)>> }
 
 // A fresh object: `n` copies of `v`, where `c` is a sequence.
 fn Dyn::fresh(tys: Nat → Type, strs: Strs(tys), c: Shape, n, v: Dyn(tys)) → Option<Dyn(tys)> {
@@ -236,7 +236,20 @@ fn Pack::outs(tys: Nat → Type, cs: List<Shape>, j: Pack(tys, cs)) → List<Dyn
     (match cs as λ cs2 => Pack(tys, cs2) → List<Dyn(tys)> { Nil => λ _ => Nil, Cons(c, rest) => λ x => Pack::outs1(tys, rest, c, x) })(j)
 }
 
-fn Stmt::eval(self s: Stmt, R: Type, tys: Nat → Type, strs: Strs(tys), w: World(tys), env: List<Dyn(tys)>, k: List<Dyn(tys)> → R, fail: R) → R {
+// The state after a join of two yielding arms: each arm's outputs at the
+// recorded codes (or no meaning), then one convoy over the packed outputs,
+// each output the `Dyn` of its code and its projection, bound once.
+fn Body::joined(tys: Nat → Type, c: Bool, ya, na: Option<List<Dyn(tys)>>, outs: List<Shape>, env: List<Dyn(tys)>) → Option<List<Dyn(tys)>> {
+    match ya.and_then(λ ds => Pack::of(tys, outs, ds)) {
+        None => None,
+        Some(py) => match na.and_then(λ ds => Pack::of(tys, outs, ds)) {
+            None => None,
+            Some(pn) => Some(Dyn::push_all(tys, env, Pack::outs(tys, outs, convoy(c, py, pn)))),
+        },
+    }
+}
+
+fn Stmt::eval(self s: Stmt, R: Type, tys: Nat → Type, strs: Strs(tys), w: Callees(tys), env: List<Dyn(tys)>, k: List<Dyn(tys)> → R, fail: R) → R {
     match s {
         Op(op, a, b) => match Dyn::words<Dyn(tys)>(tys, Dyn::at_var(tys, env, a), Dyn::at_var(tys, env, b), λ wd x y => Dyn(SWord(wd), Width::op(wd, op, x, y))) { Some(d) => k(Cons(d, env)), None => fail },
         Lit(wd, n) => k(Cons(Dyn(SWord(wd), Width::of_nat(wd, n)), env)),
@@ -252,7 +265,7 @@ fn Stmt::eval(self s: Stmt, R: Type, tys: Nat → Type, strs: Strs(tys), w: Worl
 
 // The meaning of a body: its results to `ret`, an arm's outputs to `yld`.
 // `me` is the function's own index in the world, which a `Jump` calls.
-fn Body::mean(self b: Body, R: Type, tys: Nat → Type, strs: Strs(tys), w: World(tys), me: Nat, env: List<Dyn(tys)>,
+fn Body::mean(self b: Body, R: Type, tys: Nat → Type, strs: Strs(tys), w: Callees(tys), me: Nat, env: List<Dyn(tys)>,
     ret: List<Dyn(tys)> → R, yld: List<Dyn(tys)> → R, fail: R) → R
 {
     match b {
@@ -263,14 +276,10 @@ fn Body::mean(self b: Body, R: Type, tys: Nat → Type, strs: Strs(tys), w: Worl
         Join(t, yes, no, outs, rest) => match t.bit(tys, env) {
             None => fail,
             Some(c) => match yes.exits() || no.exits() {
-                False => {
-                    match yes.mean(Option<List<Dyn(tys)>>, tys, strs, w, me, env, λ _ => None, λ ds => Some(ds), None).and_then(λ ds => Pack::of(tys, outs, ds)) {
-                        None => fail,
-                        Some(py) => match no.mean(Option<List<Dyn(tys)>>, tys, strs, w, me, env, λ _ => None, λ ds => Some(ds), None).and_then(λ ds => Pack::of(tys, outs, ds)) {
-                            None => fail,
-                            Some(pn) => rest.mean(R, tys, strs, w, me, Dyn::push_all(tys, env, Pack::outs(tys, outs, convoy(c, py, pn))), ret, yld, fail),
-                        },
-                    }
+                False => match Body::joined(tys, c, yes.mean(Option<List<Dyn(tys)>>, tys, strs, w, me, env, λ _ => None, λ ds => Some(ds), None),
+                        no.mean(Option<List<Dyn(tys)>>, tys, strs, w, me, env, λ _ => None, λ ds => Some(ds), None), outs, env) {
+                    Some(e) => rest.mean(R, tys, strs, w, me, e, ret, yld, fail),
+                    None => fail,
                 },
                 True => {
                     let after = λ (ds: List<Dyn(tys)>) => rest.mean(R, tys, strs, w, me, Dyn::push_all(tys, env, ds), ret, yld, fail);
@@ -283,6 +292,6 @@ fn Body::mean(self b: Body, R: Type, tys: Nat → Type, strs: Strs(tys), w: Worl
 
 // A function's meaning: from its arguments (the first parameter oldest),
 // its results, or nothing.
-fn Func::denote(self f: Func, tys: Nat → Type, strs: Strs(tys), w: World(tys), me: Nat, args: List<Dyn(tys)>) → Option<List<Dyn(tys)>> {
+fn Func::denote(self f: Func, tys: Nat → Type, strs: Strs(tys), w: Callees(tys), me: Nat, args: List<Dyn(tys)>) → Option<List<Dyn(tys)>> {
     f.body.mean(Option<List<Dyn(tys)>>, tys, strs, w, me, Dyn::push_all(tys, Nil, args), λ rs => Some(rs), λ _ => None, None)
 }

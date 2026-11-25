@@ -2923,3 +2923,127 @@ moved.
   7's world as a value, and one continuation after a read could not give
   the window back only where it was filled.
 - A death named a binding; a write view chosen by a join had no slot.
+
+## 22. The interfaces as built (2026-11-25)
+
+`issues/ownership-interfaces.md` built §21 as modules. This section says
+what each module holds, where a definition differs from §21 and why, and
+what was measured. Where it says "agreed", the coordinating session
+decided it; "pending" is reported and not yet decided.
+
+### 22.1 What each module holds
+
+| Module | Holds |
+|---|---|
+| `lib/lang/ownership/steps.hthr` | Steps, `Ix`, selections, the decider; the total step model (`StepModel { at, over, fits, like }`, `StepModelLaws`, `ApartAt`) and `Steps::apart_sound` over it |
+| `lib/lang/ownership/shape.hthr` | `Shape { SWord(Width), SNamed(k) }`, `El`, `Dyn`, `Struct { sharing, pad, kind }` (opaque, record, sequence with windows), the kinds' laws, `Dyn`'s model and `Dyn::model_laws` from the structures' laws alone |
+| `lib/lang/ownership/sequences.hthr` | `List<A>` (with windows), `[A; n]` and `Bytes(n)` as sequences; unique identity proofs at `Nat` for `Bytes`'s length proof |
+| `lib/lang/ownership/body.hthr` | `Place`, `Stmt`, `Body`, a signature record, `Func`, the meaning in continuation form, and two stage lemmas (`dconvoy_map`, `List::foldl_same`) |
+| `lib/lang/ownership/level2.hthr` | Heap, blocks, objects with holes, values and references, a canonical reference, an object read as a value, the run's outcome and signature (definitions only) |
+| `lib/lang/ownership/verdict.hthr` | The residual kinds, the verdict's tree and what it owes along the meaning, a program, `SafeAt`/`Safety`, `Checker` and `CheckSound` (`Type`-valued definitions only) |
+
+Probes: `lib/_tests/lang/ownership/{shape,sequences,body,interfaces}_tests.hthr`.
+Retired: `value_steps.hthr`, `coded.hthr` and their probes, and
+`PathLawsOn`/`KeepsFit` from `lib/std/machine/path.hthr`.
+
+### 22.2 Where the built form differs from §21
+
+- **The step model has four parts** (agreed). §21.1's "relative to what
+  was read there" is a fourth component, `like(sel, read, written)`: for a
+  `Dyn` its code, through a window also its length.
+- **An unfit step does not read its owner back** (agreed, withdrawn from
+  §21.1). Soundness never reads an unfit step. Reading the owner back
+  would make a read's code the bound's decision, stuck at an open index.
+- **A step with no part at the owner's code reads the word 0** (pending).
+  An owner-back read is unsound beside a write. `[SField(2)]` and
+  `[SField(0)]` on a record of two fields are found apart, yet a write
+  through field 0 changes what field 2 reads. The word 0 is a value of a
+  word code, asked of no type.
+- **The index is the variable's own value** (agreed, decision B). A
+  selection's index is an `Ix`, a number or a word at a width. An instance
+  reads it at its accessor's own type, and the decider reads it through
+  `toNat`. `Bytes::at` reads at the `u64` itself, so an index carried as
+  its number cannot spell it.
+- **A sequence's read is its type's own total accessor, with that
+  accessor's pad** (agreed, decision A; §21.1's "no inhabitant is asked" is
+  withdrawn).
+  - `[u64; n]` and `Bytes(n)` need nothing.
+  - `List<A>` and `[A; n]` take their pad as an instance parameter, at an
+    element structure that has one.
+  - A read through a proof-consuming accessor pins by one library lemma
+    per site (`copy_below_pin`).
+  - No real type was excluded for want of a pad in this package.
+- **The meaning is optional only where a cast can fail** (agreed): an
+  operand of a word primitive or a test, a join's output, a callee's
+  answer. The codes are decided outside the convoy.
+  - A pin reads `= Some([...])`.
+  - A function ending in a branch pins through the continuation (`R = Nat`,
+    `fail = 0`), as the sixth experiment's `mean_word` did. `Some` of the
+    whole answer is refused there, because the meaning's convoy is over the
+    answer.
+- **The surface has no join point** (agreed). A statement `if` with a
+  return on an inner path copies what follows into each arm that falls
+  through (`sequencing-surface-design.md` §22 items 5 and 8). The meaning
+  binds it once, the same term after β.
+- **A `while` is the loop combinator** (pending: §21.2 says a generated
+  sibling function).
+  - The surface now lowers a `while` to `Loop(measure, f::step).run(state)`
+    (`docs/language/loop-combinator-design.md`), whose one equation is
+    `Loop::run_unfold`.
+  - The loop's body is still a function whose round ends in a `Jump`. The
+    world holds the loop as the source's function.
+  - The pin is the equation, then the step's split on its test
+    (`dconvoy_map`), each arm `refl`.
+- **A `for` is the fold of its step.** The step is a function pinned by
+  `refl`. The loop is the fold of the step's meaning, related to the
+  source's fold by `List::foldl_same`.
+- **Variables are de Bruijn indices into one newest-first list of `Dyn`s**
+  (pending, §22.3).
+- **Level 2 and the verdict are definitions.**
+  - `SafeAt` states four clauses at each fuel:
+    - the run is not stuck;
+    - a measured run is done from its `need`;
+    - where it is done, its results read the meaning's, and the heap
+      outside what the arguments lend is unchanged;
+    - where an unmeasured run is going, its history is one the meaning
+      reaches.
+  - Not yet spelled:
+    - that each written parameter reads the meaning's value after and fits
+      its value before;
+    - that a returned view is its parameter's reference narrowed.
+  - `CheckSound` quantifies over a checker, since the checker is not built.
+
+### 22.3 What was measured
+
+Kernel steps, width one, a fresh cache per run, read with `scripts/timings`.
+
+- **The option** costs a factor of 1.01 to 1.09. That is an optioned
+  meaning against a copy with fallbacks and no failure, on the same bodies.
+- **One newest-first list of variables is quadratic.**
+  - A variable that lives long, such as a parameter or an object, sinks one
+    deeper with every binding.
+  - N word additions reading one parameter: 11.5k, 29.7k, 87k, 289k steps at
+    N = 32 to 256.
+  - N reads of a list at the last read's index: 20k, 47k, 122k, 357k.
+  - With arguments addressed by position and locals newest-first, both are
+    exactly linear: 8.4k to 64k, and 17k to 129k.
+- **One environment against two** (§21.5 probe 2), with a `[u64; 16]`
+  object and `u64` words. N rounds of a read at the last word's `toNat`
+  plus one:
+
+  | N | one | two |
+  |---|---|---|
+  | 32 | 121k | 109k |
+  | 64 | 263k | 218k |
+  | 128 | 613k | 436k |
+  | 256 | 2.62M | 873k |
+
+  Two (objects apart from words) is exactly linear. One is superlinear and
+  needs more than the default budget at 256.
+- **Joins in sequence.**
+  - Independent packed joins: 10.6k, 22.9k, 53.9k, 141k at K = 4 to 32. That
+    is mildly superlinear, from the same variable depth; the source alone
+    is linear.
+  - Joins with an inner return: 2.1k, 5.4k, 12.3k, 26.4k, 55.6k, 116k at K =
+    1 to 6. That is exponential, the surface's copied rest; the meaning's
+    text is linear.

@@ -1,0 +1,109 @@
+// The remaining interfaces stated at one small function, so each type is
+// checked (lib/lang/ownership/level2.hthr, verdict.hthr;
+// issues/ownership-interfaces.md): level 2's heap and objects with holes, a
+// canonical reference, the run's outcome, each residual kind, the verdict's
+// tree, a function's safety and `check_sound`. Nothing is proved over the
+// statements but a control: a run that is stuck is not safe.
+import logic;
+import bool;
+import nat;
+import option;
+import list;
+import bitvec;
+import span_set;
+import store;
+import atom;
+import steps;
+import shape;
+import sequences;
+import body;
+import level2;
+import verdict;
+import linux_world;
+
+fn tys() → Nat → Type { λ k => match k { Zero => List<Nat>, Succ(_) => True } }
+
+fn strs() → Strs(tys()) {
+    λ k => match k { Zero => Struct(Object, None, Sequence(Seq::list(tys(), SWord(WNat), 0, None))), Succ(_) => Struct(Plain, None, Opaque) }
+}
+
+fn nat(n: Nat) → Dyn(tys()) { Dyn(SWord(WNat), n) }
+
+fn nats(xs: List<Nat>) → Dyn(tys()) { Dyn(SNamed(0), xs) }
+
+// `fn pick(xs: &[Nat], i: Nat, inside: ∥i < xs.len()∥) → Nat { xs[i] }`,
+// as the list's own total accessor reads.
+fn pick(xs: List<Nat>, i: Nat, inside: ∥i < xs.len()∥) → Nat { xs.nth(i).unwrap_or(0) }
+
+fn pick_r() → Func { Func(Sig([Param(SNamed(0), ByRead), Param(SWord(WNat), ByTake)], [Result(SWord(WNat), OFresh)]), seq([Read(Place(1, [SElem(Var(0))]))], Ret([0]))) }
+
+fn pick_ctx(xs: List<Nat>, i: Nat) → Ctx(tys()) { Ctx(strs(), λ _ _ => None, 0, λ _ _ => True, λ _ _ => 0, [nats(xs), nat(i)]) }
+
+fn pick_env(xs: List<Nat>, i: Nat) → List<Dyn(tys())> { Dyn::push_all(tys(), Nil, [nats(xs), nat(i)]) }
+
+theorem pick_means(xs: List<Nat>, i: Nat, inside: ∥i < xs.len()∥): pick_r().denote(tys(), strs(), λ _ _ => None, 0, [nats(xs), nat(i)]) = Some([nat(pick(xs, i, inside))]) { refl }
+
+// ---------------------------------------------------------------------------
+// The residual kinds, each the source's proposition by conversion
+
+// An element read owes its accessor's bound: the source's own hypothesis.
+theorem access_is_bound(xs: List<Nat>, i: Nat): RAccess(Place(1, [SElem(Var(0))])).Holds(tys(), pick_ctx(xs, i), pick_env(xs, i)) = (∥i < xs.len()∥) { refl }
+
+// Two windows apart: a disjunction naming its sides.
+theorem apart_is_sides(xs: List<Nat>, i: Nat): RApart(Lit(0), Var(0), Var(0), Lit(1)).Holds(tys(), pick_ctx(xs, i), pick_env(xs, i)) = ((0 + i <= i) ∨ (i + 1 <= 0)) { refl }
+
+// A write of a whole place: what is written fits what was there.
+theorem fits_is_same(xs: List<Nat>, i: Nat): RFits(Place(1, Nil), 1).Holds(tys(), pick_ctx(xs, i), pick_env(xs, i)) = Dyn::Fits(tys(), strs(), nats(xs), nats(xs)) { refl }
+
+// A callee's precondition at the values passed, and a measure.
+theorem pre_is_callee(xs: List<Nat>, i: Nat): RPre(3, [0]).Holds(tys(), pick_ctx(xs, i), pick_env(xs, i)) = True { refl }
+
+theorem measure_is_below(xs: List<Nat>, i: Nat): RMeasure(0, [0, 1]).Holds(tys(), pick_ctx(xs, i), pick_env(xs, i)) = (0 < 0) { refl }
+
+// ---------------------------------------------------------------------------
+// The verdict's tree, owed along the meaning: discharged by the source's
+// proof, placed
+
+fn pick_owes() → Owes { ODo([RAccess(Place(1, [SElem(Var(0))]))], OEnd) }
+
+theorem pick_due(xs: List<Nat>, i: Nat, inside: ∥i < xs.len()∥): pick_owes().Due(tys(), pick_ctx(xs, i), pick_r()) { ⟨inside, trivial⟩ }
+
+// The control: a verdict not in the body's shape owes `False`.
+theorem wrong_shape_owes_false(xs: List<Nat>, i: Nat): OJump(Nil).Due(tys(), pick_ctx(xs, i), pick_r()) = False { refl }
+
+// ---------------------------------------------------------------------------
+// Level 2
+
+// A block holding the list, and a second holding an object one of whose
+// fields is owned by the first: read as a value, the hole is filled.
+fn heap1(xs: List<Nat>) → Heap(tys()) { [Live(Obj(nats(xs), Nil))] }
+
+theorem read_plain(xs: List<Nat>): Obj::read(tys(), strs(), heap1(xs), 1, Obj(nats(xs), Nil)) = Some(nats(xs)) { refl }
+
+// A taken place has no value.
+theorem read_taken(xs: List<Nat>): Obj::read(tys(), strs(), heap1(xs), 1, Obj(nats(xs), [HoleAt([SElem(Lit(0))], Taken)])) = None { refl }
+
+// A reference into the block, and what it says to be canonical.
+fn canon_ref(xs: List<Nat>) → Type { Ref::Canonical(tys(), heap1(xs), Ref(0, [SElem(Lit(2))])) }
+
+theorem ref_reads(xs: List<Nat>): Value::read(tys(), Refer(Ref(0, [SElem(Lit(2))])), strs(), heap1(xs), 1) = Some(nat(xs.nth(2).unwrap_or(0))) { refl }
+
+// ---------------------------------------------------------------------------
+// A program, a function's safety, `check_sound`: their types at `pick`
+
+fn pick_prog(run: Run(tys())) → Prog(tys()) {
+    Prog(strs(), λ _ => pick_r(), λ _ _ => None, λ _ _ => True, λ _ => Some(λ _ _ => 0), run, λ _ _ _ => True)
+}
+
+fn pick_safety(run: Run(tys())) → Type { Safety(tys(), pick_prog(run), 0) }
+
+fn pick_check_sound(check: Checker()) → Type<1> { CheckSound(tys(), check) }
+
+// The control: a run that is stuck is not safe.
+theorem stuck_not_safe(io: Io): ¬pick_safety(λ _ _ _ _ _ => Stuck) {
+    λ safe => {
+        let at0 = safe(0, λ g2 k no => false_elim(Nat::not_succ_le_zero(k, no)));
+        let clauses = at0(Nil, Nil, io, 0, Nil, trivial);
+        clauses.left(refl)
+    }
+}
