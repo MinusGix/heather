@@ -1476,7 +1476,13 @@ read off the code as it stands:
   it reads `Again`, so the generator's proof of it
   (`runtime_span_measured`) carries over.
 - *The instance* is `FFun::compile` with a pin from `FTm::node_means`, in
-  place of `FFun::compile_measured`.
+  place of `FFun::compile_measured`. `FTm::node_means` is built (in
+  `rt_file_loop`). The pin itself (`FFun::Pinned`: the source alike the
+  node function's meaning at every rest and own span) is written by the
+  generator as `Tm`'s is (`runtime_node_instance`). It binds the
+  parameters, cites `FTm::node_means` at their words, and leaves the curry,
+  the casts and the one-word round trips to conversion at the function's
+  closed types. A generic `FFun::curry` lemma is not needed.
 - *What goes:* `FFun::lower_measured`, `FFun::measured_sound`,
   `FFun::meas_tail2`, `FFun::meas_pass_turn`, `FFun::meas_zero_turn` and
   the measured instance. `FFun::counted_sound` and `Fun::meas_code` stay
