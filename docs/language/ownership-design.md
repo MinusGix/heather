@@ -3072,6 +3072,11 @@ Retired: `value_steps.hthr`, `coded.hthr` and their probes, and
     logarithm and cure the long-lived local, but cost 1.3 to 3.7 times the
     split on the other rows, past the agreed margin of a third, so the
     split stays (agreed).
+  - The split's blind spot is only a long straight-line body. A loop's
+    state is its parameters (§21.2), and the reflector passes anything
+    long-lived into a loop as a parameter, which `Arg` reaches by position
+    at every round; only a local that outlives many bindings in one
+    straight run sinks. The issue says what would reopen the choice.
   - Under an indexed environment a place's atoms name levels while the
     decider reads indices from a `List<Ix>`, so each read renumbered its
     own atoms and took only their words; that cost a further share on the
