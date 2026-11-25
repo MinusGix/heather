@@ -1034,6 +1034,51 @@ round stays green. (`Repeat` was taken: it is a native statement's.)
 - *Rust.* The region printer reads tag 9. The allocator does not, since no
   statement reaches it with an `Until`.
 
+**Round C as built so far.**
+
+- *The measure.* `Until` carries a seventh field, `measure`: the position
+  of the parameter it falls on. Both spellings write it and the Rust
+  printer reads it. No meaning reads it; it says where the check looks.
+- *The counted check* (`function_ir_counted`). A pass that counts is
+  `Compose(work, Dataflow(leaf))`, where `work` writes no part of the
+  counter and the leaf is exactly `counted_nodes(p, q, exit, t)`:
+  `t := 1; q := p - t; t := 0; t := (q = t); exit := exit | t`. `p` is the
+  parameter at `measure` (none before it) and `q` the next word there.
+  `StructuredRegion::counts` decides it by evaluation, and
+  `counts_halts` turns the verdict into `until_halts`. The measure is the
+  counter less one, so a loop entered at zero wraps and still ends within
+  `until_passes()`. The file-threaded `until_run_defined_of_measure`
+  carries it.
+- *Statements.* `scopes` asks `until_counted` where it asked
+  `until_free`. `ok_of_scoped` proves an `Until`'s ending from the check,
+  and needs no hypothesis. A `BitOr` of two clean bits is clean
+  (`Scope::clean`), so the counted exit bit scopes.
+- *A layout fix.* Round B's statement code jumped back to the head
+  conditionally. A `Jcc` lands only ahead (`item_lands`), so no program
+  holding one laid out. It went unnoticed because `scopes` refused every
+  such statement. The code now jumps ahead to the jump back, as the
+  counted `Loop`'s does, and `counted_compiles` checks a whole source.
+- *`native_build`.* `Passes` lowers to a counted `Until` over the counter,
+  `ran_out` and the state, behind a test of its bound. Each pass sets
+  `ran_out` to the negation of `stop`, so the last pass leaves it 1
+  exactly where the passes ran out.
+- *Next: the runtime producers* (`rt_lower`'s `Iterate` and node, the
+  fuel and measured loops of `rt_loop`, `rt_file_lower`, `rt_file_loop`).
+  Their proofs read `loop_eval` and `loop_run` with the count and the
+  exhausted bit. The plan is to rebuild `Loop` as a derived form over
+  `Until` rather than re-prove each producer:
+  - `counted_loop(...)` is an `Until` over `parameters ++ [exhausted,
+    count]`, fed from `inputs ++ [bound, bound]`, with outputs
+    `outputs ++ [exhausted]`. `bind` zips a prefix, so the counter is
+    never written outside.
+  - Its pass is guarded, as `Loop`'s is: `e := 0 < count` (in the
+    exhausted word); if set, the body, then `count := count - 1; e := 0`;
+    if not, the state moved to `next`, `exit := 1; e := 1`.
+  - Every temporary lives in the pass's own valuation, so its meaning
+    equals `Loop`'s pointwise at every id. One simulation theorem then
+    carries the producers' proofs over. A second counted shape (the
+    guarded one, the counter its own measure) decides its ending.
+
 **Built: a pass that answers several words** (step 3's first half, kept
 as small as the extra pass allows).
 
