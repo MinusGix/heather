@@ -42,6 +42,8 @@ theorem Atom::closed_val(self a: Atom, e: a.closed() = True, ws, vs: List<Nat>):
     (match a as λ x => x.closed() = True → x.val(ws) = x.val(vs) { Lit(_) => λ _ => refl, Var(_) => λ no => absurd(no) })(e)
 }
 
+theorem Atom::same_self(self a: Atom): a.same(a) = True { match a { Lit(n) => n.same_self(), Var(w) => w.same_self() } }
+
 theorem Atom::same_sound(self a, b: Atom, e: a.same(b) = True): a = b {
     (match a as λ x => x.same(b) = True → x = b {
         Lit(n) => match b as λ y => Lit(n).same(y) = True → Lit(n) = y {
@@ -134,4 +136,18 @@ theorem Obligation::settle_sound(self o: Obligation, ws: List<Nat>, rs: List<Obl
 theorem Obligation::settle_closed(self o: Obligation, c: o.closed() = True, rs: List<Obligation>, ok: o.settle() = Some(rs)): rs = Nil {
     let h: (o.verdict(Nil).then(Some(Nil<Obligation>)) = Some(rs)) = j(c, λ b _ => (match b { True => o.verdict(Nil).then(Some(Nil<Obligation>)), False => Some([o]) }) = Some(rs), ok);
     sym(Option::some_inj(Nil<Obligation>, rs, Bool::then_some(o.verdict(Nil), Some(Nil<Obligation>), rs, h).right))
+}
+
+// Four atoms closed: the conjunction `closed` reads.
+theorem Atom::closed_all4(a, b, c, d: Atom, ha: a.closed() = True, hb: b.closed() = True, hc: c.closed() = True, hd: d.closed() = True):
+    (a.closed() && b.closed() && c.closed() && d.closed()) = True
+{
+    Bool::and_true_of(a.closed() && b.closed() && c.closed(), d.closed(),
+        Bool::and_true_of(a.closed() && b.closed(), c.closed(), Bool::and_true_of(a.closed(), b.closed(), ha, hb), hc), hd)
+}
+
+// A closed obligation whose verdict holds is settled owing nothing.
+theorem Obligation::settle_yes(self o: Obligation, c: o.closed() = True, v: o.verdict(Nil) = True): o.settle() = Some(Nil) {
+    j(sym(c), λ b _ => (match b { True => o.verdict(Nil).then(Some(Nil<Obligation>)), False => Some([o]) }) = Some(Nil<Obligation>),
+        j(sym(v), λ b _ => b.then(Some(Nil<Obligation>)) = Some(Nil<Obligation>), refl))
 }

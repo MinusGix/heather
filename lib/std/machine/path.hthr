@@ -951,3 +951,12 @@ theorem Apart::under_on<S, A, B, C>(p: Path<S, A>, fits: A → Bool, pl: PathLaw
         λ s b c => Apart::under_commute_on(p, fits, pl, inner, kq, kr, s, b, c, p.get(s), refl),
     )
 }
+
+// A part of a part writes only through its outer step, so it keeps what
+// that step keeps.
+theorem Path::then_keeps_fit<S, A, B>(p: Path<S, A>, q: Path<A, B>, fits: S → Bool, kp: Path::KeepsFit(p, fits)): Path::KeepsFit(p.then(q), fits) {
+    λ s fs b => (match p.get(s) as λ o => p.get(s) = o → fits(p.then(q).set(s, b)) = True {
+        Some(a) => λ e => j(sym(p.then_set_at(q, s, a, e, b)), λ t _ => fits(t) = True, kp(s, fs, q.set(a, b))),
+        None => λ e => j(sym(p.then_set_none(q, s, e, b)), λ t _ => fits(t) = True, fs),
+    })(refl)
+}
