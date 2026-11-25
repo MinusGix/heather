@@ -1411,8 +1411,35 @@ proofs over an abstract leaf. (B) is worth its own design note, after
 (A)'s step a shows what the leaf interface must offer: the meaning of a
 leaf at a span, its lowering, and its soundness.
 
-**Taken: (A)** (the parent session, 2026-11-25, with Minus away; (B) stays
-open for its own note).
+- **(C) Build the node once, generic over a leaf interface**, with `FTm` as
+  its first instance. The interface is a leaf's meaning at a span, its
+  lowering and its soundness. `ETm` and pure `Tm` then become further
+  instances, not rewrites. This is the parent session's recommendation to
+  Minus. It differs from (B) in scope: (B) shares the whole control language
+  (`let`, `if`, call and the node); (C) makes only the node generic.
+
+**Pending Minus.** The parent session's go-ahead crossed with this question
+and was not his answer (2026-11-25). The concrete `FTm` node (steps a1 and
+a2) is needed under every option, and so is step b. Nothing that only (A)
+needs (an `ETm` copy of the node) is built until he decides.
+
+*If (C) is chosen, what of a1 and a2 moves into the generic layer:*
+- *Generic:*
+  - the node's meaning as `Loop::rounds` of a pass under a label (`FTm::Label`,
+    `FTm::round`, `FTm::node_pass`, `FTm::node_body`, `FTm::node_stuck`);
+  - the `Until` layout (`Tm::loop_region`, shared with `Tm` already);
+  - the induction over the passes (`FTm::node_runs`, `FTm::node_end`);
+  - the assembly (`FTm::node_sound`'s order of ids, the outputs' words, and
+    `Keeps`);
+  - the pin's theorem (`FTm::node_means` over `Loop::rounds_agree_below`).
+
+  These are stated over a state `Mutated<span, words>` and a pass's promise
+  (`FTm::TailHolds`/`FTm::Turn`); a leaf interface would supply that promise
+  and the state's carrier.
+- *Stays per leaf language:* the pass's lowering and soundness (`FTm`'s tail
+  mode, `lower_tail`/`tail_sound`), the bridge from the labelled meaning to
+  the pass's (`FTm::sem_in_tail`, `FTm::PassOk`), and the constructors
+  themselves.
 
 **Step a1 as built: the constructors and the meaning.** `FTm::Node(inits,
 body)` and `FTm::Next(res, args)` sit beside `FTm::Loop` and the self-call
