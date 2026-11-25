@@ -756,4 +756,3 @@ theorem run_words_alike(r: Renaming, ops: List<Op>, s, renamed: State, rel: Rena
     (ran: run(ops, s).map(λ (t: State) => t.values(x)) = Some(Word(word))) → run(ops, renamed).map(λ (t: State) => t.values(x)) = Some(Word(word)) {
     words_alike(r, x, word, run(ops, s), run(ops, renamed), run_renames(r, ops, s, renamed, rel))
 }
-
