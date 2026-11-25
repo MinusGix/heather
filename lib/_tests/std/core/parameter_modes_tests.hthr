@@ -245,10 +245,19 @@ fn missing_lend(x: Nat) → Nat {
     r
 }
 
-// expect-error: a `&mut` argument is lent by a call that is a statement, a `let`'s value or a block's end
-fn lend_inside(x: Nat) → Nat {
+// expect-error: a `&mut` argument is lent by a call that surely runs before the statement around it
+fn lend_under_lambda(x: Nat) → Nat {
     let mut p = x;
-    let r = add_into(&mut p, 1) + 1;
+    let f = λ (k: Nat) => add_into(&mut p, k);
+    f(1)
+}
+
+fn is_zero(n: Nat) → Bool { match n { Zero => True, Succ(_) => False } }
+
+// expect-error: a `&mut` argument is lent by a call that surely runs before the statement around it
+fn lend_under_or(x: Nat, b: Bool) → Bool {
+    let mut p = x;
+    let r = b || is_zero(add_into(&mut p, 1));
     r
 }
 
@@ -425,3 +434,96 @@ fn split_statement(c: Counter) → Nat {
 // with its own reason, not as a field the receiver lacks.
 // expect-error: `tally` is a `mut self` method, so it updates its receiver, and nothing here keeps the update
 theorem tally_projected(c: Counter): c.tally(1).value = c.n + 1 { refl }
+
+// ---------------------------------------------------------------------------
+// A call that lends places where it is surely run, anywhere in a statement's
+// expression: it runs first, inner calls before outer and left to right,
+// and the expression reads its answer (issues/parameter-modes-residue.md).
+
+// An operand.
+fn lend_in_operand(x: Nat) → Nat {
+    let mut p = x;
+    let r = add_into(&mut p, 1) + 10;
+    r + p
+}
+theorem lend_in_operand_open(x: Nat): lend_in_operand(x) = (x + 1 + 10) + (x + 1) { refl }
+
+// An argument of a call that lends too: the inner call runs first.
+fn lend_in_argument(x: Nat) → Nat {
+    let mut p = x;
+    let mut q = x;
+    let r = add_into(&mut p, add_into(&mut q, 2));
+    r + q
+}
+theorem lend_in_argument_open(x: Nat): lend_in_argument(x) = (x + (x + 2)) + (x + 2) { refl }
+
+// A statement whose call takes another's answer.
+fn lend_in_statement(x: Nat) → Nat {
+    let mut p = x;
+    let mut q = x;
+    add_into(&mut p, add_into(&mut q, 1));
+    p + q
+}
+theorem lend_in_statement_open(x: Nat): lend_in_statement(x) = (x + (x + 1)) + (x + 1) { refl }
+
+// `return`: the places are rebound before the function leaves, and in a
+// function with a live path, the path returned is the one after.
+fn lend_in_return(x: Nat, b: Bool) → Nat {
+    let mut p = x;
+    if b { return add_into(&mut p, 5); }
+    p
+}
+theorem lend_in_return_true(x: Nat): lend_in_return(x, True) = x + 5 { refl }
+theorem lend_in_return_false(x: Nat): lend_in_return(x, False) = x { refl }
+
+fn lend_in_return_path(a: &mut Nat, b: Bool) → Nat {
+    if b { return add_into(&mut a, 5) + 1; }
+    0
+}
+theorem lend_in_return_path_true(x: Nat): lend_in_return_path(x, True) = Mutated(x + 5, x + 5 + 1) { refl }
+
+// An arm of a branch that ends a block (§19.1): the bare call, or an
+// expression holding it.
+fn lend_in_arm(x: Nat, b: Bool) → Nat {
+    let mut p = x;
+    match b {
+        True => add_into(&mut p, 3),
+        False => p,
+    }
+}
+theorem lend_in_arm_true(x: Nat): lend_in_arm(x, True) = x + 3 { refl }
+theorem lend_in_arm_false(x: Nat): lend_in_arm(x, False) = x { refl }
+
+fn lend_in_arm_path(a: &mut Nat, b: Bool) → Nat {
+    match b {
+        True => add_into(&mut a, 3) * 2,
+        False => 0,
+    }
+}
+theorem lend_in_arm_path_true(x: Nat): lend_in_arm_path(x, True) = Mutated(x + 3, (x + 3) * 2) { refl }
+theorem lend_in_arm_path_false(x: Nat): lend_in_arm_path(x, False) = Mutated(x, 0) { refl }
+
+// The value of an assignment, and a block's end inside an expression.
+fn lend_in_assignment(x: Nat) → Nat {
+    let mut p = x;
+    let mut q = 0;
+    q := add_into(&mut p, 4);
+    q + p
+}
+theorem lend_in_assignment_open(x: Nat): lend_in_assignment(x) = (x + 4) + (x + 4) { refl }
+
+fn zero() → Nat { 0 }
+fn lend_in_tail(mut x: Nat) → Nat { add_into(&mut x, 3) + zero() }
+theorem lend_in_tail_open(x: Nat): lend_in_tail(x) = x + 3 + 0 { refl }
+
+// A monadic bind binds the answer; the place is rebound beside it.
+fn some_into(acc: &mut Nat, k: Nat) → Option<Nat> {
+    acc := acc + k;
+    Some(acc)
+}
+fn lend_in_bind(x: Nat) → Option<Nat> {
+    let mut p = x;
+    let r <- some_into(&mut p, 2);
+    Some(r + p)
+}
+theorem lend_in_bind_open(x: Nat): lend_in_bind(x) = Some((x + 2) + (x + 2)) { refl }

@@ -175,3 +175,41 @@ fn a_mode_is_written_where_an_argument_is_lent() {
     // A frozen view is a theorem's parameter as well as a function's.
     decl("theorem t(x: &N): P { p }");
 }
+
+#[test]
+fn a_call_inside_an_expression_runs_first() {
+    // Each lent argument still stands inside the one call that lends it,
+    // and none is left in the expression around it.
+    for src in [
+        "fn f(x: N) -> N { let mut p = x; let r = g(&mut p) + 1; r }",
+        "fn f(x: N) -> N { let mut p = x; let mut q = x; let r = g(&mut p, g(&mut q)); r }",
+        "fn f(x: N, b: B) -> N { let mut p = x; if b { return g(&mut p); } p }",
+        "fn f(x: N, b: B) -> N { let mut p = x; match b { T => g(&mut p), F => p } }",
+        "fn f(x: N) -> N { let mut p = x; let mut q = x; q := g(&mut p); q }",
+        "fn f(x: N) -> N { let mut p = x; let r <- g(&mut p); r }",
+    ] {
+        let parsed = format!("{:?}", parse_file(src).unwrap_or_else(|e| panic!("{src}: {}", e.msg)));
+        assert_eq!(parsed.matches("\\0mutarg").count(), src.matches("&mut").count(), "{src}");
+        assert_eq!(parsed.matches("\\0pathcall").count(), src.matches("&mut").count(), "{src}");
+    }
+}
+
+#[test]
+fn a_place_lent_inside_an_expression_is_read_nowhere_else_in_it() {
+    // The call now runs before the whole expression, so a read of the place
+    // beside it would mean its value after the call.
+    refused("fn f(x: N) -> N { let mut p = x; let r = p + g(&mut p); r }", "`p` is lent `&mut` by a call inside this expression and read elsewhere in it");
+    refused("fn f(x: N) -> N { let mut p = x; g(&mut p, g(&mut p)); p }", "read elsewhere in it");
+    refused("fn f(x: N) -> N { let mut p = x; return h(p, g(&mut p)); }", "read elsewhere in it");
+    // The call's own arguments are read before it runs, as at a statement.
+    decl("fn f(x: N) -> N { let mut p = x; let r = g(&mut p, p) + 1; r }");
+    // Two calls lending one place run left to right.
+    decl("fn f(x: N) -> N { let mut p = x; let r = g(&mut p) + g(&mut p); r }");
+}
+
+#[test]
+fn an_arm_in_value_position_cannot_rebind_a_lent_place() {
+    // The arm lends the place, which only an arm of a branch that ends its
+    // block may rebind (§19.1).
+    refused("fn f(x: N, b: B) -> N { let mut p = x; let r = match b { T => g(&mut p), F => 0 }; r }", "is not mutable");
+}

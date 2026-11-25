@@ -1220,8 +1220,8 @@ pub(crate) fn check_apart(places: &[&Expr]) -> R<()> {
 /// Each place is rebound as an assignment, so the rules of `:=` are the
 /// rules of a lent place: a `let mut` local or `mut` parameter of a scope
 /// that threads it, with field paths and elements (§20, §21), and "is not
-/// mutable" where it is not. `wrap` re-marks the answer's `let` (`let mut
-/// r = …` is `\0mut`).
+/// mutable" where it is not. `wrap` re-marks the answer's `let`, outermost
+/// first (`let mut r = …` is `\0mut`, `let r <- …` is `\0bind`).
 ///
 /// A method call on a mutable local or a field path of one (`x.m(&mut b)`,
 /// `receiver` set) is a method-call candidate of `x` as well ([`MUTCALL`]):
@@ -1231,7 +1231,7 @@ pub(crate) fn check_apart(places: &[&Expr]) -> R<()> {
 /// not, so the places' rebinding below reads `#path` either way.
 pub(crate) fn expand_path_call(
     tmp: String,
-    answer: Option<(String, Option<Ty>, Option<&str>)>,
+    answer: Option<(String, Option<Ty>, &[&str])>,
     call: Expr,
     receiver: bool,
     span: Span,
@@ -1265,7 +1265,7 @@ pub(crate) fn expand_path_call(
         rest = field(rest, "value");
     }
     if let Some((name, ty, wrap)) = answer {
-        let expr = match wrap { Some(m) => marked(m, rest, cspan), None => rest };
+        let expr = wrap.iter().rev().fold(rest, |e, m| marked(m, e, cspan));
         out.push(Stmt::Let { name, ty, expr, span, opaque: false });
     }
     Ok(out)

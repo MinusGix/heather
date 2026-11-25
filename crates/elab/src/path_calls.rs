@@ -50,9 +50,11 @@ impl PathCalls<'_> {
     pub(crate) fn read(&self, cx: &Cx, e: &Expr) -> Option<R<(Term, Type, Level)>> {
         if unmark(e, heather_syntax::MUTARG).is_some() {
             return Some(err(
-                "a `&mut` argument is lent by a call that is a statement, a `let`'s value or a block's \
-                 end, `let r = f(&mut a);`, where the place can be rebound after it: not inside another \
-                 expression (docs/language/sequencing-surface-design.md §24)",
+                "a `&mut` argument is lent by a call that surely runs before the statement around it, \
+                 where the place can be rebound after it: an argument, an operand, a receiver, the value \
+                 of a `let`, `return` or `:=`, or an arm of a branch that ends a block. Not under a `λ`, \
+                 in a branch's arm or a block in value position, or on the right of `&&` or `||`: bind \
+                 the call first, `let r = f(&mut a);` (docs/language/sequencing-surface-design.md §24)",
                 e.span,
             ));
         }
