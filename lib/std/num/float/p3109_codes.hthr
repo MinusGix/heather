@@ -243,12 +243,9 @@ fn P3109Layout::encode({F: Format}, self L: P3109Layout(F), r: Float(F)) → Nat
 
 // The data of the format: an unsigned format has no negative value and no
 // `-∞`.
-fn P3109Layout::Datum({F: Format}, self L: P3109Layout(F), r: Float(F)) → Type {
-    match L.s {
-        Signed => True,
-        Unsigned => match r { Fin(f) => f.neg = False ∨ f.mag = 0, Inf(n, _) => n = False, NaN(_) => True },
-    }
-}
+fn Float::Unsigned({F: Format}, self r: Float(F)) → Type { match r { Fin(f) => f.neg = False ∨ f.mag = 0, Inf(n, _) => n = False, NaN(_) => True } }
+
+fn P3109Layout::Datum({F: Format}, self L: P3109Layout(F), r: Float(F)) → Type { match L.s { Signed => True, Unsigned => r.Unsigned() } }
 
 // One datum: the same value, the same infinity, or NaN.
 fn Float::SameDatum({F: Format}, a, b: Float(F)) → Type {
@@ -524,5 +521,290 @@ theorem P3109Layout::encode_decode({F: Format}, self L: P3109Layout(F), n: Nat, 
                 Inr(g) => Inr(Inr(omega)),
             })
         },
+    }(refl)
+}
+
+// ---------------------------------------------------------------------------
+// Data to codes and back.
+
+// What `decode` does at each kind of code.
+theorem P3109Layout::half_dec_le({F: Format}, self L: P3109Layout(F), n: Nat, le: n <= L.N): L.half_dec(n) = L.pos(n) {
+    match n.le_dec(L.N) as λ dd => (match dd {
+        Inl(_) => L.pos(n),
+        Inr(_) => match F.specials.has_inf().is_true_dec() { Inl(hi) => match n.eq_dec(L.N + 1) { Inl(_) => Float::Inf(False, hi), Inr(_) => Float::NaN(L.hn) }, Inr(_) => Float::NaN(L.hn) },
+    }) = L.pos(n) {
+        Inl(_) => refl,
+        Inr(no) => false_elim(no(le)),
+    }
+}
+
+// Past `N` the nonnegative half holds `+∞` (where there is one), then NaN.
+theorem P3109Layout::half_dec_inf({F: Format}, self L: P3109Layout(F), hi: F.specials.has_inf().IsTrue()): L.half_dec(L.N + 1) = Float::Inf(False, hi) {
+    match (L.N + 1).le_dec(L.N) as λ dd => (match dd {
+        Inl(_) => L.pos(L.N + 1),
+        Inr(_) => match F.specials.has_inf().is_true_dec() { Inl(h2) => match (L.N + 1).eq_dec(L.N + 1) { Inl(_) => Float::Inf(False, h2), Inr(_) => Float::NaN(L.hn) }, Inr(_) => Float::NaN(L.hn) },
+    }) = Float::Inf(False, hi) {
+        Inl(bad) => false_elim(omega(bad)),
+        Inr(_) => match F.specials.has_inf().is_true_dec() as λ di => (match di {
+            Inl(h2) => match (L.N + 1).eq_dec(L.N + 1) { Inl(_) => Float::Inf(False, h2), Inr(_) => Float::NaN(L.hn) },
+            Inr(_) => Float::NaN(L.hn),
+        }) = Float::Inf(False, hi) {
+            Inl(h2) => match (L.N + 1).eq_dec(L.N + 1) as λ de => (match de { Inl(_) => Float::Inf(False, h2), Inr(_) => Float::NaN(L.hn) }) = Float::Inf(False, hi) {
+                Inl(_) => j(F.specials.has_inf().is_true_unique(h2, hi), λ v _ => Float::Inf(False, h2) = Float::Inf(False, v), refl),
+                Inr(ne) => false_elim(ne(refl)),
+            },
+            Inr(no) => false_elim(no(hi)),
+        },
+    }
+}
+
+theorem P3109Layout::half_dec_nan({F: Format}, self L: P3109Layout(F), n: Nat, gt: L.N < n, ne: ¬(F.specials.has_inf().IsTrue() ∧ n = L.N + 1)):
+    L.half_dec(n) = Float::NaN(L.hn)
+{
+    match n.le_dec(L.N) as λ dd => (match dd {
+        Inl(_) => L.pos(n),
+        Inr(_) => match F.specials.has_inf().is_true_dec() { Inl(hi) => match n.eq_dec(L.N + 1) { Inl(_) => Float::Inf(False, hi), Inr(_) => Float::NaN(L.hn) }, Inr(_) => Float::NaN(L.hn) },
+    }) = Float::NaN(L.hn) {
+        Inl(le) => false_elim(omega(le, gt)),
+        Inr(_) => match F.specials.has_inf().is_true_dec() as λ di => (match di {
+            Inl(hi) => match n.eq_dec(L.N + 1) { Inl(_) => Float::Inf(False, hi), Inr(_) => Float::NaN(L.hn) },
+            Inr(_) => Float::NaN(L.hn),
+        }) = Float::NaN(L.hn) {
+            Inl(hi) => match n.eq_dec(L.N + 1) as λ de => (match de { Inl(_) => Float::Inf(False, hi), Inr(_) => Float::NaN(L.hn) }) = Float::NaN(L.hn) {
+                Inl(eq) => false_elim(ne(And(hi, eq))),
+                Inr(_) => refl,
+            },
+            Inr(_) => refl,
+        },
+    }
+}
+
+theorem P3109Layout::neg_dec_le({F: Format}, self L: P3109Layout(F), m: Nat, mp: 1 <= m, le: m <= L.N): L.neg_dec(m) = -L.pos(m) {
+    match m.eq_dec(0) as λ dz => (match dz {
+        Inl(_) => Float::NaN(L.hn),
+        Inr(_) => match m.le_dec(L.N) {
+            Inl(_) => -L.pos(m),
+            Inr(_) => match F.specials.has_inf().is_true_dec() { Inl(hi) => match m.eq_dec(L.N + 1) { Inl(_) => Float::Inf(True, hi), Inr(_) => Float::NaN(L.hn) }, Inr(_) => Float::NaN(L.hn) },
+        },
+    }) = -L.pos(m) {
+        Inl(z) => false_elim(omega(z, mp)),
+        Inr(_) => match m.le_dec(L.N) as λ dd => (match dd {
+            Inl(_) => -L.pos(m),
+            Inr(_) => match F.specials.has_inf().is_true_dec() { Inl(hi) => match m.eq_dec(L.N + 1) { Inl(_) => Float::Inf(True, hi), Inr(_) => Float::NaN(L.hn) }, Inr(_) => Float::NaN(L.hn) },
+        }) = -L.pos(m) {
+            Inl(_) => refl,
+            Inr(no) => false_elim(no(le)),
+        },
+    }
+}
+
+theorem P3109Layout::neg_dec_inf({F: Format}, self L: P3109Layout(F), hi: F.specials.has_inf().IsTrue()): L.neg_dec(L.N + 1) = Float::Inf(True, hi) {
+    match (L.N + 1).eq_dec(0) as λ dz => (match dz {
+        Inl(_) => Float::NaN(L.hn),
+        Inr(_) => match (L.N + 1).le_dec(L.N) {
+            Inl(_) => -L.pos(L.N + 1),
+            Inr(_) => match F.specials.has_inf().is_true_dec() { Inl(h2) => match (L.N + 1).eq_dec(L.N + 1) { Inl(_) => Float::Inf(True, h2), Inr(_) => Float::NaN(L.hn) }, Inr(_) => Float::NaN(L.hn) },
+        },
+    }) = Float::Inf(True, hi) {
+        Inl(z) => false_elim(omega(z)),
+        Inr(_) => match (L.N + 1).le_dec(L.N) as λ dd => (match dd {
+            Inl(_) => -L.pos(L.N + 1),
+            Inr(_) => match F.specials.has_inf().is_true_dec() { Inl(h2) => match (L.N + 1).eq_dec(L.N + 1) { Inl(_) => Float::Inf(True, h2), Inr(_) => Float::NaN(L.hn) }, Inr(_) => Float::NaN(L.hn) },
+        }) = Float::Inf(True, hi) {
+            Inl(bad) => false_elim(omega(bad)),
+            Inr(_) => match F.specials.has_inf().is_true_dec() as λ di => (match di {
+                Inl(h2) => match (L.N + 1).eq_dec(L.N + 1) { Inl(_) => Float::Inf(True, h2), Inr(_) => Float::NaN(L.hn) },
+                Inr(_) => Float::NaN(L.hn),
+            }) = Float::Inf(True, hi) {
+                Inl(h2) => match (L.N + 1).eq_dec(L.N + 1) as λ de => (match de { Inl(_) => Float::Inf(True, h2), Inr(_) => Float::NaN(L.hn) }) = Float::Inf(True, hi) {
+                    Inl(_) => j(F.specials.has_inf().is_true_unique(h2, hi), λ v _ => Float::Inf(True, h2) = Float::Inf(True, v), refl),
+                    Inr(ne) => false_elim(ne(refl)),
+                },
+                Inr(no) => false_elim(no(hi)),
+            },
+        },
+    }
+}
+
+theorem P3109Layout::decode_lo({F: Format}, self L: P3109Layout(F), e: L.s = Signed, n: Nat, lt: n < L.B()): L.decode(n) = L.half_dec(n) {
+    let at: (L.decode(n) = (match L.B().le_dec(n) { Inl(_) => L.neg_dec(n - L.B()), Inr(_) => L.half_dec(n) })) =
+        j(sym(e), λ v _ => (match v { Signed => match L.B().le_dec(n) { Inl(_) => L.neg_dec(n - L.B()), Inr(_) => L.half_dec(n) }, Unsigned => L.half_dec(n) })
+            = (match L.B().le_dec(n) { Inl(_) => L.neg_dec(n - L.B()), Inr(_) => L.half_dec(n) }), refl);
+    trans(at, match L.B().le_dec(n) as λ dd => (match dd { Inl(_) => L.neg_dec(n - L.B()), Inr(_) => L.half_dec(n) }) = L.half_dec(n) {
+        Inl(ge) => false_elim(omega(ge, lt)),
+        Inr(_) => refl,
+    })
+}
+
+theorem P3109Layout::decode_hi({F: Format}, self L: P3109Layout(F), e: L.s = Signed, n: Nat, ge: L.B() <= n): L.decode(n) = L.neg_dec(n - L.B()) {
+    let at: (L.decode(n) = (match L.B().le_dec(n) { Inl(_) => L.neg_dec(n - L.B()), Inr(_) => L.half_dec(n) })) =
+        j(sym(e), λ v _ => (match v { Signed => match L.B().le_dec(n) { Inl(_) => L.neg_dec(n - L.B()), Inr(_) => L.half_dec(n) }, Unsigned => L.half_dec(n) })
+            = (match L.B().le_dec(n) { Inl(_) => L.neg_dec(n - L.B()), Inr(_) => L.half_dec(n) }), refl);
+    trans(at, match L.B().le_dec(n) as λ dd => (match dd { Inl(_) => L.neg_dec(n - L.B()), Inr(_) => L.half_dec(n) }) = L.neg_dec(n - L.B()) {
+        Inl(_) => refl,
+        Inr(no) => false_elim(no(ge)),
+    })
+}
+
+theorem P3109Layout::decode_u({F: Format}, self L: P3109Layout(F), e: L.s = Unsigned, n: Nat): L.decode(n) = L.half_dec(n) {
+    j(sym(e), λ v _ => (match v { Signed => match L.B().le_dec(n) { Inl(_) => L.neg_dec(n - L.B()), Inr(_) => L.half_dec(n) }, Unsigned => L.half_dec(n) }) = L.half_dec(n), refl)
+}
+
+// Codes up to `N` decode to floats, at either signedness.
+theorem P3109Layout::B_pos({F: Format}, self L: P3109Layout(F)): 1 <= L.B() { Nat::pow_pos(a := 2, n := L.K - 1) }
+
+theorem P3109Layout::decode_low({F: Format}, self L: P3109Layout(F), n: Nat, le: n <= L.N): L.decode(n) = L.pos(n) {
+    match L.s as λ ss => L.s = ss → L.decode(n) = L.pos(n) {
+        Signed => λ e => { let fs = L.fill_s(e); trans(L.decode_lo(e, n, omega), L.half_dec_le(n, le)) },
+        Unsigned => λ e => trans(L.decode_u(e, n), L.half_dec_le(n, le)),
+    }(refl)
+}
+
+// A nonnegative float decodes from its code.
+theorem P3109Layout::pos_code_same({F: Format}, self L: P3109Layout(F), f: Finite(F), p: f.neg = False): Float::SameDatum(L.pos(f.code()), Float::Fin(f)) {
+    let le = F.code_le(L.N, L.hs, L.hc, L.valid, f);
+    match L.pos_spec(f.code(), le) {
+        Exists(g, c) => {
+            let d = F.decode_of_code(f);
+            let gf: (g = f) = Finite::ext(g, f, trans(c.right.left, sym(p)), trans(c.right.right.left, d.left), trans(c.right.right.right, d.right));
+            j(sym(c.left), λ v _ => Float::SameDatum(v, Float::Fin(f)), j(gf, λ v _ => g.val() ≈ v.val(), g.val().same_refl()))
+        },
+    }
+}
+
+// Code 0 is `+0`, the value of `-0`.
+theorem P3109Layout::zero_same({F: Format}, self L: P3109Layout(F), f: Finite(F), mz: f.mag = 0): Float::SameDatum(L.pos(0), Float::Fin(f)) {
+    match L.pos_spec(0, trivial) {
+        Exists(g, c) => {
+            let back = F.code_of_decode(0);
+            let gm: (g.mag = 0) = trans(c.right.right.left, omega(back));
+            let Pg = Nat::pow(2, g.bexp);
+            let Pf = Nat::pow(2, f.bexp);
+            let gu: (g.units() = 0 * Pg) = Nat::cong(λ (w: Nat) => w * Pg, gm);
+            let fu: (f.units() = 0 * Pf) = Nat::cong(λ (w: Nat) => w * Pf, mz);
+            let gh = Finite::H_pos(g, c.right.left);
+            let fb = Finite::H_bounds(f);
+            j(sym(c.left), λ v _ => Float::SameDatum(v, Float::Fin(f)), Finite::same_of_H_eq(g, f, omega))
+        },
+    }
+}
+
+theorem P3109Layout::enc_zero({F: Format}, self L: P3109Layout(F), f: Finite(F), mz: f.mag = 0): L.encode(Float::Fin(f)) = 0 {
+    match f.neg as λ b => f.neg = b → L.encode(Float::Fin(f)) = 0 {
+        False => λ p => { let e = L.enc_pos(f, p); let z: (f.bexp * F.half() + f.mag = 0) = { let c = F.canonical_elim(f.mag, f.bexp, f.ok); let one = F.one_le_half();
+            let bz: (f.bexp = 0) = match c.right.right.left { Inl(z) => z, Inr(big) => false_elim(omega) };
+            let z2: (f.bexp * F.half() = 0 * F.half()) = Nat::cong(λ (w: Nat) => w * F.half(), bz); omega }; trans(e, z) },
+        True => λ ng => j(sym(ng), λ v _ => (match v { False => f.code(), True => match f.mag { Zero => 0, Succ(_) => L.B() + f.code() } }) = 0,
+            j(sym(mz), λ m _ => (match m { Zero => 0, Succ(_) => L.B() + f.code() }) = 0, refl)),
+    }(refl)
+}
+
+// Every datum decodes from its code: `decode ∘ encode` is the identity on
+// the data up to value sameness, so `decode` is onto them.
+theorem P3109Layout::decode_encode({F: Format}, self L: P3109Layout(F), r: Float(F), dat: L.Datum(r)): Float::SameDatum(L.decode(L.encode(r)), r) {
+    match r as λ rr => L.Datum(rr) → Float::SameDatum(L.decode(L.encode(rr)), rr) {
+        Fin(f) => λ df => match (1).le_dec(f.mag) {
+            Inr(nm) => {
+                let mz: (f.mag = 0) = omega(nm);
+                let e0 = L.enc_zero(f, mz);
+                j(sym(e0), λ v _ => Float::SameDatum(L.decode(v), Float::Fin(f)), j(sym(L.decode_low(0, trivial)), λ v _ => Float::SameDatum(v, Float::Fin(f)), L.zero_same(f, mz)))
+            },
+            Inl(mp) => match f.neg as λ b => f.neg = b → Float::SameDatum(L.decode(L.encode(Float::Fin(f))), Float::Fin(f)) {
+                False => λ p => {
+                    let le = F.code_le(L.N, L.hs, L.hc, L.valid, f);
+                    j(sym(L.enc_pos(f, p)), λ v _ => Float::SameDatum(L.decode(v), Float::Fin(f)),
+                        j(sym(L.decode_low(f.code(), le)), λ v _ => Float::SameDatum(v, Float::Fin(f)), L.pos_code_same(f, p)))
+                },
+                True => λ ng => match L.s as λ ss => L.s = ss → Float::SameDatum(L.decode(L.encode(Float::Fin(f))), Float::Fin(f)) {
+                    Unsigned => λ e => {
+                        let u: (f.neg = False ∨ f.mag = 0) = j(e, λ v _ => (match v as λ _ => Type { Signed => True, Unsigned => (Float::Fin(f)).Unsigned() }), df);
+                        match u { Inl(p) => false_elim(j(trans(sym(ng), p), λ b _ => b.IsTrue(), trivial)), Inr(z) => false_elim(omega(z, mp)) }
+                    },
+                    Signed => λ e => {
+                        let le = F.code_le(L.N, L.hs, L.hc, L.valid, f);
+                        let cd: (f.code() = f.bexp * F.half() + f.mag) = refl;
+                        let en = L.enc_neg(f, ng, mp);
+                        let back: (L.B() + f.code() - L.B() = f.code()) = omega;
+                        let nd: (L.decode(L.B() + f.code()) = -L.pos(f.code())) =
+                            trans(L.decode_hi(e, L.B() + f.code(), omega), trans(j(back, λ v _ => L.neg_dec(L.B() + f.code() - L.B()) = L.neg_dec(v), refl), L.neg_dec_le(f.code(), omega, le)));
+                        match L.pos_spec(f.code(), le) {
+                            Exists(g, c) => {
+                                let d = F.decode_of_code(f);
+                                let gf: (-g = f) = Finite::ext(-g, f, trans(j(sym(c.right.left), λ b _ => !b = True, refl), sym(ng)),
+                                    trans(c.right.right.left, d.left), trans(c.right.right.right, d.right));
+                                let fin: Float::SameDatum(-L.pos(f.code()), Float::Fin(f)) =
+                                    j(sym(c.left), λ v _ => Float::SameDatum(-v, Float::Fin(f)), j(gf, λ v _ => (-g).val() ≈ v.val(), (-g).val().same_refl()));
+                                j(sym(en), λ v _ => Float::SameDatum(L.decode(v), Float::Fin(f)), j(sym(nd), λ v _ => Float::SameDatum(v, Float::Fin(f)), fin))
+                            },
+                        }
+                    },
+                }(refl),
+            }(refl),
+        },
+        Inf(n, h) => λ dn => match n as λ b => (L.Datum(Float::Inf(b, h)) → Float::SameDatum(L.decode(L.encode(Float::Inf(b, h))), Float::Inf(b, h))) {
+            False => λ _ => {
+                let bt = Nat::bit_true(F.specials.has_inf(), h);
+                let at: (L.decode(L.N + 1) = L.half_dec(L.N + 1)) = match L.s as λ ss => L.s = ss → L.decode(L.N + 1) = L.half_dec(L.N + 1) {
+                    Signed => λ e => { let fs = L.fill_s(e); L.decode_lo(e, L.N + 1, omega) },
+                    Unsigned => λ e => L.decode_u(e, L.N + 1),
+                }(refl);
+                j(sym(trans(at, L.half_dec_inf(h))), λ v _ => Float::SameDatum(v, Float::Inf(False, h)), refl)
+            },
+            True => λ dt => match L.s as λ ss => L.s = ss → Float::SameDatum(L.decode(L.encode(Float::Inf(True, h))), Float::Inf(True, h)) {
+                Unsigned => λ e => {
+                    let u: (True = False) = j(e, λ v _ => (match v as λ _ => Type { Signed => True, Unsigned => (Float::Inf(True, h)).Unsigned() }), dt);
+                    false_elim(j(u, λ b _ => b.IsTrue(), trivial))
+                },
+                Signed => λ e => {
+                    let back: (L.B() + (L.N + 1) - L.B() = L.N + 1) = omega;
+                    let nd: (L.decode(L.B() + (L.N + 1)) = Float::Inf(True, h)) =
+                        trans(L.decode_hi(e, L.B() + (L.N + 1), omega), trans(j(back, λ v _ => L.neg_dec(L.B() + (L.N + 1) - L.B()) = L.neg_dec(v), refl), L.neg_dec_inf(h)));
+                    j(sym(nd), λ v _ => Float::SameDatum(v, Float::Inf(True, h)), refl)
+                },
+            }(refl),
+        }(dn),
+        NaN(h) => λ _ => match L.s as λ ss => L.s = ss → Float::SameDatum(L.decode(L.encode(Float::NaN(h))), Float::NaN(h)) {
+            Signed => λ e => {
+                let en = L.enc_nan_s(e, h);
+                let z: (L.B() - L.B() = 0) = omega;
+                let nd: (L.decode(L.B()) = Float::NaN(L.hn)) = trans(L.decode_hi(e, L.B(), omega), j(z, λ v _ => L.neg_dec(L.B() - L.B()) = L.neg_dec(v), refl));
+                j(sym(en), λ v _ => Float::SameDatum(L.decode(v), Float::NaN(h)), j(sym(nd), λ v _ => Float::SameDatum(v, Float::NaN(h)), trivial))
+            },
+            Unsigned => λ e => {
+                let en = L.enc_nan_u(e, h);
+                let ne: ¬(F.specials.has_inf().IsTrue() ∧ L.N + 1 + Nat::of_bit(F.specials.has_inf()) = L.N + 1) =
+                    λ c => { let bt = Nat::bit_true(F.specials.has_inf(), c.left); let eq = c.right; omega };
+                let nd: (L.decode(L.N + 1 + Nat::of_bit(F.specials.has_inf())) = Float::NaN(L.hn)) =
+                    trans(L.decode_u(e, L.N + 1 + Nat::of_bit(F.specials.has_inf())), L.half_dec_nan(L.N + 1 + Nat::of_bit(F.specials.has_inf()), omega, ne));
+                j(sym(en), λ v _ => Float::SameDatum(L.decode(v), Float::NaN(h)), j(sym(nd), λ v _ => Float::SameDatum(v, Float::NaN(h)), trivial))
+            },
+        }(refl),
+    }(dat)
+}
+
+// The nonnegative half never decodes to a negative float or `-∞`.
+theorem P3109Layout::half_dec_unsigned({F: Format}, self L: P3109Layout(F), n: Nat): (L.half_dec(n)).Unsigned() {
+    match n.le_dec(L.N) as λ _ => (L.half_dec(n)).Unsigned() {
+        Inl(le) => match L.pos_spec(n, le) {
+            Exists(f, c) => j(sym(trans(L.half_dec_le(n, le), c.left)), λ v _ => v.Unsigned(), Inl(c.right.left)),
+        },
+        Inr(gt) => match F.specials.has_inf().is_true_dec() as λ _ => (L.half_dec(n)).Unsigned() {
+            Inl(hi) => match n.eq_dec(L.N + 1) as λ _ => (L.half_dec(n)).Unsigned() {
+                Inl(eq) => j(sym(trans(j(eq, λ v _ => L.half_dec(n) = L.half_dec(v), refl), L.half_dec_inf(hi))), λ v _ => v.Unsigned(), refl),
+                Inr(ne) => j(sym(L.half_dec_nan(n, omega(gt), λ c => ne(c.right))), λ v _ => v.Unsigned(), trivial),
+            },
+            Inr(nh) => j(sym(L.half_dec_nan(n, omega(gt), λ c => nh(c.left))), λ v _ => v.Unsigned(), trivial),
+        },
+    }
+}
+
+// Every code decodes to a datum. With `encode_decode` and `decode_encode`,
+// `decode` is a bijection from the `2^K` codes onto the data up to value
+// sameness, for every layout and so for every P3109 format.
+theorem P3109Layout::decode_datum({F: Format}, self L: P3109Layout(F), n: Nat): L.Datum(L.decode(n)) {
+    match L.s as λ ss => L.s = ss → L.Datum(L.decode(n)) {
+        Signed => λ e => j(sym(e), λ v _ => (match v as λ _ => Type { Signed => True, Unsigned => (L.decode(n)).Unsigned() }), trivial),
+        Unsigned => λ e => j(sym(e), λ v _ => (match v as λ _ => Type { Signed => True, Unsigned => (L.decode(n)).Unsigned() }),
+            j(sym(L.decode_u(e, n)), λ v _ => v.Unsigned(), L.half_dec_unsigned(n))),
     }(refl)
 }
