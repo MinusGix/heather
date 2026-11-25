@@ -26,3 +26,7 @@ updated: 2026-11-25
 ## Done when
 
 `check_sound` itself states residuals over the final state in the source's vocabulary, with preconditions over parameters and `Pre` at the lent window, and `site_facts_tests` passes against it without `site_facts`.
+
+## Log
+
+- 2026-11-25: `site_facts.hthr` and its probes are removed from the tree. They were written against `call_check.hthr` as the second experiment left it; the fourth experiment restructured that module into one checker (a tree body, places for versions, views opened to read or write), and the two had never been combined: merged, `site_facts.hthr` has eleven errors (`Sem` has no `objs`, `Get`'s arity, `Safe`'s arguments). They are not kept beside a checker they do not fit. The module and probes are at commit 87ff7d6 and on branch `claude/ownership-residual-discharge`; this issue's work is to re-express them in the one checker, and its done-when ("`site_facts_tests` passes against it without `site_facts`") is unchanged. Until it lands, the fifth experiment's result stands on that branch's own green suite, not on this tree.
