@@ -1197,7 +1197,7 @@ as small as the extra pass allows).
   as the answer spans (it must fit in the state, `Tm::lower_loop_at`
   checks), held by `Ty::answer_holds`; no branch was left to move them in.
 
-**Round D, stage 2 as built: a `while` over a word is a loop node**
+**Round D, stage 2 as built: a `while` over words is a loop node**
 (`lib/native/runtime/rt_while.hthr`).
 
 - *Which loop it is.* `Iterate` carries the variables the loop reads of
@@ -1216,8 +1216,12 @@ as small as the extra pass allows).
   captures are 64-bit words, and its test and next state read nothing of
   the context but the captures (`Tm::while_fits`). The node's code is the
   state's own by definition, whatever the test and next state are.
-  `Tm::nodes` looks into `let`s and both kinds of `if`. A loop under a
-  `match`, or inside another loop, stays an `Iterate`.
+  `Tm::nodes` looks into `let`s and both kinds of `if`, and no further:
+  no loop in the library or its examples stands under a `match` or inside
+  another loop (a survey of every `runtime fn`'s loops, 2026-11-25), so a
+  loop there stays an `Iterate`. Once `Iterate`'s lowering goes, such a
+  loop is refused with that reason; `Tm::nodes` looks further when a
+  program needs it.
 - *The pin, at one loop.* The node runs `2^64` rounds and the written loop
   `2^64 - 1` passes, so the two meet at `Loop::run` of the loop's measure
   and not by conversion. A loop owes a `Tm::WhileLoop`:
@@ -1253,12 +1257,29 @@ as small as the extra pass allows).
   `f::loop::same`'s `Step::turn` by unifying a hole with its next state
   applied to a local proof of the test: the next state does not read that
   proof.
-- *Not yet.* A `while` over a record state (two or more locals, a counted
-  `for`) stays an `Iterate`. Its node's start words are the record's
-  fields, read by `let`s around the node. Those make the node's code the
-  state's only up to evaluation, which `Tm::loops_nodes` and the proofs
-  above read definitionally. So `Iterate`'s lowering stays until they
-  move too.
+- *Over a record.* A `while` over two or more locals, or a counted `for`,
+  is the elaborator's loop over a generated record (`f#State`), made at
+  the start and at each next state. Where its fields are words, `Tm::nodes`
+  writes it as `Tm::fields_tm`. `Field` lets around the node read the
+  start's fields (`Tm::field_lets`), and the node's state is those words
+  and the captures. Its pass makes the record of its words, tests it, and
+  goes round at the next record's fields (`Field` lets again before the
+  `Again`), or answers the record: an answer of several words, at most the
+  state's.
+  - Which way a loop is read is `Tm::while_shape` (not a node, over a word,
+    over a record's fields), and `Tm::node_of` writes it.
+  - Those lets make the node's code the state's only up to evaluation,
+    so the node's oracle casts it (`Tm::loops_nodes`). The proofs read it
+    through three inductions on the lets: `Tm::lets_ty`, `Tm::lets_sem`
+    and `Tm::lets_ends`.
+  - A loop over a record owes a `Tm::FieldsLoop`, as one over a word owes
+    a `Tm::WhileLoop`. `h` is `f::loop::of(c̄).run` at the record made of
+    the words (`Tm::rec_of`). Its pass is `Tm::state_pass`, the word
+    case's over any state, going round at the next record's field words
+    (`Tm::field_words`). The records meet by the kernel's η for records.
+    `Tm::fields_agree` turns it into the node's meaning being the written
+    loop's.
+  - The generator writes it with `runtime_fields_loop`.
 
 ## 7. Bootstrapping
 
@@ -1285,8 +1306,10 @@ wrong compiler.
    delete `Tm::lower_tail`, `Fun::Guarded`, `rt_loop`'s two loop theorems.
    *Status (2026-11-24):* 3a–3f built; 3g's node, its lowering and
    soundness, its pin lemma, and written tail recursion over 64-bit words
-   on it are built (§6.8). Left: `while` onto the node (a record state),
-   the node's pin at words that are not 64-bit, then 3h. The span and
+   on it are built (§6.8), and every `while` the elaborator writes over
+   64-bit words or a record of them is a node (§6.9). Left: retiring
+   `Iterate`'s lowering, the node's pin at words that are not 64-bit,
+   then 3h. The span and
    laid-record recursions (the ledger's tail calls) need the node in `FTm`,
    which is round 4.
 4. **The other four loop files onto it** (`rt_file_loop`, `rt_held_loop`,

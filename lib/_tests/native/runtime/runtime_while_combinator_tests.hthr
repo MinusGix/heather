@@ -132,9 +132,11 @@ runtime fn two_bits(n, cap: u64) → u64 {
 theorem two_bits_runs(): two_bits(1, 20) = 14 { refl }
 
 // Which loops are loop nodes (docs/language/loop-combinator-design.md
-// §6.9): a `while` over a word the elaborator wrote is one `Tm::Loop`, its
-// code one `Until`; one over a record state, or written by hand (with no
-// `f::loop::runs` to pin it), stays an `Iterate`.
+// §6.9): a `while` the elaborator wrote, over a word or over a record of
+// words (its fields read before the node), is one `Tm::Loop`, its code one
+// `Until`; one written by hand (with no `f::loop::runs` to pin it) stays an
+// `Iterate`. `there_and_back`'s first loop is read twice, once for `x` and
+// once for `y`'s start.
 fn nodes_in(t: Tm) → Nat {
     match t {
         Let(e, b) => nodes_in(e) + nodes_in(b),
@@ -156,9 +158,9 @@ fn iterates_in(t: Tm) → Nat {
 theorem drop_to_node(): Pair(nodes_in(drop_to::rt.body), iterates_in(drop_to::rt.body)) = Pair(1, 0) { refl }
 theorem halve_gap_node(): Pair(nodes_in(halve_gap::rt.body), iterates_in(halve_gap::rt.body)) = Pair(1, 0) { refl }
 theorem count_up_node(): Pair(nodes_in(count_up::rt.body), iterates_in(count_up::rt.body)) = Pair(1, 0) { refl }
-theorem there_and_back_nodes(): Pair(nodes_in(there_and_back::rt.body), iterates_in(there_and_back::rt.body)) = Pair(2, 1) { refl }
-theorem bits_of_iterate(): Pair(nodes_in(bits_of::rt.body), iterates_in(bits_of::rt.body)) = Pair(0, 1) { refl }
-theorem fib_iterate(): Pair(nodes_in(fib::rt.body), iterates_in(fib::rt.body)) = Pair(0, 1) { refl }
+theorem there_and_back_nodes(): Pair(nodes_in(there_and_back::rt.body), iterates_in(there_and_back::rt.body)) = Pair(3, 0) { refl }
+theorem bits_of_node(): Pair(nodes_in(bits_of::rt.body), iterates_in(bits_of::rt.body)) = Pair(1, 0) { refl }
+theorem fib_node(): Pair(nodes_in(fib::rt.body), iterates_in(fib::rt.body)) = Pair(1, 0) { refl }
 
 theorem two_bits_iterate(): Pair(nodes_in(two_bits::rt.body), iterates_in(two_bits::rt.body)) = Pair(0, 1) { refl }
 
@@ -166,6 +168,9 @@ theorem two_bits_iterate(): Pair(nodes_in(two_bits::rt.body), iterates_in(two_bi
 // `f::ends`, from the loop's measure.
 theorem drop_to_quiet(): drop_to::rt.quiet(drop_to::world) = True { refl }
 theorem there_and_back_quiet(): there_and_back::rt.quiet(there_and_back::world) = True { refl }
+theorem bits_of_quiet(): bits_of::rt.quiet(bits_of::world) = True { refl }
+theorem fib_quiet(): fib::rt.quiet(fib::world) = True { refl }
+theorem fib_ends_cited(): True { let _e = fib::ends; trivial }
 theorem drop_to_ends_cited(): True { let _e = drop_to::ends; trivial }
 theorem there_and_back_ends_cited(): True { let _e = there_and_back::ends; trivial }
 
