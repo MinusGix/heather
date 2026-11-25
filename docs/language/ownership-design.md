@@ -816,7 +816,10 @@ as a helper; addresses as numbers.
    linking; a written-out term has no world in it, so neither comparison
    arises (`docs/native/runtime-fn-setups-design.md` §16.22). A function
    of a laid record calling one of the record that takes an erased
-   parameter is still refused (`runtime-record-calls-erased`). When the
+   parameter compiles too (2026-11-25, `runtime-record-calls-erased`): the
+   callee is written out over its record (`T::n::words`), which the
+   caller's mark names, so the arena's window `read` and `store` have
+   compiled callers (§16.23). When the
    binder mode of
    `ownership-parameter-modes` lands, an erased mode can lower to this type,
    so the generator keeps one route. Item 4 (an arena's generation changed

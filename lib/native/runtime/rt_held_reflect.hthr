@@ -133,7 +133,11 @@ fn HeldEach::entry(self e: HeldEach, v: Expr, i: Nat) → Expr { App(App(App(e.i
 // the code calls (`T::m::bytes`), the function of the record, its name,
 // how many words its code takes after its span's place and length word,
 // and how many spans it only reads (the first of those words, two each).
-record HeldCall { bytes: Nat, run: GlobalRef, name: String, operands: Nat, spans: Nat }
+// A callee that takes an erased parameter is named by its function
+// written out over its record, `words` (`T::n::words`,
+// issues/runtime-record-calls-erased.md): its operands are the call's
+// data arguments, the erased ones dropped.
+record HeldCall { bytes: Nat, run: GlobalRef, name: String, operands: Nat, spans: Nat, words: Option<GlobalRef> := None }
 
 fn HeldCall::of(cs: List<HeldCall>, g: Nat) → Option<HeldCall> {
     match cs { Nil => None, Cons(c, rest) => match c.run.id.same(g) { True => Some(c), False => HeldCall::of(rest, g) } }
@@ -833,7 +837,13 @@ fn rt_held_callee(k: Known, held: List<HeldCall>, g: GlobalRef, name: String, ar
                     Refused(_) => pure(None),
                     Accepted(_) => lookup(n ++ "::bytes").bind(λ b => match b {
                         Accepted(bytes) => infer(Global(g)).bind(λ c => rt_accepted("a callee's type", c)).bind(λ t => rt_takes_erased(64, t, None)).bind(λ erased => match erased {
-                            True => rt_refuse("a call of a function of a laid record that takes an erased parameter (a proof, an `Erased<A>`) is not taken yet: its caller's meaning names it as a function of the record and words (issues/runtime-record-calls-erased.md)"),
+                            // Named by its function written out over its record,
+                            // which takes no erased parameter.
+                            True => lookup(n ++ "::words").bind(λ wc => match wc {
+                                Accepted(wg) => rt_data_args(operands).bind(λ data => rt_call_lent(64, k, data).bind(λ spans =>
+                                    pure(Some(HeldCall(bytes.id, g, n, data.len(), spans, words := Some(wg)))))),
+                                Refused(_) => rt_refuse("a call of `" ++ n ++ "`, a function of a laid record that takes an erased parameter (a proof, an `Erased<A>`) and is not written out over its record (`" ++ n ++ "::words`): one that takes record parameters, reads a span besides its record or loops is not yet (issues/runtime-record-calls-erased.md)"),
+                            }),
                             False => rt_call_lent(64, k, operands).bind(λ spans => pure(Some(HeldCall(bytes.id, g, n, operands.len(), spans)))),
                         }),
                         Refused(_) => pure(None),
@@ -1016,7 +1026,10 @@ fn rt_held_do(fuel: Nat, cx: HeldCx, w: HeldWalk, job: HeldJob) → Tac<HeldOut>
                         // holds as it was: it is not among the calls that
                         // changed it, and its word is bound where a value
                         // reads the call (`st.handles`).
-                        Cons(s, operands) => rt_held_changes(cx.names, x).bind(λ changes => {
+                        Cons(s, written_operands) => rt_held_changes(cx.names, x).bind(λ changes => {
+                            // A callee written out takes the call's data arguments.
+                            let kept: Tac<List<Handle>> = match callee.words { None => pure(written_operands), Some(_) => rt_data_args(written_operands) };
+                            let operands <- kept;
                             let settled <- rt_held_do(f, cx, w, Settle(s));
                             let ready <- rt_held_do(f, cx, settled.w, Ready(operands));
                             let still <- rt_held_still(settled.w, ready.w);

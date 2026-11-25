@@ -5,7 +5,7 @@ labels: [native,runtime-fn,layout]
 area: heather-in-heather
 milestone: [crypto-hash]
 created: 2026-11-12
-updated: 2026-11-24
+updated: 2026-11-25
 ---
 
 What a `runtime fn` of a laid record does not take yet (docs/native/layout-design.md §9.5, round 3; probes in `lib/_tests/native/runtime/runtime_held_tests.hthr` and its neighbours). Each is refused by name unless noted.
@@ -53,3 +53,4 @@ Related: [[sha256-context-type]], [[layout-classes]], [[conversion-callee-unfold
 - 2026-11-24: A customer for a proof parameter: the arena's window `read` and `store` (`lib/native/runtime/arena.hthr`) take found proofs that the element is inside its window, and are ordinary functions because a `runtime fn` of a laid record taking one is refused ('a type with no runtime layout'; ledger row `Arena::port_read`). Erasing a proof parameter, with the callee's meaning stated under it, would compile them.
 - 2026-11-24: Results of several words (docs/native/runtime-fn-setups-design.md §16.21): a function of a laid record (and one over a span or a `Bytes(n)`) answers a record of 64-bit words or an enum whose constructors carry them, in its words by the plain conventions; `runs_held` states it at `Agrees<A, R>` with `R` the result. The arena's `alloc` and `new_vec` answer `Alloc { Got(base), Full }`. What is left (a compiled caller, a loop, `Pick` over the span, the export, niches) is [[span-function-several-words]].
 - 2026-11-24: 2026-11-24: The proof-parameter item moved to [[runtime-erased-parameters]] and is built for a laid record: a proof (or an `Erased<A>`) is erased wherever it stands, `runs_held` holds at every value of it, and the arena's `read` and `store` are `runtime fn`s (the ledger row `Arena::port_read` is replaced by rows that run them). What is left of it, a record function *calling* one that takes a proof (its meaning names the callee as a function of record and words), is in [[runtime-erased-pure-shadow]].
+- 2026-11-25: Limit (1) of the 2026-11-13 entry (a callee of the record cannot take a proof) is lifted by [[runtime-record-calls-erased]] (2026-11-25): a callee that takes an erased parameter is written out over its record (`T::n::words`) and a caller's mark names that, so an index bounded by an invariant can be handed to a callee with its proof. Found beside it and filed: [[runtime-held-reader-branch-calls]] (a function that only reads the record, a branch whose arm calls another function of the record, refused with a misleading message).

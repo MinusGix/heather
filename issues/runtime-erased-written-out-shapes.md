@@ -17,3 +17,7 @@ A plain `runtime fn` of words that takes an erased parameter is compiled from it
 - **A caller's pin cost**: a caller's pin compares `g(x, p)` with `g::words(x)`, unfolding the callee once per call site. A citation of `g::reflects` there would need a rewrite under the caller's binders; take it if a library caller shows the cost.
 
 Loops and recursions taking an erased parameter wait for [[loops-on-one-combinator]] round 4.
+
+## Log
+
+- 2026-11-25: [[runtime-record-calls-erased]] (2026-11-25) wrote out a laid record's function over its record (`T::n::words`, `HeldWriting::written` in `runtime.hthr`), on `RtWriting::value` for values, so each value shape listed here is also not written out there. Its own residue, refused by name at the caller ("is not written out over its record"): a callee that takes record parameters (its caller is refused anyway, "a call of another function of a laid record that takes parameters"), one that reads a span besides its record, and a loop (waits for [[loops-on-one-combinator]]). The caller's pin unfolds the record callee once per call site, the same cost as the plain caller's item above.

@@ -2464,10 +2464,9 @@ are compared.
 erased parameter (`issues/loops-on-one-combinator.md` round 4); a plain
 function lent a span or taking an enum or a record beside its erased
 parameter, or whose body has a `match` on an enum, a fold or a byte of a
-span (none is written out by `RtWriting` yet); a function of a laid
-record calling one of the record that takes an erased parameter. Each is
-in `issues/runtime-record-calls-erased.md` or
-`issues/runtime-erased-written-out-shapes.md`. `compile-x86` states an
+span (none is written out by `RtWriting` yet). Each is in
+`issues/runtime-erased-written-out-shapes.md`; a function of a laid record
+calling one of the record that takes an erased parameter is §16.23. `compile-x86` states an
 export's agreement at its words, so an export that itself takes an
 erased parameter is not certified yet (its callers are).
 
@@ -2478,3 +2477,55 @@ proof from a literal and from their own test, and one passing its own
 proof on; a record function calling a plain one; a span writer's bytes
 and its run at an open proof; controls: an erased value computed with, a
 missing proof, a loop).
+
+### 16.23 A function of a laid record calling one of the record that takes an erased parameter (built 2026-11-25)
+
+A caller's held meaning names a record callee by its mark,
+`Writer::runs(record, k, λ a ws => T::n(a, ws…))`, and what the mark owes
+is `HWorld::Runs` at every record and every word. With an erased
+parameter there is no proof to hand `T::n` at an arbitrary word, so the
+shape of §16.22's caller was refused one level up. It is taken now the
+same way: the callee is written out, here over its record.
+
+- **The callee** (`runtime_held_words`, `HeldWriting::written`), a
+  function of a laid record that takes an erased parameter, no record
+  parameters and no read span and is not a loop, also publishes
+  `T::n::words(t, xs…)`: its *held* meaning written out as a closed
+  function of the record and the code's words. Each value is bound once
+  (`HWorld::once`); a marked reader's read is the mark's field or element
+  of the record at its operands' words (`Reader::read_at`), a marked
+  writer's store the record with it set (`Writer::set_at`,
+  `Writer::store_at`), a call of another function of the record that
+  function at the record (`HWorld::after`), a branch `HWorld::either` or
+  `Tm::convoy`, anything else as §16.22's `RtWriting::value` writes it.
+  The span's place and length word are written as the word 0, which no
+  held value reads; a body that read them would fail its pin. Beside it,
+  `T::n::runs_words(own, t, length, xs…, holds)` is the same
+  `FFun::held_agrees` as `runs_held` with the pin read against
+  `T::n::words`. `runs_held` is published as before.
+- **A caller** reflects the call with its erased arguments dropped
+  (`rt_held_callee`, `HeldCall::words`); its mark is `λ a ws =>
+  T::n::words(a, ws…)` (`runtime_held_spec`) and what it owes is
+  `T::n::runs_words` (`runtime_held_ran`), which takes no proof. Its code
+  calls `T::n::bytes` as before. Its pin meets `T::n::words(t, w…)` where
+  the body has `T::n(t, w…, p)` and unfolds both once per call site; the
+  fallback that makes each callee a parameter leaves such a callee a
+  global, since its two names meet only by unfolding.
+- **Why not the meaning itself as `T::n::words`.** Its pin against the
+  held meaning at the theorem's span and length word would compare a
+  meaning with a meaning at another span, environment by environment: the
+  wall of §16.22's shadow. The written-out term has no world, environment
+  or span in it.
+- **A function that takes no erased parameter publishes exactly what it
+  did**: the marks lists are the same items, and the writing runs only
+  where the function takes an erased parameter. Where writing out or its
+  pin fails, nothing is added and a caller is refused naming the callee.
+
+Probes: `lib/_tests/native/runtime/runtime_erased_tests.hthr` (`Slots::get_first`
+at literal operands, `Slots::bump` through a reader and a writer under its
+own test, `Slots::get_on` passing its proof on and its own caller,
+`Slots::get_at_first` passing an `Erased` datum on, the callees' `words`
+pinned to them at a neutral proof; control: a missing proof) and the
+ledger's `Arena::port_bump` and `Arena::port_first`
+(`lib/_tests/native/runtime/runtime_ports_tests.hthr`), callers of the
+arena's window `read` and `store`.
