@@ -1,6 +1,6 @@
 ---
 title: The ownership checker on a straight-line fragment: check, its residuals, and check_sound
-status: open
+status: closed
 labels: [ownership,library,design]
 area: heather-in-heather
 milestone: [nh-ownership]
@@ -81,3 +81,4 @@ The module and its probes pass the library gate, `check_sound` is proved, the th
   - A call needs a signature as data and the callee's `check_sound` as the premise the caller cites. `Inv` must then be stated against a frame (the caller's other buffers unchanged).
 
   The get, read, view and clone steps carry over unchanged. The set step's frame becomes `PathIn::agree_apart` over `Path::window` instead of `Path::elem`. `Clone` stays aside: cloning a view is a copy of its window and adds nothing.
+- 2026-11-25: Verified: scripts/test --pr on the final tree, == suite: 3517 passed, 0 failed, 2 ignored ==. Residue is filed (place-check-name-lookup-cost, ownership-checker-call-and-write-view); closing.
