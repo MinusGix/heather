@@ -1,0 +1,106 @@
+// Probes of `vector_path`: a vector's entry read and written at a literal
+// vector, an element of a window at a literal list and at open indexes,
+// elements of windows decided apart at closed and open spans, a window of a
+// window at its own span, and the negative controls: an element of a
+// window is not apart from the element of another window it overlaps, and
+// the decider refuses them. Tests, not library.
+import logic;
+import bool;
+import nat;
+import omega;
+import option;
+import list;
+import vector;
+import span_set;
+import path;
+import list_path;
+import vector_path;
+
+// ---------------------------------------------------------------------------
+// Closed
+
+fn V3() → [Nat; 3] { [10, 20, 30] }
+
+theorem entry_reads(): Path::entry(3, 1, 0).get(V3()) = Some(20) { refl }
+
+theorem entry_writes(): vector_entries(Path::entry(3, 1, 0).set(V3(), 5)) = [10, 5, 30] { refl }
+
+theorem entry_past(): Path::entry(3, 3, 0).get(V3()) = None { refl }
+
+// Element 1 of the window of 2 from 2: the list's element 3.
+theorem window_entry_reads(): Path::window<Nat>(2, 2).then(Path::entry(2, 1, 0)).get([1, 2, 3, 4, 5]) = Some(4) { refl }
+
+theorem window_entry_writes(): Path::window<Nat>(2, 2).then(Path::entry(2, 1, 0)).set([1, 2, 3, 4, 5], 9) = [1, 2, 3, 9, 5] { refl }
+
+// The window does not fit: the element reads nothing, though the list's
+// element at `lo + i` exists.
+theorem window_entry_past(): Path::window<Nat>(2, 4).then(Path::entry(4, 0, 0)).get([1, 2, 3, 4, 5]) = None { refl }
+
+// Decided apart by the spans: the last element of one window and the first
+// of the next.
+theorem closed_apart(): Apart<List<Nat>, Nat, Nat>(Path::window<Nat>(0, 2).then(Path::entry(2, 1, 0)), Path::window<Nat>(2, 3).then(Path::entry(3, 0, 0))) {
+    Path::window_entries_apart(0, 2, 1, 2, 3, 0, 0, trivial, trivial, trivial)
+}
+
+// Two elements of one window.
+theorem same_window_apart(): Apart<List<Nat>, Nat, Nat>(Path::window<Nat>(4, 3).then(Path::entry(3, 0, 0)), Path::window<Nat>(4, 3).then(Path::entry(3, 2, 0))) {
+    Path::window_entries_apart(4, 3, 0, 4, 3, 2, 0, trivial, trivial, trivial)
+}
+
+// ---------------------------------------------------------------------------
+// Open
+
+theorem entry_laws_open<A>(n, i: Nat, pad: A): PathLaws<[A; n], A>(Path::entry(n, i, pad)) { Path::entry_laws(n, i, pad) }
+
+theorem element_laws_open<A>(lo, n, i: Nat, pad: A): PathLaws<List<A>, A>(Path::window<A>(lo, n).then(Path::entry(n, i, pad))) {
+    Path::window<A>(lo, n).then_laws(Path::entry(n, i, pad), Path::window_laws<A>(lo, n), Path::entry_laws(n, i, pad))
+}
+
+// Element `i` of the window from `lo` beside element `i2` of the window
+// right after it: apart at any open sizes, the verdict by `omega`.
+theorem adjacent_windows_apart<A>(lo, n, n2, i, i2: Nat, pad: A, inside: i < n, inside2: i2 < n2):
+    Apart<List<A>, A, A>(Path::window<A>(lo, n).then(Path::entry(n, i, pad)), Path::window<A>(lo + n, n2).then(Path::entry(n2, i2, pad)))
+{
+    Path::window_entries_apart(lo, n, i, lo + n, n2, i2, pad, inside, inside2, omega(inside))
+}
+
+// Two different elements of one window, at open indexes.
+theorem one_window_apart<A>(lo, n, i, k: Nat, pad: A, inside: i < n, inside2: k < n, ne: i ≠ k):
+    Apart<List<A>, A, A>(Path::window<A>(lo, n).then(Path::entry(n, i, pad)), Path::window<A>(lo, n).then(Path::entry(n, k, pad)))
+{
+    Path::window_entries_apart(lo, n, i, lo, n, k, pad, inside, inside2, omega(ne))
+}
+
+// A window of a window beside the outer window's other half.
+theorem window_of_window_apart<A>(lo, k, m: Nat, pad: A):
+    Apart<List<A>, [A; k], [A; m]>(Path::under_window(lo, k + m, pad, Path::window<A>(0, k)), Path::window<A>(lo + k, m))
+{
+    PathIn::apart_sound(PathIn::window_of_window(lo, k + m, 0, k, pad, omega), Path::window_in<A>(lo + k, m), omega)
+}
+
+// Where the window fits, its element reads the list's element.
+theorem element_reads_open<A>(lo, n, i: Nat, pad: A, xs: List<A>, fits: lo + n <= xs.len(), inside: i < n):
+    Path::window<A>(lo, n).then(Path::entry(n, i, pad)).get(xs) = xs.nth(i + lo)
+{
+    Path::window_entry_reads(lo, n, i, pad, xs, fits, inside)
+}
+
+// ---------------------------------------------------------------------------
+// Negative controls
+
+// Element 1 of the window from 0 and element 0 of the window from 1 are the
+// list's element 1.
+theorem overlap_verdict(): Span(0 + 1, 1).apart(Span(1 + 0, 1)) = False { refl }
+
+theorem overlap_not_apart(): ¬Apart<List<Nat>, Nat, Nat>(Path::window<Nat>(0, 2).then(Path::entry(2, 1, 0)), Path::window<Nat>(1, 2).then(Path::entry(2, 0, 0))) {
+    λ apart => {
+        let same: (Path::window<Nat>(0, 2).then(Path::entry(2, 1, 0)).get(Path::window<Nat>(1, 2).then(Path::entry(2, 0, 0)).set([0, 0, 0], 7))
+                = Path::window<Nat>(0, 2).then(Path::entry(2, 1, 0)).get([0, 0, 0])) = apart.left_after_right([0, 0, 0], 7);
+        absurd(Option::some_inj(7, 0, same))
+    }
+}
+
+// expect-error: `trivial` proves `True`
+theorem overlap_refused(): Apart<List<Nat>, Nat, Nat>(Path::window<Nat>(0, 2).then(Path::entry(2, 1, 0)), Path::window<Nat>(1, 2).then(Path::entry(2, 0, 0))) {
+    Path::window_entries_apart(0, 2, 1, 1, 2, 0, 0, trivial, trivial, trivial)
+}
