@@ -1,0 +1,137 @@
+// Atoms and the obligations over them: what the ownership checker
+// (`place_check.hthr`) and the apartness decider on steps (`steps.hthr`)
+// share (docs/language/ownership-design.md §15.3, issues/ownership-steps.md).
+//
+// - An `Atom` is a literal or a word variable, read in the words a run has
+//   bound (`Atom::val`). A literal reads alike in every run
+//   (`Atom::closed_val`).
+// - An `Obligation` is what a decider could not decide where an atom is
+//   open: two spans apart (`Spans`; an element is a span of length one) or
+//   two keys different (`Keys`). Its verdict at the words is a Boolean
+//   (`Obligation::verdict`), closed data with a cheap meaning, and
+//   `Obligation::All` is a list of them holding. The checker's `Residual`
+//   (`Span(lo, n)` apart from `Span(i, 1)`) is `Spans(lo, n, i, Lit(1))`.
+import logic;
+import bool;
+import nat;
+import option;
+import list;
+import span_set;
+
+inductive Atom { Lit(n: Nat), Var(w: Nat) }
+
+fn word(ws: List<Nat>, k: Nat) → Nat { ws.nth(k).unwrap_or(0) }
+
+fn Atom::val(self a: Atom, ws: List<Nat>) → Nat { match a { Lit(n) => n, Var(w) => word(ws, w) } }
+
+// The atom reads only words bound before `nw`.
+fn Atom::bound(self a: Atom, nw: Nat) → Bool { match a { Lit(_) => True, Var(w) => (w + 1).leb(nw) } }
+
+// A literal: its value in no environment is its value in every one.
+fn Atom::closed(self a: Atom) → Bool { match a { Lit(_) => True, Var(_) => False } }
+
+// Two atoms spelled alike.
+fn Atom::same(self a, b: Atom) → Bool {
+    match a {
+        Lit(n) => match b { Lit(m) => n.same(m), Var(_) => False },
+        Var(w) => match b { Lit(_) => False, Var(v) => w.same(v) },
+    }
+}
+
+theorem Atom::closed_val(self a: Atom, e: a.closed() = True, ws, vs: List<Nat>): a.val(ws) = a.val(vs) {
+    (match a as λ x => x.closed() = True → x.val(ws) = x.val(vs) { Lit(_) => λ _ => refl, Var(_) => λ no => absurd(no) })(e)
+}
+
+theorem Atom::same_sound(self a, b: Atom, e: a.same(b) = True): a = b {
+    (match a as λ x => x.same(b) = True → x = b {
+        Lit(n) => match b as λ y => Lit(n).same(y) = True → Lit(n) = y {
+            Lit(m) => λ h => cong_fn(λ (k: Nat) => Lit(k), n.same_sound(m, h)),
+            Var(_) => λ no => absurd(no),
+        },
+        Var(w) => match b as λ y => Var(w).same(y) = True → Var(w) = y {
+            Lit(_) => λ no => absurd(no),
+            Var(v) => λ h => cong_fn(λ (k: Nat) => Var(k), w.same_sound(v, h)),
+        },
+    })(e)
+}
+
+// ---------------------------------------------------------------------------
+// Obligations
+
+inductive Obligation {
+    // `Span(lo1, n1)` apart from `Span(lo2, n2)`.
+    Spans(lo1: Atom, n1: Atom, lo2: Atom, n2: Atom),
+    // The key `(i1, g1)` is not the key `(i2, g2)`.
+    Keys(i1: Atom, g1: Atom, i2: Atom, g2: Atom),
+}
+
+fn Obligation::verdict(self o: Obligation, ws: List<Nat>) → Bool {
+    match o {
+        Spans(lo1, n1, lo2, n2) => Span(lo1.val(ws), n1.val(ws)).apart(Span(lo2.val(ws), n2.val(ws))),
+        Keys(i1, g1, i2, g2) => !(i1.val(ws).same(i2.val(ws)) && g1.val(ws).same(g2.val(ws))),
+    }
+}
+
+// Every atom is a literal: the verdict is one in every run.
+fn Obligation::closed(self o: Obligation) → Bool {
+    match o {
+        Spans(lo1, n1, lo2, n2) => lo1.closed() && n1.closed() && lo2.closed() && n2.closed(),
+        Keys(i1, g1, i2, g2) => i1.closed() && g1.closed() && i2.closed() && g2.closed(),
+    }
+}
+
+fn Obligation::Holds(self o: Obligation, ws: List<Nat>) → Type { o.verdict(ws).IsTrue() }
+
+fn Obligation::All(os: List<Obligation>, ws: List<Nat>) → Type {
+    match os { Nil => True, Cons(o, rest) => o.Holds(ws) ∧ Obligation::All(rest, ws) }
+}
+
+// Decide an obligation where it is closed, defer it where it is not: no, yes
+// with nothing owed, or yes owing it.
+fn Obligation::settle(self o: Obligation) → Option<List<Obligation>> {
+    match o.closed() { True => o.verdict(Nil).then(Some(Nil)), False => Some([o]) }
+}
+
+// Four closed atoms: each reads as in no run.
+theorem Atom::closed4(a, b, c, d: Atom, e: (a.closed() && b.closed() && c.closed() && d.closed()) = True, ws: List<Nat>):
+    And<a.val(ws) = a.val(Nil), And<b.val(ws) = b.val(Nil), And<c.val(ws) = c.val(Nil), d.val(ws) = d.val(Nil)>>>
+{
+    let p3 = Bool::and_true_parts(a.closed() && b.closed() && c.closed(), d.closed(), e);
+    let p2 = Bool::and_true_parts(a.closed() && b.closed(), c.closed(), p3.left);
+    let p1 = Bool::and_true_parts(a.closed(), b.closed(), p2.left);
+    And(a.closed_val(p1.left, ws, Nil), And(b.closed_val(p1.right, ws, Nil), And(c.closed_val(p2.right, ws, Nil), d.closed_val(p3.right, ws, Nil))))
+}
+
+theorem Atom::cong4<R>(f: Nat → Nat → Nat → Nat → R, {a, a2, b, b2, c, c2, d, d2: Nat}, ea: a = a2, eb: b = b2, ec: c = c2, ed: d = d2): f(a, b, c, d) = f(a2, b2, c2, d2) {
+    rewrite(ea, eb, ec, ed, refl)
+}
+
+theorem Obligation::closed_verdict(self o: Obligation, e: o.closed() = True, ws: List<Nat>): o.verdict(ws) = o.verdict(Nil) {
+    (match o as λ x => x.closed() = True → x.verdict(ws) = x.verdict(Nil) {
+        Spans(lo1, n1, lo2, n2) => λ h => {
+            let v = Atom::closed4(lo1, n1, lo2, n2, h, ws);
+            Atom::cong4(λ (a: Nat) (b: Nat) (c: Nat) (d: Nat) => Span(a, b).apart(Span(c, d)), v.left, v.right.left, v.right.right.left, v.right.right.right)
+        },
+        Keys(i1, g1, i2, g2) => λ h => {
+            let v = Atom::closed4(i1, g1, i2, g2, h, ws);
+            Atom::cong4(λ (a: Nat) (b: Nat) (c: Nat) (d: Nat) => !(a.same(c) && b.same(d)), v.left, v.right.left, v.right.right.left, v.right.right.right)
+        },
+    })(e)
+}
+
+// What `settle` answers holds of the obligation.
+theorem Obligation::settle_sound(self o: Obligation, ws: List<Nat>, rs: List<Obligation>, ok: o.settle() = Some(rs), hold: Obligation::All(rs, ws)): o.Holds(ws) {
+    (match o.closed() as λ b => o.closed() = b → (match b { True => o.verdict(Nil).then(Some(Nil<Obligation>)), False => Some([o]) }) = Some(rs) → o.Holds(ws) {
+        True => λ c h => {
+            let yes: (o.verdict(Nil) = True) = Bool::then_some(o.verdict(Nil), Some(Nil<Obligation>), rs, h).left;
+            Bool::is_true_of_eq(trans(o.closed_verdict(c, ws), yes))
+        },
+        False => λ c h => j(sym(Option::some_inj([o], rs, h)), λ q _ => Obligation::All(q, ws), hold).left,
+    })(refl, ok)
+}
+
+// A closed obligation is settled with nothing owed.
+theorem Obligation::settle_closed(self o: Obligation, c: o.closed() = True, rs: List<Obligation>, ok: o.settle() = Some(rs)): rs = Nil {
+    let h: (o.verdict(Nil).then(Some(Nil<Obligation>)) = Some(rs)) = j(c, λ b _ => (match b { True => o.verdict(Nil).then(Some(Nil<Obligation>)), False => Some([o]) }) = Some(rs), ok);
+    sym(Option::some_inj(Nil<Obligation>, rs, Bool::then_some(o.verdict(Nil), Some(Nil<Obligation>), rs, h).right))
+}
