@@ -138,6 +138,22 @@ theorem word_of_eight(o0, o1, o2, o3, o4, o5, o6, o7: Option<BitVec(8)>, b0, b1,
     j(sym(e6), λ x _ => word_of_reads(Some(b0), Some(b1), Some(b2), Some(b3), Some(b4), Some(b5), x, o7) = goal,
     j(sym(e7), λ x _ => word_of_reads(Some(b0), Some(b1), Some(b2), Some(b3), Some(b4), Some(b5), Some(b6), x) = goal, refl))))))))
 }
+
+// Eight reads that agree read the same word.
+theorem read_word_agree<M>(access: ByteReadAccess<M>, m, n: M, a: BitVec(64),
+    same: (t: Nat) → t < 8 → access.read(m, next_rip(a, t)) = access.read(n, next_rip(a, t))):
+    read_word(access, m, a) = read_word(access, n, a) {
+    let r = λ (memory: M) (t: Nat) => access.read(memory, next_rip(a, t));
+    j(same(0, trivial), λ x _ => read_word(access, m, a) = word_of_reads(x, r(n, 1), r(n, 2), r(n, 3), r(n, 4), r(n, 5), r(n, 6), r(n, 7)),
+    j(same(1, trivial), λ x _ => read_word(access, m, a) = word_of_reads(r(m, 0), x, r(n, 2), r(n, 3), r(n, 4), r(n, 5), r(n, 6), r(n, 7)),
+    j(same(2, trivial), λ x _ => read_word(access, m, a) = word_of_reads(r(m, 0), r(m, 1), x, r(n, 3), r(n, 4), r(n, 5), r(n, 6), r(n, 7)),
+    j(same(3, trivial), λ x _ => read_word(access, m, a) = word_of_reads(r(m, 0), r(m, 1), r(m, 2), x, r(n, 4), r(n, 5), r(n, 6), r(n, 7)),
+    j(same(4, trivial), λ x _ => read_word(access, m, a) = word_of_reads(r(m, 0), r(m, 1), r(m, 2), r(m, 3), x, r(n, 5), r(n, 6), r(n, 7)),
+    j(same(5, trivial), λ x _ => read_word(access, m, a) = word_of_reads(r(m, 0), r(m, 1), r(m, 2), r(m, 3), r(m, 4), x, r(n, 6), r(n, 7)),
+    j(same(6, trivial), λ x _ => read_word(access, m, a) = word_of_reads(r(m, 0), r(m, 1), r(m, 2), r(m, 3), r(m, 4), r(m, 5), x, r(n, 7)),
+    j(same(7, trivial), λ x _ => read_word(access, m, a) = word_of_reads(r(m, 0), r(m, 1), r(m, 2), r(m, 3), r(m, 4), r(m, 5), r(m, 6), x),
+        refl))))))))
+}
 fn word_load_after<M>(load: WordLoad, word: BitVec(64), before: MachineState<M>) → MachineState<M> {
     MachineState(gprs := write_gpr(load.destination, word, before.gprs),
         flags := before.flags, rip := next_rip(before.rip, word_load_bytes(load).len()), memory := before.memory)

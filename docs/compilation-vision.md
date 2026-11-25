@@ -252,7 +252,7 @@ optimization that uses it is proved once under it as a hypothesis.
   §2.6): the file is state the meaning threads, and a caller lends a
   span by laws that say what a store into it leaves, which are what
   Rust's `&` and `&mut` give. The memory half is built
-  (`x86_64_lending.hthr`), the function compiler's contract is stated
+  (`x86_64_memory_contract.hthr`, the memory contract stated once), the function compiler's contract is stated
   under those laws with the file threaded (`Site::CallsOver`), and it
   compiles a store under the bound a load asks, into a span the lending
   lets be written; what such a function returns and leaves is stated by

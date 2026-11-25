@@ -5,9 +5,10 @@
 import reference_cells;
 import reference_cells_x86;
 import reference_cells_bridges;
+import function_ir_lower_calls;
 import function_ir;
 import x86_64;
-import x86_64_lending;
+import x86_64_memory_contract;
 import x86_64_data_read;
 import bitvec;
 import bool;

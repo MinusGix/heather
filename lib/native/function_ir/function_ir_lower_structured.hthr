@@ -26,6 +26,7 @@ import x86_64_layout;
 import x86_64_asm;
 import x86_64_asm_runs;
 import x86_64_kept;
+import x86_64_memory_contract;
 import bitvec;
 import bool;
 import list;
@@ -1068,8 +1069,8 @@ fn left_slot(spare: Bool, slot: Option<Held>) → Option<Held> { match spare { T
 
 // Where a call's words past the first land (docs/native/runtime-fn-setups-design.md
 // §16.17): RDX, as System V returns a second word, then the other registers
-// a caller saves, so an internal call returns up to nine words in registers.
-fn answer_registers() → List<Gpr> { [Rdx, Rcx, Rsi, Rdi, R8, R9, R10, R11] }
+// a caller saves, so an internal call returns up to nine words in registers
+// (`answer_registers`, x86_64_memory_contract).
 
 // What a call's words past the first leave in `register`: the id of the
 // word that lands there, if one does.

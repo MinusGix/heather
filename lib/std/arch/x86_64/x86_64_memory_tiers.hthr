@@ -1,0 +1,405 @@
+// The x86 memory contract's older names (issues/x86-memory-contract.md):
+// each is an instance of x86_64_memory_contract, its proof one citation of
+// it or a short derivation, kept for the lowering that cites it
+// (function_ir_lower_calls, function_ir_lower_views and their callers)
+// until docs/language/ownership-design.md §17.5's stage 3 deletes that
+// lowering and this module with it. Nothing new cites these.
+//
+// - `Stack::Wrote`, `Unchanged`, `Through`, `Lends`: `WroteIn` with no span
+//   to write (`Spans::none()`), `UnchangedTo` up to the stack's end, and
+//   what holds through such stores.
+// - The lending's old lemmas: `WroteIn`'s order at its cases
+//   (`wrote_in_own`, `wrote_in_deeper`, `wrote_in_wider`, `wrote_in_none`),
+//   a byte stored (`wrote_in_put`, `Loan::put_reads`, `Loan::put_keeps`),
+//   narrowing what may be written (`Loan::narrow`, a `Sub`).
+// - Views (docs/native/native-library-exports-design.md §3.1): `Views` and
+//   `Viewed` are a `Sub` (`Viewed::sub`), `Loan::view` and the lemmas about
+//   what was stored through views are `Loan::sub` and its lemmas at it;
+//   `Loan::onto` is `Loan::sub` at `Sub::same`.
+import x86_64;
+import x86_64_fetch;
+import x86_64_data_read;
+import x86_64_fetched_code;
+import x86_64_store;
+import x86_64_stack;
+import x86_64_memory_contract;
+import memory;
+import bitvec;
+import bool;
+import list;
+import list_window;
+import logic;
+import nat;
+import option;
+import omega;
+import relation;
+import transition;
+
+// ---------------------------------------------------------------------------
+// The stack's old names
+
+// The words at and above offset `from` read in `after` as in `before`: what
+// a callee leaves of its caller's frame. `UnchangedTo` up to the stack's end.
+fn Stack::Unchanged<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), from: Nat, before, after: M) → Type {
+    stack.UnchangedTo(from, stack.size, before, after)
+}
+
+theorem Stack::unchanged_refl<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), from: Nat, memory: M):
+    stack.Unchanged(from, memory, memory) {
+    λ k _ _ => refl
+}
+
+theorem Stack::unchanged_trans<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), from: Nat,
+    a, b, c: M, first: stack.Unchanged(from, a, b), second: stack.Unchanged(from, b, c)): stack.Unchanged(from, a, c) {
+    λ k above fits => trans(second(k, above, fits), first(k, above, fits))
+}
+
+// Unchanged above a higher offset too.
+theorem Stack::unchanged_above<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), from, higher: Nat,
+    le: from <= higher, a, b: M, unchanged: stack.Unchanged(from, a, b)): stack.Unchanged(higher, a, b) {
+    λ k above fits => unchanged(k, Nat::le_trans(from, higher, k, le, above), fits)
+}
+
+// A word stored wholly below `from` leaves what is above it.
+theorem Stack::store_below<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), memory: M,
+    i, from: Nat, fits: i + 8 <= stack.size, below: i + 8 <= from, word: BitVec(64)):
+    stack.Unchanged(from, memory, stack.writes.store(memory, stack.at(i), word_bytes(word))) {
+    λ k above k_fits => stack.apart(memory, i, k, fits, k_fits, Inl(Nat::le_trans(i + 8, from, k, below, above)), word)
+}
+
+// What a call entered at `i` may have done to memory: stores of its own,
+// one after another. `WroteIn` with no span to write.
+fn Stack::Wrote<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), i: Nat, before, after: M) → Type {
+    stack.WroteIn(i, Spans::none(), before, after)
+}
+
+theorem Stack::wrote_refl<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), i: Nat, memory: M):
+    stack.Wrote(i, memory, memory) {
+    stack.wrote_in_refl(i, Spans::none(), memory)
+}
+
+theorem Stack::wrote_trans<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), i: Nat, a, b, c: M,
+    first: stack.Wrote(i, a, b), second: stack.Wrote(i, b, c)): stack.Wrote(i, a, c) {
+    stack.wrote_in_trans(i, Spans::none(), a, b, c, first, second)
+}
+
+// A word stored wholly below `i`.
+theorem Stack::wrote_store<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), i: Nat, memory: M,
+    k: Nat, below: k + 8 <= i, word: BitVec(64)): stack.Wrote(i, memory, stack.writes.store(memory, stack.at(k), word_bytes(word))) {
+    stack.wrote_in_word(i, Spans::none(), memory, k, below, word)
+}
+
+// One more store after the others.
+theorem Stack::wrote_then<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), i: Nat, before, memory: M,
+    wrote: stack.Wrote(i, before, memory), k: Nat, below: k + 8 <= i, word: BitVec(64)):
+    stack.Wrote(i, before, stack.writes.store(memory, stack.at(k), word_bytes(word))) {
+    stack.wrote_trans(i, before, memory, stack.writes.store(memory, stack.at(k), word_bytes(word)), wrote,
+        stack.wrote_store(i, memory, k, below, word))
+}
+
+// What a call entered lower may store, one entered higher may.
+theorem Stack::wrote_deeper<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), d, i: Nat, le: d <= i,
+    before, after: M, wrote: stack.Wrote(d, before, after)): stack.Wrote(i, before, after) {
+    stack.wrote_in_widen(d, i, le, Spans::none(), Spans::none(), Spans::none().within_self(), before, after, wrote)
+}
+
+// The frame rule with no span to write.
+theorem Stack::wrote_frame<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), i: Nat,
+    {P: M → Type}, stable: stack.Stable(i, P), before, after: M, wrote: stack.Wrote(i, before, after), held: P(before)): P(after) {
+    stack.wrote_in_frame(i, Spans::none(), stack.stable_in_none(i, Spans::none(), λ b => refl, stable), before, after, wrote, held)
+}
+
+// The caller's words at and above `i`, the return address included, are as
+// they were.
+theorem Stack::wrote_unchanged<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), i: Nat,
+    room: i <= stack.size, before, after: M, wrote: stack.Wrote(i, before, after)): stack.Unchanged(i, before, after) {
+    λ k above fits => stack.wrote_frame(i, stack.stable_word(i, k, above, fits, read_word(data, before, stack.at(k))),
+        before, after, wrote, refl)
+}
+
+// Code stays where it was.
+theorem Stack::wrote_resident<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), i: Nat,
+    room: i <= stack.size, bytes: List<BitVec(8)>, at: BitVec(64), before, after: M, wrote: stack.Wrote(i, before, after),
+    resident: CodeResident(fetch, before, bytes, at)): CodeResident(fetch, after, bytes, at) {
+    stack.wrote_frame(i, stack.stable_resident(i, room, bytes, at), before, after, wrote, resident)
+}
+
+// `P` holds of `memory` through a call entered at `i`: now, and after
+// whatever the call stores of its own. It is the rule's conclusion held
+// for later, for a predicate known stable only from here on.
+fn Stack::Through<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), i: Nat, P: M → Type,
+    memory: M) → Type {
+    (after: M) → stack.Wrote(i, memory, after) → P(after)
+}
+
+// A stable predicate that holds, holds through the call.
+theorem Stack::stable_through<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), i: Nat,
+    {P: M → Type}, stable: stack.Stable(i, P), memory: M, held: P(memory)): stack.Through(i, P, memory) {
+    λ after wrote => stack.wrote_frame(i, stable, memory, after, wrote, held)
+}
+
+// What holds through a call holds now, still holds through it after some
+// of its stores, and holds through whatever it calls, which is entered
+// lower.
+theorem Stack::through_now<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), i: Nat,
+    {P: M → Type}, memory: M, through: stack.Through(i, P, memory)): P(memory) {
+    through(memory, stack.wrote_refl(i, memory))
+}
+
+theorem Stack::through_after<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), i: Nat,
+    {P: M → Type}, before, after: M, through: stack.Through(i, P, before), wrote: stack.Wrote(i, before, after)):
+    stack.Through(i, P, after) {
+    λ later more => through(later, stack.wrote_trans(i, before, after, later, wrote, more))
+}
+
+theorem Stack::through_deeper<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), i, d: Nat,
+    le: d <= i, {P: M → Type}, memory: M, through: stack.Through(i, P, memory)): stack.Through(d, P, memory) {
+    λ after wrote => through(after, stack.wrote_deeper(d, i, le, memory, after, wrote))
+}
+
+// A span is lent to a call entered at `i`: it reads its bytes through the
+// call (`Stack::Through`), so nothing the call may store changes what it
+// reads. Stated as that and not as where the span lies, so a load's proof
+// compares no addresses: memory now is `Wrote` from memory at entry, so
+// the span reads its bytes here. Where it lies is the memory model's to
+// say (`DataRegion::lends`, x86_64_byte_memory).
+fn Stack::Lends<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), i: Nat, a: BitVec(64),
+    xs: List<BitVec(8)>, memory: M) → Type {
+    stack.Through(i, λ (m: M) => Readable(data, m, a, xs), memory)
+}
+
+// A lent span reads its bytes, stays lent across the call's own stores, and
+// is lent to whatever the call calls, which is entered lower.
+theorem Stack::lends_reads<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), i: Nat, a: BitVec(64),
+    xs: List<BitVec(8)>, memory: M, lent: stack.Lends(i, a, xs, memory)): Readable(data, memory, a, xs) {
+    stack.through_now(i, memory, lent)
+}
+
+theorem Stack::lends_after<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), i: Nat, a: BitVec(64),
+    xs: List<BitVec(8)>, before, after: M, lent: stack.Lends(i, a, xs, before), wrote: stack.Wrote(i, before, after)):
+    stack.Lends(i, a, xs, after) {
+    stack.through_after(i, before, after, lent, wrote)
+}
+
+theorem Stack::lends_deeper<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), i, d: Nat, le: d <= i,
+    a: BitVec(64), xs: List<BitVec(8)>, memory: M, lent: stack.Lends(i, a, xs, memory)): stack.Lends(d, a, xs, memory) {
+    stack.through_deeper(i, d, le, memory, lent)
+}
+
+// A register holding base plus index addresses the lent span's byte there,
+// at any memory the call's own stores have reached: what a byte load asks
+// of its base (`readable_at`).
+theorem Stack::lent_address<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), i: Nat, a: BitVec(64),
+    xs: List<BitVec(8)>, entry: M, lent: stack.Lends(i, a, xs, entry), index: BitVec(64), memory: M,
+    wrote: stack.Wrote(i, entry, memory), inside: index.toNat() < xs.len()):
+    (a.add(index).toNat() < Nat::pow(2, 47)) ∧ (data.read(memory, a.add(index)) = xs.nth(index.toNat())) {
+    readable_at(data, memory, a, xs, lent(memory, wrote), index, inside).right
+}
+
+// The same register addresses four bytes of the span when the last is
+// inside, all below the canonical boundary: what a doubleword load asks of
+// its base.
+theorem Stack::lent_four<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), i: Nat, a: BitVec(64),
+    xs: List<BitVec(8)>, entry: M, lent: stack.Lends(i, a, xs, entry), index: BitVec(64), memory: M,
+    wrote: stack.Wrote(i, entry, memory), inside: index.toNat() + 3 < xs.len()): a.add(index).toNat() + 4 <= Nat::pow(2, 47) {
+    let readable = lent(memory, wrote);
+    let address: (a.add(index) = next_rip(a, index.toNat())) = sym(BitVec::iter_add_eq_add(64, a, index));
+    let top: (Nat::pow(2, 47) < Nat::pow(2, 64)) = Nat::leb_sound(Nat::pow(2, 47) + 1, Nat::pow(2, 64), trivial);
+    let value: (next_rip(a, index.toNat()).toNat() = a.toNat() + index.toNat()) =
+        BitVec::offset_toNat(64, a, index.toNat(), omega(readable.left, inside, top));
+    j(sym(address), λ x _ => x.toNat() + 4 <= Nat::pow(2, 47), omega(value, readable.left, inside))
+}
+
+// ---------------------------------------------------------------------------
+// The lending's old names
+
+// Stores in its own room are among a call's stores.
+theorem Stack::wrote_in_own<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), i: Nat, spans: Spans,
+    before, after: M, wrote: stack.Wrote(i, before, after)): stack.WroteIn(i, spans, before, after) {
+    stack.wrote_in_widen(i, i, omega(), Spans::none(), spans, Spans::none_within(spans), before, after, wrote)
+}
+
+// One byte stored into a span it may write.
+theorem Stack::wrote_in_put<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), i: Nat, spans: Spans,
+    memory: M, b, k: Nat, written: spans.written(b) = True, inside: k < spans.size(b), byte: BitVec(8)):
+    stack.WroteIn(i, spans, memory, stack.writes.store(memory, spans.byte(b, k), [byte])) {
+    stack.wrote_in_store(i, spans, memory, b, k, written, inside, [byte], inside)
+}
+
+// What a call entered lower may store, one entered higher may.
+theorem Stack::wrote_in_deeper<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), d, i: Nat,
+    le: d <= i, spans: Spans, before, after: M, wrote: stack.WroteIn(d, spans, before, after)): stack.WroteIn(i, spans, before, after) {
+    stack.wrote_in_widen(d, i, le, spans, spans, spans.within_self(), before, after, wrote)
+}
+
+// The same spans with fewer to write: a `Sub` of them.
+fn Sub::fewer(at: Nat → BitVec(64), size: Nat → Nat, wide, narrow: Nat → Bool, fewer: (b: Nat) → narrow(b) = True → wide(b) = True) →
+    Sub(Spans(at, size, wide), Spans(at, size, narrow)) {
+    Sub::same(Spans(at, size, wide), Spans(at, size, narrow), λ b => Nat::le_refl(size(b)), fewer, λ b _ => refl)
+}
+
+// What a call may store with fewer spans to write, one with more may.
+theorem Stack::wrote_in_wider<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), i: Nat,
+    at: Nat → BitVec(64), size: Nat → Nat, narrow, wide: Nat → Bool, fewer: (b: Nat) → narrow(b) = True → wide(b) = True,
+    before, after: M, wrote: stack.WroteIn(i, Spans(at, size, narrow), before, after)): stack.WroteIn(i, Spans(at, size, wide), before, after) {
+    stack.wrote_in_up(i, Spans(at, size, wide), Spans(at, size, narrow), Sub::fewer(at, size, wide, narrow, fewer), before, after, wrote)
+}
+
+// With nothing to write, the stores are the call's own.
+theorem Stack::wrote_in_none<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), i: Nat, spans: Spans,
+    none: (b: Nat) → spans.written(b) = False, before, after: M, wrote: stack.WroteIn(i, spans, before, after)): stack.Wrote(i, before, after) {
+    stack.wrote_in_widen(i, i, omega(), spans, Spans::none(), spans.within_none(none), before, after, wrote)
+}
+
+// What a span reads after a call's own stores.
+theorem Loan::wrote_reads<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, {stack: Stack<M>(fetch, data)}, {top: Nat}, {spans: Spans},
+    self loan: Loan<M>(fetch, data, stack, top, spans), i: Nat, low: i <= top, c: Nat, ys: List<BitVec(8)>,
+    fits: ys.len() <= spans.size(c), before, after: M, wrote: stack.Wrote(i, before, after), reads: Readable(data, before, spans.at(c), ys)):
+    Readable(data, after, spans.at(c), ys) {
+    stack.wrote_frame(i, loan.stable_span(i, low, c, ys, fits), before, after, wrote, reads)
+}
+
+// Which is the span lent in the earlier sense, to a call that writes no
+// span.
+theorem Loan::lends<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, {stack: Stack<M>(fetch, data)}, {top: Nat}, {spans: Spans},
+    self loan: Loan<M>(fetch, data, stack, top, spans), i: Nat, low: i <= top, c: Nat, ys: List<BitVec(8)>,
+    fits: ys.len() <= spans.size(c), memory: M, reads: Readable(data, memory, spans.at(c), ys)): stack.Lends(i, spans.at(c), ys, memory) {
+    stack.stable_through(i, loan.stable_span(i, low, c, ys, fits), memory, reads)
+}
+
+// A byte stored into a span: `Loan::store_reads` at one byte, the list with
+// it written over being the list with it set.
+theorem Loan::put_reads<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, {stack: Stack<M>(fetch, data)}, {top: Nat}, {spans: Spans},
+    self loan: Loan<M>(fetch, data, stack, top, spans), memory: M, b, k: Nat, written: spans.written(b) = True, inside: k < spans.size(b),
+    byte: BitVec(8), xs: List<BitVec(8)>, whole: xs.len() = spans.size(b), reads: Readable(data, memory, spans.at(b), xs)):
+    Readable(data, stack.writes.store(memory, spans.byte(b, k), [byte]), spans.at(b), xs.update(k, λ (_: BitVec(8)) => byte)) {
+    let set: (xs.put_window(k, [byte]) = xs.update(k, λ (_: BitVec(8)) => byte)) =
+        trans(xs.put_window_cons(k, byte, Nil, omega(inside, whole)), xs.update(k, λ (_: BitVec(8)) => byte).put_window_nil(k + 1));
+    j(set, λ ys _ => Readable(data, stack.writes.store(memory, spans.byte(b, k), [byte]), spans.at(b), ys),
+        loan.store_reads(memory, b, k, written, inside, [byte], inside, xs, whole, reads))
+}
+
+theorem Loan::put_keeps<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, {stack: Stack<M>(fetch, data)}, {top: Nat}, {spans: Spans},
+    self loan: Loan<M>(fetch, data, stack, top, spans), memory: M, b, k: Nat, written: spans.written(b) = True, inside: k < spans.size(b),
+    byte: BitVec(8), c: Nat, differs: b ≠ c, ys: List<BitVec(8)>, fits: ys.len() <= spans.size(c),
+    reads: Readable(data, memory, spans.at(c), ys)): Readable(data, stack.writes.store(memory, spans.byte(b, k), [byte]), spans.at(c), ys) {
+    loan.store_keeps(memory, b, k, written, inside, [byte], inside, c, differs, ys, fits, reads)
+}
+
+// Spans lent to write may be lent on to read: a callee that writes fewer
+// of them is owed no more.
+theorem Loan::narrow<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, {stack: Stack<M>(fetch, data)}, {top: Nat},
+    at: Nat → BitVec(64), size: Nat → Nat, wide, narrow: Nat → Bool, fewer: (b: Nat) → narrow(b) = True → wide(b) = True,
+    loan: Loan<M>(fetch, data, stack, top, Spans(at, size, wide))): Loan<M>(fetch, data, stack, top, Spans(at, size, narrow)) {
+    loan.sub(Spans(at, size, narrow), Sub::fewer(at, size, wide, narrow, fewer), loan.canonical)
+}
+
+// ---------------------------------------------------------------------------
+// Views: parts of spans as a call lends them on
+
+// The views lent, by number: view `v` is `size(v)` bytes of span `of(v)`,
+// from that span's byte `start(v)`, and may be stored into when
+// `written(v)`.
+record Views { of: Nat → Nat, start: Nat → Nat, size: Nat → Nat, written: Nat → Bool }
+
+// The views as spans: where each lies.
+fn Views::spans(self views: Views, spans: Spans) → Spans {
+    Spans(at := λ v => spans.byte(views.of(v), views.start(v)), size := views.size, written := views.written)
+}
+
+// Byte `k` of a view is byte `start + k` of its span.
+theorem Views::byte_at(self views: Views, spans: Spans, v, k: Nat):
+    views.spans(spans).byte(v, k) = spans.byte(views.of(v), views.start(v) + k) {
+    rip_compose(spans.at(views.of(v)), views.start(v), k)
+}
+
+// What makes the views lendable: each inside its span, a view to write of a
+// span the lender may write, and apart from every other view.
+record Viewed(views: Views, spans: Spans) {
+    inside: (v: Nat) → views.start(v) + views.size(v) <= spans.size(views.of(v)),
+    allowed: (v: Nat) → views.written(v) = True → spans.written(views.of(v)) = True,
+    alone: (v, u: Nat) → views.written(v) = True → v ≠ u →
+        (views.of(v) ≠ views.of(u)) ∨ ((views.start(v) + views.size(v) <= views.start(u)) ∨ (views.start(u) + views.size(u) <= views.start(v))),
+}
+
+// So the views are parts of the spans.
+fn Viewed::sub({views: Views}, {spans: Spans}, self viewed: Viewed(views, spans)) → Sub(spans, views.spans(spans)) {
+    Sub(
+        parent := views.of,
+        offset := views.start,
+        at := λ v _ => refl,
+        inside := viewed.inside,
+        written := viewed.allowed,
+        apart := λ v u marks differ _ _ same => match viewed.alone(v, u, marks, differ) {
+            Inl(other) => false_elim(other(same)),
+            Inr(order) => order,
+        },
+    )
+}
+
+theorem Loan::view<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, {stack: Stack<M>(fetch, data)}, {top: Nat}, {spans: Spans},
+    self loan: Loan<M>(fetch, data, stack, top, spans), views: Views, viewed: Viewed(views, spans)):
+    Loan<M>(fetch, data, stack, top, views.spans(spans)) {
+    loan.sub(views.spans(spans), viewed.sub(), λ v => loan.canonical_at(views.of(v), views.start(v), views.size(v), viewed.inside(v)))
+}
+
+theorem Stack::wrote_in_view<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), i: Nat, spans: Spans,
+    views: Views, viewed: Viewed(views, spans), before, after: M, wrote: stack.WroteIn(i, views.spans(spans), before, after)):
+    stack.WroteIn(i, spans, before, after) {
+    stack.wrote_in_up(i, spans, views.spans(spans), viewed.sub(), before, after, wrote)
+}
+
+theorem Loan::view_outside<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, {stack: Stack<M>(fetch, data)}, {top: Nat}, {spans: Spans},
+    self loan: Loan<M>(fetch, data, stack, top, spans), views: Views, viewed: Viewed(views, spans), i: Nat, low: i <= top, c, t: Nat,
+    short: t < spans.size(c),
+    outside: (v: Nat) → views.written(v) = True → views.of(v) = c → (t < views.start(v)) ∨ (views.start(v) + views.size(v) <= t),
+    before, after: M, wrote: stack.WroteIn(i, views.spans(spans), before, after)):
+    data.read(after, spans.byte(c, t)) = data.read(before, spans.byte(c, t)) {
+    loan.sub_outside(views.spans(spans), viewed.sub(), i, low, c, t, short, λ v marks _ same => outside(v, marks, same), before, after, wrote)
+}
+
+theorem Loan::view_unwritten_reads<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, {stack: Stack<M>(fetch, data)}, {top: Nat},
+    {spans: Spans}, self loan: Loan<M>(fetch, data, stack, top, spans), views: Views, viewed: Viewed(views, spans), i: Nat, low: i <= top,
+    c: Nat, unviewed: (v: Nat) → views.written(v) = True → views.of(v) ≠ c, ys: List<BitVec(8)>, fits: ys.len() <= spans.size(c),
+    before, after: M, wrote: stack.WroteIn(i, views.spans(spans), before, after), reads: Readable(data, before, spans.at(c), ys)):
+    Readable(data, after, spans.at(c), ys) {
+    loan.sub_unwritten_reads(views.spans(spans), viewed.sub(), i, low, c, unviewed, ys, fits, before, after, wrote, reads)
+}
+
+theorem Loan::view_written_reads<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, {stack: Stack<M>(fetch, data)}, {top: Nat},
+    {spans: Spans}, self loan: Loan<M>(fetch, data, stack, top, spans), views: Views, viewed: Viewed(views, spans), i: Nat, low: i <= top,
+    v: Nat, only: (u: Nat) → views.written(u) = True → views.of(u) = views.of(v) → u = v, xs, ys: List<BitVec(8)>,
+    whole: xs.len() = spans.size(views.of(v)), same_len: ys.len() = views.size(v), before, after: M,
+    wrote: stack.WroteIn(i, views.spans(spans), before, after), was: Readable(data, before, spans.at(views.of(v)), xs),
+    now: Readable(data, after, views.spans(spans).at(v), ys)): Readable(data, after, spans.at(views.of(v)), xs.put_window(views.start(v), ys)) {
+    loan.sub_written_reads(views.spans(spans), viewed.sub(), i, low, v, only, xs, ys, whole, same_len, before, after, wrote, was, now)
+}
+
+// A byte of span `c` after the stores (`SubCovers` at the views).
+fn ViewCovers(views: Views, c, t: Nat, ys: Nat → List<BitVec(8)>, xs, zs: List<BitVec(8)>) → Type {
+    SubCovers(Spans(λ (_: Nat) => BitVec::zero(), views.size, views.written), views.of, views.start, c, t, ys, xs, zs)
+}
+
+theorem Loan::view_windows_reads<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, {stack: Stack<M>(fetch, data)}, {top: Nat},
+    {spans: Spans}, self loan: Loan<M>(fetch, data, stack, top, spans), views: Views, viewed: Viewed(views, spans), i: Nat, low: i <= top,
+    c: Nat, xs, zs: List<BitVec(8)>, ys: Nat → List<BitVec(8)>, same_len: zs.len() = xs.len(), fits: xs.len() <= spans.size(c),
+    before, after: M, wrote: stack.WroteIn(i, views.spans(spans), before, after), was: Readable(data, before, spans.at(c), xs),
+    now: (v: Nat) → views.written(v) = True → views.of(v) = c → Readable(data, after, views.spans(spans).at(v), ys(v)),
+    covers: (t: Nat) → t < xs.len() → ViewCovers(views, c, t, ys, xs, zs)): Readable(data, after, spans.at(c), zs) {
+    loan.sub_windows_reads(views.spans(spans), viewed.sub(), i, low, c, xs, zs, ys, same_len, fits, before, after, wrote, was, now, covers)
+}
+
+// The same spans under other numbers: `Sub::same`.
+theorem Loan::onto<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, {stack: Stack<M>(fetch, data)}, {top: Nat}, {spans: Spans},
+    self loan: Loan<M>(fetch, data, stack, top, spans), other: Spans, size: (b: Nat) → other.size(b) <= spans.size(b),
+    written: (b: Nat) → other.written(b) = True → spans.written(b) = True, at: (b: Nat) → 0 < other.size(b) → other.at(b) = spans.at(b),
+    canonical: (b: Nat) → other.at(b).toNat() + other.size(b) <= Nat::pow(2, 47)): Loan<M>(fetch, data, stack, top, other) {
+    loan.sub(other, Sub::same(spans, other, size, written, at), canonical)
+}
+
+theorem Stack::wrote_in_onto<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), i: Nat,
+    spans, other: Spans, size: (b: Nat) → other.size(b) <= spans.size(b),
+    written: (b: Nat) → other.written(b) = True → spans.written(b) = True, at: (b: Nat) → 0 < other.size(b) → other.at(b) = spans.at(b),
+    before, after: M, wrote: stack.WroteIn(i, other, before, after)): stack.WroteIn(i, spans, before, after) {
+    stack.wrote_in_up(i, spans, other, Sub::same(spans, other, size, written, at), before, after, wrote)
+}

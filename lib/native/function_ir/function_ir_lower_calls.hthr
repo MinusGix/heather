@@ -68,9 +68,9 @@ import x86_64_fetched_code;
 import x86_64_layout;
 import x86_64_store;
 import x86_64_stack;
-import x86_64_lending;
+import x86_64_memory_contract;
+import x86_64_memory_tiers;
 import x86_64_frame;
-import x86_64_views;
 import x86_64_kept;
 import x86_64_asm;
 import x86_64_asm_runs;
@@ -89,8 +89,9 @@ import omega;
 // ---------------------------------------------------------------------------
 // The calling convention
 
-// SysV's: arguments in RDI, RSI, RDX, RCX, R8, R9, the result in RAX.
-fn argument_registers() → List<Gpr> { [Rdi, Rsi, Rdx, Rcx, R8, R9] }
+// SysV's: arguments in RDI, RSI, RDX, RCX, R8, R9, the result in RAX
+// (`argument_registers`, `ArgsIn`, `Stack::Passed`, `callee_kept`:
+// x86_64_memory_contract).
 
 // A call saves a list of them the placement names (`Spilling`, a mask over
 // the eight, bit `k` the `k`th), slot `k` holding the list's `k`th, and all
@@ -184,19 +185,6 @@ theorem left_slot_rep(values: Valuation(), saved: List<Gpr>, before, after: Gprs
     }
 }
 
-// What a callee keeps besides the stack pointer.
-fn callee_kept() → List<Gpr> { [Rbx, Rbp, R12, R13, R14, R15] }
-
-// The words in the registers, one each.
-fn ArgsIn(words: List<BitVec(64)>) → List<Gpr> → Gprs → Type {
-    match words {
-        Nil => λ _ _ => True,
-        Cons(word, rest) => λ registers gprs => match registers {
-            Nil => False,
-            Cons(register, later) => (read_gpr(register, gprs) = word) ∧ ArgsIn(rest, later, gprs),
-        },
-    }
-}
 
 theorem ports_args(values: Valuation(), ids: List<Nat>): (registers: List<Gpr>) → (gprs: Gprs) →
     PortsAt(values, word_ports(ids), registers, gprs) → ArgsIn(words_of(values, ids), registers, gprs) {
@@ -268,26 +256,10 @@ fn stack_registers() → List<Gpr> { [R10, R11] }
 fn parameter_registers() → List<Gpr> { argument_registers() ++ stack_registers() }
 
 // The words, the first ones in `registers` and the rest one a word from
-// stack offset `at` up.
-fn Stack::Passes<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data),
-    words: List<BitVec(64)>) → List<Gpr> → Nat → Gprs → M → Type {
-    match words {
-        Nil => λ _ _ _ _ => True,
-        Cons(word, rest) => λ registers at gprs memory => match registers {
-            Nil => ((at + 8 <= stack.size) ∧ (read_word(data, memory, stack.at(at)) = Some(word))) ∧
-                stack.Passes(rest, Nil, at + 8, gprs, memory),
-            Cons(register, later) => (read_gpr(register, gprs) = word) ∧ stack.Passes(rest, later, at, gprs, memory),
-        },
-    }
-}
-
-// The words a function entered at stack offset `i` is passed: in the
-// argument registers, then from just above its return address. Six words
-// or fewer read as `ArgsIn` does.
-fn Stack::Passed<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), words: List<BitVec(64)>,
-    i: Nat, s: MachineState<M>) → Type {
-    stack.Passes(words, argument_registers(), i + 8, s.gprs, s.memory)
-}
+// stack offset `at` up, are `Stack::Passes`; the words a function entered
+// at stack offset `i` is passed, in the argument registers and then from
+// just above its return address, `Stack::Passed` (x86_64_memory_contract).
+// Six words or fewer read as `ArgsIn` does.
 
 // How many words a call of `count` passes on the stack.
 fn stack_count(count: Nat) → Nat { count - 6 }
@@ -775,6 +747,59 @@ fn Stack::InMemory<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self s
         Readable(data, memory, address_of(lending.addresses, b), buffer_bytes(now, b))
 }
 
+// FunctionIR's buffers as a heap (x86_64_memory_contract): no block holds a
+// reference.
+fn Heap::of(buffers: Buffers()) → Heap { Heap(λ (b: Nat) => buffer_bytes(buffers, b), []) }
+
+// The file in memory is the empty-shadow heap injected,
+theorem in_memory_injected<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, stack: Stack<M>(fetch, data), lending: Lending,
+    now: Buffers(), memory: M, held: stack.InMemory(lending, now, memory)): Injected<M>(data, lending.spans(), Heap::of(now), memory) {
+    Injected(
+        sizes := λ b => held(b).left,
+        bytes := λ b k inside _ => {
+            let size: (lending.spans().size(b) = buffer_bytes(lending.buffers, b).len()) = refl;
+            held(b).right.right(k, omega(inside, held(b).left, size))
+        },
+        refs := trivial,
+    )
+}
+
+// and an empty-shadow heap injected under a loan is the file in memory:
+// `Stack::InMemory` is `Injected` at an empty shadow.
+theorem injected_in_memory<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, {stack: Stack<M>(fetch, data)}, {top: Nat}, lending: Lending,
+    loan: Loan<M>(fetch, data, stack, top, lending.spans()), now: Buffers(), memory: M,
+    inj: Injected<M>(data, lending.spans(), Heap::of(now), memory)): stack.InMemory(lending, now, memory) {
+    λ b => ⟨inj.sizes(b), ⟨omega(loan.canonical(b), inj.sizes(b)), λ k short => inj.bytes(b, k, omega(short, inj.sizes(b)), refl)⟩⟩
+}
+
+// A store into the heap of buffers is `store_span`, block for block, and
+// leaves the shadow empty.
+theorem Heap::of_store(now: Buffers(), loc: Loc, bytes: List<BitVec(8)>, inside: loc.offset < buffer_bytes(now, loc.block).len(), c: Nat):
+    Heap::of(now).store(loc, bytes).bytes(c) = buffer_bytes(store_span(now, loc.block, loc.offset, bytes), c) {
+    let window = buffer_bytes(now, loc.block).put_window(loc.offset, bytes);
+    match c.eq_dec(loc.block) {
+        Inl(same) => j(sym(same), λ x _ => set_block(λ (b: Nat) => buffer_bytes(now, b), loc.block, window, x) =
+                buffer_bytes(store_span(now, loc.block, loc.offset, bytes), x),
+            trans(set_block_here(λ (b: Nat) => buffer_bytes(now, b), loc.block, window),
+                sym(buffer_bytes_spanned(now, loc.block, loc.offset, bytes, inside)))),
+        Inr(differs) => trans(set_block_other(λ (b: Nat) => buffer_bytes(now, b), loc.block, window, c, differs),
+            sym(buffer_bytes_span_other(now, loc.block, loc.offset, bytes, c, λ same => differs(sym(same))))),
+    }
+}
+
+// One byte stored is the span of one byte stored.
+theorem store_byte_span(now: Buffers(), b, k: Nat, byte: BitVec(8), inside: k < buffer_bytes(now, b).len(), c: Nat):
+    buffer_bytes(store_byte(now, b, k, byte), c) = buffer_bytes(store_span(now, b, k, [byte]), c) {
+    match b.eq_dec(c) {
+        Inl(same) => j(same, λ x _ => buffer_bytes(store_byte(now, b, k, byte), x) = buffer_bytes(store_span(now, b, k, [byte]), x),
+            trans(buffer_bytes_stored(now, b, k, byte),
+                trans(sym(trans(buffer_bytes(now, b).put_window_cons(k, byte, Nil, inside),
+                        buffer_bytes(now, b).update(k, λ (_: BitVec(8)) => byte).put_window_nil(k + 1))),
+                    sym(buffer_bytes_spanned(now, b, k, [byte], inside))))),
+        Inr(differs) => trans(buffer_bytes_store_other(now, b, k, byte, c, differs), sym(buffer_bytes_span_other(now, b, k, [byte], c, differs))),
+    }
+}
+
 // Under the laws, the file in memory is lent to a call entered below
 // `top`: its own stores leave every buffer.
 theorem Stack::in_memory_lent<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), top: Nat,
@@ -787,15 +812,13 @@ theorem Stack::in_memory_lent<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<
     }
 }
 
-// The file in memory is stable under a word stored below `top`,
+// The file in memory is stable under a word stored below `top`: the
+// injection is (`Loan::stable_injected`),
 theorem Stack::stable_in_memory<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), top: Nat,
     lending: Lending, loan: Loan<M>(fetch, data, stack, top, lending.spans()), i: Nat, low: i <= top, now: Buffers()):
     stack.Stable(i, λ (m: M) => stack.InMemory(lending, now, m)) {
-    λ memory k below word held b => {
-        let same = held(b).left;
-        let fits: (buffer_bytes(now, b).len() <= buffer_bytes(lending.buffers, b).len()) = omega(same);
-        ⟨same, loan.own_reads(memory, k, omega(below, low), word, b, buffer_bytes(now, b), fits, held(b).right)⟩
-    }
+    λ memory k below word held => injected_in_memory(lending, loan, now, stack.writes.store(memory, stack.at(k), word_bytes(word)),
+        loan.stable_injected(i, low, Heap::of(now), memory, k, below, word, in_memory_injected(stack, lending, now, memory, held)))
 }
 
 // so it is still the one in memory after a call's own stores.
@@ -826,29 +849,41 @@ theorem Stack::trail_store<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}
      stack.in_memory_wrote(top, lending, loan, d, under, now, memory, stored, own, trail.right)⟩
 }
 
+// Bytes stored into a buffer the lending lets a call write, from a byte
+// inside it: the file with them written over it is the one in memory
+// (`Loan::store_injected` at an empty shadow).
+theorem Stack::in_memory_span<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), top: Nat,
+    lending: Lending, loan: Loan<M>(fetch, data, stack, top, lending.spans()), now: Buffers(), memory: M,
+    held: stack.InMemory(lending, now, memory), b, k: Nat, written: lending.written(b) = True,
+    inside: k < buffer_bytes(lending.buffers, b).len(), bytes: List<BitVec(8)>, fits: k + bytes.len() <= buffer_bytes(lending.buffers, b).len()):
+    stack.InMemory(lending, store_span(now, b, k, bytes), stack.writes.store(memory, lending.spans().byte(b, k), bytes)) {
+    let loc = Loc(b, k);
+    let ok: (Heap::of(now).fits(loc, bytes.len()) = True) =
+        trans(Bool::and_true_r((k + bytes.len()).leb(buffer_bytes(now, b).len())),
+            Nat::leb_eq_true(k + bytes.len(), buffer_bytes(now, b).len(), omega(fits, held(b).left)));
+    let stored = loan.store_injected(Heap::of(now), memory, in_memory_injected(stack, lending, now, memory, held), loc, written, inside, bytes, ok);
+    injected_in_memory(lending, loan, store_span(now, b, k, bytes), stack.writes.store(memory, lending.spans().byte(b, k), bytes),
+        stored.same_bytes(Heap::of(store_span(now, b, k, bytes)), λ c => sym(Heap::of_store(now, loc, bytes, omega(inside, held(b).left), c)), refl))
+}
+
+// The file in memory is any file whose buffers read the same.
+theorem Stack::in_memory_same<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), lending: Lending,
+    now, other: Buffers(), memory: M, same: (b: Nat) → buffer_bytes(other, b) = buffer_bytes(now, b), held: stack.InMemory(lending, now, memory)):
+    stack.InMemory(lending, other, memory) {
+    λ b => j(sym(same(b)), λ ys _ => (ys.len() = buffer_bytes(lending.buffers, b).len()) ∧ Readable(data, memory, address_of(lending.addresses, b), ys),
+        held(b))
+}
+
 // A byte stored into a buffer the lending lets a call write: the file with
-// that byte set is the one in memory.
+// that byte set is the one in memory (`Stack::in_memory_span` at one byte).
 theorem Stack::in_memory_put<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), top: Nat,
     lending: Lending, loan: Loan<M>(fetch, data, stack, top, lending.spans()), now: Buffers(), memory: M,
     held: stack.InMemory(lending, now, memory), b, k: Nat, written: lending.written(b) = True,
     inside: k < buffer_bytes(lending.buffers, b).len(), byte: BitVec(8)):
     stack.InMemory(lending, store_byte(now, b, k, byte), stack.writes.store(memory, lending.spans().byte(b, k), [byte])) {
-    let set = λ (_: BitVec(8)) => byte;
-    let stored = stack.writes.store(memory, lending.spans().byte(b, k), [byte]);
-    λ c => match b.eq_dec(c) {
-        Inl(same) => j(same, λ x _ => (buffer_bytes(store_byte(now, b, k, byte), x).len() = buffer_bytes(lending.buffers, x).len()) ∧
-                Readable(data, stored, address_of(lending.addresses, x), buffer_bytes(store_byte(now, b, k, byte), x)),
-            j(sym(buffer_bytes_stored(now, b, k, byte)), λ ys _ => (ys.len() = buffer_bytes(lending.buffers, b).len()) ∧
-                    Readable(data, stored, address_of(lending.addresses, b), ys),
-                ⟨trans(buffer_bytes(now, b).len_update(k, set), held(b).left),
-                 loan.put_reads(memory, b, k, written, inside, byte, buffer_bytes(now, b), held(b).left, held(b).right)⟩)),
-        Inr(differs) => {
-            let fits: (buffer_bytes(now, c).len() <= buffer_bytes(lending.buffers, c).len()) = omega(held(c).left);
-            j(sym(buffer_bytes_store_other(now, b, k, byte, c, differs)), λ ys _ =>
-                    (ys.len() = buffer_bytes(lending.buffers, c).len()) ∧ Readable(data, stored, address_of(lending.addresses, c), ys),
-                ⟨held(c).left, loan.put_keeps(memory, b, k, written, inside, byte, c, differs, buffer_bytes(now, c), fits, held(c).right)⟩)
-        },
-    }
+    stack.in_memory_same(lending, store_span(now, b, k, [byte]), store_byte(now, b, k, byte), stack.writes.store(memory, lending.spans().byte(b, k), [byte]),
+        λ c => store_byte_span(now, b, k, byte, omega(inside, held(b).left), c),
+        stack.in_memory_span(top, lending, loan, now, memory, held, b, k, written, inside, [byte], inside))
 }
 
 // And the trail is kept, the file now the one with the byte set.
@@ -862,30 +897,6 @@ theorem Stack::trail_put<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, 
      stack.in_memory_put(top, lending, loan, now, memory, trail.right, b, k, written, inside, byte)⟩
 }
 
-// Bytes stored into a buffer the lending lets a call write, from a byte
-// inside it: the file with them written over it is the one in memory.
-theorem Stack::in_memory_span<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), top: Nat,
-    lending: Lending, loan: Loan<M>(fetch, data, stack, top, lending.spans()), now: Buffers(), memory: M,
-    held: stack.InMemory(lending, now, memory), b, k: Nat, written: lending.written(b) = True,
-    inside: k < buffer_bytes(lending.buffers, b).len(), bytes: List<BitVec(8)>, fits: k + bytes.len() <= buffer_bytes(lending.buffers, b).len()):
-    stack.InMemory(lending, store_span(now, b, k, bytes), stack.writes.store(memory, lending.spans().byte(b, k), bytes)) {
-    let stored = stack.writes.store(memory, lending.spans().byte(b, k), bytes);
-    λ c => match b.eq_dec(c) {
-        Inl(same) => j(same, λ x _ => (buffer_bytes(store_span(now, b, k, bytes), x).len() = buffer_bytes(lending.buffers, x).len()) ∧
-                Readable(data, stored, address_of(lending.addresses, x), buffer_bytes(store_span(now, b, k, bytes), x)),
-            j(sym(buffer_bytes_spanned(now, b, k, bytes, omega(inside, held(b).left))), λ ys _ => (ys.len() = buffer_bytes(lending.buffers, b).len()) ∧
-                    Readable(data, stored, address_of(lending.addresses, b), ys),
-                ⟨trans(buffer_bytes(now, b).len_put_window(k, bytes, omega(fits, held(b).left)), held(b).left),
-                 loan.store_reads(memory, b, k, written, inside, bytes, fits, buffer_bytes(now, b), held(b).left, held(b).right)⟩)),
-        Inr(differs) => {
-            let reach: (buffer_bytes(now, c).len() <= buffer_bytes(lending.buffers, c).len()) = omega(held(c).left);
-            j(sym(buffer_bytes_span_other(now, b, k, bytes, c, differs)), λ ys _ =>
-                    (ys.len() = buffer_bytes(lending.buffers, c).len()) ∧ Readable(data, stored, address_of(lending.addresses, c), ys),
-                ⟨held(c).left, loan.store_keeps(memory, b, k, written, inside, bytes, fits, c, differs, buffer_bytes(now, c), reach, held(c).right)⟩)
-        },
-    }
-}
-
 // And the trail is kept, the file now the one with them written.
 theorem Stack::trail_span<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), top: Nat,
     lending: Lending, loan: Loan<M>(fetch, data, stack, top, lending.spans()), d: Nat, entry: M, now: Buffers(), memory: M,
@@ -895,14 +906,6 @@ theorem Stack::trail_span<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>},
     ⟨stack.wrote_in_trans(d, lending.spans(), entry, memory, stack.writes.store(memory, lending.spans().byte(b, k), bytes), trail.left,
         stack.wrote_in_store(d, lending.spans(), memory, b, k, written, inside, bytes, fits)),
      stack.in_memory_span(top, lending, loan, now, memory, trail.right, b, k, written, inside, bytes, fits)⟩
-}
-
-// The file in memory is any file whose buffers read the same.
-theorem Stack::in_memory_same<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), lending: Lending,
-    now, other: Buffers(), memory: M, same: (b: Nat) → buffer_bytes(other, b) = buffer_bytes(now, b), held: stack.InMemory(lending, now, memory)):
-    stack.InMemory(lending, other, memory) {
-    λ b => j(sym(same(b)), λ ys _ => (ys.len() = buffer_bytes(lending.buffers, b).len()) ∧ Readable(data, memory, address_of(lending.addresses, b), ys),
-        held(b))
 }
 
 // What a call gives function `f` of the file `now`: the homes of the

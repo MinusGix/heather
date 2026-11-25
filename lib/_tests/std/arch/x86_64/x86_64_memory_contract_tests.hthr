@@ -1,19 +1,30 @@
-// Probes of a lending (x86_64_lending; docs/native/native-one-compiler-design.md
-// §2.6): two spans of a data region lent above an offset `top`, the first
-// to write and the second to read, by `DataRegion::loan`, and what the
-// laws give a borrower and its caller, for one byte stored and for four
-// in one store. Then the control: no lending has a
-// written span that shares its first byte with another. Tests, not
-// library: nothing imports this module.
+// Probes of the x86 memory contract (x86_64_memory_contract;
+// issues/x86-memory-contract.md): two spans of a data region lent above an
+// offset `top`, the first to write and the second to read, by
+// `DataRegion::loan`, and what the laws give a borrower and its caller, for
+// one byte stored and for four in one store; a heap with a shadow over
+// them, a reference stored and loaded back; and `Site::Meets`, which the
+// existing call contract at one lending gives at an empty shadow. Then the
+// controls: no lending has a written span that shares its first byte with
+// another, and a doubleword load is refused over part of a reference.
+// Tests, not library: nothing imports this module.
 import x86_64;
 import x86_64_fetch;
 import x86_64_data_read;
 import x86_64_fetched_code;
 import x86_64_store;
 import x86_64_stack;
-import x86_64_lending;
-import x86_64_views;
+import x86_64_memory_contract;
+import x86_64_memory_tiers;
 import x86_64_byte_memory;
+import x86_64_kept;
+import x86_64_asm;
+import x86_64_asm_runs;
+import x86_64_stack_runs;
+import function_ir;
+import function_ir_writes;
+import function_ir_lower_reads;
+import function_ir_lower_calls;
 import memory;
 import bitvec;
 import bool;
@@ -175,4 +186,79 @@ theorem written_span_unshared<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<
     let both: (Some<BitVec(8)>(BitVec::ofNat(0)) = Some<BitVec(8)>(BitVec::ofNat(1))) = trans(seen(BitVec::ofNat(0)), sym(seen(BitVec::ofNat(1))));
     let verdict: (True = False) = cong_fn<Option<BitVec(8)>, Bool>(λ o => match o { None => True, Some(v) => v.eq_bit(BitVec::ofNat(0)) }, both);
     absurd(verdict)
+}
+
+// ---------------------------------------------------------------------------
+// A heap over the two spans
+
+// A reference stored at byte 0 of block 0, to byte 2 of block 1, loads
+// back as that byte's address.
+theorem ref_stored_reads_address(r: DataRegion, top: Nat, fits: top + 32 <= r.size, m: X86Memory(r.profile), heap: Heap,
+    inj: Injected<X86Memory(r.profile)>(r.profile.data(), pair_spans(r, top), heap, m), ok: heap.fits(Loc(0, 0), 8) = True):
+    read_word(r.profile.data(), r.profile.store(m, Loc(0, 0).address(pair_spans(r, top)), word_bytes(Loc(1, 2).address(pair_spans(r, top)))),
+        Loc(0, 0).address(pair_spans(r, top))) = Some(Loc(1, 2).address(pair_spans(r, top))) {
+    pair_loan(r, top, fits).store_ref_injected(heap, m, inj, Loc(0, 0), refl, ok, Loc(1, 2)).ref_read(Loc(0, 0), Loc(1, 2), refl).right
+}
+
+// Four bytes stored at byte 4 of block 0 load back as their doubleword.
+theorem dword_stored_reads_back(r: DataRegion, top: Nat, fits: top + 32 <= r.size, m: X86Memory(r.profile), heap: Heap,
+    inj: Injected<X86Memory(r.profile)>(r.profile.data(), pair_spans(r, top), heap, m), a, b, c, d: BitVec(8),
+    ok: heap.fits(Loc(0, 4), 4) = True, plain: heap.store(Loc(0, 4), [a, b, c, d]).plain(Loc(0, 4), 4) = True):
+    read_dword(r.profile.data(), r.profile.store(m, Loc(0, 4).address(pair_spans(r, top)), [a, b, c, d]), Loc(0, 4).address(pair_spans(r, top))) =
+        Some(heap.store(Loc(0, 4), [a, b, c, d]).dword(Loc(0, 4))) {
+    pair_loan(r, top, fits).store_injected(heap, m, inj, Loc(0, 4), refl, trivial, [a, b, c, d], ok).dword_read(Loc(0, 4), plain).right
+}
+
+// A pointer stored keeps the heap canonical: its eight bytes are zero.
+theorem ref_stored_canonical(heap: Heap, canonical: heap.Canonical(), target: Loc, fits: 8 <= heap.bytes(0).len()):
+    heap.store_ref(Loc(0, 0), target).Canonical() {
+    heap.canonical_store_ref(canonical, Loc(0, 0), target, fits)
+}
+
+// The control: a doubleword load over half of a reference is refused.
+theorem dword_over_reference_refused(heap: Heap, target: Loc):
+    heap.store_ref(Loc(0, 0), target).plain(Loc(0, 4), 4) = False {
+    Bool::and_false_r((4 + 4).leb(heap.store_ref(Loc(0, 0), target).bytes(0).len()))
+}
+
+// ---------------------------------------------------------------------------
+// The one call contract, from the existing one
+
+// `Site::CallsLent` at one lending gives `Site::Meets` at an empty shadow:
+// for a meaning each of whose answers is, over heaps of buffers, one the
+// program's functions allow (`effects`), with the buffers' homes passed.
+theorem calls_lent_meets<M>(site: Site<M>, stack: Stack<M>(site.fetch, site.data), effects: Effects(), rooms: Nat → Nat, bound: Nat,
+    counts: List<Nat>, needs: Nat → Nat → Bool, top: Nat, lending: Lending, counted: lending.counts = counts,
+    loan: Loan<M>(site.fetch, site.data, stack, top, lending.spans()), lent: site.CallsLent(stack, effects, rooms, bound, counts, needs, top),
+    allowed: (f: Nat) → (b: Nat) → needs(f, b).IsTrue() → lending.written(b) = True, calls: Nat → List<BitVec(64)> → Heap → Option<Returned>,
+    answers: (f: Nat) → (arguments: List<BitVec(64)>) → (heap: Heap) → (answer: Returned) → calls(f, arguments, heap) = Some(answer) →
+        Exists<Buffers()>(λ before => Exists<Buffers()>(λ after => Exists<BitVec(64)>(λ result => Exists<List<BitVec(64)>>(λ rest =>
+            ((heap = Heap::of(before)) ∧ (answer = Returned(Cons(result, rest), Heap::of(after)))) ∧
+            (effects(before, f, arguments, result, rest, after) ∧ ArgsLent(lent_count(lending.counts, f), 0, arguments, lending.addresses, lending.buffers))))))):
+    site.Meets(stack, lending.spans(), top, rooms, bound, calls) {
+    λ f below arguments heap answer called => {
+        let found = answers(f, arguments, heap, answer, called);
+        let before = found.witness;
+        let after = found.proof.witness;
+        let result = found.proof.proof.witness;
+        let rest = found.proof.proof.proof.witness;
+        let facts = found.proof.proof.proof.proof;
+        let entry = asm_labels(site.program)(f + 1);
+        let returns = lent(lending, counted, loan, f, below, λ b need => allowed(f, b, need), arguments, result, rest, before, after);
+        let pre = λ (h: Heap) (i: Nat) (s: MachineState<M>) =>
+            (stack.Passed(arguments, i, s) ∧ ((rooms(f) <= i) ∧ (i + 8 <= top))) ∧ Injected<M>(site.data, lending.spans(), h, s.memory);
+        let post = λ (a: Returned) (i: Nat) (s: MachineState<M>) (t: MachineState<M>) =>
+            (ArgsIn(a.words, Cons(Rax, answer_registers()), t.gprs) ∧ Kept(callee_kept(), s.gprs, t.gprs)) ∧
+                (stack.WroteIn(i, lending.spans(), s.memory, t.memory) ∧ Injected<M>(site.data, lending.spans(), a.heap, t.memory));
+        let weakened = site.returns_weaken(stack, entry, stack.CalledOver(effects, rooms, lending, top, f, arguments, result, rest, before, after),
+            pre(Heap::of(before)), stack.AnsweredBoth(lending, result, rest, after), returns,
+            λ i s held => ⟨⟨held.left.left, ⟨facts.right.left, held.left.right.left⟩⟩,
+                ⟨facts.right.right, ⟨held.left.right.right, injected_in_memory(lending, loan, before, s.memory, held.right)⟩⟩⟩);
+        let both = site.returns_implies(stack, entry, pre(Heap::of(before)), stack.AnsweredBoth(lending, result, rest, after),
+            post(Returned(Cons(result, rest), Heap::of(after))), weakened,
+            λ i s t room done => ⟨⟨⟨done.left.left, done.right⟩, done.left.right.left⟩,
+                ⟨done.left.right.right.left, in_memory_injected(stack, lending, after, t.memory, done.left.right.right.right)⟩⟩);
+        j(sym(facts.left.left), λ h _ => site.Returns(stack, entry, pre(h), post(answer)),
+            j(sym(facts.left.right), λ a _ => site.Returns(stack, entry, pre(Heap::of(before)), post(a)), both))
+    }
 }

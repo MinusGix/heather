@@ -1,4 +1,4 @@
-// Probes of views (x86_64_views; docs/native/native-library-exports-design.md
+// Probes of views (x86_64_memory_tiers, a case of the contract's `Sub`; docs/native/native-library-exports-design.md
 // §3.1): the two halves of a span of sixteen bytes lent apart, the first
 // to write and the second to read, under any lending of the span, and what
 // the lender has after. Then the controls: views that share a byte, a view
@@ -10,8 +10,8 @@ import x86_64_data_read;
 import x86_64_fetched_code;
 import x86_64_store;
 import x86_64_stack;
-import x86_64_lending;
-import x86_64_views;
+import x86_64_memory_contract;
+import x86_64_memory_tiers;
 import memory;
 import bitvec;
 import bool;

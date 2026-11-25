@@ -52,7 +52,7 @@ const IMPORTS: &[&str] = &["function_ir", "function_ir_eval", "function_ir_lower
 
 /// What a program that is lent buffers needs besides: that it stores into
 /// none, and the laws its buffers are lent under.
-const LENT_IMPORTS: &[&str] = &["function_ir_writes", "function_ir_lower_reads", "x86_64_lending", "function_ir_state", "function_ir_borrows"];
+const LENT_IMPORTS: &[&str] = &["function_ir_writes", "function_ir_lower_reads", "x86_64_memory_contract", "function_ir_state", "function_ir_borrows"];
 
 /// And what one that stores into them needs: the run of a program over a
 /// file, and the ending the generator states it with.
