@@ -39,8 +39,9 @@
 //
 // What the generator does not take yet shapes three spellings, each noted
 // where it stands: the tests that keep the heap's indexes in bounds are
-// written where an index is used (`h < 14`), as `bv_omega` does not read a
-// bound through a sum of words that may wrap; a window's `read` and `store`
+// written where an index is used (`h < 14`), as a test of a sum of words
+// that may wrap does not bound its operands (a window's fit is tested by
+// `window_fits`, as `store_item` does); a window's `read` and `store`
 // take found proofs, which their code does not carry (erased parameters);
 // and `push` is a call, a test of
 // its answer and a call, which has no branch equations (its laws are those
@@ -52,6 +53,7 @@ import logic;
 import bool;
 import omega;
 import runtime_data;
+import word_fits;
 
 laid record Arena { top: u64, limit: u64, heap: [u64; 16] }
 
@@ -171,6 +173,36 @@ runtime fn Arena::push_in(mut self a: Arena, h, x: u64) → u64 {
         let len = a.heap.at(h + 2);
         if room: len < cap { a.put_item(h, base, len, x) } else { 2 }
     } else { 0 }
+}
+
+// Item `len` of the window `(base, cap)` set to `x` through the window's
+// `store`, the length one more: 1, or 2 when the window is full, or 0 for a
+// header outside the heap or a window that does not fit the heap. `store`'s
+// proofs are found where it is written, `inside` from the room test and
+// `fits` from `window_fits`, the test the code runs
+// (lib/native/runtime/word_fits.hthr): a test of the sum `base + cap <= 16`
+// would not give it, since the sum may wrap
+// (issues/bv-omega-fits-through-wrapping-sum.md). Under a vector's
+// invariant the window always fits; the test is the check that discharges
+// `store`'s obligation without it. The header's words are parameters, as
+// `put_item`'s are: a found proof does not read a word bound by `let` to a
+// read of the heap (issues/found-proof-over-let-bound-read.md).
+runtime fn Arena::store_item(mut self a: Arena, h, base, cap, len, x: u64) → u64 {
+    if hb: h < 14 {
+        if room: len < cap {
+            if ok: window_fits(base, cap, 16) {
+                let old = a.store(base, cap, len, x);
+                a.heap := a.heap.put(h + 2, len + 1);
+                1
+            } else { 0 }
+        } else { 2 }
+    } else { 0 }
+}
+
+// Push `x` where the window has room, through `store_item`: `push_in`'s
+// answers, and 0 where the window does not fit the heap.
+runtime fn Arena::push_fit(mut self a: Arena, h, x: u64) → u64 {
+    if hb: h < 14 { a.store_item(h, a.heap.at(h), a.heap.at(h + 1), a.heap.at(h + 2), x) } else { 0 }
 }
 
 // Push `x`, growing the vector first where it is full: 1 when pushed, 0
