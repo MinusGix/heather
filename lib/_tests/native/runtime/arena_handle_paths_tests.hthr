@@ -38,9 +38,9 @@ theorem empty_inv(): HeapInv(EMPTY_ARENA(), Store::empty()) {
     HeapInv(omega, omega, λ _ _ e => absurd(e), λ _ _ _ _ e1 _ _ => absurd(e1))
 }
 
-fn EMPTY() → Heap { Heap(EMPTY_ARENA(), Store::empty(), empty_inv()) }
+fn EMPTY() → Heap { Heap(EMPTY_ARENA(), Erased(Store::empty()), empty_inv()) }
 
-fn NO_WINDOW() → Window { Window(0, 0, Key(0, 0)) }
+fn NO_WINDOW() → Window { Window(0, 0, Erased(Key(0, 0))) }
 
 fn A1() → Mutated<Heap, Grant> { Heap::alloc(EMPTY(), 1) }
 
@@ -63,11 +63,11 @@ theorem d0_in(): BitVec::ofNat(0, n := 64).toNat() < DW().count.toNat() { let c:
 // `X` holds 9; the header says data at 4, capacity 2, length 1; the data
 // window holds 7.
 fn H0() → Heap {
-    A3().after.store(X(), 0, 9, valid := refl, inside := squash(x0_in()))
-        .store(HW(), 0, 4, valid := refl, inside := squash(h_in(0, omega)))
-        .store(HW(), 1, 2, valid := refl, inside := squash(h_in(1, omega)))
-        .store(HW(), 2, 1, valid := refl, inside := squash(h_in(2, omega)))
-        .store(DW(), 0, 7, valid := refl, inside := squash(d0_in()))
+    let h1 = Heap::store(A3().after, X(), 0, 9, valid := refl, inside := squash(x0_in())).after;
+    let h2 = Heap::store(h1, HW(), 0, 4, valid := refl, inside := squash(h_in(0, omega))).after;
+    let h3 = Heap::store(h2, HW(), 1, 2, valid := refl, inside := squash(h_in(1, omega))).after;
+    let h4 = Heap::store(h3, HW(), 2, 1, valid := refl, inside := squash(h_in(2, omega))).after;
+    Heap::store(h4, DW(), 0, 7, valid := refl, inside := squash(d0_in())).after
 }
 
 // The element paths read the words, through the key and the index.
@@ -93,7 +93,7 @@ theorem x_data_apart(): Apart<Heap, u64, u64>(Heap::elem_path(X(), 0), Heap::ele
 // element reads.
 fn V0() → VecHandle { VecHandle(HW(), DW()) }
 
-theorem apart_keys(): ¬(HW().key.index = DW().key.index) { let a: (HW().key.index = 1) = refl; let b: (DW().key.index = 2) = refl; λ e => omega(e, a, b) }
+theorem apart_keys(): ¬(HW().key.value.index = DW().key.value.index) { let a: (HW().key.value.index = 1) = refl; let b: (DW().key.value.index = 2) = refl; λ e => omega(e, a, b) }
 
 theorem v0_ok(): VecOk(H0(), V0()) {
     let l: (H0().arena.cell(HW().base + 2).toNat() = 1) = refl;
@@ -157,8 +157,8 @@ theorem granted_apart(h: Heap, size: u64, w, w2: Window, granted: Heap::alloc(h,
 // it: a store through `w` keeps every element of a valid window of another
 // key.
 theorem store_keeps_other(h: Heap, w, w2: Window, i, x: u64, k: Nat, valid: h.Valid(w), valid2: h.Valid(w2), li: i.toNat() < w.count.toNat(),
-    lk: k < w2.count.toNat(), other: ¬(w2.key.index = w.key.index)):
-    Heap::elem_path(w2, k).Keeps(h, h.store(w, i, x, valid := valid))
+    lk: k < w2.count.toNat(), other: ¬(w2.key.value.index = w.key.value.index)):
+    Heap::elem_path(w2, k).Keeps(h, Heap::store(h, w, i, x, valid := valid).after)
 {
     let apart = h.valid_elems_apart(w2, w, k, i.toNat(), valid2, valid, other, lk, li);
     j(sym(h.store_is_elem(w, i, x, valid, li)), λ t _ => Heap::elem_path(w2, k).Keeps(h, t), apart.keeps(h, x))

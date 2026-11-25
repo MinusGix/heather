@@ -154,8 +154,12 @@ fn HeldCall::add(cs: List<HeldCall>, c: HeldCall) → List<HeldCall> {
 // whether it is a loop (a function that `decreases`, its body ending in
 // its own call), and how many spans it only reads (the first of its
 // operands, a place and a length word each).
+// A plain record around a laid one, as `rt_held_wrapped` reads it.
+record HeldWrapped { ty: Nat, outer: Handle, laid: Handle, at: Nat, self_e: Expr, named: List<FieldTerm> }
+
 record HeldReflected { reflected: FFun, funs: List<Nat>, cfuns: List<Nat>, record: Handle, record_name: String, stored: GlobalRef, fields: List<HeldField>,
-    operands: Nat, changes: Bool, calls: List<HeldCall>, measured: Bool, spans: Nat, params: List<LocalRef>, carried: Option<Nat> }
+    operands: Nat, changes: Bool, calls: List<HeldCall>, measured: Bool, spans: Nat, params: List<LocalRef>, carried: Option<Nat>,
+    wrapper: Option<HeldWrapped> := None }
 
 // A term applied to arguments.
 fn rt_ap(f: Expr, args: List<Expr>) → Expr { args.foldl(λ acc a => App(acc, a), f) }
@@ -310,12 +314,12 @@ fn rt_held_stride(fname: String, codec: Expr) → Tac<Nat> {
 // The elements of an array field whose count is the word `count` a laid
 // record's parameter is: read and stored at a word only, through the
 // checked accessors, with that word as the count.
-fn rt_held_each_carried(tname: String, fname: String, record: LocalInfo, stored: Expr, part: Expr, element: Handle, length: Handle, count: Expr, span, len: Expr,
+fn rt_held_each_carried(tname: String, fname: String, record: LocalInfo, self_e: Expr, stored: Expr, part: Expr, element: Handle, length: Handle, count: Expr, span, len: Expr,
     under: LocalRef) → Tac<Option<HeldEach>> {
     let then_g <- lookup("part::Part::then").bind(λ c => rt_accepted("a part of a part (import `part`)", c));
     let element_g <- lookup("part::Part::element").bind(λ c => rt_accepted("an array's element as a part (import `part`)", c));
     let index_g <- lookup("vector::vector_index").bind(λ c => rt_accepted("an entry of a vector (import `vector`)", c));
-    let projected <- fields(Local(record.ref)).bind(λ c => rt_accepted("the fields of `" ++ tname ++ "`", c));
+    let projected <- fields(self_e).bind(λ c => rt_accepted("the fields of `" ++ tname ++ "`", c));
     let own <- rt_held_projection(fname, projected.fields);
     let inside <- resolve("trivial").bind(λ c => rt_accepted("`trivial`", c));
     let stores <- lookup("part::Part::stores").bind(λ c => rt_accepted("a part's codec (import `part`)", c));
@@ -360,13 +364,13 @@ fn rt_held_count_param(length: Handle, ps: List<Nat>) → Tac<Option<Nat>> {
 // The elements of an array field, where their codec has an accessor.
 // Where element `i` lies is the place of its part: the field's, then the
 // element's in the array.
-fn rt_held_each(tname: String, fname: String, record: LocalInfo, stored: Expr, open_params: Bool, part: Expr, element: Handle, length: Handle, span, len: Expr, under: LocalRef) → Tac<Option<HeldEach>> {
+fn rt_held_each(tname: String, fname: String, record: LocalInfo, self_e: Expr, stored: Expr, open_params: Bool, part: Expr, element: Handle, length: Handle, span, len: Expr, under: LocalRef) → Tac<Option<HeldEach>> {
     let count <- rt_literal(length);
     let then_g <- lookup("part::Part::then").bind(λ c => rt_accepted("a part of a part (import `part`)", c));
     let element_g <- lookup("part::Part::element").bind(λ c => rt_accepted("an array's element as a part (import `part`)", c));
     let place_g <- lookup("part::Part::place").bind(λ c => rt_accepted("where a part lies (import `part`)", c));
     let index_g <- lookup("vector::vector_index").bind(λ c => rt_accepted("an entry of a vector (import `vector`)", c));
-    let projected <- fields(Local(record.ref)).bind(λ c => rt_accepted("the fields of `" ++ tname ++ "`", c));
+    let projected <- fields(self_e).bind(λ c => rt_accepted("the fields of `" ++ tname ++ "`", c));
     let own <- rt_held_projection(fname, projected.fields);
     let inside <- resolve("trivial").bind(λ c => rt_accepted("`trivial`", c));
     let stores <- lookup("part::Part::stores").bind(λ c => rt_accepted("a part's codec (import `part`)", c));
@@ -426,7 +430,7 @@ fn rt_held_each(tname: String, fname: String, record: LocalInfo, stored: Expr, o
 record HeldFields { fields: List<HeldField>, named: List<FieldTerm> }
 
 // `params`: the record's parameters' locals, `args` the same as terms.
-fn rt_held_fields(tname: String, record: LocalInfo, stored: Expr, params: List<Nat>, args: List<Expr>, fs: List<FieldInfo>, span, length: Expr, under: LocalRef) → Tac<HeldFields> {
+fn rt_held_fields(tname: String, record: LocalInfo, self_e: Expr, stored: Expr, params: List<Nat>, args: List<Expr>, fs: List<FieldInfo>, span, length: Expr, under: LocalRef) → Tac<HeldFields> {
     match fs {
         Nil => pure(HeldFields([], [])),
         Cons(f, rest) => match f.ty {
@@ -436,7 +440,7 @@ fn rt_held_fields(tname: String, record: LocalInfo, stored: Expr, params: List<N
                 let at <- resolve(tname ++ "::" ++ f.name ++ "_at").bind(λ c => rt_accepted("where field `" ++ f.name ++ "` lies", c));
                 let part_g <- lookup(tname ++ "::" ++ f.name ++ "_part").bind(λ c => rt_accepted("the part of field `" ++ f.name ++ "`", c));
                 let array <- rt_held_array(ty);
-                let more <- rt_held_fields(tname, record, stored, params, args, rest, span, length, under);
+                let more <- rt_held_fields(tname, record, self_e, stored, params, args, rest, span, length, under);
                 let part = rt_ap(Global(part_g), args);
                 match array {
                     Some(a) => {
@@ -445,11 +449,11 @@ fn rt_held_fields(tname: String, record: LocalInfo, stored: Expr, params: List<N
                         let carried <- match literal { HLit(_) => pure(None), _ => rt_held_count_param(a.snd, params) };
                         let each <- match carried {
                             None => match literal {
-                                HLit(_) => rt_held_each(tname, f.name, record, stored, open_params, part, a.fst, a.snd, span, length, under),
+                                HLit(_) => rt_held_each(tname, f.name, record, self_e, stored, open_params, part, a.fst, a.snd, span, length, under),
                                 _ => rt_refuse("the count of the array field `" ++ f.name ++ "` is neither a numeral nor a parameter's `toNat()`: "
                                     ++ "a parameter counts an array's elements (`[u64; n.toNat()]`), and a count computed from parameters is not taken yet"),
                             },
-                            Some(ix) => rt_held_each_carried(tname, f.name, record, stored, part, a.fst, a.snd, args.nth(ix).unwrap_or(Blank), span, length, under),
+                            Some(ix) => rt_held_each_carried(tname, f.name, record, self_e, stored, part, a.fst, a.snd, args.nth(ix).unwrap_or(Blank), span, length, under),
                         };
                         let named = match each { None => more.named, Some(e) => Cons(FieldEach(record.ref.id, f.name, e.term), more.named) };
                         pure(HeldFields(Cons(HeldField(f.name, at, None, each), more.fields), named))
@@ -800,11 +804,15 @@ fn rt_held_indexed(fuel: Nat, k: Known, st: RSt, record: Nat, settled: Bool, und
 // local a new one is assumed under, and the terms the body being walked
 // is (a branch's scrutinee and arms, or an end). `ih` is the local a
 // function that `decreases` calls itself through, in its step.
+// `wrapper`: where the function's record is a plain record around the
+// laid one (issues/runtime-record-erased-fields.md), that record's type and
+// the laid field's place among its fields; `record` is then the plain
+// record's local, whose laid field (`h.arena`) is the record the span holds.
 record HeldCx { k: Known, names: FileNames, ty: Nat, record: Nat, span: Nat, fs: List<HeldField>, named: List<FieldTerm>, under: LocalRef, roots: List<Handle>,
-    ih: Option<Nat> }
+    ih: Option<Nat>, wrapper: Option<Pair<Nat, Nat>> := None }
 
 // The walk of the body `roots` are: what a call's reads are looked for in.
-fn HeldCx::rooted(self cx: HeldCx, roots: List<Handle>) → HeldCx { HeldCx(cx.k, cx.names, cx.ty, cx.record, cx.span, cx.fs, cx.named, cx.under, roots, cx.ih) }
+fn HeldCx::rooted(self cx: HeldCx, roots: List<Handle>) → HeldCx { HeldCx(cx.k, cx.names, cx.ty, cx.record, cx.span, cx.fs, cx.named, cx.under, roots, cx.ih, cx.wrapper) }
 
 // Where the walk is: the pure walk's state, the stores and calls so far
 // (the last first), the program's computations, the calls made, the call
@@ -906,10 +914,7 @@ fn rt_held_changes(names: FileNames, x: Handle) → Tac<Bool> {
 // before any call, and what the last call left after one.
 fn rt_held_current(cx: HeldCx, w: HeldWalk, r: Handle) → Tac<Bool> {
     match w.now {
-        None => view(r).bind(λ v => {
-            let own: Bool = match v { HLocal(y, args) => match args { Nil => y.id.same(cx.record), Cons(_, _) => False }, _ => False };
-            pure(own)
-        }),
+        None => Known::laid_local(cx.named, r).bind(λ x => pure(match x { Some(y) => y.same(cx.record), None => False })),
         Some(c) => rt_after_of(r, c),
     }
 }
@@ -1053,13 +1058,25 @@ fn rt_held_do(fuel: Nat, cx: HeldCx, w: HeldWalk, job: HeldJob) → Tac<HeldOut>
                 }),
                 _ => rt_held_built(),
             }),
-            Settle(s) => view(s).bind(λ v => match v {
+            Settle(s) => view(s).bind(λ v => Known::laid_local(cx.named, s).bind(λ own => match own.map(λ y => y.same(cx.record) && cx.wrapper.is_some()).unwrap_or(False) {
+              // The laid field of the plain record around it, as it came.
+              True => match w.now { None => pure(HeldOut(w, [])), Some(_) => rt_held_earlier() },
+              False => match v {
                 HLocal(y, _) => match y.id.same(cx.record) {
                     False => rt_refuse("a function of a laid record leaves its own record"),
                     True => match w.now { None => pure(HeldOut(w, [])), Some(_) => rt_held_earlier() },
                 },
                 HCtor(cty, _, _, values) => match cty.id.same(cx.ty) {
-                    False => rt_refuse("a function of a laid record leaves a record of its own type"),
+                    // The plain record around the laid one, built again: what
+                    // it leaves is its laid field's new value, and its erased
+                    // fields' are never walked.
+                    False => match cx.wrapper {
+                        Some(wr) => match cty.id.same(wr.fst) {
+                            True => match values.nth(wr.snd) { Some(laid) => rt_held_do(f, cx, w, Settle(laid)), None => rt_held_built() },
+                            False => rt_refuse("a function of a laid record leaves a record of its own type"),
+                        },
+                        None => rt_refuse("a function of a laid record leaves a record of its own type"),
+                    },
                     True => rt_held_base(cx.record, cx.fs, values).bind(λ base => {
                         let under: Tac<HeldOut> = match base { None => pure(HeldOut(w, [])), Some(b) => rt_held_do(f, cx, w, Settle(b)) };
                         under.bind(λ o => rt_held_do(f, cx, o.w, Sets(base, cx.fs, values)))
@@ -1082,7 +1099,8 @@ fn rt_held_do(fuel: Nat, cx: HeldCx, w: HeldWalk, job: HeldJob) → Tac<HeldOut>
                         _ => rt_held_built(),
                     },
                 }),
-            }),
+              },
+            })),
             Sets(base, fs, values) => match fs {
                 Nil => pure(HeldOut(w, [])),
                 Cons(field, rest) => match values {
@@ -1250,7 +1268,65 @@ fn rt_held_tail(fuel: Nat, cx: HeldCx, w: HeldWalk, reads: Bool, h: Handle) → 
 // local at levels 2 on (the written span's place and its length word are
 // 0 and 1; a read span's place is its bytes' local's level), how many
 // spans are read, and the body under them.
-record HeldWords { locals: List<LocalRef>, bound: List<Pair<Nat, Nat>>, body: Handle, last: LocalRef, spans: Nat }
+// `named`: the record parameters read field by field
+// (issues/runtime-record-erased-fields.md), each word field the code's
+// word at its level and each erased field marked so; such a parameter's
+// local stands in `locals` once for each of its words.
+record HeldWords { locals: List<LocalRef>, bound: List<Pair<Nat, Nat>>, body: Handle, last: LocalRef, spans: Nat, named: List<FieldTerm> := [] }
+
+fn rt_held_unpack_fields(k: Known, x: LocalInfo, fs: List<FieldProj>, acc: List<Pair<String, Bool>>) → Tac<Option<List<Pair<String, Bool>>>> {
+    match fs {
+        Nil => pure(Some(acc)),
+        Cons(f, rest) => infer(Hd(f.term)).bind(λ c => match c {
+            Refused(_) => pure(None),
+            Accepted(t) => rt_erased_param(t, Some(x.ref)).bind(λ erased => match erased {
+                True => rt_held_unpack_fields(k, x, rest, acc ++ [Pair(rt_base_name(f.name), False)]),
+                False => attempt(k.ty(t)).bind(λ o => match o {
+                    Done(ty) => match ty {
+                        Word(w) => match w.same(64) { True => rt_held_unpack_fields(k, x, rest, acc ++ [Pair(rt_base_name(f.name), True)]), False => pure(None) },
+                        _ => pure(None),
+                    },
+                    Failed(_, _) => pure(None),
+                }),
+            }),
+        }),
+    }
+}
+
+// A record parameter read field by field: a plain record (not laid) of
+// one constructor whose fields are 64-bit words or erased (`Erased<A>`, a
+// proof), at least one of them erased. Its fields, each a word or not.
+fn rt_held_unpackable(k: Known, x: LocalInfo) → Tac<Option<List<Pair<String, Bool>>>> {
+    view(x.ty).bind(λ v => match v {
+        HGlobal(_, tname, _) => match Known::str_same(rt_base_name(tname), "BitVec") || Known::str_same(rt_base_name(tname), "List") {
+          True => pure(None),
+          False => lookup(tname ++ "::stored").bind(λ c => match c {
+            Accepted(_) => pure(None),
+            Refused(_) => fields(Local(x.ref)).bind(λ fc => match fc {
+                Refused(_) => pure(None),
+                Accepted(p) => rt_held_unpack_fields(k, x, p.fields, []).bind(λ fs => match fs {
+                    None => pure(None),
+                    Some(list) => match list.any_bit(λ f => !f.snd) { True => pure(Some(list)), False => pure(None) },
+                }),
+            }),
+          }),
+        },
+        _ => pure(None),
+    })
+}
+
+// The terms a record parameter's fields stand for, from `level` on.
+fn rt_held_unpacked(x: Nat, fs: List<Pair<String, Bool>>, level: Nat) → List<FieldTerm> {
+    match fs {
+        Nil => [],
+        Cons(f, rest) => match f.snd {
+            True => Cons(FieldWord(x, f.fst, level), rt_held_unpacked(x, rest, level + 1)),
+            False => Cons(FieldErased(x, f.fst), rt_held_unpacked(x, rest, level)),
+        },
+    }
+}
+
+fn rt_held_word_count(fs: List<Pair<String, Bool>>) → Nat { fs.filter(λ f => f.snd).len() }
 
 fn rt_held_takes<A>() → Tac<A> {
     rt_refuse("a function of a laid record takes, after its record, the spans it only reads (each a `List<u8>` followed by its 64-bit length word) and then 64-bit words, with proofs and `Erased<A>` anywhere among them")
@@ -1267,13 +1343,25 @@ fn rt_held_words(fuel: Nat, k: Known, h: Handle, level: Nat, under: LocalRef, sp
             HLam(dom) => rt_erased_param(dom, Some(under)).bind(λ erased => match erased {
               True => open(h, "e").bind(λ c => rt_accepted("an erased parameter", c)).bind(λ o =>
                   rt_held_words(f, k, o.body, level, o.local.ref, spans, length)),
-              False => k.ty(dom).bind(λ at => match at {
+              False => open(h, "x").bind(λ c => rt_accepted("a parameter", c)).bind(λ ox => rt_held_unpackable(k, ox.local).bind(λ unpack => match unpack {
+              // A record of words and erased fields: its words are the
+              // code's, in field order where it stands.
+              Some(fs) => match length {
+                True => rt_held_takes(),
+                False => {
+                    let n = rt_held_word_count(fs);
+                    let more <- rt_held_words(f, k, ox.body, level + n, ox.local.ref, False, False);
+                    pure(HeldWords(List::range(n).map(λ _ => ox.local.ref) ++ more.locals, more.bound, more.body, more.last, more.spans,
+                        rt_held_unpacked(ox.local.ref.id, fs, level) ++ more.named))
+                },
+              },
+              None => k.ty(dom).bind(λ at => match at {
                 Word(w) => match w.same(64) {
                     False => rt_held_takes(),
                     True => {
                         let o <- open(h, "x").bind(λ c => rt_accepted("a parameter", c));
                         let more <- rt_held_words(f, k, o.body, level + 1, o.local.ref, spans && length, False);
-                        pure(HeldWords(Cons(o.local.ref, more.locals), Cons(Pair(o.local.ref.id, level), more.bound), more.body, more.last, more.spans))
+                        pure(HeldWords(Cons(o.local.ref, more.locals), Cons(Pair(o.local.ref.id, level), more.bound), more.body, more.last, more.spans, more.named))
                     },
                 },
                 // A span that is only read: its bytes and then its length
@@ -1283,11 +1371,12 @@ fn rt_held_words(fuel: Nat, k: Known, h: Handle, level: Nat, under: LocalRef, sp
                     True => {
                         let o <- open(h, "span").bind(λ c => rt_accepted("a span parameter", c));
                         let more <- rt_held_words(f, k, o.body, level + 1, o.local.ref, True, True);
-                        pure(HeldWords(Cons(o.local.ref, more.locals), Cons(Pair(o.local.ref.id, level), more.bound), more.body, more.last, more.spans + 1))
+                        pure(HeldWords(Cons(o.local.ref, more.locals), Cons(Pair(o.local.ref.id, level), more.bound), more.body, more.last, more.spans + 1, more.named))
                     },
                 },
                 _ => rt_held_takes(),
               }),
+              })),
             }),
             _ => match length { True => rt_held_takes(), False => pure(HeldWords([], [], h, under, 0)) },
         }),
@@ -1391,6 +1480,107 @@ fn rt_held_carried(fs: List<FieldInfo>, ps: List<Nat>) → Tac<Option<Nat>> {
     }
 }
 
+// The laid field's value at the record `x`: `match x { R(…, a, …) => a }`,
+// which converts with the field's read `x.f` (a record whose later field's
+// type mentions an earlier one has no projection definition to name).
+fn rt_held_project(x: LocalRef, record: Handle, laid: Handle, at: Nat) → Tac<Handle> {
+    branches(Local(x), laid).bind(λ c => rt_accepted("the record's laid field", c)).bind(λ sp => match sp.branches {
+        Cons(br, _) => match br.fields.nth(at) {
+            Some(f) => close(sp.id, [Hd(f)]).bind(λ cl => rt_accepted("the record's laid field", cl)),
+            None => rt_refuse("the record's laid field is not among its constructor's"),
+        },
+        Nil => rt_refuse("a record with no constructor"),
+    })
+}
+
+fn rt_held_wrap_fields(h: LocalInfo, under: Option<LocalRef>, tname: String, fs: List<FieldInfo>, vs: List<Handle>, i: Nat, laid: Option<Pair<Handle, Nat>>, named: List<FieldTerm>, bad: Option<String>)
+    → Tac<Pair<Option<Pair<Handle, Nat>>, List<FieldTerm>>>
+{
+    match fs {
+        // A field neither laid nor erased: where the record has a laid
+        // field this is said by name; otherwise it is no such record.
+        Nil => match laid {
+            None => pure(Pair(None, named)),
+            Some(_) => match bad {
+                None => pure(Pair(laid, named)),
+                Some(fname) => rt_refuse("the field `" ++ fname ++ "` of `" ++ tname ++ "` is neither a laid record nor erased: a record read as its laid field has one laid record, "
+                    ++ "its other fields erased (`Erased<A>`, or a proof)"),
+            },
+        },
+        Cons(fi, rest) => match vs {
+            Nil => pure(Pair(None, named)),
+            Cons(fv, vrest) => infer(Hd(fv)).bind(λ c => rt_accepted("the type of field `" ++ fi.name ++ "`", c)).bind(λ t =>
+                rt_erased_param(t, under).bind(λ erased => match erased {
+                    True => rt_held_wrap_fields(h, under, tname, rest, vrest, i + 1, laid, named ++ [FieldErased(h.ref.id, fi.name)], bad),
+                    False => {
+                        let other = match bad { None => Some(fi.name), Some(_) => bad };
+                        view(t).bind(λ tv => match tv {
+                            HGlobal(_, fname, _) => lookup(fname ++ "::stored").bind(λ sc => match sc {
+                                Accepted(_) => match laid {
+                                    None => rt_held_wrap_fields(h, under, tname, rest, vrest, i + 1, Some(Pair(t, i)), named ++ [FieldLaid(h.ref.id, fi.name)], bad),
+                                    Some(_) => rt_refuse("`" ++ tname ++ "` has two laid records among its fields: a record read as its laid field has one, its other fields erased"),
+                                },
+                                Refused(_) => rt_held_wrap_fields(h, under, tname, rest, vrest, i + 1, laid, named, other),
+                            }),
+                            _ => rt_held_wrap_fields(h, under, tname, rest, vrest, i + 1, laid, named, other),
+                        })
+                    },
+                })),
+        },
+    }
+}
+
+// The record `h` is of, where it is not laid and its fields are one laid
+// record and erased fields (`Erased<A>`, a proof): `None` where it is not
+// such a record at all (a laid record, or not a record), refused naming
+// the field where it nearly is. The fields are read as a `match` on `h`
+// binds them, since a later field's type may mention an earlier one.
+fn rt_held_wrapped(h: LocalInfo) → Tac<Option<HeldWrapped>> {
+    view(h.ty).bind(λ v => match v {
+        HGlobal(tg, tname, _) => match Known::str_same(rt_base_name(tname), "BitVec") || Known::str_same(rt_base_name(tname), "List") {
+          True => pure(None),
+          False => lookup(tname ++ "::stored").bind(λ c => match c {
+            Accepted(_) => pure(None),
+            Refused(_) => ctors(h.ty).bind(λ cc => match cc {
+                Refused(_) => pure(None),
+                Accepted(cs) => match cs {
+                    Cons(ci, more) => match more {
+                        Cons(_, _) => pure(None),
+                        Nil => branches(Local(h.ref), h.ty).bind(λ bc => match bc {
+                            Refused(_) => pure(None),
+                            Accepted(sp) => match sp.branches {
+                                Nil => pure(None),
+                                Cons(br, _) => rt_held_wrap_fields(h, br.locals.head().map(λ (l: LocalInfo) => l.ref), tname, ci.fields, br.fields, 0, None, [], None).bind(λ found => match found.fst {
+                                    None => pure(None),
+                                    // With no erased field it is not such a record.
+                                    Some(_) => match found.snd.any_bit(λ t => match t { FieldErased(_, _) => True, _ => False }) {
+                                    False => pure(None),
+                                    True => match found.fst {
+                                    None => pure(None),
+                                    // Both types again at the root: the laid one
+                                    // was read under the match's payload.
+                                    Some(laid) => view(laid.fst).bind(λ lv => match lv {
+                                        HGlobal(lg, _, _) => as_type(Global(lg)).bind(λ c1 => rt_accepted("the laid field's type", c1)).bind(λ laid_t =>
+                                            as_type(Global(tg)).bind(λ c2 => rt_accepted("the record's type", c2)).bind(λ outer_t =>
+                                            rt_held_project(h.ref, outer_t, laid_t, laid.snd).bind(λ proj =>
+                                                pure(Some(HeldWrapped(tg.id, outer_t, laid_t, laid.snd, Hd(proj), found.snd)))))),
+                                        _ => rt_refuse("the laid field's type is not a record's"),
+                                    }),
+                                    },
+                                    },
+                                }),
+                            },
+                        }),
+                    },
+                    Nil => pure(None),
+                },
+            }),
+          }),
+        },
+        _ => pure(None),
+    })
+}
+
 // The parameters before the record: each that is not a laid record's
 // type, opened, and the body after them.
 fn rt_held_record_params(fuel: Nat, h: Handle, ps: List<LocalInfo>) → Tac<Pair<List<LocalInfo>, Handle>> {
@@ -1404,7 +1594,16 @@ fn rt_held_record_params(fuel: Nat, h: Handle, ps: List<LocalInfo>) → Tac<Pair
                 };
                 laid.bind(λ is_record => match is_record {
                     True => pure(Pair(ps, h)),
-                    False => open(h, "p").bind(λ c => rt_accepted("a parameter of the record", c)).bind(λ o => rt_held_record_params(f, o.body, ps ++ [o.local])),
+                    False => open(h, "p").bind(λ c => rt_accepted("a parameter of the record", c)).bind(λ o =>
+                        // A record around a laid one is the record too
+                        // (issues/runtime-record-erased-fields.md).
+                        attempt(rt_held_wrapped(o.local)).bind(λ w => match w {
+                            Done(found) => match found {
+                                Some(_) => pure(Pair(ps, h)),
+                                None => rt_held_record_params(f, o.body, ps ++ [o.local]),
+                            },
+                            Failed(_, _) => pure(Pair(ps, h)),
+                        })),
                 })
             }),
             _ => pure(Pair(ps, h)),
@@ -1421,6 +1620,10 @@ fn rt_held_assume_params(ps: List<LocalInfo>, under: Option<LocalRef>, acc: List
             rt_held_assume_params(rest, Some(x.ref), acc ++ [x.ref])),
     }
 }
+
+// A plain record around a laid one (issues/runtime-record-erased-fields.md):
+// its type, the laid field's type, its place and its term at the record's
+// local, and what each field stands for (the laid one, the rest erased).
 
 // The function `g`, whose first parameter is the record.
 // A function that `decreases` is read from its step `g::body`, `λ k again
@@ -1457,7 +1660,21 @@ fn rt_held_reflect_one(k: Known, names: FileNames, g: GlobalRef, name: String) �
     let np = rp.fst.len();
     let b0 = rp.snd;
     let o <- open(b0, "record").bind(λ c => rt_accepted("its record parameter", c));
-    let record = o.local.ty;
+    // A plain record of one laid field and erased ones is read as that
+    // field (issues/runtime-record-erased-fields.md).
+    let wrapped <- rt_held_wrapped(o.local);
+    let plain_ok: Tac<True> = match wrapped {
+        None => pure(trivial),
+        Some(_) => match np {
+            Succ(_) => rt_refuse("a record with erased fields around a laid record that takes parameters is not read yet"),
+            Zero => match en.snd {
+                Some(_) => rt_refuse("a loop over a record with erased fields is not read yet; a function without one is taken"),
+                None => pure(trivial),
+            },
+        },
+    };
+    let _ <- plain_ok;
+    let record = match wrapped { None => o.local.ty, Some(wr) => wr.laid };
     let rv <- view(record);
     // The record at the parameters before it, in order (a view of a type
     // does not list its arguments, so the type is compared with that).
@@ -1510,13 +1727,25 @@ fn rt_held_reflect_one(k: Known, names: FileNames, g: GlobalRef, name: String) �
             pure(HeldWords(ws0.locals, ws0.bound, oh.body, oh.local.ref, ws0.spans))),
     };
     let ws <- opened;
-    let result <- rt_held_result(k, names, record, ws.body);
+    let result <- rt_held_result(k, names, o.local.ty, ws.body);
     let word <- as_type(rt_ap(Global(GlobalRef(k.bitvec)), [NatLit(64)])).bind(λ c => rt_accepted("a word's type", c));
     let bytes <- as_type(rt_ap(Global(GlobalRef(k.list)), [rt_ap(Global(GlobalRef(k.bitvec)), [NatLit(8)])])).bind(λ c => rt_accepted("a span's type", c));
     let span <- assume(Hd(bytes), "span", Some(ws.last)).bind(λ c => rt_accepted("a span's local", c));
     let length <- assume(Hd(word), "length", Some(span.ref)).bind(λ c => rt_accepted("a length word's local", c));
-    let hf <- rt_held_fields(tname, o.local, rt_ap(Global(stored), pargs), rp.fst.map(λ p => p.ref.id), pargs, ctor.fields, Local(span.ref), Local(length.ref), length.ref);
-    let cx = HeldCx(k.lending(ws.spans + 1), names, rg.fst.id, o.local.ref.id, span.ref.id, hf.fields, hf.named, length.ref, [ws.body], en.snd.map(λ p => p.fst));
+    let self_e = match wrapped { None => Local(o.local.ref), Some(wr) => wr.self_e };
+    let hf <- rt_held_fields(tname, LocalInfo(o.local.ref, o.local.name, record), self_e, rt_ap(Global(stored), pargs), rp.fst.map(λ p => p.ref.id), pargs, ctor.fields,
+        Local(span.ref), Local(length.ref), length.ref);
+    let named = match wrapped { None => hf.named, Some(wr) => wr.named ++ ws.named ++ hf.named };
+    let unpacked: Tac<True> = match wrapped {
+        Some(_) => pure(trivial),
+        None => match ws.named {
+            Nil => pure(trivial),
+            Cons(_, _) => rt_refuse("a record of words and erased fields as a parameter is read for a function of a record with erased fields only, for now"),
+        },
+    };
+    let _ <- unpacked;
+    let cx = HeldCx(k.lending(ws.spans + 1), names, rg.fst.id, o.local.ref.id, span.ref.id, hf.fields, named, length.ref, [ws.body], en.snd.map(λ p => p.fst),
+        wrapped.map(λ wr => Pair(wr.ty, wr.at)));
     let st = RSt(2 + lift + ws.locals.len(), [], [], [], Cons(Pair(span.ref.id, 0), Cons(Pair(length.ref.id, 1), carried_bound ++ ws.bound)), k.funs);
     let w = HeldWalk(st, [], [], [], None, []);
     // A function that only reads the record is one value, its branches
@@ -1559,11 +1788,11 @@ fn rt_held_reflect_one(k: Known, names: FileNames, g: GlobalRef, name: String) �
             let record1 <- assume(Hd(record_t), "record", under1).bind(λ c => rt_accepted("a record's local", c));
             let span1 <- assume(Hd(bytes), "span", Some(record1.ref)).bind(λ c => rt_accepted("a span's local", c));
             let length1 <- assume(Hd(word), "length", Some(span1.ref)).bind(λ c => rt_accepted("a length word's local", c));
-            rt_held_fields(tname, record1, rt_ap(Global(stored), pargs1), ps.map(λ x => x.id), pargs1, ctor1.fields, Local(span1.ref), Local(length1.ref), length1.ref).bind(λ h => pure(h.fields))
+            rt_held_fields(tname, record1, Local(record1.ref), rt_ap(Global(stored), pargs1), ps.map(λ x => x.id), pargs1, ctor1.fields, Local(span1.ref), Local(length1.ref), length1.ref).bind(λ h => pure(h.fields))
         },
     };
     let fs <- fields;
     pure(HeldReflected(FFun(params, result.snd, r.term, ws.spans + 1), r.funs, r.cfuns, record_t, tname, stored,
         fs ++ rt_held_reached(fs, rt_held_offsets(r.term, [], called)), lift + ws.locals.len(), result.fst, r.held, match en.snd { None => False, Some(_) => True }, ws.spans,
-        ps, carried))
+        ps, carried, wrapper := wrapped))
 }

@@ -1289,6 +1289,12 @@ fn HWorld::answer<R>(span: List<BitVec(8)>, value: R) → Mutated<List<BitVec(8)
 // it: its value beside the record as it was.
 fn HWorld::unchanged<A, R>(a: A, value: R) → Mutated<A, R> { Mutated(a, value) }
 
+// What a function of a record around a laid one says of the laid record
+// (issues/runtime-record-erased-fields.md): its laid field after, beside
+// its value. The record's erased fields are dropped here, so a statement
+// of the laid record's words holds at every value of them.
+fn HWorld::through<W, T, R>(m: Mutated<W, R>, laid: W → T) → Mutated<T, R> { Mutated(laid(m.after), m.value) }
+
 fn HWorld::after<A, R, S>(m: Mutated<A, R>, k: A → R → S) → S { k(m.after, m.value) }
 
 fn HWorld::either<S>(c: Bool, yes: S, no: S) → S { match c { False => no, True => yes } }

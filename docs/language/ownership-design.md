@@ -787,9 +787,18 @@ as a helper; addresses as numbers.
    history (which allocation a window came from), which no function of the
    arena's words recovers, so they cannot be a parameter computed from it.
    The laid record stays as compiled; the erased fields are what proofs
-   read. Open still: how the reflector drops them (`runtime-erased-parameters`
-   drops erased parameters; erased fields are the same question one level
-   in).
+   read. *Built (2026-11-25, `runtime-record-erased-fields`):* a field is
+   erased by the recognition a parameter has, so data is wrapped (`claims:
+   Erased<Store<Claim>>`, a window's `key: Erased<Key>`) and a proposition
+   is not (`ok: HeapInv(…)`; the test reads propositions by their form as
+   well as by irrelevance, so an equation and a record of facts count). A
+   `runtime fn` of such a record is compiled as its laid field's function,
+   a record parameter of words and erased fields as its words, and its
+   `runs_held` takes the records whole and holds at every value of their
+   erased fields (`docs/native/runtime-fn-setups-design.md` §16.24).
+   `Heap::read`, `store` and `reset` compile; an answer carrying an erased
+   field (`alloc`'s window) and a compiled caller of them do not yet
+   (`runtime-erased-field-answers`, `runtime-erased-field-callers`).
 5. The shape of the checker's annotations, and which of them a module's
    interface keeps.
 6. The milestone's done-when (`docs/roadmap.md`, `nh-ownership`), to restate

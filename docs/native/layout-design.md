@@ -1506,6 +1506,20 @@ keep it.
 Probes: `lib/_tests/native/runtime/runtime_held_params_tests.hthr`, and
 the ledger's `PortLimbs` rows (`runtime_ports_tests.hthr`).
 
+### 11.5 A record around a laid one: erased fields (built 2026-11-25)
+
+A plain record of one laid field and erased fields is held as its laid
+field (`issues/runtime-record-erased-fields.md`,
+`docs/native/runtime-fn-setups-design.md` §16.24): `record Heap { arena:
+Arena, claims: Erased<Store<Claim>>, ok: HeapInv(arena, claims.value) }`
+has `Arena`'s layout and no other, and a `runtime fn` of it is a function
+of the span that holds the arena. A field is erased by the one
+recognition a parameter is (`Erased<A>`, or a proposition: irrelevant, or
+by its form, as `HeapInv` and `Le` are); a record parameter of 64-bit
+words and erased fields (`Window { base, count, key: Erased<Key> }`) is its
+words, in field order. Nothing about the layout of the laid record
+changes, and no codec is involved for the record around it.
+
 ## 12. Niches: an enum in its payload's word where the type rules a value out (design, 2026-11-24)
 
 Minus (2026-11-24): special values are fine *when the type encodes them*.

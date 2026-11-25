@@ -1,11 +1,11 @@
 ---
 title: Erased fields of a record a runtime fn takes: the arena's claims beside its laid words
-status: open
+status: closed
 labels: [ownership,native,reflector]
 area: heather-in-heather
 milestone: [nh-ownership]
 created: 2026-11-24
-updated: 2026-11-24
+updated: 2026-11-25
 ---
 
 `docs/language/ownership-design.md` §13.4 is settled for the arena by [[ownership-stores-and-keys]]: erased state a `mut self` method changes is an erased field beside the laid record (`Heap { arena, claims, ok }`, `lib/native/runtime/arena_handles.hthr`), not a parameter of its type. Today `Heap` is an ordinary record and its functions ordinary `fn`s; the compiled arena is still `Arena`'s `runtime fn`s.
@@ -15,3 +15,24 @@ What compiling `Heap`'s functions needs: the reflector dropping a record's erase
 ## What it assumes from elsewhere
 
 - **[[runtime-erased-parameters]]** owns dropping erased parameters. Assumed here: only that a dropped field is the same question one level in.
+
+## Log
+
+- 2026-11-25: Round started (branch `claude/ownership-erased-fields`). The route, written down before building, and why the pin stays one conversion linear in the function:
+
+  - **How a field is marked.** One recognition for parameters and fields (`rt_erased_param`): a field is erased when its type is `Erased<A>` or a proposition. The kernel's irrelevance test alone does not make `HeapInv(a, claims)` or `Heap::Valid(h, w)` (an equation) a proposition, and `Heap::read`'s `valid` is such a parameter, so the test is widened, for parameters and fields alike, to *propositions by their form*: an equation, a function type into a proposition, an inductive whose constructors all carry only propositions (a record of them, `Or`, logic's `True` and `False`), and a definition that unfolds, or a recursion stuck on an open argument whose arms are, one of those (`Nat::Le`, `Arena::Apart`). So `ok: HeapInv(…)` needs no wrapper; `claims: Store<Claim>` and a window's `key: Key` are data and are wrapped, `Erased<…>`, as design note §13 item 8 decided for erased data. The classification is untrusted: a wrong verdict is a pin the kernel refuses, since every statement holds at a local of each erased thing.
+  - **What compiles.** A `runtime fn` whose record is a plain record of exactly one laid field (`arena: Arena`) and erased fields, and which may take records whose fields are 64-bit words and erased fields (`w: Window`), is reflected as the laid field's function: the local `h` stays a local, `h.arena` stands for the laid record (its field reads are the accessors' reads, a call's record is it), a word field of a record parameter is a word of the code (in field order, where the parameter stands), and a read of an erased field as data is refused by name. A body ending `Mutated(Heap(a′, …), v)` is read as `Mutated(a′, v)`: the erased fields' new values are never walked.
+  - **The pin.** `T::m::runs_held(own, h, length, xs…, holds)` takes the whole record `h` (and each record parameter whole) where the function does, the span holding `h.arena`, and states the held meaning against `HWorld::through(T::m(h, …), λ r => r.arena)` (`Mutated(m.after.arena, m.value)`; a function that only reads, `unchanged(h.arena, T::m(h, …))`), at every value of the erased fields. The kernel unfolds `T::m` once, the projections of its result reduce by ι to the laid record's after and the value, and from there it is the comparison the laid record's own function would make: the erased fields' terms are discarded by the projection and never compared. No two meanings are compared, and nothing on the right has a span, a world or an environment, so it is the ordinary pin's cost.
+  - **What does not change.** Records with no erased field publish the same declarations from the same terms: the new reading runs only where the record is not laid; `FTm::Sem`, `HWorld` and every reflected language's meaning are untouched (the one addition beside `HWorld` is a plain projection helper). Callers of a function of such a record, and an answer carrying an erased field (`Heap::alloc`'s `Grant`, a `Window` with its key), are left for later rounds and refused by name.
+- 2026-11-25: Built and verified (branch `claude/ownership-erased-fields`), on the route logged above:
+
+  - **Marking.** A field is erased by the recognition a parameter has (`rt_erased_param`): `Erased<A>`, or a proposition. Propositions are now read by their form as well as by irrelevance (`rt_is_logical_ty`, `rt_reflect.hthr`: an equation, a function type into one, an inductive whose constructors carry only propositions with none of several empty, `Nat`'s `Le`/`Lt`, a definition unfolding to one), for fields and parameters alike, and a call drops such an argument (`rt_data_kept`). `Heap.claims` and `Window.key` are `Erased<…>`; `ok: HeapInv(arena, claims.value)` and `valid: h.Valid(w)` are unwrapped. Every citation updated in the same commit (`arena_handles.hthr`, `arena_handle_paths.hthr`, both probe files); law names unchanged.
+  - **Reflection** (`rt_held_reflect.hthr`): `rt_held_wrapped` reads a plain record of one laid field and erased fields (at least one) through a `match` on its local (such a record has no projection definitions, since `ok`'s type mentions earlier fields); `FieldLaid`/`FieldErased`/`FieldWord` field terms make `h.arena` the record the span holds and a record parameter's word fields the code's words; a body ending `Mutated(Heap(a′, …), v)` settles `a′` only. The dispatcher sends such a function to the laid-record route.
+  - **Publication** (`runtime_held_straight`): `runs_held(own, h, length, xs…, holds)` takes the records whole, the span holding `h.arena`, against `HWorld::through(T::m(h, …), λ r => r.arena)` (`rt_held.hthr`, a projection beside `HWorld`'s meaning, which is untouched). The pin is the one conversion logged above; `Heap::read`, `store` and `reset` check in about a second each.
+  - **Customers.** `Heap::read`, `Heap::store` (now answering `Mutated<Heap, u64>`, the element replaced, its laws reading `.after`) and `Heap::reset` are `runtime fn`s. The stale window passed to the compiled `Heap::read` (and `store`) is still refused with the first wave's message.
+  - **Probes**: `lib/_tests/native/runtime/runtime_erased_fields_tests.hthr` (field read, read and store through the laid record's functions at a record parameter's word, a store changing an erased field and its proof; literal words and open records; a checking position; controls: an erased field computed with, read off a record parameter, branched on; a record with a field neither laid nor erased) and `arena_handles_tests.hthr` (the three at literal words and open heaps, a read in a checking position at a granted window).
+  - Functions of records with no erased field publish the same declarations from the same terms (the code's words are the same locals); the suite is the evidence. `HEATHER_PR_NATIVE=all scripts/test --pr` on the final tree: `== suite: 4136 passed, 0 failed, 3 ignored ==` (an earlier run's one failure was the Heather formatter on `rt_reflect.hthr`, fixed, then the whole suite rerun).
+
+  Not built, filed: an answer carrying an erased field (`Heap::alloc`'s `Grant`, `Heap::grow`'s `VecHandle`): [[runtime-erased-field-answers]]; a compiled caller of a `Heap` function (push and new-vector over handles need it): [[runtime-erased-field-callers]]; push's fitting proof stays [[bv-omega-fits-through-wrapping-sum]]'s. Docs: `docs/native/runtime-fn-setups-design.md` §3.3 and §16.24, `docs/native/layout-design.md` §11.5, `docs/language/ownership-design.md` §13 item 4.
+
+  Closed: the mechanism the issue asks for is built and its first customers compile; the remaining shapes are the two issues above.

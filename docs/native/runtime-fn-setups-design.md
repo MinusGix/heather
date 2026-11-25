@@ -275,7 +275,11 @@ A reflector needs (issue `runtime-body-reflection-requests`):
   same conversion at those locals, so it holds at every value of them. A
   plain function and a span writer that take one are compiled the same
   way, from the reflection written out (§16.22,
-  `issues/runtime-erased-pure-shadow.md`).
+  `issues/runtime-erased-pure-shadow.md`). A field of a record is erased by the
+  same test, and a proposition is read by its form as well as by
+  irrelevance (an equation, a record of facts): a record of one laid field
+  and erased ones is compiled as its laid field (§16.24,
+  `issues/runtime-record-erased-fields.md`).
 - **Names.** Globals the setup knows are primitives (§7.1) become `Prim`
   nodes. Runtime fns become `Call`s (§9.2). Any other global is a refusal
   ("`Nat::max` is an ordinary fn: mark it `runtime fn`, or the default setup
@@ -2529,3 +2533,83 @@ pinned to them at a neutral proof; control: a missing proof) and the
 ledger's `Arena::port_bump` and `Arena::port_first`
 (`lib/_tests/native/runtime/runtime_ports_tests.hthr`), callers of the
 arena's window `read` and `store`.
+
+### 16.24 A record with erased fields: compiled as its laid field (built 2026-11-25)
+
+The arena with typed handles (`lib/native/runtime/arena_handles.hthr`) is a
+plain record around a laid one: `Heap { arena: Arena, claims:
+Erased<Store<Claim>>, ok: HeapInv(arena, claims.value) }`, and its window
+`Window { base, count: u64, key: Erased<Key> }`. Its functions now compile
+(`issues/runtime-record-erased-fields.md`).
+
+- **Which fields are erased.** The one recognition parameters already
+  have (`rt_erased_param`), read at each field's type: `Erased<A>`, or a
+  proposition. A proposition is a type the kernel finds irrelevant (`∥P∥`),
+  or one by its form (`rt_is_logical_ty`, `rt_reflect.hthr`): an equation,
+  a function type into one (`¬P`), an inductive whose constructors carry
+  only propositions with none of several carrying nothing (a record of
+  facts, `And`, `Or`, logic's `True` and `False`; never `Bool`), the order
+  on `Nat`, or a definition that unfolds to one. So `ok: HeapInv(…)` and a
+  proof parameter `valid: h.Valid(w)` (an equation) need no wrapper; the
+  claims and a key are data and are wrapped. Widening the test is safe
+  because it is untrusted: every statement holds at a local of each erased
+  thing, so a function that computes from one fails its pin. It also
+  turned a parameter of an equation, refused before, into an erased one;
+  a call drops such an argument the same way (`rt_data_kept`).
+- **The reflection** (`rt_held_reflect.hthr`). A record that is not laid,
+  of one constructor, whose fields are one laid record and erased fields
+  (at least one) is read as its laid field (`rt_held_wrapped`): its local
+  `h` stays a local, `h.arena` stands for the record the span holds
+  (`FieldLaid`, read through `Known::laid_local` wherever the walk asks
+  whether a term is the record: a field read, a call's record, a record
+  settled), and a read of an erased field as data is refused by name
+  (`FieldErased`). The fields' types are read as a `match` on `h` binds them
+  (`branches`), since a later field's type mentions an earlier one and such
+  a record has no projection definitions; the laid field's term is that
+  `match` closed (`rt_held_project`), which converts with `h.arena`. A body
+  ending `Mutated(Heap(a′, c′, i′), v)` settles `a′` and never walks the
+  erased fields' new values. A record parameter of 64-bit words and erased
+  fields (`rt_held_unpackable`) is its word fields at consecutive levels
+  (`FieldWord`), its erased ones `FieldErased`.
+- **What is published.** `T::m::runs_held(own, h, length, xs…, holds)`
+  takes the record whole, its record parameters whole and each erased
+  parameter where the function does, and the span holds `h.arena`
+  (`Holds(Arena::stored(), own, length, h.arena)`). The statement is
+  `HWorld::through(T::m(h, …), λ r => r.arena)` (the laid field after,
+  beside the value) for a function answering `Mutated<Heap, R>`, and
+  `unchanged(h.arena, T::m(h, …))` for one that only reads; the code's
+  words after the length word are the word parameters and the record
+  parameters' word fields (`RtOwnArgs.es`).
+- **Why the pin stays one conversion linear in the function.** The kernel
+  unfolds `T::m` once; the projections of its result reduce by ι to the
+  laid record's after and the value; from there it is the comparison the
+  laid record's own function would make (here `Arena::read`'s or
+  `Arena::store`'s mark, written out over the arena, §16.23). The erased
+  fields' terms are dropped by the projection and never compared; nothing
+  on the right has a span, a world or an environment, so no two meanings
+  are compared (the wall of §16.22's shadow). The arena's three compile in
+  about a second each.
+- **A function of a record with no erased field publishes exactly what it
+  did**: the new reading runs only for a record that is not laid, the
+  marks, the code and every statement are built from the same terms
+  (`RtOwnArgs.es` is the word locals there), and `FTm::Sem`, `HWorld`'s
+  meaning and every reflected language are untouched (`HWorld::through` is
+  a projection beside them).
+
+**Not built**, each refused by name or left as an ordinary `fn`: an answer
+carrying an erased field (`Heap::alloc`'s `Grant`, whose window holds its
+key; `Heap::grow`'s `VecHandle`), a caller of a function of such a record
+(a compiled `Heap` method calling `Heap::read`), such a record around a
+laid record that takes parameters, and a loop over one. Filed in
+`issues/runtime-erased-field-answers.md` and
+`issues/runtime-erased-field-callers.md`.
+
+Probes: `lib/_tests/native/runtime/runtime_erased_fields_tests.hthr` (a
+field read, a read and a store through the laid record's functions at a
+record parameter's word, a store that changes an erased field, each at
+literal words and at open records and proofs, one in a checking position;
+controls: an erased field computed with, read off a record parameter or
+branched on, and a record with a field neither laid nor erased) and
+`lib/_tests/native/runtime/arena_handles_tests.hthr` (`Heap::read`,
+`store`, `reset` at literal words and open heaps; the stale window still
+refused).
