@@ -294,6 +294,37 @@ theorem Loop::steps_stays<S>(self l: Loop<S, S>, step: S → Step<S>, same: (s: 
     }
 }
 
+// The state a step goes on with or stops at.
+fn Step::state<S>(self q: Step<S>) → S { match q { Next(s) => s, Stop(s) => s } }
+
+// A `while` pass, its going round answered by `K`, is the loop's run where
+// the loop's step is that pass and `K` is the run at the next state, which
+// the step puts below. What a `while` loop read as a loop that answers its
+// state is pinned by (`Loop::rounds_agree_below`): `K` is the rounds after
+// this one (docs/language/loop-combinator-design.md §6.9).
+theorem Loop::run_when<S>(self l: Loop<S, S>, s: S, go: Bool, n: S, same: Pass::step(l.measure, s, l.step(s)) = Step::when(go, n, s),
+    K: S → S, agree: (go = True) → l.measure(n) < l.measure(s) → K(n) = l.run(n)):
+    (match go { False => s, True => K(n) }) = l.run(s)
+{
+    trans((match l.step(s) as λ p => Pass::step(l.measure, s, p) = Step::when(go, n, s) →
+        (match go { False => s, True => K(n) }) = (match p { Again(b) => l.run(b.next), Done(r) => r }) {
+        Again(b) => λ e => (match go as λ g0 => (Step::Next(b.next) = Step::when(g0, n, s)) →
+            ((g0 = True) → l.measure(n) < l.measure(s) → K(n) = l.run(n)) → (match g0 { False => s, True => K(n) }) = l.run(b.next) {
+            False => λ bad _ => absurd(bad),
+            True => λ e2 ag => {
+                let eq: (b.next = n) = j(e2, λ q _ => b.next = q.state(), refl);
+                let lt: (l.measure(n) < l.measure(s)) = j(eq, λ x _ => l.measure(x) < l.measure(s), b.less.recover());
+                trans(ag(refl, lt), j(sym(eq), λ x _ => l.run(n) = l.run(x), refl))
+            },
+        })(e, agree),
+        Done(r) => λ e => (match go as λ g0 => (Step::Stop(r) = Step::when(g0, n, s)) →
+            ((g0 = True) → l.measure(n) < l.measure(s) → K(n) = l.run(n)) → (match g0 { False => s, True => K(n) }) = r {
+            False => λ e2 _ => sym(j(e2, λ q _ => r = q.state(), refl)),
+            True => λ bad _ => absurd(bad),
+        })(e, agree),
+    })(same), sym(l.run_unfold(s)))
+}
+
 // A recursion given `fuel` rounds, as a loop that answers a value runs
 // (`rt::Tm`'s `Loop` node, docs/language/loop-combinator-design.md §6.7):
 // each round is `F` with its recursion the run one round fewer, and past

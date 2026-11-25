@@ -89,7 +89,7 @@ fn Tm::tail_sem(self t: Tm, w: World, skip: Nat, res: Ty, again: List<BitVec(64)
         Pick(i, c, arms, eq) => λ g env => Tm::leaf(Pick(i, c, arms, eq), w, res, g, env),
         Inject(i, k, args) => λ g env => Tm::leaf(Inject(i, k, args), w, res, g, env),
         Slot(i, j, of) => λ g env => Tm::leaf(Slot(i, j, of), w, res, g, env),
-        Iterate(init, test, body) => λ g env => Tm::leaf(Iterate(init, test, body), w, res, g, env),
+        Iterate(init, test, body, caps, loopn) => λ g env => Tm::leaf(Iterate(init, test, body, caps, loopn), w, res, g, env),
         Again(r, args) => λ g env => Tm::leaf(Again(r, args), w, res, g, env),
         Loop(inits, body) => λ g env => Tm::leaf(Loop(inits, body), w, res, g, env),
     }
@@ -112,7 +112,7 @@ theorem Tm::tail_sem_ext(self t: Tm, w: World, skip: Nat, res: Ty, k1, k2: List<
         Pick(_, _, _, _) => λ g env => refl,
         Inject(_, _, _) => λ g env => refl,
         Slot(_, _, _) => λ g env => refl,
-        Iterate(_, _, _) => λ g env => refl,
+        Iterate(_, _, _, _, _) => λ g env => refl,
         Again(_, _) => λ g env => refl,
         Loop(_, _) => λ g env => refl,
         Call(f, args) => match f as λ f2 => (g: List<Ty>) → (env: Env(w.tys, g)) →
@@ -165,7 +165,7 @@ fn Tm::lower_tail(self t: Tm, w: World, skip: Nat, res: Ty, flag: Nat, kept, nex
         Pick(i, c, arms, eq) => Tm::lower_leaf(Pick(i, c, arms, eq), w, res, flag, nexts, g, ports, next),
         Inject(i, k, args) => Tm::lower_leaf(Inject(i, k, args), w, res, flag, nexts, g, ports, next),
         Slot(i, j, of) => Tm::lower_leaf(Slot(i, j, of), w, res, flag, nexts, g, ports, next),
-        Iterate(init, test, body) => Tm::lower_leaf(Iterate(init, test, body), w, res, flag, nexts, g, ports, next),
+        Iterate(init, test, body, caps, loopn) => Tm::lower_leaf(Iterate(init, test, body, caps, loopn), w, res, flag, nexts, g, ports, next),
         Again(r, args) => Tm::lower_leaf(Again(r, args), w, res, flag, nexts, g, ports, next),
         Loop(inits, body) => Tm::lower_leaf(Loop(inits, body), w, res, flag, nexts, g, ports, next),
     }
@@ -343,8 +343,8 @@ theorem Tm::tail_sound(self t: Tm, w: World, skip: Nat, res: Ty, er: res.OneWord
             Tm::lower_leaf_sound(Inject(i, k, args), w, skip, res, er, flag, kept, nexts, g, ports, next, λ again env => refl),
         Slot(i, j, of) => λ g ports next =>
             Tm::lower_leaf_sound(Slot(i, j, of), w, skip, res, er, flag, kept, nexts, g, ports, next, λ again env => refl),
-        Iterate(init, test, body) => λ g ports next =>
-            Tm::lower_leaf_sound(Iterate(init, test, body), w, skip, res, er, flag, kept, nexts, g, ports, next, λ again env => refl),
+        Iterate(init, test, body, caps, loopn) => λ g ports next =>
+            Tm::lower_leaf_sound(Iterate(init, test, body, caps, loopn), w, skip, res, er, flag, kept, nexts, g, ports, next, λ again env => refl),
         Again(r, args) => λ g ports next =>
             Tm::lower_leaf_sound(Again(r, args), w, skip, res, er, flag, kept, nexts, g, ports, next, λ again env => refl),
         Loop(inits, body) => λ g ports next =>
@@ -1242,7 +1242,7 @@ fn Tm::calls_self(self t: Tm) → Bool {
         Call(f, _) => match f { Zero => True, Succ(_) => False },
         Case(_, zero, succ) => zero.calls_self() || succ.calls_self(),
         Pick(_, _, arms, _) => arms.calls_self(),
-        Iterate(_, test, body) => test.calls_self() || body.calls_self(),
+        Iterate(_, test, body, _, _) => test.calls_self() || body.calls_self(),
         _ => False,
     }
 }
@@ -1273,7 +1273,7 @@ fn Tm::calls_after(self t: Tm) → Tm {
         Fold(over, init, step) => Fold(over, init, Succ(step)),
         Case(c, zero, succ) => Case(c, zero.calls_after(), succ.calls_after()),
         Pick(i, c, arms, eq) => Pick(i, c, arms.calls_after(), eq),
-        Iterate(init, test, body) => Iterate(init, test.calls_after(), body.calls_after()),
+        Iterate(init, test, body, caps, loopn) => Iterate(init, test.calls_after(), body.calls_after(), caps, loopn),
         _ => t,
     }
 }
@@ -1434,8 +1434,8 @@ theorem Tm::lower_tail_static(self t: Tm, w: World, cs: Sig::Sems(w.tys, w.sigs)
         Pick(i, c, arms, eq) => λ g ports next => Tm::lower_leaf_static(Pick(i, c, arms, eq), w, cs, spans, res, flag, nexts, g, ports, next),
         Inject(i, k, args) => λ g ports next => Tm::lower_leaf_static(Inject(i, k, args), w, cs, spans, res, flag, nexts, g, ports, next),
         Slot(i, j, of) => λ g ports next => Tm::lower_leaf_static(Slot(i, j, of), w, cs, spans, res, flag, nexts, g, ports, next),
-        Iterate(init, test, body) => λ g ports next =>
-            Tm::lower_leaf_static(Iterate(init, test, body), w, cs, spans, res, flag, nexts, g, ports, next),
+        Iterate(init, test, body, caps, loopn) => λ g ports next =>
+            Tm::lower_leaf_static(Iterate(init, test, body, caps, loopn), w, cs, spans, res, flag, nexts, g, ports, next),
         Again(r, args) => λ g ports next => Tm::lower_leaf_static(Again(r, args), w, cs, spans, res, flag, nexts, g, ports, next),
         Loop(inits, body) => λ g ports next => Tm::lower_leaf_static(Loop(inits, body), w, cs, spans, res, flag, nexts, g, ports, next),
         Call(f, args) => match f as λ f2 => (g: List<Ty>) → (ports: List<Nat>) → (next: Nat) →

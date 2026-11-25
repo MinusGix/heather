@@ -114,7 +114,7 @@ fn FSeg::lets(lets: List<Tm>) → List<FSeg> { lets.map(λ e => FLet(e)) }
 // Pure code read at the span as it is now. A self-call is not pure code:
 // the walk reads it itself, where a body ends.
 fn Known::at_file(self k: Known, fk: FileKnown) → Known {
-    Known(k.prims, k.funs, k.recs, k.discover, k.bitvec, k.boolean, k.list, k.io, k.nat, None, k.reprs, k.lent, Some(fk), k.named, k.consts, k.payloads)
+    Known(k.prims, k.funs, k.recs, k.discover, k.bitvec, k.boolean, k.list, k.io, k.nat, None, k.reprs, k.lent, Some(fk), k.named, k.consts, k.payloads, k.own)
 }
 
 // The values numbered so far that still stand after the span is written:

@@ -220,7 +220,7 @@ fn Tm::judge_in(self t: Tm, sigs: List<Sig>, tys: Table, pass: Bool) → Verdict
         Slot(_, _, _) => Ok,
         // A `while` loop: its state and the context it reads are carried
         // as words (`Tm::lower_iterate`).
-        Iterate(_, test, body) => test.judge_in(sigs, tys, False).and(body.judge_in(sigs, tys, False)),
+        Iterate(_, test, body, _, _) => test.judge_in(sigs, tys, False).and(body.judge_in(sigs, tys, False)),
         // Going round is a loop's pass's last act, never a value.
         Again(_, _) => match pass { True => Ok, False => Refused("going round a loop outside a loop's pass") },
         // A loop that answers: its body is a pass.
@@ -249,7 +249,7 @@ fn Tm::judge_tail(self t: Tm, sigs: List<Sig>, tys: Table) → Verdict {
         Pick(i, c, arms, eq) => Pick(i, c, arms, eq).judge(sigs, tys),
         Inject(i, k, args) => Inject(i, k, args).judge(sigs, tys),
         Slot(i, j, of) => Slot(i, j, of).judge(sigs, tys),
-        Iterate(init, test, body) => Iterate(init, test, body).judge(sigs, tys),
+        Iterate(init, test, body, caps, loopn) => Iterate(init, test, body, caps, loopn).judge(sigs, tys),
         Again(r, args) => Tm::Again(r, args).judge(sigs, tys),
         Loop(inits, body) => Tm::Loop(inits, body).judge(sigs, tys),
     }
@@ -2006,7 +2006,7 @@ fn Tm::quote(self t: Tm, q: RtQ) → Expr {
         Pick(i, c, arms, eq) => ap(runtime_at(q.tm, 12), [NatLit(i), NatLit(c), arms.quote(q), q.boolean(eq)]),
         Inject(i, k, args) => ap(runtime_at(q.tm, 13), [NatLit(i), NatLit(k), q.nat_list(args)]),
         Slot(i, j, of) => ap(runtime_at(q.tm, 14), [NatLit(i), NatLit(j), NatLit(of)]),
-        Iterate(init, test, body) => ap(runtime_at(q.tm, 15), [NatLit(init), test.quote(q), body.quote(q)]),
+        Iterate(init, test, body, caps, loopn) => ap(runtime_at(q.tm, 15), [NatLit(init), test.quote(q), body.quote(q), q.nat_list(caps), NatLit(loopn)]),
         Again(res, args) => ap(runtime_at(q.tm, 16), [Ty::quote(res, q), q.nat_list(args)]),
         Loop(inits, body) => ap(runtime_at(q.tm, 17), [q.nat_list(inits), body.quote(q)]),
     }
@@ -2141,8 +2141,8 @@ record LinkFrame { g: Nat, name: String, table: List<Nat>, pending: List<Nat>, r
 // `f::body` (`rt_reflect_measured`), any other from its body.
 fn runtime_reflect(k: Known, g: Nat, name: String) → Tac<Pair<Fun, List<Nat>>> {
     lookup(name ++ "::body").bind(λ c => match c {
-        Accepted(step) => rt_reflect_measured(4096, k, g, step.id),
-        Refused(_) => rt_reflect_one(4096, k, g),
+        Accepted(step) => rt_reflect_measured(4096, k.owning(name), g, step.id),
+        Refused(_) => rt_reflect_one(4096, k.owning(name), g),
     })
 }
 

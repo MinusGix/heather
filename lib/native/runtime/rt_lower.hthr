@@ -3182,7 +3182,7 @@ fn Tm::Within(self t: Tm, keep: Nat → Bool) → Type {
         Pick(_, c, arms, _) => (keep(c) = True) ∧ arms.Within(Tm::under(keep)),
         Inject(_, _, args) => Tm::AllKept(args, keep),
         Slot(_, _, of) => keep(of) = True,
-        Iterate(init, test, body) => (keep(init) = True) ∧ (test.Within(Tm::under(keep)) ∧ body.Within(Tm::under(keep))),
+        Iterate(init, test, body, caps, loopn) => (keep(init) = True) ∧ (test.Within(Tm::under(keep)) ∧ body.Within(Tm::under(keep))),
         Again(_, args) => Tm::AllKept(args, keep),
         // Not yet carried by an enclosing loop.
         Loop(_, _) => False,
@@ -3220,7 +3220,7 @@ fn Tm::check_within(self t: Tm) → (keep: Nat → Bool) → Option<t.Within(kee
         Pick(_, c, arms, _) => λ keep => Tm::both(Tm::kept_at(keep, c), arms.check_within(Tm::under(keep))),
         Inject(_, _, args) => λ keep => Tm::check_all_kept(args, keep),
         Slot(_, _, of) => λ keep => Tm::kept_at(keep, of),
-        Iterate(init, test, body) => λ keep => Tm::both(Tm::kept_at(keep, init), Tm::both(test.check_within(Tm::under(keep)), body.check_within(Tm::under(keep)))),
+        Iterate(init, test, body, caps, loopn) => λ keep => Tm::both(Tm::kept_at(keep, init), Tm::both(test.check_within(Tm::under(keep)), body.check_within(Tm::under(keep)))),
         Again(_, args) => λ keep => Tm::check_all_kept(args, keep),
         Loop(_, _) => λ keep => None,
     }
@@ -3249,7 +3249,7 @@ fn Tm::vars(self t: Tm) → List<Nat> {
         Pick(_, c, arms, _) => Cons(c, Tm::unbind(arms.vars())),
         Inject(_, _, args) => args,
         Slot(_, _, of) => [of],
-        Iterate(init, test, body) => Cons(init, Tm::unbind(test.vars()) ++ Tm::unbind(body.vars())),
+        Iterate(init, test, body, caps, loopn) => Cons(init, Tm::unbind(test.vars()) ++ Tm::unbind(body.vars())),
         Again(_, args) => args,
         Loop(inits, _) => inits,
     }
@@ -3386,7 +3386,7 @@ theorem Tm::sem_kept(self t: Tm, w: World): (keep: Nat → Bool) → (g: List<Ty
         Slot(i, j, of) => λ keep g e1 e2 h a => cong_fn(λ (x: Ty::at(g, of).sem(w.tys)) =>
             Ty::at(w.tys.ens(i).slots, j).of_slot(w.tys, Ty::flat_nth(w.tys.ens(i).slots, w.tys.ens(i).fields(Ty::cast(w.tys, Ty::at(g, of), Enum(i), x)), j)),
             a(of, h)),
-        Iterate(init, test, body) => λ keep g e1 e2 h a => {
+        Iterate(init, test, body, caps, loopn) => λ keep g e1 e2 h a => {
             let st = Ty::at(g, init);
             let inner = Cons(st, g);
             let turn = λ (env: Env(w.tys, g)) (s: st.sem(w.tys)) => loop::Step::turn(
@@ -4019,7 +4019,7 @@ fn Tm::Unlabelled(self t: Tm) → Type {
         Pick(_, _, arms, _) => arms.Unlabelled(),
         Inject(_, _, _) => True,
         Slot(_, _, _) => True,
-        Iterate(_, test, body) => test.Unlabelled() ∧ body.Unlabelled(),
+        Iterate(_, test, body, _, _) => test.Unlabelled() ∧ body.Unlabelled(),
         Again(_, _) => False,
         Loop(_, _) => True,
     }
@@ -4042,7 +4042,7 @@ fn Tm::check_unlabelled(self t: Tm) → Option<t.Unlabelled()> {
         Pick(_, _, arms, _) => arms.check_unlabelled(),
         Inject(_, _, _) => Some(trivial),
         Slot(_, _, _) => Some(trivial),
-        Iterate(_, test, body) => Tm::both(test.check_unlabelled(), body.check_unlabelled()),
+        Iterate(_, test, body, _, _) => Tm::both(test.check_unlabelled(), body.check_unlabelled()),
         Again(_, _) => None,
         Loop(_, _) => Some(trivial),
     }
@@ -4161,7 +4161,7 @@ fn Tm::lower_in(self t: Tm, w: World, mode: Option<PassAt>, g: List<Ty>, ports: 
         Slot(i, j, of) => Tm::leaf_at(Slot(i, j, of), w, mode, g, Tm::lower_slot(w, g, ports, next, i, j, of)),
         // A `while` loop: a FunctionIR loop over the state and the context
         // it carries (`Tm::lower_iterate`).
-        Iterate(init, test, body) => Tm::leaf_at(Iterate(init, test, body), w, mode, g, port_at(ports, init).and_then(λ pi =>
+        Iterate(init, test, body, caps, loopn) => Tm::leaf_at(Iterate(init, test, body, caps, loopn), w, mode, g, port_at(ports, init).and_then(λ pi =>
             Tm::lower_iterate(w, g, ports, next, init, pi, test, body,
                 λ ps k => Tm::lower_in(test, w, None, Cons(Ty::at(g, init), g), ps, k), λ ps k => Tm::lower_in(body, w, None, Cons(Ty::at(g, init), g), ps, k)))),
         // Going round: the state's words moved to the pass's next ones, the
@@ -4245,10 +4245,10 @@ theorem Tm::unlabelled_case(c: Nat, zero, succ: Tm, w: World, l1, l2: Tm::Label(
     r
 }
 
-theorem Tm::unlabelled_iterate(init: Nat, test, body: Tm, w: World, l1, l2: Tm::Label(w.tys), g: List<Ty>, env: Env(w.tys, g),
+theorem Tm::unlabelled_iterate(init: Nat, test, body: Tm, caps: List<Nat>, loopn: Nat, w: World, l1, l2: Tm::Label(w.tys), g: List<Ty>, env: Env(w.tys, g),
     ht: (s: Ty::at(g, init).sem(w.tys)) → test.sem_in(w, l1, Cons(Ty::at(g, init), g), Pair(s, env)) = test.sem_in(w, l2, Cons(Ty::at(g, init), g), Pair(s, env)),
     hb: (s: Ty::at(g, init).sem(w.tys)) → body.sem_in(w, l1, Cons(Ty::at(g, init), g), Pair(s, env)) = body.sem_in(w, l2, Cons(Ty::at(g, init), g), Pair(s, env))):
-    Tm::sem_in(Iterate(init, test, body), w, l1, g, env) = Tm::sem_in(Iterate(init, test, body), w, l2, g, env) {
+    Tm::sem_in(Iterate(init, test, body, caps, loopn), w, l1, g, env) = Tm::sem_in(Iterate(init, test, body, caps, loopn), w, l2, g, env) {
     let st = Ty::at(g, init);
     let inner = Cons(st, g);
     let turn = λ (l: Tm::Label(w.tys)) (s: st.sem(w.tys)) => loop::Step::turn(
@@ -4286,7 +4286,7 @@ theorem Tm::sem_in_unlabelled(self t: Tm, w: World, l1, l2: Tm::Label(w.tys)): t
             λ n fl => Tm::sem_in_unlabelled(arms, w, l1, l2, h, Cons(Enum(i), g), Pair(w.tys.ens(i).of(n, fl), env))),
         Inject(_, _, _) => λ h g env => refl,
         Slot(_, _, _) => λ h g env => refl,
-        Iterate(init, test, body) => λ h g env => Tm::unlabelled_iterate(init, test, body, w, l1, l2, g, env,
+        Iterate(init, test, body, caps, loopn) => λ h g env => Tm::unlabelled_iterate(init, test, body, caps, loopn, w, l1, l2, g, env,
             λ s => Tm::sem_in_unlabelled(test, w, l1, l2, h.left, Cons(Ty::at(g, init), g), Pair(s, env)),
             λ s => Tm::sem_in_unlabelled(body, w, l1, l2, h.right, Cons(Ty::at(g, init), g), Pair(s, env))),
         Again(_, _) => λ h g env => false_elim(h),
@@ -5949,7 +5949,7 @@ theorem Tm::iterate_pass(w: World, g: List<Ty>, init: Nat, test, body: Tm, next:
 
 // The loop: its words start related to the state the variable holds, the
 // passes keep them related, and its outputs hold the state they end at.
-theorem Tm::iterate_holds(w: World, g: List<Ty>, ports: List<Nat>, next, init, pi: Nat, test, body: Tm, at_pi: port_at(ports, init) = Some(pi),
+theorem Tm::iterate_holds(w: World, g: List<Ty>, ports: List<Nat>, next, init, pi: Nat, test, body: Tm, caps: List<Nat>, loopn: Nat, at_pi: port_at(ports, init) = Some(pi),
     ok: Ty::at(g, init).Carries(w.tys), wi: test.Within(Tm::iter_keep(g, Ty::at(g, init), test, body)) ∧ body.Within(Tm::iter_keep(g, Ty::at(g, init), test, body)), c: Carry,
     ch: Tm::CarryHolds(w.tys, g, Tm::iter_keeps(g, Ty::at(g, init), test, body), ports, Tm::iter_at(w.tys, Ty::at(g, init), next), Some(c)),
     lt, lb: Lowered,
@@ -5957,7 +5957,7 @@ theorem Tm::iterate_holds(w: World, g: List<Ty>, ports: List<Nat>, next, init, p
         Fun::past(c.cells, Tm::iter_at(w.tys, Ty::at(g, init), next)) + 1, Some(lt)),
     b_holds: Tm::LowerHolds(body, w, Cons(Ty::at(g, init), g), Cons(next + 1, c.inner), lt.next, Some(lb)),
     e_t: Tm::ty(test, w, Cons(Ty::at(g, init), g)) = Bit, e_b: Tm::ty(body, w, Cons(Ty::at(g, init), g)) = Ty::at(g, init)):
-    Tm::LowerHolds(Iterate(init, test, body), w, g, ports, next, Some(Tm::iter_region(w.tys, Ty::at(g, init), pi, next, c, lt, lb))) {
+    Tm::LowerHolds(Iterate(init, test, body, caps, loopn), w, g, ports, next, Some(Tm::iter_region(w.tys, Ty::at(g, init), pi, next, c, lt, lb))) {
     λ call agree values env held below => {
         let tys = w.tys;
         let st = Ty::at(g, init);
@@ -6047,18 +6047,18 @@ theorem Tm::iterate_holds(w: World, g: List<Ty>, ports: List<Nat>, next, init, p
     }
 }
 
-theorem Tm::iterate_sound(init: Nat, test, body: Tm, w: World,
+theorem Tm::iterate_sound(init: Nat, test, body: Tm, caps: List<Nat>, loopn: Nat, w: World,
     ih_test: (g: List<Ty>) → (ports: List<Nat>) → (next: Nat) → Tm::LowerHolds(test, w, g, ports, next, Tm::lower(test, w, g, ports, next)),
     ih_body: (g: List<Ty>) → (ports: List<Nat>) → (next: Nat) → Tm::LowerHolds(body, w, g, ports, next, Tm::lower(body, w, g, ports, next)),
     g: List<Ty>, ports: List<Nat>, next: Nat):
-    Tm::LowerHolds(Iterate(init, test, body), w, g, ports, next, Tm::lower(Iterate(init, test, body), w, g, ports, next)) {
+    Tm::LowerHolds(Iterate(init, test, body, caps, loopn), w, g, ports, next, Tm::lower(Iterate(init, test, body, caps, loopn), w, g, ports, next)) {
     let tys = w.tys;
     let st = Ty::at(g, init);
     let inner = Cons(st, g);
     let at = Tm::iter_at(tys, st, next);
     let ks = Tm::iter_keeps(g, Ty::at(g, init), test, body);
     let K = Tm::iter_keep(g, Ty::at(g, init), test, body);
-    let P = λ (r: Option<Lowered>) => Tm::LowerHolds(Iterate(init, test, body), w, g, ports, next, r);
+    let P = λ (r: Option<Lowered>) => Tm::LowerHolds(Iterate(init, test, body, caps, loopn), w, g, ports, next, r);
     let lower_test = λ (ps: List<Nat>) (k: Nat) => Tm::lower(test, w, inner, ps, k);
     let lower_body = λ (ps: List<Nat>) (k: Nat) => Tm::lower(body, w, inner, ps, k);
     let from_body = λ (pi: Nat) (c: Carry) (lt: Lowered) =>
@@ -6077,7 +6077,7 @@ theorem Tm::iterate_sound(init: Nat, test, body: Tm, w: World,
     Option::and_then_elim(P, trivial, Tm::ty(test, w, inner).check(Bit), λ _ => Tm::ty(body, w, inner).check(st).and_then(λ _ =>
         Some(Tm::iter_region(tys, st, pi, next, c, lt, lb))), λ e_t _ =>
     Option::and_then_elim(P, trivial, Tm::ty(body, w, inner).check(st), λ _ => Some(Tm::iter_region(tys, st, pi, next, c, lt, lb)), λ e_b _ =>
-        Tm::iterate_holds(w, g, ports, next, init, pi, test, body, at_pi, ok, wi, c,
+        Tm::iterate_holds(w, g, ports, next, init, pi, test, body, caps, loopn, at_pi, ok, wi, c,
             j(carried, λ r _ => Tm::CarryHolds(tys, g, ks, ports, at, r), Tm::carry_sound(tys, st, next + 1, g, ks, ports, at, Fun::past(st.cells(tys), next + 1).le_refl())), lt, lb,
             j(lowered_t, λ r _ => Tm::LowerHolds(test, w, inner, Cons(next + 1, c.inner), Fun::past(c.cells, at) + 1, r),
                 ih_test(inner, Cons(next + 1, c.inner), Fun::past(c.cells, at) + 1)),
@@ -6945,7 +6945,7 @@ theorem Tm::lower_in_sound(self t: Tm, w: World): (mode: Option<PassAt>) → (g:
         Pick(i, c, arms, eq) => Tm::both_leaf(Pick(i, c, arms, eq), w, λ g ports next => Tm::pick_sound(i, c, arms, eq, w, λ g2 ports2 next2 => Tm::lower_in_sound(arms, w, None, g2, ports2, next2), g, ports, next), λ pc g ports next => refl),
         Inject(i, k, args) => Tm::both_leaf(Inject(i, k, args), w, λ g ports next => Tm::lower_inject_sound(w, g, ports, next, i, k, args), λ pc g ports next => refl),
         Slot(i, j, of) => Tm::both_leaf(Slot(i, j, of), w, λ g ports next => Tm::lower_slot_sound(w, g, ports, next, i, j, of), λ pc g ports next => refl),
-        Iterate(init, test, body) => Tm::both_leaf(Iterate(init, test, body), w, λ g ports next => Tm::iterate_sound(init, test, body, w,
+        Iterate(init, test, body, caps, loopn) => Tm::both_leaf(Iterate(init, test, body, caps, loopn), w, λ g ports next => Tm::iterate_sound(init, test, body, caps, loopn, w,
             λ g2 ports2 next2 => Tm::lower_in_sound(test, w, None, g2, ports2, next2), λ g2 ports2 next2 => Tm::lower_in_sound(body, w, None, g2, ports2, next2), g, ports, next), λ pc g ports next => refl),
         Again(r, args) => λ mode => match mode as λ md => (g: List<Ty>) → (ports: List<Nat>) → (next: Nat) →
             Tm::HoldsIn(Again(r, args), w, md, g, ports, next, Tm::lower_in(Again(r, args), w, md, g, ports, next)) {
@@ -7961,7 +7961,7 @@ theorem Tm::ty_static(self t: Tm, w: World, cs: Sig::Sems(w.tys, w.sigs), spans:
         Pick(i, _, arms, _) => λ g => Tm::ty_static(arms, w, cs, spans, Cons(Enum(i), g)),
         Inject(_, _, _) => λ g => refl,
         Slot(_, _, _) => λ g => refl,
-        Iterate(_, _, _) => λ g => refl,
+        Iterate(_, _, _, _, _) => λ g => refl,
         Again(_, _) => λ g => refl,
         Loop(inits, body) => λ g => Tm::ty_static(body, w, cs, spans, Tm::inside(g, inits)),
     }
@@ -7990,11 +7990,11 @@ theorem Tm::lower_if_static(c: Nat, yes, no: Tm, w: World, cs: Sig::Sems(w.tys, 
 }
 
 // A loop's lowering reads the world only through its test's and body's.
-theorem Tm::iterate_static(init: Nat, test, body: Tm, w: World, cs: Sig::Sems(w.tys, w.sigs), spans: List<List<BitVec(8)>>, g: List<Ty>,
+theorem Tm::iterate_static(init: Nat, test, body: Tm, caps: List<Nat>, loopn: Nat, w: World, cs: Sig::Sems(w.tys, w.sigs), spans: List<List<BitVec(8)>>, g: List<Ty>,
     ports: List<Nat>, next: Nat,
     same_test: (ps: List<Nat>) → (k: Nat) → Tm::lower(test, w.over(cs, spans), Cons(Ty::at(g, init), g), ps, k) = Tm::lower(test, w, Cons(Ty::at(g, init), g), ps, k),
     same_body: (ps: List<Nat>) → (k: Nat) → Tm::lower(body, w.over(cs, spans), Cons(Ty::at(g, init), g), ps, k) = Tm::lower(body, w, Cons(Ty::at(g, init), g), ps, k)):
-    Tm::lower(Iterate(init, test, body), w.over(cs, spans), g, ports, next) = Tm::lower(Iterate(init, test, body), w, g, ports, next) {
+    Tm::lower(Iterate(init, test, body, caps, loopn), w.over(cs, spans), g, ports, next) = Tm::lower(Iterate(init, test, body, caps, loopn), w, g, ports, next) {
     let v = w.over(cs, spans);
     let tys = w.tys;
     let st = Ty::at(g, init);
@@ -8061,7 +8061,7 @@ theorem Tm::lower_static(self t: Tm, w: World, cs: Sig::Sems(w.tys, w.sigs), spa
             λ n => Tm::lower_static(yes, w, cs, spans, g, ports, n), λ n => Tm::lower_static(no, w, cs, spans, g, ports, n)),
         IfEq(c, yes, no) => λ g ports next => Tm::lower_if_static(c, yes, no, w, cs, spans, g, ports, next,
             λ n => Tm::lower_static(yes, w, cs, spans, g, ports, n), λ n => Tm::lower_static(no, w, cs, spans, g, ports, n)),
-        Iterate(init, test, body) => λ g ports next => Tm::iterate_static(init, test, body, w, cs, spans, g, ports, next,
+        Iterate(init, test, body, caps, loopn) => λ g ports next => Tm::iterate_static(init, test, body, caps, loopn, w, cs, spans, g, ports, next,
             λ ps k => Tm::lower_static(test, w, cs, spans, Cons(Ty::at(g, init), g), ps, k),
             λ ps k => Tm::lower_static(body, w, cs, spans, Cons(Ty::at(g, init), g), ps, k)),
         Again(_, _) => λ g ports next => refl,

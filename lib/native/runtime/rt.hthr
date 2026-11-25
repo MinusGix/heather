@@ -1090,7 +1090,14 @@ inductive Tm {
     // state becomes `body`'s value, at the state's code; when it fails the
     // state is the loop's answer. Its meaning is `Loop::steps` of
     // `Step::turn(test, body, s)`, at most `Tm::passes()` of them.
-    Iterate(init: Nat, test: Tm, body: Tm),
+    //
+    // `caps` are the variables the loop reads of its context, in the order
+    // the elaborator's `f::loop::runs` takes them, and `loopn` names that
+    // loop: 0 for none found (a loop written by hand), 1 for `f::loop`,
+    // `k + 1` for `f::loopk_loop`. Its meaning reads neither: they are what
+    // the loop is read as a node by (`Tm::nodes`, docs/language/loop-combinator-design.md
+    // §6.9).
+    Iterate(init: Nat, test: Tm, body: Tm, caps: List<Nat>, loopn: Nat),
     // Going round the innermost loop around it (`Loop`) at the state the
     // variables `args` hold, each read as a word. `res` is that loop's
     // result code, which the leaf names so that no term's code depends on
@@ -1230,7 +1237,7 @@ fn Tm::ty(self t: Tm, w: World, g: List<Ty>) → Ty {
         Pick(i, _, arms, _) => arms.ty(w, Cons(Enum(i), g)),
         Inject(i, _, _) => Enum(i),
         Slot(i, j, _) => Ty::at(w.tys.ens(i).slots, j),
-        Iterate(init, _, _) => Ty::at(g, init),
+        Iterate(init, _, _, _, _) => Ty::at(g, init),
         Again(res, _) => res,
         Loop(inits, body) => body.ty(w, Tm::inside(g, inits)),
     }
@@ -1340,7 +1347,7 @@ fn Tm::sem_in(self t: Tm, w: World, lab: Tm::Label(w.tys)) → (g: List<Ty>) →
         Slot(i, j, of) => λ g env =>
             Ty::at(w.tys.ens(i).slots, j).of_slot(w.tys,
                 Ty::flat_nth(w.tys.ens(i).slots, w.tys.ens(i).fields(Ty::cast(w.tys, Ty::at(g, of), Enum(i), Env::get(w.tys, g, env, of))), j)),
-        Iterate(init, test, body) => λ g env => loop::Loop::steps(loop::Loop::passes(),
+        Iterate(init, test, body, caps, loopn) => λ g env => loop::Loop::steps(loop::Loop::passes(),
             λ (s: Ty::at(g, init).sem(w.tys)) => loop::Step::turn(
                 Ty::cast(w.tys, test.ty(w, Cons(Ty::at(g, init), g)), Bit, test.sem_in(w, lab, Cons(Ty::at(g, init), g), Pair(s, env))),
                 λ _ => Ty::cast(w.tys, body.ty(w, Cons(Ty::at(g, init), g)), Ty::at(g, init), body.sem_in(w, lab, Cons(Ty::at(g, init), g), Pair(s, env))),
@@ -1497,8 +1504,8 @@ fn Tm::same(self t: Tm) → Tm → Bool {
         },
         Inject(i, k, args) => λ u => match u { Inject(i2, k2, args2) => i.same(i2).and(k.same(k2)).and(Tm::nats_same(args, args2)), _ => False },
         Slot(i, j, of) => λ u => match u { Slot(i2, j2, of2) => i.same(i2).and(j.same(j2)).and(of.same(of2)), _ => False },
-        Iterate(init, test, body) => λ u => match u {
-            Iterate(init2, test2, body2) => init.same(init2).and(test.same(test2)).and(body.same(body2)),
+        Iterate(init, test, body, caps, loopn) => λ u => match u {
+            Iterate(init2, test2, body2, caps2, loopn2) => init.same(init2).and(test.same(test2)).and(body.same(body2)).and(Tm::nats_same(caps, caps2)).and(loopn.same(loopn2)),
             _ => False,
         },
         Again(res, args) => λ u => match u { Again(res2, args2) => res.same(res2).and(Tm::nats_same(args, args2)), _ => False },

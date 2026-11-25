@@ -238,11 +238,14 @@ record Known {
     // The payloads of the `match` arms the walk is inside, each by its
     // local: a read of its field is a slot of the enum matched (`Slot`).
     payloads: List<PayloadAt> := [],
+    // The name of the function being walked: what its loops' reasoning
+    // declarations (`f::loop::runs`) are found under.
+    own: String := "",
 }
 
 fn Known::with_payload(self k: Known, p: PayloadAt) → Known {
     Known(k.prims, k.funs, k.recs, k.discover, k.bitvec, k.boolean, k.list, k.io, k.nat, k.recursion, k.reprs, k.lent, k.file, k.named, k.consts,
-        Cons(p, k.payloads))
+        Cons(p, k.payloads), k.own)
 }
 
 fn Known::payload_at(ps: List<PayloadAt>, x: Nat) → Option<PayloadAt> {
@@ -288,23 +291,27 @@ fn ConstInit::zeroed_handles(placed: List<Pair<Pair<ConstInit, Handle>, Nat>>) �
 }
 
 fn Known::within(self k: Known, sc: SelfCall) → Known {
-    Known(k.prims, k.funs, k.recs, k.discover, k.bitvec, k.boolean, k.list, k.io, k.nat, Some(sc), k.reprs, k.lent, k.file, k.named, k.consts, k.payloads)
+    Known(k.prims, k.funs, k.recs, k.discover, k.bitvec, k.boolean, k.list, k.io, k.nat, Some(sc), k.reprs, k.lent, k.file, k.named, k.consts, k.payloads, k.own)
 }
 
 fn Known::with_recs(self k: Known, rs: List<RecEntry>) → Known {
-    Known(k.prims, k.funs, rs, k.discover, k.bitvec, k.boolean, k.list, k.io, k.nat, k.recursion, k.reprs, k.lent, k.file, k.named, k.consts, k.payloads)
+    Known(k.prims, k.funs, rs, k.discover, k.bitvec, k.boolean, k.list, k.io, k.nat, k.recursion, k.reprs, k.lent, k.file, k.named, k.consts, k.payloads, k.own)
 }
 
 fn Known::with_reprs(self k: Known, rs: List<ReprEntry>) → Known {
-    Known(k.prims, k.funs, k.recs, k.discover, k.bitvec, k.boolean, k.list, k.io, k.nat, k.recursion, rs, k.lent, k.file, k.named, k.consts, k.payloads)
+    Known(k.prims, k.funs, k.recs, k.discover, k.bitvec, k.boolean, k.list, k.io, k.nat, k.recursion, rs, k.lent, k.file, k.named, k.consts, k.payloads, k.own)
+}
+
+fn Known::owning(self k: Known, own: String) → Known {
+    Known(k.prims, k.funs, k.recs, k.discover, k.bitvec, k.boolean, k.list, k.io, k.nat, k.recursion, k.reprs, k.lent, k.file, k.named, k.consts, k.payloads, own)
 }
 
 fn Known::lending(self k: Known, lent: Nat) → Known {
-    Known(k.prims, k.funs, k.recs, k.discover, k.bitvec, k.boolean, k.list, k.io, k.nat, k.recursion, k.reprs, lent, k.file, k.named, k.consts, k.payloads)
+    Known(k.prims, k.funs, k.recs, k.discover, k.bitvec, k.boolean, k.list, k.io, k.nat, k.recursion, k.reprs, lent, k.file, k.named, k.consts, k.payloads, k.own)
 }
 
 fn Known::with_consts(self k: Known, consts: List<Pair<List<Nat>, Nat>>) → Known {
-    Known(k.prims, k.funs, k.recs, k.discover, k.bitvec, k.boolean, k.list, k.io, k.nat, k.recursion, k.reprs, k.lent, k.file, k.named, consts, k.payloads)
+    Known(k.prims, k.funs, k.recs, k.discover, k.bitvec, k.boolean, k.list, k.io, k.nat, k.recursion, k.reprs, k.lent, k.file, k.named, consts, k.payloads, k.own)
 }
 
 // The level of the constant whose bytes are `bs`, if the program has one.
@@ -313,7 +320,7 @@ fn Known::const_level(xs: List<Pair<List<Nat>, Nat>>, bs: List<Nat>) → Option<
 }
 
 fn Known::naming(self k: Known, named: List<FieldTerm>) → Known {
-    Known(k.prims, k.funs, k.recs, k.discover, k.bitvec, k.boolean, k.list, k.io, k.nat, k.recursion, k.reprs, k.lent, k.file, named, k.consts, k.payloads)
+    Known(k.prims, k.funs, k.recs, k.discover, k.bitvec, k.boolean, k.list, k.io, k.nat, k.recursion, k.reprs, k.lent, k.file, named, k.consts, k.payloads, k.own)
 }
 
 // The span a parameter level is the bytes of, if it is one.
@@ -760,7 +767,7 @@ fn RSt::at_depth(self st: RSt, t: Tm) → Tm {
         IfEq(c, yes, no) => IfEq(st.index(c), yes, no),
         Byte(k, i, length) => Byte(k, st.index(i), st.index(length)),
         Pick(i, c, arms, eq) => Pick(i, st.index(c), arms, eq),
-        Iterate(init, test, body) => Iterate(st.index(init), test, body),
+        Iterate(init, test, body, caps, loopn) => Iterate(st.index(init), test, body, caps.map(λ c => st.index(c)), loopn),
         _ => t,
     }
 }
@@ -782,7 +789,7 @@ fn RSt::finish(self st: RSt, h: Handle, operand: Bool, node: Tm) → Pair<RSt, T
         False => Pair(st, st.at_depth(node)),
         True => match node {
             Var(l) => Pair(st, Var(l)),
-            _ => match (match node { Lit(_, _) => None, If(_, _, _) => None, IfEq(_, _, _) => None, Pick(_, _, _, _) => None, Iterate(_, _, _) => None,
+            _ => match (match node { Lit(_, _) => None, If(_, _, _) => None, IfEq(_, _, _) => None, Pick(_, _, _, _) => None, Iterate(_, _, _, _, _) => None,
                 _ => rt_memo(st.memo, node) }) {
                 Some(l) => Pair(RSt(st.depth, st.lets, st.memo, Cons(Pair(h.id, l), st.handles), st.locals, st.funs), Var(l)),
                 None => Pair(RSt(st.depth + 1, Cons(st.at_depth(node), st.lets), Cons(Pair(node, st.depth), st.memo),
@@ -2127,6 +2134,88 @@ fn rt_within(f: Nat, k: Known, st: RSt, h: Handle, operand: Bool, bytes, length,
     })
 }
 
+// How many parameters a function type takes.
+fn rt_arity(fuel: Nat, t: Handle) → Tac<Nat> {
+    match fuel {
+        Zero => rt_refuse("more parameters than the reflector's fuel"),
+        Succ(f) => view(t).bind(λ v => match v {
+            HPi(_) => open(t, "x").bind(λ c => rt_accepted("a parameter", c)).bind(λ o => rt_arity(f, o.body).bind(λ n => pure(n + 1))),
+            _ => pure(0),
+        }),
+    }
+}
+
+// The name of the `n`th candidate for a loop's reasoning declarations
+// (crates/elab/src/loops.rs, `Lift::names`): `f::loop` where `f` has one
+// loop, `f::loopk_loop` for its `k`th where it has several.
+fn rt_loop_name(own: String, n: Nat) → String {
+    match n { Zero => own ++ "::loop", Succ(k) => match k { Zero => own ++ "::loop", Succ(_) => own ++ "::loop" ++ decimal_name(4, k) ++ "_loop" } }
+}
+
+// The levels of the locals `hs` stand for, if each is one bound so far.
+fn rt_loop_caps(st: RSt, hs: List<Handle>) → Tac<Option<List<Nat>>> {
+    match hs {
+        Nil => pure(Some([])),
+        Cons(x, rest) => view(x).bind(λ v => match v {
+            HLocal(y, args) => match args {
+                Nil => match rt_assoc(st.locals, y.id) {
+                    Some(l) => rt_loop_caps(st, rest).bind(λ more => pure(more.map(λ ls => Cons(l, ls)))),
+                    None => pure(None),
+                },
+                Cons(_, _) => pure(None),
+            },
+            _ => pure(None),
+        }),
+    }
+}
+
+// The loop the elaborator wrote a `while` as (`Loop::steps` at `h`, from
+// `init`), found by its reasoning declarations: the `f::loop…::runs` whose
+// statement's left side is `h` at some captures, which unification with `h`
+// fills in. They are read off its right side, `f::loop…::of(c̄).run(init)`.
+// `runs` is applied to `init` so that its holes stand where the loop does.
+// The captures, as levels, and the candidate's number (`Iterate.loopn`);
+// none and `0` for a loop written by hand, which has no such declaration.
+fn rt_loop_found(fuel: Nat, k: Known, st: RSt, h, init: Handle, n: Nat) → Tac<Pair<List<Nat>, Nat>> {
+    let none: Pair<List<Nat>, Nat> = Pair([], 0);
+    match fuel {
+        Zero => pure(none),
+        Succ(more) => lookup(rt_loop_name(k.own, n) ++ "::runs").bind(λ c => match c {
+            Refused(_) => match n { Succ(Zero) => rt_loop_found(more, k, st, h, init, n + 1), _ => pure(none) },
+            Accepted(g) => mark().bind(λ m => {
+                let give_up = restore(m).bind(λ _ => pure(none));
+                let next_one = restore(m).bind(λ _ => rt_loop_found(more, k, st, h, init, n + 1));
+                infer(Global(g)).bind(λ ct => match ct {
+                    Refused(_) => give_up,
+                    Accepted(t) => rt_arity(64, t).bind(λ a =>
+                        infer(App(List::replicate(Blank, a - 1).foldl(λ e x => App(e, x), Global(g)), Hd(init))).bind(λ cty => match cty {
+                            Refused(_) => next_one,
+                            Accepted(ty) => view(ty).bind(λ v => match v {
+                                HEq(lhs, rhs) => defeq(Hd(lhs), Hd(h)).bind(λ same => match same {
+                                    False => next_one,
+                                    True => view(rhs).bind(λ vr => match vr {
+                                        HGlobal(_, _, rargs) => match rargs {
+                                            Cons(of_h, _) => view(of_h).bind(λ vo => match vo {
+                                                HGlobal(_, _, caps_h) => rt_loop_caps(st, caps_h).bind(λ caps => restore(m).bind(λ _ => match caps {
+                                                    Some(ls) => pure(Pair(ls, n)),
+                                                    None => pure(none),
+                                                })),
+                                                _ => give_up,
+                                            }),
+                                            Nil => give_up,
+                                        },
+                                        _ => give_up,
+                                    }),
+                                }),
+                                _ => give_up,
+                            }),
+                        })),
+                })
+            }),
+        }),
+    }
+}
+
 // A `while` loop (docs/language/loop-combinator-design.md §6.2), as the
 // elaborator writes it: `loop::Loop::steps(F, λ s => Step::turn(c, λ h =>
 // next, s), init)`, `F` the passes a loop is given (`Loop::passes()`). The
@@ -2155,8 +2244,9 @@ fn rt_steps(k: Known, st: RSt, h: Handle, operand: Bool, args: List<Handle>,
                             let under = λ (funs: List<Nat>) => RSt(at + 1, [], s0.memo, s0.handles, Cons(Pair(os.local.ref.id, at), s0.locals), funs);
                             go(under(s0.funs), test_h, False).bind(λ rt =>
                             go(under(rt.fst.funs), on.body, False).bind(λ rb =>
+                            rt_loop_found(16, k, s0, h, init, 1).bind(λ found =>
                             pure(s0.with_funs(rb.fst.funs).finish(h, operand,
-                                Iterate(RSt::level(ri.snd), RSt::wrap(rt.fst.lets, rt.snd), RSt::wrap(rb.fst.lets, rb.snd))))))
+                                Iterate(RSt::level(ri.snd), RSt::wrap(rt.fst.lets, rt.snd), RSt::wrap(rb.fst.lets, rb.snd), found.fst, found.snd))))))
                         }),
                         _ => rt_refuse("a loop's step `" ++ tname ++ "` without its test and next state"),
                     },
@@ -2550,17 +2640,6 @@ fn rt_reflect_one(fuel: Nat, k: Known, g: Nat) → Tac<Pair<Fun, List<Nat>>> {
     pure(Pair(Fun(lent.snd, result, RSt::wrap(r.fst.lets, r.snd), lent.fst), r.fst.funs)))))))
 }
 
-// How many parameters a function type takes.
-fn rt_arity(fuel: Nat, t: Handle) → Tac<Nat> {
-    match fuel {
-        Zero => rt_refuse("more parameters than the reflector's fuel"),
-        Succ(f) => view(t).bind(λ v => match v {
-            HPi(_) => open(t, "x").bind(λ c => rt_accepted("a parameter", c)).bind(λ o => rt_arity(f, o.body).bind(λ n => pure(n + 1))),
-            _ => pure(0),
-        }),
-    }
-}
-
 // The first `n` parameters, as `rt_params` reads them.
 fn rt_params_n(n: Nat, k: Known, st: RSt, tys: List<Ty>, b: Handle) → Tac<Pair<Pair<RSt, List<Ty>>, Handle>> {
     match n {
@@ -2819,7 +2898,7 @@ fn Tm::show(self t: Tm) → String {
         Pick(i, c, arms, eq) => "Pick(" ++ rt_nat(i) ++ ", " ++ rt_nat(c) ++ ", " ++ arms.show() ++ match eq { True => ", True)", False => ", False)" },
         Inject(i, k, args) => "Inject(" ++ rt_nat(i) ++ ", " ++ rt_nat(k) ++ ", [" ++ rt_nats(args) ++ "])",
         Slot(i, j, of) => "Slot(" ++ rt_nat(i) ++ ", " ++ rt_nat(j) ++ ", " ++ rt_nat(of) ++ ")",
-        Iterate(init, test, body) => "Iterate(" ++ rt_nat(init) ++ ", " ++ test.show() ++ ", " ++ body.show() ++ ")",
+        Iterate(init, test, body, caps, loopn) => "Iterate(" ++ rt_nat(init) ++ ", " ++ test.show() ++ ", " ++ body.show() ++ ", [" ++ rt_nats(caps) ++ "], " ++ rt_nat(loopn) ++ ")",
         Again(res, args) => "Again(" ++ res.show() ++ ", [" ++ rt_nats(args) ++ "])",
         Loop(inits, body) => "Loop([" ++ rt_nats(inits) ++ "], " ++ body.show() ++ ")",
     }
