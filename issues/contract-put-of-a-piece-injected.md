@@ -24,3 +24,7 @@ One injection lemma per primitive (take, put), the per-store lemmas their instan
 ## What it assumes from elsewhere
 
 - [[bytes-level-on-the-contract]]: the heap, pieces and `placed` as built.
+
+## Log
+
+- 2026-11-25: [[bytes-level-lowering]] round 1 needs this lemma for the typed copy (`Instr::Copy`), and stopped at the leaves that do not: `Instr::emit` refuses a copy, and the copy's lowering is [[bytes-level-copy-and-halfwords]], waiting on this. The other nodes cite the per-store lemmas (`Loan::store_injected`, `store_ref_injected`) and the reads as they are.
