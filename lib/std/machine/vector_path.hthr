@@ -78,6 +78,25 @@ theorem Apart::in_vector<A, V, W>(n: Nat, pad: A, {p: Path<List<A>, V>}, {q: Pat
     )
 }
 
+// A composition after a list path read in a vector is the composition
+// read in the vector.
+theorem Path::in_vector_then_set<A, V, W>(n: Nat, pad: A, p: Path<List<A>, V>, q: Path<V, W>, v: [A; n], x: W):
+    (o: Option<V>) → p.get(vector_entries(v)) = o → Path::in_vector(n, pad, p).then(q).set(v, x) = Path::in_vector(n, pad, p.then(q)).set(v, x)
+{
+    λ o => match o {
+        Some(a) => λ e => trans(Path::in_vector(n, pad, p).then_set_at(q, v, a, e, x),
+            cong_fn(λ (ys: List<A>) => ys.vector_of(n, pad), sym(p.then_set_at(q, vector_entries(v), a, e, x)))),
+        None => λ e => trans(Path::in_vector(n, pad, p).then_set_none(q, v, e, x),
+            trans(sym(vector_of_entries_exact(n, pad, v)), cong_fn(λ (ys: List<A>) => ys.vector_of(n, pad), sym(p.then_set_none(q, vector_entries(v), e, x))))),
+    }
+}
+
+theorem Path::in_vector_then<A, V, W>(n: Nat, pad: A, p: Path<List<A>, V>, q: Path<V, W>):
+    PathSame<[A; n], W>(Path::in_vector(n, pad, p).then(q), Path::in_vector(n, pad, p.then(q)))
+{
+    PathSame(λ v => refl, λ v x => Path::in_vector_then_set(n, pad, p, q, v, x, p.get(vector_entries(v)), refl))
+}
+
 // ---------------------------------------------------------------------------
 // An entry of a vector
 
