@@ -1036,9 +1036,8 @@ round stays green. (`Repeat` was taken: it is a native statement's.)
 
 **Round C as built so far.**
 
-- *The measure.* `Until` carries a seventh field, `measure`: the position
-  of the parameter it falls on. Both spellings write it and the Rust
-  printer reads it. No meaning reads it; it says where the check looks.
+- *The measure.* `Until` carried a seventh field, `measure`: the position
+  of the parameter it falls on. Round D removes it (below).
 - *The counted check* (`function_ir_counted`). A pass that counts is
   `Compose(work, Dataflow(leaf))`, where `work` writes no part of the
   counter and the leaf is exactly `counted_nodes(p, q, exit, t)`:
@@ -1062,12 +1061,8 @@ round stays green. (`Repeat` was taken: it is a native statement's.)
   `ran_out` and the state, behind a test of its bound. Each pass sets
   `ran_out` to the negation of `stop`, so the last pass leaves it 1
   exactly where the passes ran out.
-- *A limit of the measure.* `Until`'s measure is a parameter's position,
-  so a measure such as `(n - i).toNat()` needs a state word holding it,
-  recomputed on every pass. That is enough for a first version: the
-  counted helper and a `decreases` measure that is one word both fit.
-  Whether a measure written as an expression of the state is wanted later
-  is open.
+- *A measure is any function of the state, carried by the proof* (was:
+  a parameter's position; see the decision below).
 - *The runtime producers: held for a decision.* Every runtime producer of
   `Loop` is already replaced or deleted in round D:
   - `Iterate` goes when `while` reflects to the node;
@@ -1090,6 +1085,40 @@ round stays green. (`Repeat` was taken: it is a native statement's.)
   **Decided (Minus, 2026-11-25):** this order. Round C is closed as built
   (9720631). The counted `Loop` stays in use by the runtime producers
   until 3h.
+
+**Round D, stage 1: the measure is evidence, not code.**
+
+*Decided (Minus, 2026-11-25).*
+
+- *The node's measure is a ghost.* It is the pin's `m`: the function's
+  `decreases` expression, any function of the state words whose value is a
+  word's `toNat` (`Setup::NodePass`, `node_means`). The compiled loop
+  computes nothing for it (vision principle 13).
+- *Its decrease comes from the pin.* A node goes round only from tail
+  position, so a pass that goes round at `xs` answers exactly `k(ys)`.
+  Suppose it went round with `m(ys) >= m(xs)`. Two continuations that agree
+  below `m` and differ at `ys` would then give `f(xs)` two values, and
+  every answer type has two. So `NodePass` alone says each pass that goes
+  round lowers `m`. One structural lemma about `Tm::loop_body` carries this
+  (it is `k` at the state the pass names, or does not read `k`), and the
+  generator owes nothing new. `rt_lower_defined` stays generic: the node's
+  case takes the pin's `m` and `NodePass`.
+- *`Until` has no `measure` field.* A measure is evidence, so it belongs
+  with the loop's definedness proof, which takes any measure function and
+  invariant already (`until_defined_of_measure`). Each producer supplies
+  its own:
+  - the node, from the pin;
+  - the counted check, from the counter its leaf names: in
+    `q := p - t`, `p` is the counter and `q` its next word, found in the
+    parameters and the next words by walking them together.
+
+  So every loop carries its measure, and no field means something only
+  sometimes.
+- *The node's meaning.* With no count and no extra pass it is
+  `Loop::rounds(2^64, pass, stuck, xs)`, where `stuck` reads the state
+  back. One `Until` matches it pass for pass, an exhausted `Until` leaving
+  the state as `stuck` does, so the code's eval needs no measure. Only its
+  definedness does.
 
 **Built: a pass that answers several words** (step 3's first half, kept
 as small as the extra pass allows).
