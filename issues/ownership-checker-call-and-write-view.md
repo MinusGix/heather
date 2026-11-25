@@ -1,6 +1,6 @@
 ---
 title: The ownership checker's second experiment: a call with a &mut window and a returned view
-status: open
+status: closed
 labels: [ownership,library,design]
 area: heather-in-heather
 milestone: [nh-ownership]
