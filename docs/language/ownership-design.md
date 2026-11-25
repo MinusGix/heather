@@ -1721,12 +1721,22 @@ per function connects them.
    with"; soundness by induction on fuel. Test: one loop added to the
    checker's fragment, writing an element while a view of a later window is
    held, its residual from the loop's guard.
-3. **Where a growable container lives.** A list has no capacity. Either
-   level 1 is over representation types only (a vector is a record of an
-   array, a length and a capacity; `push` and `grow` are ordinary code; a
-   list is reached through an abstraction function above), or each
-   container brings its own reading at level 2. Lean: the first, which
-   makes level 2 structural and turns "a push with room keeps a held
-   element" into the checker run on `push`'s body. It revises §10.6's
-   "capacity is a fact about a home": at this level it is a field. Test:
-   the arena vector's push and a caller holding an element view, by hand.
+3. **Where a growable container lives: settled by Minus, it is what
+   `datarepr` is for.** Source code is written over the mathematical type
+   and its interface (`List<T>` and its operations), and a representation
+   (a vector, a small vector, a linked list) is chosen for it; a function
+   "just uses the List API" whatever the representation. So there are three
+   tiers of type, not two: the specification type, in which programs are
+   written and theorems stated; a representation (`docs/native/datarepr-design.md`:
+   a carrier, an abstraction function, an invariant, an implementation of
+   each operation with its refinement theorem), which is ordinary code over
+   records and is what the checker and level 2 see; and a layout. Capacity
+   is a field of a representation and is not in the specification, which
+   is what §10.6's "a fact about a home" was reaching for. Only the author
+   of a representation writes code over the record. A representation may
+   fail where the specification does not (a full fixed-capacity vector;
+   memory): that is its operation's precondition, a residual or the room
+   premise. To be designed: how a representation is chosen and recorded in
+   an interface; a function general in its representation; how a place in
+   the specification (an element, a window) becomes a place in a
+   representation; and where the transfer sits relative to the checker.
