@@ -1,0 +1,508 @@
+// Values: codes, the single sort `Dyn`, structures, and `Dyn`'s instance of
+// the total step model (docs/language/ownership-design.md §21.1,
+// issues/ownership-interfaces.md).
+//
+// - **Codes.** `Shape` is closed first-order data: a word of a width
+//   (`WNat`, or `WBits(n)` for the source's `BitVec(n)`, so `u64` is
+//   `SWord(WBits(64))`), or a named type by index. A type environment
+//   `tys: Nat → Type` decodes a code by large elimination (`El`): a name is
+//   `tys(k)` itself, so a user record, a type parameter and a sequence type
+//   are all names. Equality is decided by a `fn` whose `Inl` is built from
+//   `refl` (`Shape::dec`), so at two closed equal codes it is `Inl(refl)` by
+//   evaluation; at one code it is `Inl(refl)` by induction (`Shape::dec_self`),
+//   with no unique identity proofs.
+// - **The single sort** is `Dyn(tys)`, a code and a value of its decoding.
+//   `Dyn::back` reads a `Dyn` at a code, the given value where the code
+//   differs; `Dyn::get` answers `None` there, which is how a callee takes
+//   its arguments without an inhabitant.
+// - **Structures.** A second environment (`Strs`) gives each name its
+//   `Struct`: its sharing class (§15.1) and its kind, opaque or a record of
+//   fields, each a shape with a total read and update. A record owes its
+//   fields' lens laws and the apartness of distinct fields (`RecordLaws`):
+//   what a derived instance proves once per record.
+// - **The model.** Each step at an owner's code is a `Part` of that code or
+//   none: a field of a record. `Dyn::at` reads the part tagged with its
+//   code; a step with no part at the owner's code reads the word 0 (a value
+//   of a word code, not of any named type: no type is asked for an
+//   inhabitant, and the read does not depend on the owner, which the
+//   decider's soundness needs, §22). `Dyn::over` modifies the part, putting
+//   back the function's result where it has the part's code. The code of
+//   what either produces is a function of the codes alone, so along a place
+//   of closed codes every dispatch reduces. `Dyn::model_laws` gives the
+//   total model's laws from the structures' laws alone, and `Dyn::apart`
+//   the decider's verdicts at `Dyn`.
+import logic;
+import bool;
+import nat;
+import omega;
+import option;
+import list;
+import bitvec;
+import span_set;
+import store;
+import atom;
+import steps;
+
+// ---------------------------------------------------------------------------
+// Codes, and their decision
+
+inductive Width { WNat, WBits(n: Nat) }
+
+inductive Shape { SWord(w: Width), SNamed(k: Nat) }
+
+fn Nat::cong_succ({a, b: Nat}, e: a = b) → Succ(a) = Succ(b) { j(e, λ c _ => Succ(a) = Succ(c), refl) }
+
+fn Nat::pred_eq({a, b: Nat}, e: Succ(a) = Succ(b)) → a = b { j(e, λ c _ => a = c.pred(), refl) }
+
+// Equality of two numbers, decided with a proof the kernel reduces: at two
+// equal literals, `Inl(refl)`.
+fn Nat::dec(a, b: Nat) → Or<a = b, ¬(a = b)> {
+    match a {
+        Zero => match b { Zero => Inl(refl), Succ(_) => Inr(λ no => absurd(no)) },
+        Succ(a1) => match b {
+            Zero => Inr(λ no => absurd(no)),
+            Succ(b1) => match Nat::dec(a1, b1) { Inl(e) => Inl(Nat::cong_succ(e)), Inr(ne) => Inr(λ h => ne(Nat::pred_eq(h))) },
+        },
+    }
+}
+
+fn Width::bits_of(self w: Width) → Nat { match w { WBits(n) => n, WNat => 0 } }
+
+fn Width::cong_bits({a, b: Nat}, e: a = b) → WBits(a) = WBits(b) { j(e, λ c _ => WBits(a) = WBits(c), refl) }
+
+fn Width::bits_inj({a, b: Nat}, e: WBits(a) = WBits(b)) → a = b { j(e, λ c _ => a = c.bits_of(), refl) }
+
+fn Width::dec(a, b: Width) → Or<a = b, ¬(a = b)> {
+    match a {
+        WNat => match b { WNat => Inl(refl), WBits(_) => Inr(λ no => absurd(no)) },
+        WBits(m) => match b {
+            WBits(n) => match Nat::dec(m, n) { Inl(e) => Inl(Width::cong_bits(e)), Inr(ne) => Inr(λ h => ne(Width::bits_inj(h))) },
+            WNat => Inr(λ no => absurd(no)),
+        },
+    }
+}
+
+fn Shape::width_of(self c: Shape) → Width { match c { SWord(w) => w, SNamed(_) => WNat } }
+
+fn Shape::name_of(self c: Shape) → Nat { match c { SNamed(k) => k, SWord(_) => 0 } }
+
+fn Shape::cong_word({a, b: Width}, e: a = b) → SWord(a) = SWord(b) { j(e, λ c _ => SWord(a) = SWord(c), refl) }
+
+fn Shape::cong_named({k, l: Nat}, e: k = l) → SNamed(k) = SNamed(l) { j(e, λ c _ => SNamed(k) = SNamed(c), refl) }
+
+fn Shape::word_inj({a, b: Width}, e: SWord(a) = SWord(b)) → a = b { j(e, λ c _ => a = c.width_of(), refl) }
+
+fn Shape::named_inj({k, l: Nat}, e: SNamed(k) = SNamed(l)) → k = l { j(e, λ c _ => k = c.name_of(), refl) }
+
+fn Shape::dec(a, b: Shape) → Or<a = b, ¬(a = b)> {
+    match a {
+        SWord(v) => match b {
+            SWord(w) => match Width::dec(v, w) { Inl(e) => Inl(Shape::cong_word(e)), Inr(ne) => Inr(λ h => ne(Shape::word_inj(h))) },
+            SNamed(_) => Inr(λ no => absurd(no)),
+        },
+        SNamed(k) => match b {
+            SNamed(l) => match Nat::dec(k, l) { Inl(e) => Inl(Shape::cong_named(e)), Inr(ne) => Inr(λ h => ne(Shape::named_inj(h))) },
+            SWord(_) => Inr(λ no => absurd(no)),
+        },
+    }
+}
+
+// The decision as a bit.
+fn Shape::same(self a, b: Shape) → Bool { match Shape::dec(a, b) { Inl(_) => True, Inr(_) => False } }
+
+// At one code, the decision is `refl`: by induction, no unique identity
+// proofs.
+theorem Nat::dec_self(k: Nat): Nat::dec(k, k) = Inl(refl) {
+    match k {
+        Zero => refl,
+        Succ(k1) => j(sym(Nat::dec_self(k1)), λ o _ => (match o { Inl(e) => Inl(Nat::cong_succ(e)), Inr(ne) => Inr(λ h => ne(Nat::pred_eq(h))) }) = Inl<(Succ(k1) = Succ(k1)), ¬(Succ(k1) = Succ(k1))>(refl), refl),
+    }
+}
+
+theorem Width::dec_self(w: Width): Width::dec(w, w) = Inl(refl) {
+    match w {
+        WNat => refl,
+        WBits(n) => j(sym(Nat::dec_self(n)), λ o _ => (match o { Inl(e) => Inl(Width::cong_bits(e)), Inr(ne) => Inr(λ h => ne(Width::bits_inj(h))) }) = Inl<(WBits(n) = WBits(n)), ¬(WBits(n) = WBits(n))>(refl), refl),
+    }
+}
+
+theorem Shape::dec_self(c: Shape): Shape::dec(c, c) = Inl(refl) {
+    match c {
+        SWord(w) => j(sym(Width::dec_self(w)), λ o _ => (match o { Inl(e) => Inl(Shape::cong_word(e)), Inr(ne) => Inr(λ h => ne(Shape::word_inj(h))) }) = Inl<(SWord(w) = SWord(w)), ¬(SWord(w) = SWord(w))>(refl), refl),
+        SNamed(k) => j(sym(Nat::dec_self(k)), λ o _ => (match o { Inl(e) => Inl(Shape::cong_named(e)), Inr(ne) => Inr(λ h => ne(Shape::named_inj(h))) }) = Inl<(SNamed(k) = SNamed(k)), ¬(SNamed(k) = SNamed(k))>(refl), refl),
+    }
+}
+
+theorem Shape::same_self(self c: Shape): c.same(c) = True { j(sym(Shape::dec_self(c)), λ o _ => (match o { Inl(_) => True, Inr(_) => False }) = True, refl) }
+
+// ---------------------------------------------------------------------------
+// The decoding, and the single sort
+
+fn Word(w: Width) → Type { match w { WNat => Nat, WBits(n) => BitVec(n) } }
+
+// A word read as a number: how an index or a bound reads it.
+fn Width::to_nat(w: Width, x: Word(w)) → Nat { (match w as λ v => Word(v) → Nat { WNat => λ y => y, WBits(_) => λ y => y.toNat() })(x) }
+
+fn El(tys: Nat → Type, c: Shape) → Type { match c { SWord(w) => Word(w), SNamed(k) => tys(k) } }
+
+// The cast between two codes found equal: the identity at `refl`.
+fn Shape::cast(tys: Nat → Type, {a, b: Shape}, e: a = b, x: El(tys, a)) → El(tys, b) { j(e, λ c _ => El(tys, c), x) }
+
+// A code with a value of its decoding.
+record Dyn(tys: Nat → Type) { code: Shape, val: El(tys, code) }
+
+// What `e` holds, where its code is `a`; `x` otherwise.
+fn Dyn::back(tys: Nat → Type, a: Shape, e: Dyn(tys), x: El(tys, a)) → El(tys, a) {
+    match Shape::dec(e.code, a) { Inl(h) => Shape::cast(tys, h, e.val), Inr(_) => x }
+}
+
+// What `e` holds at code `a`, or nothing: how a callee takes an argument.
+fn Dyn::get(tys: Nat → Type, a: Shape, e: Dyn(tys)) → Option<El(tys, a)> {
+    match Shape::dec(e.code, a) { Inl(h) => Some(Shape::cast(tys, h, e.val)), Inr(_) => None }
+}
+
+// A word as a number, 0 where `e` is not a word.
+fn Dyn::index(tys: Nat → Type, e: Dyn(tys)) → Nat {
+    (match e.code as λ c => El(tys, c) → Nat { SWord(w) => λ v => Width::to_nat(w, v), SNamed(_) => λ _ => 0 })(e.val)
+}
+
+// The value of a step that has no part at its owner's code: the number 0,
+// a word, which does not depend on the owner.
+fn Dyn::none(tys: Nat → Type) → Dyn(tys) { Dyn(SWord(WNat), 0) }
+
+theorem Dyn::cast_back(tys: Nat → Type, c: Shape, wv: El(tys, c)): (t: Shape) → (h: c = t) → Dyn(t, Shape::cast(tys, h, wv)) = Dyn(c, wv) {
+    λ t h => j(h, λ t2 h2 => Dyn(t2, Shape::cast(tys, h2, wv)) = Dyn(c, wv), refl)
+}
+
+// A `Dyn` read back at its own code is itself.
+theorem Dyn::back_like(tys: Nat → Type, t: Shape, w: Dyn(tys), x: El(tys, t), l: w.code.same(t) = True): Dyn(t, Dyn::back(tys, t, w, x)) = w {
+    (match Shape::dec(w.code, t) as λ o => (match o { Inl(_) => True, Inr(_) => False }) = True →
+            Dyn(t, match o { Inl(h) => Shape::cast(tys, h, w.val), Inr(_) => x }) = w {
+        Inl(h) => λ _ => Dyn::cast_back(tys, w.code, w.val, t, h),
+        Inr(_) => λ no => absurd(no),
+    })(l)
+}
+
+// Where `w` has the code, what is put back does not read the other value.
+theorem Dyn::back_any(tys: Nat → Type, t: Shape, w: Dyn(tys), x1, x2: El(tys, t), l: w.code.same(t) = True): Dyn::back(tys, t, w, x1) = Dyn::back(tys, t, w, x2) {
+    (match Shape::dec(w.code, t) as λ o => (match o { Inl(_) => True, Inr(_) => False }) = True →
+            (match o { Inl(h) => Shape::cast(tys, h, w.val), Inr(_) => x1 }) = (match o { Inl(h) => Shape::cast(tys, h, w.val), Inr(_) => x2 }) {
+        Inl(_) => λ _ => refl,
+        Inr(_) => λ no => absurd(no),
+    })(l)
+}
+
+// ---------------------------------------------------------------------------
+// Structures: what a derived instance supplies
+
+// Plain data, an object, or an object that may be neither dropped nor
+// duplicated (§15.1).
+inductive Sharing { Plain, Object, Linear }
+
+// A record's field: its shape, and a total read and update of it.
+record Field(tys: Nat → Type, T: Type) { shape: Shape, get: T → El(tys, shape), set: T → El(tys, shape) → T }
+
+// Opaque (a type parameter, a type the function does not look into), or a
+// record of fields.
+inductive Kind(tys: Nat → Type, T: Type) { Opaque, Record(fs: List<Field(tys, T)>) }
+
+record Struct(tys: Nat → Type, T: Type) { sharing: Sharing, kind: Kind(tys, T) }
+
+// The structures of an environment's types, stated after it.
+fn Strs(tys: Nat → Type) → Type { (k: Nat) → Struct(tys, tys(k)) }
+
+// A field is a lens.
+record FieldLaws(tys: Nat → Type, T: Type, f: Field(tys, T)) {
+    get_set: (v: T) → (x: El(tys, f.shape)) → f.get(f.set(v, x)) = x,
+    set_set: (v: T) → (x, y: El(tys, f.shape)) → f.set(f.set(v, x), y) = f.set(v, y),
+}
+
+// Two fields apart: a write of either leaves the other's read, and the
+// writes commute.
+record FieldsApart(tys: Nat → Type, T: Type, f, g: Field(tys, T)) {
+    left_after_right: (v: T) → (y: El(tys, g.shape)) → f.get(g.set(v, y)) = f.get(v),
+    right_after_left: (v: T) → (x: El(tys, f.shape)) → g.get(f.set(v, x)) = g.get(v),
+    commute: (v: T) → (x: El(tys, f.shape)) → (y: El(tys, g.shape)) → f.set(g.set(v, y), x) = g.set(f.set(v, x), y),
+}
+
+record RecordLaws(tys: Nat → Type, T: Type, fs: List<Field(tys, T)>) {
+    lawful: (i: Nat) → (f: Field(tys, T)) → fs.nth(i) = Some(f) → FieldLaws(tys, T, f),
+    apart: (i, l: Nat) → (f, g: Field(tys, T)) → fs.nth(i) = Some(f) → fs.nth(l) = Some(g) → ¬(i = l) → FieldsApart(tys, T, f, g),
+}
+
+fn KindLaws(tys: Nat → Type, {T: Type}, kd: Kind(tys, T)) → Type { match kd { Opaque => True, Record(fs) => RecordLaws(tys, T, fs) } }
+
+fn StrsLaws(tys: Nat → Type, strs: Strs(tys)) → Type { (k: Nat) → KindLaws(tys, strs(k).kind) }
+
+// ---------------------------------------------------------------------------
+// A step's part at an owner's code
+
+// The part's code, where the step fits a value of the owner's code, and its
+// total read and update.
+record Part(tys: Nat → Type, c: Shape) { t: Shape, fits: El(tys, c) → Bool, get: El(tys, c) → El(tys, t), set: El(tys, c) → El(tys, t) → El(tys, c) }
+
+fn Field::part(tys: Nat → Type, {c: Shape}, f: Field(tys, El(tys, c))) → Part(tys, c) { Part(f.shape, λ _ => True, f.get, f.set) }
+
+fn Kind::field_part(tys: Nat → Type, k: Nat, kd: Kind(tys, tys(k)), i: Nat) → Option<Part(tys, SNamed(k))> {
+    match kd { Opaque => None, Record(fs) => match fs.nth(i) { Some(f) => Some(Field::part(tys, f)), None => None } }
+}
+
+fn Dyn::part(tys: Nat → Type, strs: Strs(tys), sel: Sel, c: Shape) → Option<Part(tys, c)> {
+    match c {
+        SWord(_) => None,
+        SNamed(k) => match sel { OnField(i) => Kind::field_part(tys, k, strs(k).kind, i), OnSeq(_) => None, OnKey(_) => None, OnVariant(_) => None },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The model
+
+fn Dyn::at_in(tys: Nat → Type, {c: Shape}, o: Option<Part(tys, c)>, v: El(tys, c)) → Dyn(tys) { match o { Some(p) => Dyn(p.t, p.get(v)), None => Dyn::none(tys) } }
+
+fn Dyn::over_in(tys: Nat → Type, {c: Shape}, o: Option<Part(tys, c)>, g: Dyn(tys) → Dyn(tys), v: El(tys, c)) → El(tys, c) {
+    match o { Some(p) => p.set(v, Dyn::back(tys, p.t, g(Dyn(p.t, p.get(v))), p.get(v))), None => v }
+}
+
+fn Dyn::fits_in(tys: Nat → Type, {c: Shape}, o: Option<Part(tys, c)>, v: El(tys, c)) → Bool { match o { Some(p) => p.fits(v), None => False } }
+
+fn Dyn::at(tys: Nat → Type, strs: Strs(tys), sel: Sel, d: Dyn(tys)) → Dyn(tys) { Dyn::at_in(tys, Dyn::part(tys, strs, sel, d.code), d.val) }
+
+fn Dyn::over(tys: Nat → Type, strs: Strs(tys), sel: Sel, g: Dyn(tys) → Dyn(tys), d: Dyn(tys)) → Dyn(tys) { Dyn(d.code, Dyn::over_in(tys, Dyn::part(tys, strs, sel, d.code), g, d.val)) }
+
+fn Dyn::fits(tys: Nat → Type, strs: Strs(tys), sel: Sel, d: Dyn(tys)) → Bool { Dyn::fits_in(tys, Dyn::part(tys, strs, sel, d.code), d.val) }
+
+// What is written is like what was read: its code.
+fn Dyn::like(tys: Nat → Type, x, w: Dyn(tys)) → Bool { w.code.same(x.code) }
+
+fn Dyn::model(tys: Nat → Type, strs: Strs(tys)) → StepModel<Dyn(tys)> {
+    StepModel<Dyn(tys)>(λ sel d => Dyn::at(tys, strs, sel, d), λ sel g d => Dyn::over(tys, strs, sel, g, d), λ sel d => Dyn::fits(tys, strs, sel, d), λ _ x w => Dyn::like(tys, x, w))
+}
+
+// A place's steps from a root, read and modified.
+fn Dyn::read(tys: Nat → Type, strs: Strs(tys), ws: List<Nat>, xs: List<Step>, d: Dyn(tys)) → Dyn(tys) { Steps::at(Dyn::model(tys, strs), ws, xs, d) }
+
+fn Dyn::write(tys: Nat → Type, strs: Strs(tys), ws: List<Nat>, xs: List<Step>, g: Dyn(tys) → Dyn(tys), d: Dyn(tys)) → Dyn(tys) { Steps::over(Dyn::model(tys, strs), ws, xs, g, d) }
+
+// ---------------------------------------------------------------------------
+// One part's laws carry over to the tagged step
+
+record PartLaws(tys: Nat → Type, c: Shape, p: Part(tys, c)) {
+    get_set: (v: El(tys, c)) → p.fits(v) = True → (x: El(tys, p.t)) → p.get(p.set(v, x)) = x,
+    set_set: (v: El(tys, c)) → p.fits(v) = True → (x, y: El(tys, p.t)) → p.set(p.set(v, x), y) = p.set(v, y),
+    still: (v: El(tys, c)) → p.fits(v) = False → (x: El(tys, p.t)) → p.set(v, x) = v,
+}
+
+fn Dyn::OptLaws(tys: Nat → Type, {c: Shape}, o: Option<Part(tys, c)>) → Type { match o { Some(p) => PartLaws(tys, c, p), None => True } }
+
+theorem Dyn::in_still(tys: Nat → Type, {c: Shape}, o: Option<Part(tys, c)>, ol: Dyn::OptLaws(tys, o), g: Dyn(tys) → Dyn(tys), v: El(tys, c), off: Dyn::fits_in(tys, o, v) = False):
+    Dyn::over_in(tys, o, g, v) = v
+{
+    (match o as λ o2 => Dyn::OptLaws(tys, o2) → Dyn::fits_in(tys, o2, v) = False → Dyn::over_in(tys, o2, g, v) = v {
+        Some(p) => λ pl f => pl.still(v, f, Dyn::back(tys, p.t, g(Dyn(p.t, p.get(v))), p.get(v))),
+        None => λ _ _ => refl,
+    })(ol, off)
+}
+
+theorem Dyn::in_over_at(tys: Nat → Type, {c: Shape}, o: Option<Part(tys, c)>, ol: Dyn::OptLaws(tys, o), g: Dyn(tys) → Dyn(tys), v: El(tys, c),
+    on: Dyn::fits_in(tys, o, v) = True, l: Dyn::like(tys, Dyn::at_in(tys, o, v), g(Dyn::at_in(tys, o, v))) = True):
+    Dyn::at_in(tys, o, Dyn::over_in(tys, o, g, v)) = g(Dyn::at_in(tys, o, v))
+{
+    (match o as λ o2 => Dyn::OptLaws(tys, o2) → Dyn::fits_in(tys, o2, v) = True → Dyn::like(tys, Dyn::at_in(tys, o2, v), g(Dyn::at_in(tys, o2, v))) = True →
+            Dyn::at_in(tys, o2, Dyn::over_in(tys, o2, g, v)) = g(Dyn::at_in(tys, o2, v)) {
+        Some(p) => λ pl f l2 => {
+            let w = g(Dyn(p.t, p.get(v)));
+            let x = Dyn::back(tys, p.t, w, p.get(v));
+            trans(cong_fn(λ (y: El(tys, p.t)) => Dyn(p.t, y), pl.get_set(v, f, x)), Dyn::back_like(tys, p.t, w, p.get(v), l2))
+        },
+        None => λ _ no _ => absurd(no),
+    })(ol, on, l)
+}
+
+theorem Dyn::in_over_over(tys: Nat → Type, {c: Shape}, o: Option<Part(tys, c)>, ol: Dyn::OptLaws(tys, o), g, h: Dyn(tys) → Dyn(tys), v: El(tys, c),
+    on: Dyn::fits_in(tys, o, v) = True, lg: Dyn::like(tys, Dyn::at_in(tys, o, v), g(Dyn::at_in(tys, o, v))) = True,
+    lhg: Dyn::like(tys, Dyn::at_in(tys, o, v), h(g(Dyn::at_in(tys, o, v)))) = True):
+    Dyn::over_in(tys, o, h, Dyn::over_in(tys, o, g, v)) = Dyn::over_in(tys, o, λ x => h(g(x)), v)
+{
+    (match o as λ o2 => Dyn::OptLaws(tys, o2) → Dyn::fits_in(tys, o2, v) = True → Dyn::like(tys, Dyn::at_in(tys, o2, v), g(Dyn::at_in(tys, o2, v))) = True →
+            Dyn::like(tys, Dyn::at_in(tys, o2, v), h(g(Dyn::at_in(tys, o2, v)))) = True →
+            Dyn::over_in(tys, o2, h, Dyn::over_in(tys, o2, g, v)) = Dyn::over_in(tys, o2, λ x => h(g(x)), v) {
+        Some(p) => λ pl f l1 l2 => {
+            let r = p.get(v);
+            let w1 = Dyn::back(tys, p.t, g(Dyn(p.t, r)), r);
+            let read: (p.get(p.set(v, w1)) = w1) = pl.get_set(v, f, w1);
+            let tagged: (Dyn(p.t, w1) = g(Dyn(p.t, r))) = Dyn::back_like(tys, p.t, g(Dyn(p.t, r)), r, l1);
+            let inner: (Dyn::back(tys, p.t, h(Dyn(p.t, p.get(p.set(v, w1)))), p.get(p.set(v, w1))) = Dyn::back(tys, p.t, h(g(Dyn(p.t, r))), w1)) =
+                j(sym(read), λ y _ => Dyn::back(tys, p.t, h(Dyn(p.t, y)), y) = Dyn::back(tys, p.t, h(g(Dyn(p.t, r))), w1),
+                    cong_fn(λ (d: Dyn(tys)) => Dyn::back(tys, p.t, h(d), w1), tagged));
+            trans(cong_fn(λ (y: El(tys, p.t)) => p.set(p.set(v, w1), y), inner),
+                trans(pl.set_set(v, f, w1, Dyn::back(tys, p.t, h(g(Dyn(p.t, r))), w1)),
+                    cong_fn(λ (y: El(tys, p.t)) => p.set(v, y), Dyn::back_any(tys, p.t, h(g(Dyn(p.t, r))), w1, r, l2))))
+        },
+        None => λ _ no _ _ => absurd(no),
+    })(ol, on, lg, lhg)
+}
+
+theorem Dyn::in_over_read(tys: Nat → Type, {c: Shape}, o: Option<Part(tys, c)>, g, h: Dyn(tys) → Dyn(tys), v: El(tys, c), e: g(Dyn::at_in(tys, o, v)) = h(Dyn::at_in(tys, o, v))):
+    Dyn::over_in(tys, o, g, v) = Dyn::over_in(tys, o, h, v)
+{
+    (match o as λ o2 => g(Dyn::at_in(tys, o2, v)) = h(Dyn::at_in(tys, o2, v)) → Dyn::over_in(tys, o2, g, v) = Dyn::over_in(tys, o2, h, v) {
+        Some(p) => λ e2 => cong_fn(λ (d: Dyn(tys)) => p.set(v, Dyn::back(tys, p.t, d, p.get(v))), e2),
+        None => λ _ => refl,
+    })(e)
+}
+
+// ---------------------------------------------------------------------------
+// Two parts apart, and two selections apart at `Dyn`
+
+record PartsApart(tys: Nat → Type, c: Shape, p, q: Part(tys, c)) {
+    left_after_right: (v: El(tys, c)) → (y: El(tys, q.t)) → p.get(q.set(v, y)) = p.get(v),
+    right_after_left: (v: El(tys, c)) → (x: El(tys, p.t)) → q.get(p.set(v, x)) = q.get(v),
+    commute: (v: El(tys, c)) → (x: El(tys, p.t)) → (y: El(tys, q.t)) → p.set(q.set(v, y), x) = q.set(p.set(v, x), y),
+}
+
+fn Dyn::OptApart(tys: Nat → Type, {c: Shape}, o1, o2: Option<Part(tys, c)>) → Type {
+    match o1 { Some(p) => match o2 { Some(q) => PartsApart(tys, c, p, q), None => True }, None => True }
+}
+
+theorem PartsApart::symm(tys: Nat → Type, {c: Shape}, {p, q: Part(tys, c)}, ap: PartsApart(tys, c, p, q)): PartsApart(tys, c, q, p) {
+    PartsApart(ap.right_after_left, ap.left_after_right, λ v y x => sym(ap.commute(v, x, y)))
+}
+
+theorem Dyn::opt_apart_symm(tys: Nat → Type, {c: Shape}, o1, o2: Option<Part(tys, c)>, ap: Dyn::OptApart(tys, o1, o2)): Dyn::OptApart(tys, o2, o1) {
+    (match o1 as λ x1 => Dyn::OptApart(tys, x1, o2) → Dyn::OptApart(tys, o2, x1) {
+        None => λ _ => match o2 { Some(_) => trivial, None => trivial },
+        Some(_) => match o2 { None => λ _ => trivial, Some(_) => λ a2 => PartsApart::symm(tys, a2) },
+    })(ap)
+}
+
+theorem Dyn::opt_apart_none(tys: Nat → Type, {c: Shape}, o: Option<Part(tys, c)>): Dyn::OptApart(tys, o, None) { match o { Some(_) => trivial, None => trivial } }
+
+theorem Dyn::in_after(tys: Nat → Type, {c: Shape}, o1, o2: Option<Part(tys, c)>, ap: Dyn::OptApart(tys, o1, o2), g: Dyn(tys) → Dyn(tys), v: El(tys, c)):
+    Dyn::at_in(tys, o1, Dyn::over_in(tys, o2, g, v)) = Dyn::at_in(tys, o1, v)
+{
+    (match o1 as λ x1 => Dyn::OptApart(tys, x1, o2) → Dyn::at_in(tys, x1, Dyn::over_in(tys, o2, g, v)) = Dyn::at_in(tys, x1, v) {
+        None => λ _ => refl,
+        Some(p) => match o2 {
+            None => λ _ => refl,
+            Some(q) => λ a2 => cong_fn(λ (y: El(tys, p.t)) => Dyn(p.t, y), a2.left_after_right(v, Dyn::back(tys, q.t, g(Dyn(q.t, q.get(v))), q.get(v)))),
+        },
+    })(ap)
+}
+
+theorem Dyn::in_commute(tys: Nat → Type, {c: Shape}, o1, o2: Option<Part(tys, c)>, ap: Dyn::OptApart(tys, o1, o2), f, g: Dyn(tys) → Dyn(tys), v: El(tys, c)):
+    Dyn::over_in(tys, o1, f, Dyn::over_in(tys, o2, g, v)) = Dyn::over_in(tys, o2, g, Dyn::over_in(tys, o1, f, v))
+{
+    (match o1 as λ x1 => Dyn::OptApart(tys, x1, o2) → Dyn::over_in(tys, x1, f, Dyn::over_in(tys, o2, g, v)) = Dyn::over_in(tys, o2, g, Dyn::over_in(tys, x1, f, v)) {
+        None => λ _ => refl,
+        Some(p) => match o2 {
+            None => λ _ => refl,
+            Some(q) => λ a2 => {
+                let x = Dyn::back(tys, p.t, f(Dyn(p.t, p.get(v))), p.get(v));
+                let y = Dyn::back(tys, q.t, g(Dyn(q.t, q.get(v))), q.get(v));
+                let left: (p.set(q.set(v, y), Dyn::back(tys, p.t, f(Dyn(p.t, p.get(q.set(v, y)))), p.get(q.set(v, y)))) = p.set(q.set(v, y), x)) =
+                    j(sym(a2.left_after_right(v, y)), λ r _ => p.set(q.set(v, y), Dyn::back(tys, p.t, f(Dyn(p.t, r)), r)) = p.set(q.set(v, y), x), refl);
+                let right: (q.set(p.set(v, x), Dyn::back(tys, q.t, g(Dyn(q.t, q.get(p.set(v, x)))), q.get(p.set(v, x)))) = q.set(p.set(v, x), y)) =
+                    j(sym(a2.right_after_left(v, x)), λ r _ => q.set(p.set(v, x), Dyn::back(tys, q.t, g(Dyn(q.t, r)), r)) = q.set(p.set(v, x), y), refl);
+                trans(left, trans(a2.commute(v, x, y), sym(right)))
+            },
+        },
+    })(ap)
+}
+
+// ---------------------------------------------------------------------------
+// The structures' laws give the parts' laws
+
+theorem Field::part_laws(tys: Nat → Type, {c: Shape}, f: Field(tys, El(tys, c)), fl: FieldLaws(tys, El(tys, c), f)): PartLaws(tys, c, Field::part(tys, f)) {
+    PartLaws(λ v _ x => fl.get_set(v, x), λ v _ x y => fl.set_set(v, x, y), λ v no x => absurd(no))
+}
+
+theorem Dyn::field_part_laws(tys: Nat → Type, k: Nat, i: Nat): (kd: Kind(tys, tys(k))) → KindLaws(tys, kd) → Dyn::OptLaws(tys, Kind::field_part(tys, k, kd, i)) {
+    λ kd => match kd {
+        Opaque => λ _ => trivial,
+        Record(fs) => λ rl => (match fs.nth(i) as λ o => fs.nth(i) = o →
+                Dyn::OptLaws(tys, match o { Some(f) => Some(Field::part(tys, f)), None => None<Part(tys, SNamed(k))>() }) {
+            Some(f) => λ e => Field::part_laws(tys, f, rl.lawful(i, f, e)),
+            None => λ _ => trivial,
+        })(refl),
+    }
+}
+
+theorem Dyn::part_laws(tys: Nat → Type, strs: Strs(tys), sl: StrsLaws(tys, strs), sel: Sel): (c: Shape) → Dyn::OptLaws(tys, Dyn::part(tys, strs, sel, c)) {
+    λ c => match c {
+        SWord(_) => trivial,
+        SNamed(k) => match sel { OnField(i) => Dyn::field_part_laws(tys, k, i, strs(k).kind, sl(k)), OnSeq(_) => trivial, OnKey(_) => trivial, OnVariant(_) => trivial },
+    }
+}
+
+theorem Dyn::span_ne(i, l: Nat, v: Span(i, 1).apart(Span(l, 1)).IsTrue()): ¬(i = l) { λ e => omega(v, e) }
+
+theorem Field::parts_apart(tys: Nat → Type, {c: Shape}, f, g: Field(tys, El(tys, c)), ap: FieldsApart(tys, El(tys, c), f, g)): PartsApart(tys, c, Field::part(tys, f), Field::part(tys, g)) {
+    PartsApart(ap.left_after_right, ap.right_after_left, ap.commute)
+}
+
+theorem Dyn::fields_apart(tys: Nat → Type, k, i, l: Nat, ne: ¬(i = l)): (kd: Kind(tys, tys(k))) → KindLaws(tys, kd) →
+    Dyn::OptApart(tys, Kind::field_part(tys, k, kd, i), Kind::field_part(tys, k, kd, l))
+{
+    λ kd => match kd {
+        Opaque => λ _ => trivial,
+        Record(fs) => λ rl => (match fs.nth(i) as λ o1 => fs.nth(i) = o1 →
+                Dyn::OptApart(tys, match o1 { Some(f) => Some(Field::part(tys, f)), None => None<Part(tys, SNamed(k))>() },
+                    match fs.nth(l) { Some(g) => Some(Field::part(tys, g)), None => None<Part(tys, SNamed(k))>() }) {
+            None => λ _ => trivial,
+            Some(f) => λ ei => (match fs.nth(l) as λ o2 => fs.nth(l) = o2 →
+                    Dyn::OptApart(tys, Some(Field::part(tys, f)), match o2 { Some(g) => Some(Field::part(tys, g)), None => None<Part(tys, SNamed(k))>() }) {
+                None => λ _ => trivial,
+                Some(g) => λ el => Field::parts_apart(tys, f, g, rl.apart(i, l, f, g, ei, el, ne)),
+            })(refl),
+        })(refl),
+    }
+}
+
+theorem Dyn::parts_apart(tys: Nat → Type, strs: Strs(tys), sl: StrsLaws(tys, strs), a, b: Sel, v: a.apart(b).IsTrue()):
+    (c: Shape) → Dyn::OptApart(tys, Dyn::part(tys, strs, a, c), Dyn::part(tys, strs, b, c))
+{
+    λ c => match c {
+        SWord(_) => trivial,
+        SNamed(k) => (match a as λ a2 => a2.apart(b).IsTrue() → Dyn::OptApart(tys, Dyn::part(tys, strs, a2, SNamed(k)), Dyn::part(tys, strs, b, SNamed(k))) {
+            OnField(i) => match b {
+                OnField(l) => λ v2 => Dyn::fields_apart(tys, k, i, l, Dyn::span_ne(i, l, v2), strs(k).kind, sl(k)),
+                OnSeq(_) => λ _ => Dyn::opt_apart_none(tys, Kind::field_part(tys, k, strs(k).kind, i)),
+                OnKey(_) => λ _ => Dyn::opt_apart_none(tys, Kind::field_part(tys, k, strs(k).kind, i)),
+                OnVariant(_) => λ _ => Dyn::opt_apart_none(tys, Kind::field_part(tys, k, strs(k).kind, i)),
+            },
+            OnSeq(_) => λ _ => trivial,
+            OnKey(_) => λ _ => trivial,
+            OnVariant(_) => λ _ => trivial,
+        })(v),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The model's laws, from the structures' laws alone
+
+theorem Dyn::model_laws(tys: Nat → Type, strs: Strs(tys), sl: StrsLaws(tys, strs)): StepModelLaws<Dyn(tys)>(Dyn::model(tys, strs)) {
+    StepModelLaws(
+        λ a g s off => cong_fn(λ (u: El(tys, s.code)) => Dyn(s.code, u), Dyn::in_still(tys, Dyn::part(tys, strs, a, s.code), Dyn::part_laws(tys, strs, sl, a, s.code), g, s.val, off)),
+        λ a g s on l => Dyn::in_over_at(tys, Dyn::part(tys, strs, a, s.code), Dyn::part_laws(tys, strs, sl, a, s.code), g, s.val, on, l),
+        λ a g h s on lg lhg => cong_fn(λ (u: El(tys, s.code)) => Dyn(s.code, u),
+            Dyn::in_over_over(tys, Dyn::part(tys, strs, a, s.code), Dyn::part_laws(tys, strs, sl, a, s.code), g, h, s.val, on, lg, lhg)),
+        λ a g h s e => cong_fn(λ (u: El(tys, s.code)) => Dyn(s.code, u), Dyn::in_over_read(tys, Dyn::part(tys, strs, a, s.code), g, h, s.val, e)),
+        λ _ x => x.code.same_self(),
+        λ _ _ x s h _ => h,
+        λ a b v => ApartAt(
+            λ g s => Dyn::in_after(tys, Dyn::part(tys, strs, a, s.code), Dyn::part(tys, strs, b, s.code), Dyn::parts_apart(tys, strs, sl, a, b, v, s.code), g, s.val),
+            λ g s => Dyn::in_after(tys, Dyn::part(tys, strs, b, s.code), Dyn::part(tys, strs, a, s.code),
+                Dyn::opt_apart_symm(tys, Dyn::part(tys, strs, a, s.code), Dyn::part(tys, strs, b, s.code), Dyn::parts_apart(tys, strs, sl, a, b, v, s.code)), g, s.val),
+            λ f g s => cong_fn(λ (u: El(tys, s.code)) => Dyn(s.code, u),
+                Dyn::in_commute(tys, Dyn::part(tys, strs, a, s.code), Dyn::part(tys, strs, b, s.code), Dyn::parts_apart(tys, strs, sl, a, b, v, s.code), f, g, s.val)),
+        ),
+    )
+}
+
+// The decider's verdict, its obligations holding at the words, gives two
+// places of a `Dyn` apart.
+theorem Dyn::apart(tys: Nat → Type, strs: Strs(tys), sl: StrsLaws(tys, strs), ws: List<Nat>, xs, ys: List<Step>, rs: List<Obligation>,
+    ok: Steps::apart(xs, ys) = Some(rs), hold: Obligation::All(rs, ws)): Steps::Apart(Dyn::model(tys, strs), ws, xs, ys)
+{
+    Steps::apart_sound(Dyn::model(tys, strs), Dyn::model_laws(tys, strs, sl), ws, xs, ys, rs, ok, hold)
+}
