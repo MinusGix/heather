@@ -1395,15 +1395,40 @@ fn rt_name_of(g: GlobalRef, shown: String) → Tac<String> {
 // or, in the generator's mode, a runtime fn not met before, appended (a
 // global `g` is one when `g::rt` is published, which only the `runtime`
 // generator does). `None` for anything else.
+// A `g::words` found by name that is a function's reflection written out
+// (`Setup::of_erased(g, …)`, which the `runtime` generator publishes).
+fn rt_written_of(c: Checked<GlobalRef>) → Tac<Option<GlobalRef>> {
+    match c {
+        Refused(_) => pure(None),
+        Accepted(wg) => body(wg).bind(λ bc => match bc {
+            Refused(_) => pure(None),
+            Accepted(b) => view(b).bind(λ v => match v {
+                HGlobal(_, n, _) => pure(match Known::str_same(rt_base_name(n), "of_erased") { True => Some(wg), False => None }),
+                _ => pure(None),
+            }),
+        }),
+    }
+}
+
+// A callee that takes an erased parameter is compiled from its reflection
+// written out, a function of its words alone, and the table lists that,
+// `g::words` (issues/runtime-erased-pure-shadow.md): the call's erased
+// arguments are dropped (`rt_data_args`), and the code passes the rest.
 fn rt_callee(k: Known, st: RSt, g: GlobalRef, name: String) → Tac<Option<Pair<RSt, Nat>>> {
     match Known::index(st.funs, g.id, 0) {
         Some(i) => pure(Some(Pair(st, i))),
         None => match k.discover {
             False => pure(None),
-            True => rt_name_of(g, name).bind(λ n => lookup(n ++ "::rt")).bind(λ c => match c {
-                Accepted(_) => pure(Some(Pair(st.with_funs(st.funs ++ [g.id]), st.funs.len()))),
+            True => rt_name_of(g, name).bind(λ n => lookup(n ++ "::rt").bind(λ c => match c {
+                Accepted(_) => lookup(n ++ "::words").bind(λ w => rt_written_of(w)).bind(λ written => {
+                    let id = match written { Some(wg) => wg.id, None => g.id };
+                    match Known::index(st.funs, id, 0) {
+                        Some(i) => pure(Some(Pair(st, i))),
+                        None => pure(Some(Pair(st.with_funs(st.funs ++ [id]), st.funs.len()))),
+                    }
+                }),
                 Refused(_) => pure(None),
-            }),
+            })),
         },
     }
 }

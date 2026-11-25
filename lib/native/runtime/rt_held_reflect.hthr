@@ -833,7 +833,7 @@ fn rt_held_callee(k: Known, held: List<HeldCall>, g: GlobalRef, name: String, ar
                     Refused(_) => pure(None),
                     Accepted(_) => lookup(n ++ "::bytes").bind(λ b => match b {
                         Accepted(bytes) => infer(Global(g)).bind(λ c => rt_accepted("a callee's type", c)).bind(λ t => rt_takes_erased(64, t, None)).bind(λ erased => match erased {
-                            True => rt_refuse("a call of a function of a laid record that takes an erased parameter (a proof, an `Erased<A>`) is not taken yet: its caller's meaning names it as a function of the record and words"),
+                            True => rt_refuse("a call of a function of a laid record that takes an erased parameter (a proof, an `Erased<A>`) is not taken yet: its caller's meaning names it as a function of the record and words (issues/runtime-record-calls-erased.md)"),
                             False => rt_call_lent(64, k, operands).bind(λ spans => pure(Some(HeldCall(bytes.id, g, n, operands.len(), spans)))),
                         }),
                         Refused(_) => pure(None),

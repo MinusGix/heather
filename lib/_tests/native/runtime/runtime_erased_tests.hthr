@@ -1,9 +1,13 @@
-// Probes for erased parameters of a `runtime fn` (issues/runtime-erased-parameters.md):
+// Probes for erased parameters of a `runtime fn` (issues/runtime-erased-parameters.md,
+// issues/runtime-erased-pure-shadow.md):
 // a parameter whose type is a proposition (`∥P∥`) or `Erased<A>` is no word
 // of the code, wherever it stands, and what the generator publishes holds at
 // every value of it. Nothing here is proved by hand: each theorem restates or
 // reads what the generator published. Nothing imports this module.
 import runtime_data;
+import function_ir_eval;
+import function_ir_run;
+import rt_file_loop;
 
 fn w(n: Nat) → BitVec(64) { BitVec::ofNat(n) }
 fn b(n: Nat) → BitVec(8) { BitVec::ofNat(n) }
@@ -118,8 +122,10 @@ runtime fn Slots::gen_of(self s: Slots, g: Erased<u64>) → u64 { g.value }
 // expect-error: was left to its default
 fn get_untested(s: Slots, i: u64) → u64 { s.get(i, 0) }
 
-// A function of the record that calls one taking a proof is not taken yet:
-// its meaning names the callee as a function of the record and words.
+// A function of the record that calls one of the record taking a proof is
+// not taken yet: its meaning names the callee as a function of the record
+// and words (issues/runtime-record-calls-erased.md). One calling a function
+// of words that takes a proof is (`Slots::halve`, below).
 // expect-error: takes an erased parameter
 runtime fn Slots::get_first(self s: Slots) → u64 { s.get(0, 0) }
 
@@ -130,21 +136,129 @@ runtime fn Slots::sum_from(self s: Slots, i, acc: u64, g: Erased<u64>) → u64 d
 }
 
 // ---------------------------------------------------------------------------
-// A function of words taking a proof: not compiled yet
+// A function of words taking a proof (issues/runtime-erased-pure-shadow.md):
+// compiled from its reflection written out, `f::words`, a function of the
+// words alone; what is published of `f` holds at every proof.
 
-// It would be compiled as its shadow, its reflection's meaning, which its
-// callers' tables would list (issues/runtime-erased-pure-shadow.md).
-// expect-error: a function of words that takes an erased parameter
 runtime fn erased_div(n, d: u64, nonzero: ∥0 < d.toNat()∥ := bv_omega) → u64 { n / d }
 
-// expect-error: a function of words that takes an erased parameter
-runtime fn erased_pick(g: Erased<u64>, x: u64) → u64 { x }
+// The code's function takes the two words and nothing for the proof.
+fn erased_div_code() → (u64 → u64 → u64) { erased_div::words }
 
-// Nor one over a span: its code is compiled from the function itself.
-// expect-error: a function over a span that takes an erased parameter
+// At literal words the program computes.
+theorem erased_div_runs(): program_eval(erased_div::program, 0, [w(17), w(5)]) = w(3) { refl }
+
+// At open words and an open proof.
+theorem erased_div_agrees(n, d: u64, p: ∥0 < d.toNat()∥): program_eval(erased_div::program, 0, [n, d]) = erased_div(n, d, nonzero := p) {
+    erased_div::agrees(n, d, p)
+}
+
+// The pin, at every proof: the reflection's meaning is the function.
+theorem erased_div_pinned(n, d: u64, p: ∥0 < d.toNat()∥): erased_div::words(n, d) = erased_div(n, d, nonzero := p) {
+    erased_div::reflects(n, d, p)
+}
+
+// An erased datum first, of a type with no layout, beside a word.
+runtime fn erased_pick(g: Erased<List<Nat>>, x: u64) → u64 { x + 1 }
+
+fn erased_pick_code() → (u64 → u64) { erased_pick::words }
+
+theorem erased_pick_agrees(g: Erased<List<Nat>>, x: u64): program_eval(erased_pick::program, 0, [x]) = erased_pick(g, x) { erased_pick::agrees(g, x) }
+
+// Two proofs around a branch: a value bound, a branch on a `Bool`.
+runtime fn erased_clamp(lo: u64, p: ∥lo.toNat() < 100∥, x: u64, q: ∥x.toNat() < 200∥) → u64 {
+    let y = x + lo;
+    if y < 150 { y } else { 150 }
+}
+
+theorem erased_clamp_runs(): program_eval(erased_clamp::program, 0, [w(10), w(20)]) = w(30) ∧ program_eval(erased_clamp::program, 0, [w(90), w(100)]) = w(150) {
+    ⟨refl, refl⟩
+}
+
+theorem erased_clamp_agrees(lo: u64, p: ∥lo.toNat() < 100∥, x: u64, q: ∥x.toNat() < 200∥):
+    program_eval(erased_clamp::program, 0, [lo, x]) = erased_clamp(lo, p, x, q) {
+    erased_clamp::agrees(lo, p, x, q)
+}
+
+// A compiled caller passes a found proof: its code passes no word for it.
+// At a literal divisor the proof is found from the literal.
+runtime fn half_of(n: u64) → u64 { erased_div(n, 2) }
+
+theorem half_of_runs(): program_eval(half_of::program, 1, [w(9)]) = w(4) { refl }
+
+theorem half_of_agrees(n: u64): program_eval(half_of::program, 1, [n]) = half_of(n) { half_of::agrees(n) }
+
+// Its program is it and the callee's function of its words: the caller
+// takes one word, the callee two, and nothing for the proof.
+theorem half_of_table(): half_of::program.len() = 2 ∧ half_of::arities = [1, 2] { ⟨refl, refl⟩ }
+
+// In a checking position: the proof is found from the caller's own test,
+// at an open divisor.
+runtime fn safe_div(n, d: u64) → u64 { if h: 0 < d { erased_div(n, d) } else { 0 } }
+
+theorem safe_div_runs(): program_eval(safe_div::program, 1, [w(17), w(5)]) = w(3) ∧ program_eval(safe_div::program, 1, [w(17), w(0)]) = w(0) {
+    ⟨refl, refl⟩
+}
+
+theorem safe_div_agrees(n, d: u64): program_eval(safe_div::program, 1, [n, d]) = safe_div(n, d) { safe_div::agrees(n, d) }
+
+// A caller that takes a proof itself and passes it on.
+runtime fn erased_div_twice(n, d: u64, nonzero: ∥0 < d.toNat()∥ := bv_omega) → u64 { erased_div(erased_div(n, d), d) }
+
+theorem erased_div_twice_runs(): program_eval(erased_div_twice::program, 1, [w(100), w(3)]) = w(11) { refl }
+
+theorem erased_div_twice_agrees(n, d: u64, p: ∥0 < d.toNat()∥): program_eval(erased_div_twice::program, 1, [n, d]) = erased_div_twice(n, d, nonzero := p) {
+    erased_div_twice::agrees(n, d, p)
+}
+
+// A function of a laid record calling one of words that takes a proof:
+// the call passes the record's field, and no word for the proof.
+runtime fn Slots::halve(self s: Slots) → u64 { erased_div(s.n, 2) }
+
+theorem slots_halve_runs(): Slots::halve::bytes(SLOTS(), w(40)).value = w(4) { refl }
+
+theorem slots_halve_held(own: List<u8>, s: Slots, length: u64, holds: rt_held::Stored::Holds(Slots::stored(), own, length, s)):
+    Slots::halve(s) = Slots::halve::bytes(own, length).value {
+    Slots::halve::runs_held(own, s, length, holds).value
+}
+
+// Negative controls.
+
+// A function of words answering its erased value computes with it.
+// expect-error: an erased parameter (`Erased<A>`) used as runtime data
+runtime fn erased_value(g: Erased<u64>, x: u64) → u64 { g.value + x }
+
+// A call whose proof is missing: nothing bounds the divisor.
+// expect-error: was left to its default
+runtime fn div_untested(n, d: u64) → u64 { erased_div(n, d) }
+
+// A loop that takes a proof waits for the loop combinator.
+// expect-error: it is a loop or a recursion
+runtime fn erased_count(n: u64, p: ∥n.toNat() < 10∥, acc: u64) → u64 decreases n.toNat() {
+    if h: 0 < n { erased_count(n - 1, bv_omega, acc + 1) } else { acc }
+}
+
+// A function over a span taking a proof: written out as a function of a
+// `Bytes(n)` is, its run stated against it at every proof.
 runtime fn List::erased_put(mut self s: List<u8>, n, i: u64, inside: ∥i < n∥ := bv_omega, x: u64) → u64 {
     s.put_u64_be_within(n, i, x);
     1
+}
+
+// Its code takes the span, its length word, `i` and `x`.
+fn erased_put_code() → (List<u8> → u64 → u64 → u64 → Mutated<List<u8>, u64>) { List::erased_put::bytes }
+
+// Its program: it and what its store reaches.
+theorem erased_put_program(): List::erased_put::program.len() = 3 { refl }
+
+// At literal bytes: the word stored big-endian from byte 1.
+theorem erased_put_bytes(): List::erased_put::bytes([b(0), b(0), b(0), b(0), b(0), b(0), b(0), b(0), b(0), b(0)], w(10), w(1), w(258)) =
+    Mutated([b(0), b(0), b(0), b(0), b(0), b(0), b(0), b(1), b(2), b(0)], w(1)) { refl }
+
+// At an open span, open words and an open proof.
+theorem erased_put_runs(span: List<u8>, rest: List<List<u8>>, place, n, i: u64, p: ∥i < n∥, x: u64):
+    program_run(List::erased_put::program, Cons(span, rest), 2, [place, n, i, x]) = FTm::end_of(rest, List::erased_put(span, n, i, x, inside := p)) {
+    List::erased_put::runs_over(span, rest, place, n, i, x, p)
 }
 
 // ---------------------------------------------------------------------------
