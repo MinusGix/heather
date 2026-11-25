@@ -3114,12 +3114,12 @@ fn runtime_while_loop(name: String, q: RtQ, ts: RtTypes, w_e: Expr, under: Local
     let bool_t <- infer(Hd(turn.fst)).or_fail("runtime: `" ++ lname ++ "`'s test: ");
     let bools <- runtime_ctors_at(bool_t);
     let e <- assume(Equation(Hd(turn.fst), runtime_at(bools, 1)), "e", Some(hyp)).or_fail("runtime: `" ++ lname ++ "`'s test: ");
-    // The next word, held where the loop's word is: the next state where
+    // The next word, held where the words are all bound: the next state where
     // the test holds, which does not read the proof that it does.
-    let word_here <- infer(first(vs)).or_fail("runtime: `" ++ lname ++ "`'s word: ");
+    let word_here <- infer(ap(Local(k_ref), [RtQ::seq(word_list, runtime_locals(vs))])).or_fail("runtime: `" ++ lname ++ "`'s word: ");
     let next_hole <- hole(word_here).or_fail("runtime: `" ++ lname ++ "`'s next word: ");
     let found_next <- defeq(App(Hd(turn.snd), Local(e.ref)), Hd(next_hole));
-    let next_e <- match found_next { True => pure(Hd(next_hole)), False => runtime_fail("`" ++ lname ++ "`'s next state reads its test's proof") };
+    let next_e <- match found_next { True => pure(Hd(next_hole)), False => fail("runtime: `" ++ lname ++ "`'s next state reads its test's proof", [At(App(Hd(turn.snd), Local(e.ref)), Tried("next state", "not a word without the proof"))]) };
     // The measure and the function again, as the pass's body reads them
     // (a `Lam` is written where its binders are opened).
     let xs5 <- runtime_params(ts.word, sg, Some(hyp), 0);

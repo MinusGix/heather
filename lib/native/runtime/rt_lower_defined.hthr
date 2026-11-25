@@ -382,16 +382,20 @@ theorem Tm::node_defined_at(i0: Nat, irest: List<Nat>, body: Tm, w: World, ok: T
     let lower_body = λ (pc: PassAt) (ps: List<Nat>) (k: Nat) => Tm::lower_in(body, w, Some(pc), inner, ps, k);
     let pa = PassAt(res, Tm::loop_flag(sg, next), Tm::loop_ns(sg, next));
     let P = λ (r: Option<Lowered>) => Tm::DefinedHolds(Loop(inits, body), w, ok, g, ports, next, r);
+    let span_ok = res.span(tys).leb(sg.len());
     Option::and_then_elim(P, trivial, Tm::self_args(w, g, ports, inits), λ qs =>
-        Ty::check_one_words(tys, sg).and_then(λ _ => res.check_one_word(tys).and_then(λ _ =>
+        Ty::check_one_words(tys, sg).and_then(λ _ => res.check_answer(tys).and_then(λ _ => Tm::check_true(span_ok).and_then(λ _ =>
         lower_body(pa, Fun::ports_onto(sg, next + 1, Nil), Tm::loop_flag(sg, next) + 1).and_then(λ t =>
-        Some(Tm::loop_region(sg, qs, next, t))))), λ qs e_qs =>
-    Option::and_then_elim(P, trivial, Ty::check_one_words(tys, sg), λ _ => res.check_one_word(tys).and_then(λ _ =>
+        Some(Tm::loop_region(sg, qs, next, t)))))), λ qs e_qs =>
+    Option::and_then_elim(P, trivial, Ty::check_one_words(tys, sg), λ _ => res.check_answer(tys).and_then(λ _ => Tm::check_true(span_ok).and_then(λ _ =>
         lower_body(pa, Fun::ports_onto(sg, next + 1, Nil), Tm::loop_flag(sg, next) + 1).and_then(λ t =>
-        Some(Tm::loop_region(sg, qs, next, t)))), λ one_words _ =>
-    Option::and_then_elim(P, trivial, res.check_one_word(tys), λ _ =>
+        Some(Tm::loop_region(sg, qs, next, t))))), λ one_words _ =>
+    Option::and_then_elim(P, trivial, res.check_answer(tys), λ _ => Tm::check_true(span_ok).and_then(λ _ =>
         lower_body(pa, Fun::ports_onto(sg, next + 1, Nil), Tm::loop_flag(sg, next) + 1).and_then(λ t =>
-        Some(Tm::loop_region(sg, qs, next, t))), λ er _ =>
+        Some(Tm::loop_region(sg, qs, next, t)))), λ er _ =>
+    Option::and_then_elim(P, trivial, Tm::check_true(span_ok), λ _ =>
+        lower_body(pa, Fun::ports_onto(sg, next + 1, Nil), Tm::loop_flag(sg, next) + 1).and_then(λ t =>
+        Some(Tm::loop_region(sg, qs, next, t))), λ _ _ =>
     Option::and_then_elim(P, trivial, lower_body(pa, Fun::ports_onto(sg, next + 1, Nil), Tm::loop_flag(sg, next) + 1), λ t =>
         Some(Tm::loop_region(sg, qs, next, t)), λ t lowered_t =>
     λ call agree defines oks values env held below quiet calls ends => {
@@ -404,7 +408,7 @@ theorem Tm::node_defined_at(i0: Nat, irest: List<Nat>, body: Tm, w: World, ok: T
         let step = λ (v: Valuation()) => pass.eval(call, v, buffers := w.spans);
         let junk = λ (ys: List<BitVec(64)>) => Ty::read_words(res, tys, ys);
         let fin = λ (e: LoopEnd) => Tm::loop_end(tys, res, junk, e);
-        let ok_res: res.Answer(tys) = Ty::one_word_answer(tys, res, er);
+        let ok_res: res.Answer(tys) = er;
         let m = ends.witness;
         let bounded = ends.proof.left;
         let h = ends.proof.right.witness;
@@ -485,7 +489,7 @@ theorem Tm::node_defined_at(i0: Nat, irest: List<Nat>, body: Tm, w: World, ok: T
         let fits: (m(xs0) < until_passes()) = j(same_fuel, λ n _ => m(xs0) < n, within);
         until_defined_of_measure(step, λ (v: Valuation()) => pass.defined_over(w.spans, call, defines, v), ps1, exit, ns1, inv, m,
             λ st _ => pass.quiet_defined(w.spans, call, defines, quiet, until_valuation(ps1, st)), decreases, until_passes(), xs0, len0, fits)
-    }))))
+    })))))
 }
 
 theorem Tm::node_defined(inits: List<Nat>, body: Tm, w: World, ok: Tm::Oracle(w), g: List<Ty>, ports: List<Nat>, next: Nat):
