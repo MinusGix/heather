@@ -933,6 +933,17 @@ fn projected(t: &Term) -> Option<Rc<Term>> {
         };
         return Some(if first { fst } else { snd });
     }
+    // So is a packed tail's (`ExprElab::packed_vec_tail`): left unread, every
+    // element past the packing point kept a projection chain from the
+    // literal's root as deep as its position, which the kernel re-walked per
+    // element — a literal's read quadratic in its packed length
+    // (issues/list-literal-evaluation-quadratic.md).
+    if let Term::VecLit { level, elem, zero, one, width, bits } = &*inner {
+        let Term::Pair { fst, snd, .. } = heather_kernel::term::vec_lit_unfold(level, elem, zero, one, *width, *bits) else {
+            unreachable!("a vector literal unfolds to a pair")
+        };
+        return Some(if first { fst } else { snd });
+    }
     let (fst, snd) = crate::spelling::pair_of(&inner)?;
     Some(Rc::clone(if first { fst } else { snd }))
 }

@@ -227,6 +227,16 @@ evaluates to an ordinary `Pair` with a `VecLit` tail — one pair per demanded
 bit, still never the whole chain. So the "must stay structural" requirement
 is met by the value path, not by refusing the term.
 
+**Every syntax reader that takes a literal vector apart reads through it.**
+The kernel's `Fst`/`Snd` arms do (§3.2–3.3), and so must any elaborator walk
+that contracts a projection off a literal's vector: the collection-literal
+spine walk (`projected` in `crates/elab/src/literals.rs`) read through a
+`Pair` and a `VecItems` but not a `VecLit`, so every element of a packed
+tail kept a projection chain from the literal's root as deep as its
+position, and a two-valued list literal's read was quadratic in its packed
+length (`issues/list-literal-evaluation-quadratic.md`). The one-step view
+is `term::vec_lit_unfold`.
+
 ### 3.2 The syntax domain
 
 `Term::NatLit`'s footprint is the template, and it is small. Each site below
