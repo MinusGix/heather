@@ -194,6 +194,75 @@ theorem FFun::pick_same<A>(b: Bool, yes, no: A, same: b = True → yes = no): (m
 // every key, which is what the function's own `f::ext` can use (it asks
 // its recursions to agree at every span, read or written), and a pass's own
 // recursion is `again` at its world's key. The measure may read the key.
+// ---------------------------------------------------------------------------
+// A measured span function as a loop node (docs/language/loop-combinator-design.md
+// §6.10, step b): its node's rounds, from a state within the measure, are
+// the function, by `Loop::rounds_agree_below`; each pass agrees by
+// `FFun::Guarded`, read through `FTm::sem_in_tail`.
+
+// A word read at a one-word code and back, and the other way round.
+theorem FTm::recast_out_in(tys: Table, R: Ty, er: R.OneWord(tys), u: Mutated<List<BitVec(8)>, BitVec(64)>):
+    FTm::recast(tys, R, Word(64), FTm::recast(tys, Word(64), R, u)) = u {
+    cong_fn(λ (x: BitVec(64)) => Mutated(u.after, x), Tm::out_into(tys, R, er, u.value))
+}
+
+theorem FTm::recast_in_out(tys: Table, R: Ty, er: R.OneWord(tys), u: Mutated<List<BitVec(8)>, R.sem(tys)>):
+    FTm::recast(tys, Word(64), R, FTm::recast(tys, R, Word(64), u)) = u {
+    cong_fn(λ (v: R.sem(tys)) => Mutated(u.after, v), Ty::one_word_back(tys, R, er, u.value))
+}
+
+// The node's rounds, from a state of as many words as the parameters and
+// within the measure, are the function at that state.
+theorem FTm::node_means(ws: List<Ty>, body: FTm, fw: FWorld,
+    er: body.ty(fw.w, fw.fsigs, Ty::bind_onto(ws, Nil)).OneWord(fw.w.tys),
+    pass_ok: body.PassOk(fw.w, fw.fsigs, body.ty(fw.w, fw.fsigs, Ty::bind_onto(ws, Nil)), Ty::bind_onto(ws, Nil)),
+    h: FTm::Sem(fw.w.tys, Sig(ws, body.ty(fw.w, fw.fsigs, Ty::bind_onto(ws, Nil)))), m: List<BitVec(64)> → List<BitVec(8)> → Nat,
+    guarded: FFun::Guarded(ws, body.ty(fw.w, fw.fsigs, Ty::bind_onto(ws, Nil)), body, fw, h, m), n: Nat,
+    st: Mutated<List<BitVec(8)>, List<BitVec(64)>>, len: st.value.len() = ws.len(), within: m(st.value, st.after) < n):
+    loop::Loop::rounds(n, λ a s => FTm::node_body(fw, ws, body, a, s), λ s => FTm::node_stuck(fw.w.tys, body.ty(fw.w, fw.fsigs, Ty::bind_onto(ws, Nil)), s), st)
+        = FTm::recast(fw.w.tys, Word(64), body.ty(fw.w, fw.fsigs, Ty::bind_onto(ws, Nil)),
+            FFun::uncurry(fw.w.tys, ws, body.ty(fw.w, fw.fsigs, Ty::bind_onto(ws, Nil)), h, st.value, st.after)) {
+    let tys = fw.w.tys;
+    let inner = Ty::bind_onto(ws, Nil);
+    let R = body.ty(fw.w, fw.fsigs, inner);
+    let S = Mutated<List<BitVec(8)>, List<BitVec(64)>>;
+    let V = Mutated<List<BitVec(8)>, R.sem(tys)>;
+    let M = λ (s: S) => m(s.value, s.after);
+    let ok = λ (s: S) => s.value.len() = ws.len();
+    let f = λ (s: S) => FTm::recast(tys, Word(64), R, FFun::uncurry(tys, ws, R, h, s.value, s.after));
+    let P = λ (a: S → V) (s: S) => FTm::node_body(fw, ws, body, a, s);
+    let stuck = λ (s: S) => FTm::node_stuck(tys, R, s);
+    let G = λ (xs: List<BitVec(64)>) => (own: List<BitVec(8)>) →
+        (again: List<BitVec(64)> → List<BitVec(8)> → Mutated<List<BitVec(8)>, BitVec(64)>) →
+        ((ys: List<BitVec(64)>) → (o: List<BitVec(8)>) → ys.len() = ws.len() → m(ys, o) < m(xs, own) →
+            again(ys, o) = FFun::uncurry(tys, ws, R, h, ys, o)) →
+        FTm::recast(tys, R, Word(64), body.tail_sem(fw, R, λ (ys: List<BitVec(64)>) (o: List<BitVec(8)>) =>
+                FTm::recast(tys, Word(64), R, again(ys, o)), inner, Ty::extend(tys, ws, Nil, trivial, xs), own)) =
+            FFun::uncurry(tys, ws, R, h, xs, own);
+    let pass = λ (s: S) (oks: ok(s)) (k: S → V) (agree: (b: S) → ok(b) → M(b) < M(s) → k(b) = f(b)) => {
+        let xs = s.value;
+        let own = s.after;
+        let env = Ty::extend(tys, ws, Nil, trivial, xs);
+        let again = λ (ys: List<BitVec(64)>) (o: List<BitVec(8)>) => FTm::recast(tys, R, Word(64), k(Mutated(o, ys)));
+        let agree_again = λ (ys: List<BitVec(64)>) (o: List<BitVec(8)>) (l: ys.len() = ws.len()) (lt: m(ys, o) < m(xs, own)) =>
+            trans(cong_fn(λ (u: V) => FTm::recast(tys, R, Word(64), u), agree(Mutated(o, ys), l, lt)),
+                FTm::recast_out_in(tys, R, er, FFun::uncurry(tys, ws, R, h, ys, o)));
+        let guard: (FTm::recast(tys, R, Word(64), body.tail_sem(fw, R, λ (ys: List<BitVec(64)>) (o: List<BitVec(8)>) =>
+                FTm::recast(tys, Word(64), R, again(ys, o)), inner, env, own)) = FFun::uncurry(tys, ws, R, h, xs, own)) =
+            Ty::for_words_at(ws, G, guarded, xs, oks)(own, again, agree_again);
+        let ext: (body.tail_sem(fw, R, λ (ys: List<BitVec(64)>) (o: List<BitVec(8)>) => FTm::recast(tys, Word(64), R, again(ys, o)), inner, env, own)
+            = body.tail_sem(fw, R, FTm::as_round(tys, R, k), inner, env, own)) =
+            FTm::tail_sem_ext(body, fw, R, λ (ys: List<BitVec(64)>) (o: List<BitVec(8)>) => FTm::recast(tys, Word(64), R, again(ys, o)),
+                FTm::as_round(tys, R, k), λ ys o => FTm::recast_in_out(tys, R, er, k(Mutated(o, ys))), inner, env, own);
+        let bridge: (P(k, s) = body.tail_sem(fw, R, FTm::as_round(tys, R, k), inner, env, own)) =
+            trans(sym(FTm::recast_self(tys, R, P(k, s))), FTm::sem_in_tail(body, fw, R, k, inner, pass_ok, env, own));
+        let out: (FTm::recast(tys, R, Word(64), P(k, s)) = FFun::uncurry(tys, ws, R, h, xs, own)) =
+            trans(cong_fn(λ (u: V) => FTm::recast(tys, R, Word(64), u), trans(bridge, sym(ext))), guard);
+        trans(sym(FTm::recast_in_out(tys, R, er, P(k, s))), cong_fn(λ (u: Mutated<List<BitVec(8)>, BitVec(64)>) => FTm::recast(tys, Word(64), R, u), out))
+    };
+    loop::Loop::rounds_agree_below(M, ok, f, P, stuck, pass, n, st, len, within)
+}
+
 fn FFun::GuardedBy<I, K>(ws: List<Ty>, res: Ty, body: FTm, worlds: I → FWorld, h: (i: I) → FTm::Sem(worlds(i).w.tys, Sig(ws, res)), key: I → K,
     value: K → List<BitVec(64)> → List<BitVec(8)> → Mutated<List<BitVec(8)>, BitVec(64)>, m: K → List<BitVec(64)> → List<BitVec(8)> → Nat) → Type {
     (i: I) → Ty::ForWords(ws, λ (xs: List<BitVec(64)>) => (own: List<BitVec(8)>) →
