@@ -1759,7 +1759,7 @@ second compiler goes, which is where `native-one-compiler` was heading.
 
 Not yet known: whether the structured-control lowering and the frame proofs
 are generic in the body's invariant, so cited, or must be redone. Reading
-those two proofs opens stage 2.
+those two proofs opens stage 2. (Read: §17.6.)
 
 ### 17.5 Stages
 
@@ -1786,6 +1786,98 @@ the held meaning; stage 5's scratch build is its test.
 
 The experiments' modules (`place_check`, `call_check`, `reference_cells`)
 are deleted when the real modules exist.
+
+### 17.6 Stage 2's language as built (2026-11-25)
+
+`lib/native/bytes_level/` (`issues/bytes-level-language.md` has the log,
+`lib/_tests/native/bytes_level/` the probes).
+
+**The reading.** The structured lowering (`function_ir_lower_structured`)
+is about words and control only: its invariant is registers alone. The
+call, loop and frame proofs of `function_ir_lower_calls` reach memory
+through one clause, `Stack::Trail` in `EmitsOver`, and use it only for
+its stability under the frame's own stores. So they can be cited by a new
+memory layer once that clause is a parameter with that one law. Whether
+to make that generalisation is open (the issue's log states it exactly).
+`StructuredRegion` itself is not reused: its leaves have buffer nodes and
+its meaning is relational. The new language states its own regions with
+the same shapes so that the lowering can reuse the emission and the
+word-and-control theorems.
+
+**The language** (`bytes_level`, as revised the same day by the
+coordinator's round on the world and non-terminating loops). Values are
+words and references (`reference_cells`' `Value`, until the heap's move).
+A run is at a configuration: a routine's ids (its words in a FunctionIR
+valuation, so a wrapped node (`Compute`) runs as FunctionIR's evaluator runs
+it, unedited, and references beside them), memory (the heap and its
+undefined bytes), and the world (`linux_world`'s `Io`). Nodes: `Compute`, a
+load and a store of 1, 2, 4 or 8 bytes, a reference's load and store,
+`Offset` and a typed `Copy`. Regions: a leaf, a sequence, a branch, a call,
+a plain loop, a system call (`Sys`: read and write so far) and `Exit`. The
+one meaning is a family over fuel, `run(p, blocks, n, f, args, heap, io) →
+Ran<Answer>`, where `Ran` is one of `Done`, `Exited`, `Going` with the world
+so far, or `Stuck` (no meaning). It is monotone in fuel (`run_monotone`,
+`run_settled`, `bytes_level_fuel`). Calls and loop passes spend fuel, so
+routines are tied by fuel and not by levels. Validity checks every id's
+kind (`Program::valid`, a system call's descriptor and count among them),
+and that check is what replaces `placeless`. Placelessness is `run_renames`
+and `run_words_alike` (`bytes_level_renames`), proved once for the
+language, fuel by fuel; a renaming is the identity on the world, because a
+command carries only words and bytes.
+
+**Choices this made**, each the default taken where §17.2–17.3 left it
+open:
+
+- *What is fixed for a run is beside the program, not in what it answers*:
+  `Blocks` says which blocks may be written, and the heap holds contents.
+  With references, which block a store hits is dynamic, so a store into a
+  block the run may not write is `Stuck`. One writability per block per
+  run is the grain; read-only-ness per call is proved above, by the
+  checker. Lengths stay the heap's (its bytes are lists): a second copy
+  would need an invariant tying the two.
+- *A byte is plain, part of a reference, or undefined.* A load of an
+  undefined byte is `Stuck`; a store defines; a failed read leaves its
+  window undefined; a typed copy carries undefinedness.
+- *Every memory operation is a take or a put of a piece* (bytes, the
+  references wholly among them at offsets of their own, and which bytes
+  are undefined). A word's load is a take holding no reference and nothing
+  undefined. A reference's load is a take of eight bytes holding one at its
+  start. A store is a put of bytes, a reference's store a put of eight zero
+  bytes holding it, and a typed copy a take and a put. So there are two
+  site facts and two renaming lemmas, and each lowering lemma will be one
+  `Injected` lemma per primitive.
+- *Canonical by construction*: a reference's bytes and an undefined byte
+  are zero (`Memory::Canonical`, kept by every put and so by every run:
+  `run_canonical`, `bytes_level_canonical`). That entries are apart from
+  each other is kept by construction too but not yet stated; the passes'
+  congruence needs it (`issues/bytes-level-passes.md`).
+- *`Refines` has three clauses* (the coordinator's): answers and exits of
+  `p` are `q`'s; a history `p` reaches while going is a prefix of one `q`
+  reaches; a history `q` reaches is a prefix of one `p` reaches unless `p`
+  gets stuck. Heaps are compared as they read (`Memory::Same`); there is no
+  function extensionality. `refines_refl` is proved. Transitivity does not
+  hold as stated: a stuck `q` lets the third clause of `(q, s)` say nothing,
+  while `p`, which `q` refines, may diverge silently. The usual repair is
+  CompCert's: `Stuck` carries the history it was stuck after, and the third
+  clause's exception is "`p` stuck after a prefix of that history".
+- *Widths stay FunctionIR's*: validity checks kinds, not the widths of word
+  nodes, which the leaf's lowering tracks as it does today.
+- *`Offset` adds a word as a number*: a reference below its block's start
+  is not expressible yet. A window is carved forward from a base.
+
+**Cost** (shapes, `--timings` per declaration). Each module's own
+declarations check in about a second or less in all; the costliest are
+the canonical lemmas' `omega` steps. The renaming and fuel proofs are
+linear in the language's constructors. `run` on the probes is a few
+thousand kernel steps per run. On the experiment's heap (blocks as a
+closure per store) a read of one block through stores into another is
+quadratic in the stores; blocks as a list by number is the linear form.
+
+**What follows.** The lowering under `Site::Meets`
+(`issues/bytes-level-lowering.md`), the translation of FunctionIR programs
+and the comparison over `crates/linked`'s exports
+(`issues/bytes-level-translation.md`), and the passes
+(`issues/bytes-level-passes.md`).
 
 ## 18. The world, termination, and level 2 fixed (2026-11-25)
 
