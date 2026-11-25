@@ -409,3 +409,24 @@ theorem copy_below_pin<T>(xs: List<T>, i, j: Nat, inside: j < xs.len()): (d: T) 
 {
     λ d => cong_fn(λ (y: T) => xs.update(i, λ _ => y), sym(xs.at_below_total(j, inside, d)))
 }
+
+// ---------------------------------------------------------------------------
+// The step lemma at `Dyn`: a store through `ps[i].x` (block 0) keeps the
+// view `ps[i].y` of the same block, and any view of block 1, with no look
+// inside a code.
+
+theorem store_x_keeps_y(heap: List<Dyn(pt_tys())>, i: Nat, x: Dyn(pt_tys())):
+    View(0, [SElem(Var(0)), SField(1)]).read(Dyn::model_rel(pt_tys(), pt_strs()), [i], View(0, [SElem(Var(0)), SField(0)]).write(Dyn::model_rel(pt_tys(), pt_strs()), [i], heap, x))
+        = View(0, [SElem(Var(0)), SField(1)]).read(Dyn::model_rel(pt_tys(), pt_strs()), [i], heap)
+{
+    View::write_keeps(Dyn::model_rel(pt_tys(), pt_strs()), Dyn::model_laws_rel(pt_tys(), pt_strs(), pt_strs_laws()), [i], heap,
+        View(0, [SElem(Var(0)), SField(0)]), View(0, [SElem(Var(0)), SField(1)]), x, Places(refl, Nil, refl, trivial))
+}
+
+theorem store_x_keeps_other_block(heap: List<Dyn(pt_tys())>, i: Nat, xs: List<Step>, x: Dyn(pt_tys())):
+    View(1, xs).read(Dyn::model_rel(pt_tys(), pt_strs()), [i], View(0, [SElem(Var(0)), SField(0)]).write(Dyn::model_rel(pt_tys(), pt_strs()), [i], heap, x))
+        = View(1, xs).read(Dyn::model_rel(pt_tys(), pt_strs()), [i], heap)
+{
+    View::write_keeps(Dyn::model_rel(pt_tys(), pt_strs()), Dyn::model_laws_rel(pt_tys(), pt_strs(), pt_strs_laws()), [i], heap,
+        View(0, [SElem(Var(0)), SField(0)]), View(1, xs), x, Blocks(λ no => absurd(no)))
+}

@@ -746,10 +746,10 @@ theorem Dyn::in_set_none(tys: Nat → Type, sel: Sel, {c: Shape}, pt: Part(tys, 
     h: Dyn::take_in(tys, pt, v) = None): Dyn::put_in(tys, pt, v, w) = v
 {
     let none: (pt.p.get(v) = None) = Dyn::none_at(tys, pt, v, h);
-    (match Shape::dec(w.code, pt.t) as λ r => (match r { Inl(h2) => pt.p.set(v, Shape::cast(tys, h2, w.val)), Inr(_) => v }) = v {
+    match Shape::dec(w.code, pt.t) {
         Inl(h2) => pl.set_none(v, Shape::cast(tys, h2, w.val), none),
         Inr(_) => refl,
-    })
+    }
 }
 
 theorem Dyn::in_reads_fit(tys: Nat → Type, sel: Sel, {c: Shape}, pt: Part(tys, c), pl: Dyn::PartLaws(tys, sel, pt), v: El(tys, c), a: Dyn(tys),
@@ -902,11 +902,10 @@ theorem Dyn::size_cast(tys: Nat → Type, c: Shape, w: El(tys, c)): (t: Shape) �
 theorem Dyn::seq_put_len(tys: Nat → Type, strs: Strs(tys), x: Shape, q: SeqSel, w: List<El(tys, x)>, v: Dyn(tys)):
     List::len(Dyn::put_in(tys, Dyn::seq_part(tys, strs, x, q), w, v)) = List::len(w)
 {
-    (match Shape::dec(v.code, Dyn::seq_part(tys, strs, x, q).t) as λ r =>
-            List::len(match r { Inl(h) => Dyn::seq_part(tys, strs, x, q).p.set(w, Shape::cast(tys, h, v.val)), Inr(_) => w }) = List::len(w) {
+    match Shape::dec(v.code, Dyn::seq_part(tys, strs, x, q).t) {
         Inl(h) => Dyn::seq_part_in(tys, strs, x, q).shape(w, Shape::cast(tys, h, v.val)),
         Inr(_) => refl,
-    })
+    }
 }
 
 theorem Dyn::put_size(tys: Nat → Type, strs: Strs(tys), b: Sel, c: Shape, w: El(tys, c), v: Dyn(tys)):
@@ -1093,4 +1092,59 @@ theorem Dyn::apart(tys: Nat → Type, strs: Strs(tys), sl: StrsLaws(tys, strs), 
     Apart<Dyn(tys), Dyn(tys), Dyn(tys)>(Steps::denote(Dyn::model_rel(tys, strs).steps(), ws, xs), Steps::denote(Dyn::model_rel(tys, strs).steps(), ws, ys))
 {
     Steps::apart_sound_rel(Dyn::model_rel(tys, strs), Dyn::model_laws_rel(tys, strs, sl), ws, xs, ys, rs, ok, hold)
+}
+
+// ---------------------------------------------------------------------------
+// Level 2 in miniature: a heap of blocks of one sort, a view as a block and
+// steps, and the step lemma a single-sorted soundness proof rests on, from
+// the relative laws alone
+//
+// A store through a view leaves every view the decider finds apart from it
+// reading what it read: in another block by the heap's frame, in the same
+// block by `Steps::apart_sound_rel`. Nothing here looks inside a value of
+// `S`, so at `S = Dyn` nothing looks inside a code.
+
+record View { b: Nat, steps: List<Step> }
+
+fn View::read<S>(self r: View, m: StepModelRel<S>, ws: List<Nat>, heap: List<S>) → Option<S> {
+    heap.nth(r.b).and_then(λ o => Steps::denote(m.steps(), ws, r.steps).get(o))
+}
+
+fn View::write<S>(self r: View, m: StepModelRel<S>, ws: List<Nat>, heap: List<S>, x: S) → List<S> {
+    heap.update(r.b, λ o => Steps::denote(m.steps(), ws, r.steps).set(o, x))
+}
+
+theorem List::nth_update_map<A>(self xs: List<A>): (i: Nat) → (f: A → A) → xs.update(i, f).nth(i) = xs.nth(i).map(f) {
+    match xs { Nil => λ i f => refl, Cons(_, t) => λ i => match i { Zero => λ f => refl, Succ(k) => λ f => t.nth_update_map(k, f) } }
+}
+
+// Two views apart: in different blocks, or in one block where the decider
+// answers and its obligations hold.
+inductive ViewsApart(ws: List<Nat>, r, r2: View) {
+    Blocks(ne: ¬(r2.b = r.b)),
+    Places(same: r2.b = r.b, rs: List<Obligation>, ok: Steps::apart(r2.steps, r.steps) = Some(rs), hold: Obligation::All(rs, ws)),
+}
+
+theorem View::same_block<S>(m: StepModelRel<S>, ws: List<Nat>, heap: List<S>, r, r2: View, x: S, same: r2.b = r.b,
+    ap: Apart<S, S, S>(Steps::denote(m.steps(), ws, r2.steps), Steps::denote(m.steps(), ws, r.steps))): r2.read(m, ws, r.write(m, ws, heap, x)) = r2.read(m, ws, heap)
+{
+    let f = λ (o: S) => Steps::denote(m.steps(), ws, r.steps).set(o, x);
+    let at: (heap.update(r.b, f).nth(r2.b) = heap.nth(r2.b).map(f)) =
+        j(same, λ c _ => heap.update(c, f).nth(r2.b) = heap.nth(r2.b).map(f), heap.nth_update_map(r2.b, f));
+    trans(cong_fn(λ (o: Option<S>) => o.and_then(λ y => Steps::denote(m.steps(), ws, r2.steps).get(y)), at),
+        (match heap.nth(r2.b) as λ o => o.map(f).and_then(λ y => Steps::denote(m.steps(), ws, r2.steps).get(y)) = o.and_then(λ y => Steps::denote(m.steps(), ws, r2.steps).get(y)) {
+            Some(y) => ap.left_after_right(y, x),
+            None => refl,
+        }))
+}
+
+// The step lemma: a store through `r` keeps every view apart from it.
+theorem View::write_keeps<S>(m: StepModelRel<S>, ml: StepModelLawsRel<S>(m), ws: List<Nat>, heap: List<S>, r, r2: View, x: S, apart: ViewsApart(ws, r, r2)):
+    r2.read(m, ws, r.write(m, ws, heap, x)) = r2.read(m, ws, heap)
+{
+    match apart {
+        Blocks(ne) => cong_fn(λ (o: Option<S>) => o.and_then(λ y => Steps::denote(m.steps(), ws, r2.steps).get(y)),
+            heap.nth_update_other(r.b, λ o => Steps::denote(m.steps(), ws, r.steps).set(o, x), r2.b, ne)),
+        Places(same, rs, ok, hold) => View::same_block(m, ws, heap, r, r2, x, same, Steps::apart_sound_rel(m, ml, ws, r2.steps, r.steps, rs, ok, hold)),
+    }
 }
