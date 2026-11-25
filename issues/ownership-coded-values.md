@@ -90,3 +90,36 @@ Items 1 to 7 are answered with probes in `lib/_tests`, the log reports what pins
   - The uncoded twin is in line with the checker branch's own measurements (its let-chain pin was 154k at 512, this one 152k), so the factor is against a fair baseline. Part of it is the fixture's generality (places, `obj_at`, the object list), not the codes.
 
   **8. Not built.** It asks for one step lemma "from `StepModelLaws` alone", and item 2 refutes those laws at `Dyn` as stated. With the relative fit of item 2 it is the next thing to try.
+- 2026-11-25: Second round, after the coordinator's answers: the relative laws, a branch that names its output, and how real sources spell reads.
+
+  **1. Laws relative to the read: the candidate replacement for `StepModelLaws`.** All three asks hold.
+  - The definitions:
+    - `PathLawsRel(p, fits: V → V → Bool)` takes `fits(read, written)`.
+    - `set_get` and `set_set` hold under the fit against the step's read `a`.
+    - `reads_fit` gives `fits(a, a)`.
+    - `Path::KeepsFitRel(q, fits) = (x, s) → fits(x, s) → (v) → fits(x, q.set(s, v))`.
+    - `StepModelRel` and `StepModelLawsRel` follow.
+  - (c) **The decider's soundness goes through unchanged.** `Steps::apart_sound_rel` is `Steps::apart_sound`'s proof with `Apart::under_rel` in place of `Apart::under_on`. In `under_on` each `fits(x)` becomes `fits(a, x)` against the outer step's read: `fits(a, a)` comes from `reads_fit`, and the fits of `r.set(a, c)` and `q.set(r.set(a, c), b)` from the relative keeps. Nothing else in the proof touches fits. The denotation is `steps.hthr`'s own (`StepModelRel::steps()`).
+  - (b) `StepModelLawsRel::of_laws` lifts any model lawful under `StepModelLaws`, with its fit ignoring the read. `val_model_laws_rel` is `Val`'s, and `val_split_apart_rel` runs `split_at_mut` through the relative soundness.
+  - (a) **`Dyn`'s laws come from the structures' laws alone** (`Dyn::model_laws_rel`, given `StrsLaws`: per record, each field's `PathLaws` and the pairwise `Apart` of distinct fields).
+    - The model's path dispatches on the owner's code to a native part (`Dyn::part`): `Path::elem` for an element, the library's `Path::window` then a vector-as-list step for a window, and the structure's `Field.path` for a field. Its write decides the written value's code once, outside the part (`Dyn::put_in`).
+    - The fit is the read's code, plus the window's length for a window (`Dyn::fits`, `Sel::ok`).
+    - The five laws transfer from one part's laws by `Dyn::in_set_get` and its siblings. A fitting write is `Dyn(t, w0)` (`Dyn::fit_at`, through `Dyn::cast_back`, `J` with the code free), and the write at its own code is the part's write (`Dyn::put_in_at`, through `Shape::dec_self`).
+    - Keeps: a write keeps the owner's code definitionally (the write is `Dyn(d.code, …)`) and a sequence's length (`PathIn.shape`).
+    - Apartness: the parts' spans (`PathIn::apart_sound`) or the structure's field apartness.
+    - **Beyond the dictionaries' laws, nothing was needed. No UIP anywhere**: every cast is at a decision known to be `refl` by `dec_self`, or under `J` with an endpoint free.
+  - `Point`'s instance is written by hand in the probes (`Point::fields_laws`, `pt_strs_laws`). `xy_apart` finds `ps[i].x` and `ps[i].y` apart owing nothing; `elems_x_apart` finds `ps[i].x` and `ps[l].x` apart owing `i ≠ l`, discharged from the source's `ne`.
+  - The model's write is not the meaning's `Dyn::over`. They agree where the write fits; relating them is item 8's step lemma, still not built.
+
+  **2. A branch that names its output** (`Join(cd, a, wa, b, wb, rest)`). Each arm runs from the branch's state and its bindings end with it. The output is `convoy(test, wa at a's end, wb at b's end)` (`Sem::joined`, each arm's state an argument so it is evaluated once), and `rest` runs once. `mean_then` takes its result type `R` as a value argument, because the arms' states are a call at `R = Sem` and polymorphic recursion is not lowered. The arms here bind words only; the objects pass through.
+  - **A function that continues after its `if` pins by `refl`.** `after_join` is `let a = if h: i < ps.len() { ps[i].x } else { 0 }; ps[a].y`. It pins both through the word (`after_join_reflects`) and through the whole output record (`after_join_whole`), since no convoy over the record is left. The control is refused (`after_join_not_x`).
+  - Its residuals: the arm's bound is `Bool::cases` of the `if`'s evidence, and the read after the join owes its bound at the joined word, which the source states as written (`after_join_site`).
+  - Cost: N joins each testing the parameter, each arm's bound discharged, as one restated conjunction (`j_both`): 41.7k, 78.9k, 153k and 302k steps at 64 to 512. That is linear, about 1.9 times a plain read per join.
+  - A chain where each join's test and arm read the previous joined word is **quadratic** (3.3k, 8.7k, 17.9k, 32.2k, 52.8k and 81.1k steps at N = 2 to 12) and runs out of fuel by N = 64. The joined value is substituted into both the next test and the next arm and re-evaluated at each use: a computed value is shared only by closure identity (`docs/proof-patterns.md` §1). The source's `let` chain has the same term. That is an elaboration-sharing cost, not a join cost.
+
+  **3. Total reads and the inhabitant, on real sources** (no machinery built).
+  - (a) **Today's `runtime fn` sources spell an element read as a proof-carrying call whose body is total with a default.** `Vec::at(v, i, inside: ∥i.toNat() < n∥ := bv_omega)` is `vector_get(v, i.toNat(), BitVec::ofNat(0))`, and `Bytes::at` is `byte_within`, 0 past the length. The squashed bound is an erased parameter the body never reads, as the fifth experiment's `pick` was. A write is `Vec::put` (`vector_update`), total, with its bound likewise unused. The arena (`a.heap.at(base + i)`), the word map (`m.keys.at(j)` under `if lt: j < 4`) and the linked lexer (`Bytes::at`) all spell it this way. `Vec::at` exists only at words, where 0 is the inhabitant.
+  - (b) The spelling with an unused proof pins by `refl` against the total read (`read_w_reflects`, `List::at_word` in `Vec::at`'s shape). A read that consumes its proof is refused by `refl` (`get_x_below_refl`, `List::at_below` by recursion on the proof; `vector_index` at the proof, which `Vec::at_index` relates `Vec::at` to, is the library's instance). It holds by one library lemma per site: `List::at_below_total`, the read under its bound is the total read at any inhabitant (`get_x_below_pin`).
+  - (c) **The inhabitant can live only in the pin's statement, quantified, and the function then takes no `T`.** A write that reads nothing at `T` pins by `refl` at every inhabitant (`put_elem_reflects`, `∀ d`). A read at `T` cannot be `refl`: the meaning's read is `unwrap_or(d)`, and a source with no `d` cannot spell it. It must use the proof-consuming read plus the lemma of (b) (`copy_below_pin`, `∀ d`). So for an open `T` the choice is the `Default` bound or one lemma per read.
+
+  **The measurements were re-run** after `mean_then`'s change and are within noise of the first round: `c_both` 21.8k, 41.8k, 81.7k, 162k; `u_both` 13.8k, 26.4k, 51.7k, 102k.

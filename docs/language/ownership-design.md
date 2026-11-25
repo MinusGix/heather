@@ -2065,6 +2065,7 @@ per function connects them.
    - its functional update;
    - a generic element copy;
    - an `if h:` guarding a read;
+   - a function that continues after its `if`;
    - calls passing a record and a window.
 
    Every residual (a bound, a callee's precondition at the value passed) is
@@ -2072,26 +2073,35 @@ per function connects them.
    the uncoded meaning's steps. The same read over `Val` is an induction per
    operation.
 
-   Three things carry the result:
+   What carries the result, and what it changes:
    - **The meaning reads totally and writes by modifying.** An absent part
      reads as its code's inhabitant, and a part is modified by a function.
      A read through a path's `Option` stops at a stuck `nth`, since the
-     kernel does not do case-of-case. So each named type's structure holds
-     an inhabitant: a `Default` in the derived instance, and a given `T` for
-     a type parameter.
-   - **A meaning answers through its continuation.** Projecting a word out
-     of a convoy over a record stops.
-   - **`StepModelLaws` does not hold at `Dyn` as stated.** A fit is a
-     property of the written value alone, so a typed step cannot be lawful
-     (`Dyn::elem_not_lawful`).
+     kernel does not do case-of-case. This is how today's `runtime fn`
+     sources already read: `Vec::at` and `Bytes::at` carry the bound as an
+     erased parameter and their bodies are total, 0 past the end. A read
+     that consumes its proof costs one library lemma per site. For an open
+     `T` the inhabitant can stay in the pin's statement, quantified: a
+     write then pins by `refl`, and a read needs that lemma.
+   - **A branch names its output.** Each output after the join is the
+     convoy of the arms' values, and what follows runs once. A function
+     that continues after its `if` then pins by `refl`, at linear cost.
+   - **A step's fit is relative to the value it replaces.**
+     `StepModelLaws` as stated cannot hold at `Dyn`
+     (`Dyn::elem_not_lawful`), since a fit over the written value alone
+     cannot say "the read part's code". With `fits(read, written)`:
+     - any model lawful as stated stays lawful (`Val`'s included);
+     - the decider's soundness holds by the same proof;
+     - `Dyn`'s model is lawful from the structures' laws alone, with no
+       unique identity proofs.
 
    **The level-1 interface should therefore be:**
    - values are `Dyn` over a type environment and its structures, which a
-     derived instance per type supplies, with an inhabitant;
+     derived instance per type supplies (field paths, their laws, an
+     inhabitant);
    - the meaning's reads and writes are total and code-directed;
-   - a step's fit is stated relative to the value the step replaces (the
-     same code, or for `Val` the same length), so that one model covers
-     both.
+   - a branch names its outputs;
+   - `steps.hthr`'s laws take the relative fit, changed once in place.
 
 ## 19. The representation tier (2026-11-25)
 
