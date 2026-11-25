@@ -147,12 +147,14 @@ type Arms = Vec<(String, Vec<(String, Ty)>, Expr, Expr, PathTest)>;
 struct Test<'a> {
     scrut: &'a Expr,
     convoy: Option<&'a String>,
+    /// The name an `if h:` gave its test (`ExprKind::Match::test`).
+    written: Option<&'a String>,
     yes: &'a Expr,
     no: &'a Expr,
 }
 
 fn bool_test(e: &Expr) -> Option<Test<'_>> {
-    let ExprKind::Match { scrut, eqbind, motive: None, arms, .. } = &e.kind else { return None };
+    let ExprKind::Match { scrut, eqbind, motive: None, arms, test, .. } = &e.kind else { return None };
     let [a, b] = arms.as_slice() else { return None };
     let named = |arm: &Arm, ctor: &str| arm.ctor == ctor && !arm.default && arm.binders.is_empty();
     let (yes, no) = if named(a, "True") && (named(b, "False") || b.default) {
@@ -162,7 +164,7 @@ fn bool_test(e: &Expr) -> Option<Test<'_>> {
     } else {
         return None;
     };
-    Some(Test { scrut, convoy: eqbind.as_ref(), yes: &yes.body, no: &no.body })
+    Some(Test { scrut, convoy: eqbind.as_ref(), written: test.as_ref(), yes: &yes.body, no: &no.body })
 }
 
 /// A pipeline step written as a call (`o.and_then(λ v => k)`, `o.map(…)`,
@@ -408,11 +410,11 @@ impl Walk<'_> {
             let stated = inline_ty(lets, &prop)?;
             // The name `if less:` gives, read off whichever branch binds it:
             // a branch that never uses it binds none.
-            // A branch that never uses it binds none, and where neither
-            // does the convoy's private equation keeps the name.
+            // A branch that never uses it binds none; the match keeps the
+            // name as written either way.
             let written = evidence_name(arm)
                 .or_else(|| evidence_name(if truth { t.no } else { t.yes }))
-                .or_else(|| t.convoy.and_then(|c| heather_syntax::if_bit_written(c)))
+                .or(t.written.map(String::as_str))
                 .map(str::to_string);
             let name = self.fresh(evidence_name(arm).unwrap_or("h"));
             let ty = if truth { stated.clone() } else { not_ty(stated.clone()) };

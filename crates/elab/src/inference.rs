@@ -253,11 +253,32 @@ impl Inference<'_> {
         if let Some((bound, tested)) = crate::tested::Tested(self).tested_mark(cx, e)? {
             return self.elab_infer_uncached(&bound, &tested, expected);
         }
-        if let ExprKind::App { head, .. } = &e.kind {
+        if let ExprKind::App { head, args, .. } = &e.kind {
             if matches!(&head.kind, ExprKind::Var(name) if name == heather_syntax::BY_TACTIC) {
                 return err(
                     "`by` runs a tactic against the statement it must prove, and there is none here; \
                      use it where the expected type is known, or annotate: `let p: P = by t;`",
+                    e.span,
+                );
+            }
+            if matches!(&head.kind, ExprKind::Var(name) if name == heather_syntax::WITHIN) {
+                let [world, body] = args.as_slice() else {
+                    return err("`within` expects a world and a block", e.span);
+                };
+                return Bindings(self).elab_within_infer(cx, world, body, expected, e.span);
+            }
+            if matches!(&head.kind, ExprKind::Var(name) if name == heather_syntax::WITHIN_FOR) {
+                return Bindings(self).elab_within_for_infer(cx, args, e.span);
+            }
+            if matches!(&head.kind, ExprKind::Var(name) if name == heather_syntax::SUFFICES) {
+                return err(
+                    "a `suffices` statement needs an expected goal type; use it where the goal is known",
+                    e.span,
+                );
+            }
+            if matches!(&head.kind, ExprKind::Var(name) if name == heather_syntax::REQUIRE) {
+                return err(
+                    "`require` is only valid inside a pointwise `within W for x { … }` block",
                     e.span,
                 );
             }
@@ -1421,6 +1442,7 @@ impl Inference<'_> {
                 arms,
                 eqbind,
                 generated,
+                test: _,
             } => {
                 let (scrut_t, scrut_ty, scrut_lvl) = self.elab_infer(cx, scrut)?;
                 // An indexed scrutinee's motive binds the index too
@@ -1560,6 +1582,7 @@ impl Inference<'_> {
                 arms,
                 eqbind,
                 generated,
+                test: _,
             } => {
                 if *form == MatchForm::If && eqbind.is_none() {
                     match matching::infer_if_constant_motive(

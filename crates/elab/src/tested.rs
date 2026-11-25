@@ -344,7 +344,7 @@ impl Tested<'_> {
     /// scrutinee's place. The names are
     /// private, like `__if_bitN`, and visible to a tactic and to `known`.
     fn complete_arms(&self, e: &Expr) -> Option<Expr> {
-        let ExprKind::Match { form, motive, scrut, arms, eqbind, generated } = &e.kind else { return None };
+        let ExprKind::Match { form, motive, scrut, arms, eqbind, generated, test } = &e.kind else { return None };
         if !when_arm(arms).is_some_and(|c| self.names_when(c)) {
             return None;
         }
@@ -382,6 +382,7 @@ impl Tested<'_> {
                 arms,
                 eqbind: eqbind.clone(),
                 generated: *generated,
+                test: test.clone(),
             },
             span: e.span,
         })
@@ -407,6 +408,7 @@ impl Tested<'_> {
                 arms: arms.clone(),
                 eqbind: eqbind.clone(),
                 generated: *generated,
+                test: None,
             },
             span: e.span,
         };

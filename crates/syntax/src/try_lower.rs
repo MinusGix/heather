@@ -72,6 +72,24 @@ fn call(name: &str, args: Vec<Expr>, span: Span) -> Expr {
 pub(crate) fn bind_marker(input: Expr, span: Span) -> Expr {
     Expr { kind:ExprKind::App { head:Box::new(var(BIND,span)),args:vec![input],named:vec![],explicit:false,goal_oriented:false },span }
 }
+/// If `e` is a parser-emitted bind marker `(<- inner)`, return `inner`.
+pub(crate) fn unwrap_bind_marker(e: &Expr) -> Option<&Expr> {
+    let ExprKind::App { head, args, named, explicit: false, goal_oriented: false } = &e.kind else {
+        return None;
+    };
+    if !named.is_empty() || args.len() != 1 {
+        return None;
+    }
+    if matches!(&head.kind, ExprKind::Var(n) if n == BIND) {
+        Some(&args[0])
+    } else {
+        None
+    }
+}
+/// Does `e` contain any unlowered `(<- …)` bind marker?
+pub(crate) fn has_bind_marker(e: &Expr) -> bool {
+    BINDING.contains(e)
+}
 impl Protocol {
     fn bind(self, input: Expr, slot: &str, body: Expr, span: Span) -> Expr {
         // A continuation that only re-binds the slot under a written
@@ -331,19 +349,19 @@ impl Lower {
                 let cont = Expr { kind:ExprKind::Block(Box::new(Block { stmts:vec![statement],result:Box::new(rest),ons:vec![],span })),span };
                 self.cps(input,&s,cont)
             }
-            ExprKind::Match { form,generated,scrut,eqbind,motive,arms } if !arms_bind => {
+            ExprKind::Match { form,generated,scrut,eqbind,motive,arms, test } if !arms_bind => {
                 let (s,v) = self.identity(span);
-                let matched = Expr { kind:ExprKind::Match { form,generated,scrut:Box::new(v),eqbind,motive,arms },span };
+                let matched = Expr { kind:ExprKind::Match { form,generated,scrut:Box::new(v),eqbind,motive,arms, test },span };
                 self.cps(*scrut,&s,plug(k,slot,&matched))
             }
-            ExprKind::Match { form,generated,scrut,eqbind,motive,mut arms } => {
+            ExprKind::Match { form,generated,scrut,eqbind,motive,mut arms, test } => {
                 let identity = matches!(&k.kind,ExprKind::Var(n) if n == slot);
                 if !identity && motive.is_some() { return fail(span,&format!("{} in a non-tail match with a written motive is not supported; move the match to a helper returning the carrier",self.p.what)); }
                 for a in &mut arms {
                     a.body = self.cps(a.body.clone(),slot,k.clone())?;
                 }
                 let (s,v) = self.identity(span);
-                let cont = Expr { kind:ExprKind::Match { form,generated,scrut:Box::new(v),eqbind,motive,arms },span };
+                let cont = Expr { kind:ExprKind::Match { form,generated,scrut:Box::new(v),eqbind,motive,arms, test },span };
                 self.cps(*scrut,&s,cont)
             }
             ExprKind::App { .. } | ExprKind::Dot { .. } | ExprKind::Index { .. }

@@ -1537,6 +1537,7 @@ fn scan_splices(e: &Expr, menv: &MetaEnv, out: &mut Vec<(String, Span)>) -> R<()
             eqbind: _,
             form: _,
             generated: _,
+            test: _,
         } => {
             scan_splices(scrut, menv, out)?;
             if let Some(m) = motive {

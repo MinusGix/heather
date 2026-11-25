@@ -551,6 +551,13 @@ impl Holes<'_> {
                 self.ty(b1, b2, md + 1)
             }
             (
+                Type::Squash { level: l1, ty: a1 },
+                Type::Squash { level: l2, ty: a2 },
+            ) => {
+                (l1 == l2).then_some(())?;
+                self.ty(a1, a2, md)
+            }
+            (
                 Type::Wf { shape: s1, arity: _, level: v1 },
                 Type::Wf { shape: s2, arity: _, level: v2 },
             ) => {
@@ -2917,6 +2924,26 @@ impl GeneratedDefs<'_> {
     }
 
     pub(crate) fn constructor_spelling(&self, cx: &Cx, ty: &Type, span: Span) -> Option<Type> {
+        // Primitive `∥A∥` as a `Type → Type` constructor (`λ A => ⌜∥El A∥⌝`),
+        // letting `Bind` / `Pointed` resolve directly on `∥A∥` with no wrapper
+        // record (issues/proof-worlds-native-inside.md).
+        if let Type::Squash { level, ty: inner } = &*crate::inductive::decoded(ty)
+            && let Some(arg) = crate::code::code_of(inner)
+        {
+            let lam = Term::Lam {
+                dom_level: level.plus(1),
+                cod_level: level.plus(1),
+                dom: Rc::new(Type::Ty(level.clone())),
+                body: Rc::new(Term::TmSquash {
+                    level: level.clone(),
+                    ty: Rc::new(Term::Var(LocalVar(0))),
+                }),
+            };
+            return Some(Type::El {
+                level: level.clone(),
+                tm: Rc::new(Term::AppAt { fun: Rc::new(lam), arg: Rc::new(arg) }),
+            });
+        }
         let ind = self.tag_of(ty)?;
         // A codata declaration and one with value parameters after its type
         // parameters (`CoTree<R>(E)`) have a constructor too: the value

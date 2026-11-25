@@ -1,4 +1,4 @@
-// Probes of `lib/std/analysis/real_log.hthr`: atanh at the reals, the
+// Probes of `lib/std/analysis/real/real_log.hthr`: atanh at the reals, the
 // identity exp(2·atanh t)·(1 - t) = 1 + t, and exp(log q) = q, read at
 // concrete points. Tests, not library: nothing outside lib/_tests imports
 // this module (docs/test-value-audit.md §4.5).

@@ -1,0 +1,37 @@
+{
+  "name": "heather",
+  "displayName": "Heather",
+  "description": "Syntax highlighting for the Heather language (.hthr)",
+  "version": "0.1.0",
+  "publisher": "heather",
+  "license": "UNLICENSED",
+  "private": true,
+  "engines": {
+    "vscode": "^1.70.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "heather",
+        "aliases": [
+          "Heather",
+          "heather"
+        ],
+        "extensions": [
+          ".hthr"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "heather",
+        "scopeName": "source.heather",
+        "path": "./syntaxes/heather.tmLanguage.json"
+      }
+    ]
+  }
+}

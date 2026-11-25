@@ -10,7 +10,7 @@ updated: 2026-11-09
 A proof that splits on `m.le_total(n)` (or `le_dec`, `lt_total`, a sign
 case) often proves the same thing twice with the roles swapped. Examples:
 
-- `CReal::atanh_regular` (lib/std/analysis/real_log.hthr): the `Inl` and
+- `CReal::atanh_regular` (lib/std/analysis/real/real_log.hthr): the `Inl` and
   `Inr` arms are the same eleven lines with `m` and `n` exchanged.
 - `Rat::err_in_nonneg` / `Rat::err_in_nonpos` (lib/std/num/float/float_real.hthr):
   two theorems, one per sign, whose bodies differ by which slope goes where.

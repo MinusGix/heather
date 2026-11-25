@@ -285,7 +285,7 @@ impl Calls<'_> {
                 *b.result = self.rewrite(result, tail)?;
                 Ok(Expr { kind: ExprKind::Block(b), span })
             }
-            ExprKind::Match { form, generated, scrut, eqbind, motive, arms } => {
+            ExprKind::Match { form, generated, scrut, eqbind, motive, arms, test } => {
                 if tail && motive.is_some() {
                     self.unplaced();
                 }
@@ -295,7 +295,7 @@ impl Calls<'_> {
                     arm.body = self.rewrite(arm.body, tail)?;
                     out.push(arm);
                 }
-                Ok(Expr { kind: ExprKind::Match { form, generated, scrut, eqbind, motive, arms: out }, span })
+                Ok(Expr { kind: ExprKind::Match { form, generated, scrut, eqbind, motive, arms: out, test: test.clone() }, span })
             }
             kind => {
                 let mut e = Expr { kind, span };

@@ -940,23 +940,6 @@ pub struct Expr {
 /// never collide with this checking-form marker.
 pub const SPLIT_ALL_GOALS: &str = "\0split-all-goals";
 
-/// The private equation an `if h: P` convoys when neither branch names
-/// `h`: `__if_bitN_h`, lexable (a tactic spells it back as source) and
-/// carrying the written name, which the function's term no longer binds
-/// but its branch equations and `induct` cases are named by
-/// (issues/runtime-fn-induct-test-names.md).
-pub fn if_bit_unnamed(id: &str, written: &str) -> String {
-    format!("__if_bit{id}_{written}")
-}
-
-/// The test name [`if_bit_unnamed`] kept, if `eqbind` is one.
-pub fn if_bit_written(eqbind: &str) -> Option<&str> {
-    let rest = eqbind.strip_prefix("__if_bit")?;
-    let digits = rest.bytes().take_while(u8::is_ascii_digit).count();
-    let name = rest[digits..].strip_prefix('_')?;
-    (digits > 0 && !name.is_empty()).then_some(name)
-}
-
 /// Parser-generated heads for `induct f(x̄); all_goals { ... }` (arguments:
 /// the call, the block) and `induct f(x̄) { C => e, … }` (argument: a `match`
 /// on the call whose arms are the cases). Unspellable, as
@@ -971,6 +954,32 @@ pub const INDUCT_CASES: &str = "\0induct-cases";
 /// (`docs/elaborator/goal-motive-synthesis-design.md` §4.7). Unspellable,
 /// as [`SPLIT_ALL_GOALS`] is (issues/cases-on-hypothesis-tactic.md).
 pub const CASES_HYPOTHESIS: &str = "\0cases-hypothesis";
+
+/// Parser-generated head for anonymous `suffices P by justify; <rest>`
+/// (issues/block-suffices-statement.md). Arguments: `TyLit(P)`, `justify`,
+/// and `<rest>`. Named `suffices h: P by justify; <rest>` lowers directly
+/// to `{ have h: P = <rest>; justify }`.
+pub const SUFFICES: &str = "\0suffices";
+
+/// Parser-generated head for `require [h:] P;` inside `within W for x { … }`
+/// (issues/proof-worlds-native-inside.md). Lowered by `within::lower_pointwise`
+/// into `let h <- W::synth(λ x => P);`; refused elsewhere by the elaborator.
+pub const REQUIRE: &str = "\0require";
+
+/// Field-name prefix for positional `let ⟨p1, p2, …⟩ = e;` patterns stored
+/// in [`Stmt::LetRecord`] (issues/conjunction-facts-read-by-counting.md).
+/// Unspellable by the surface lexer, so it never collides with a record's
+/// real field names while every AST walker keeps treating `LetRecord` uniformly.
+pub const POSITIONAL_FIELD_PREFIX: &str = "\0pos:";
+
+/// Marker field name for a nullary positional pattern `let ⟨⟩ = e;`,
+/// distinguishing it from partial named `let {} = e;`.
+pub const POSITIONAL_EMPTY: &str = "\0pos:empty";
+
+/// Positional field sentinel for slot `index` of a `let ⟨…⟩` pattern.
+pub fn positional_field_name(index: usize) -> String {
+    format!("{POSITIONAL_FIELD_PREFIX}{index}")
+}
 
 /// One name of `cases h as …`: the equation of one split, and the names of
 /// its surviving constructor's fields.
@@ -1309,6 +1318,16 @@ pub enum ExprKind {
         /// bespoke `as z -> T`, which overloaded `->`.
         motive: Option<Box<Expr>>,
         arms: Vec<Arm>,
+        /// The name an `if h: P` gives its test, as the source wrote it:
+        /// `Some("h")` on the match `if h:` lowers to, `None` on every
+        /// other. The lowering binds `h` only in a branch that names it, so
+        /// this is where a body that never cites its tests keeps their
+        /// names; the branch equations, `f::step` and `f::induct` read their
+        /// hypotheses' names from it (issues/runtime-fn-induct-test-names.md).
+        /// Read by those generators only: nothing that computes the
+        /// function's term consults it, and a pass that rebuilds the node
+        /// carries it.
+        test: Option<String>,
     },
     /// `match code e as T { zero => …, succ(t) => …, _ => … }` — intensional
     /// analysis of code by the kernel's code recursor

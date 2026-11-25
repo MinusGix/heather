@@ -59,3 +59,4 @@ are introduced.
   as a record (`p.left`), the motive's body a literal Π and a defined
   proposition. Probe: lib/_tests/native/runtime/runtime_induct_names_tests.hthr.
   `word_map_laws.hthr`'s seven probes are `induct` arms now (0a6a79c).
+- 2026-11-24: 2026-11-24: The name now travels as data, per Minus (less magic, more explicit structure): `ExprKind::Match::test` holds the name an `if h:` gave its test, on the match it lowers to; the branch equations, f::step and f::induct read it, every pass that rebuilds a match carries it, and module images store it (format bumped, HTHMOD 0x28 / HTHIFC 0x22). The `__if_bitN_more` encoding is gone. Nothing that computes a term reads the field. New probe pair induct_names_source_tests / induct_names_import_tests: an imported structural recursion whose `if big:` no branch cites, with induct arms citing `big` over the replayed image, and a negative control.

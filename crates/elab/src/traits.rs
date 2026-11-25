@@ -537,6 +537,9 @@ fn head_name(t: &Ty) -> Option<&str> {
                     ExprKind::TyApp { head, .. } => spine_head(head),
                     _ => None,
                 },
+                // `λ (A: Type) => ∥A∥`: primitive squash carrier
+                // (issues/proof-worlds-native-inside.md).
+                ExprKind::TyLit(ty) if matches!(ty.kind, TyKind::Squash(_)) => Some("Squash"),
                 _ => None,
             },
             _ => None,
@@ -1152,6 +1155,7 @@ fn rename_expr(m: &Ren, e: &Expr) -> Expr {
             eqbind,
             motive,
             arms,
+            test,
         } => Match {
             form: *form,
             generated: *generated,
@@ -1168,6 +1172,7 @@ fn rename_expr(m: &Ren, e: &Expr) -> Expr {
                     span: a.span,
                 })
                 .collect(),
+            test: test.clone(),
         },
         // A `match code` cannot appear in a class member's body — the renamer
         // walks program-layer declarations and `match code` is layer-m only —
@@ -4159,6 +4164,17 @@ impl Classes<'_> {
         for arg in &d.class.args {
             let TyKind::OfExpr(e) = &arg.kind else { continue };
             let ExprKind::Lam { binders, body } = &e.kind else { continue };
+            // Primitive `∥A∥`: `constructor_spelling` gives `λ A => ⌜∥A∥⌝`, so
+            // `Bind<λ (A: Type) => ∥A∥>` and `Pointed<λ (A: Type) => ∥A∥>` are
+            // learned directly at any `∥T∥` (issues/proof-worlds-native-inside.md).
+            if let [b] = binders.as_slice()
+                && !b.implicit
+                && let ExprKind::TyLit(ty) = &body.kind
+                && let TyKind::Squash(inner) = &ty.kind
+                && matches!(&inner.kind, TyKind::Named { name, args } if name == &b.name && args.is_empty())
+            {
+                continue;
+            }
             let carrier = render_expr(e);
             // `D<…, A>(v̄)`: a declaration with value parameters after its
             // type parameters (`CoTree<R>(E)`) fixes its value arguments, so

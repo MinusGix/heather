@@ -1,0 +1,234 @@
+// Scoped proof worlds (docs/language/proof-worlds-design.md, issues/proof-worlds.md):
+// inside-to-outside internal logics that lower to ordinary constructive terms
+// with no kernel change.
+//
+// - `Dne<P>`: constructive double negation (`¬¬P`), with `Dne::em` (excluded
+//   middle with zero axioms) and `Dne::exit` via `Stable<P>`.
+// - `Squash` exit: `SquashOut<P>` and `Squash::exit` for `within Squash { … }`
+//   (beside `Squash::recover` for any `Decide<P>`).
+// - `Directed<I>(le)` and `Eventually<I>(le, P)`: pointwise filter world for
+//   `within Eventually for n { … }`, combining thresholds automatically and
+//   exiting constant goals via `Eventually::extract`.
+
+import logic;
+import bool;
+import nat;
+
+// ---------------------------------------------------------------------------
+// Constructive double negation (`Dne`): classical reasoning inside,
+// constructive proof out at any `Stable` goal.
+
+record Dne<P> { run: ¬¬P }
+
+fn Dne::pure<P>(p: P) → Dne<P> { Dne(λ k => k(p)) }
+
+fn Dne::bind<P, Q>(self m: Dne<P>, f: P → Dne<Q>) → Dne<Q> {
+    Dne(λ k => m.run(λ p => f(p).run(k)))
+}
+
+instance Bind<Dne> { bind := λ {A} {B} m f => m.bind(f) }
+instance Pointed<Dne> { pure := λ {A} a => Dne::pure(a) }
+
+// Constructive excluded middle inside `Dne` (zero axioms).
+theorem Dne::em(P: Type): Dne<P ∨ ¬P> {
+    Dne(λ k => k(Inr(λ p => k(Inl(p)))))
+}
+
+// Proof by contradiction inside `Dne`.
+theorem Dne::by_contradiction<P>(f: ¬P → False): Dne<P> { Dne(f) }
+
+// Lift an existing `¬¬P` into `Dne<P>`.
+theorem Dne::of<P>(h: ¬¬P): Dne<P> { Dne(h) }
+
+// Any proposition `P` with `¬¬P → P` can exit `Dne`.
+class Stable<P> { dne: ¬¬P → P }
+
+theorem Stable::of_decide<P: Decide>(h: ¬¬P): P {
+    match P.dec {
+        Inl(p) => p,
+        Inr(no) => false_elim(h(no)),
+    }
+}
+
+instance Stable<False> { dne := λ h => h(λ f => f) }
+
+instance<P> Stable<Not(P)> { dne := λ h p => h(λ np => np(p)) }
+
+instance<P, Q> Stable<And<P, Q>> requires sp: Stable<P>, sq: Stable<Q> {
+    dne := λ h => And(
+        sp.dne(λ np => h(λ pq => np(pq.left))),
+        sq.dne(λ nq => h(λ pq => nq(pq.right))),
+    )
+}
+
+instance<P, Q> Stable<Iff<P, Q>> requires sp: Stable<P>, sq: Stable<Q> {
+    dne := λ h => Iff(
+        mp := λ p => sq.dne(λ nq => h(λ pq => nq(pq.mp(p)))),
+        mpr := λ q => sp.dne(λ np => h(λ pq => np(pq.mpr(q)))),
+    )
+}
+
+instance(n, m: Nat) Stable<Nat::Le(n, m)> { dne := Stable::of_decide }
+
+// Boundary exit for `within Dne { … }`.
+fn Dne::exit<P>(m: Dne<P>, s: Stable<P> := infer) → P { s.dne(m.run) }
+
+// Exit `Dne` at any decidable proposition: `within Dne::exit_dec { … }`.
+fn Dne::exit_dec<P: Decide>(m: Dne<P>) → P { Stable::of_decide(m.run) }
+
+// ---------------------------------------------------------------------------
+// Propositional truncation (`Squash`) as a proof world.
+
+record Trunc<A> { val: ∥A∥ }
+
+fn Trunc::of<A>(q: ∥A∥) → Trunc<A> { Trunc(q) }
+
+fn Trunc::pure<A>(a: A) → Trunc<A> { Trunc(squash(a)) }
+
+fn Trunc::bind<A, B>(self q: Trunc<A>, f: A → Trunc<B>) → Trunc<B> {
+    Trunc(squash_bind(q.val, λ a => f(a).val))
+}
+
+instance Bind<Trunc> { bind := λ {A} {B} q f => q.bind(f) }
+instance Pointed<Trunc> { pure := λ {A} a => Trunc::pure(a) }
+
+class SquashOut<P> { out: ∥P∥ → P }
+
+instance SquashOut<False> { out := λ q => unsquash_empty(q) }
+
+instance<P, Q> SquashOut<And<P, Q>> requires sp: SquashOut<P>, sq: SquashOut<Q> {
+    out := λ q => And(
+        sp.out(squash_map(q, λ h => h.left)),
+        sq.out(squash_map(q, λ h => h.right)),
+    )
+}
+
+// Direct instances on primitive `∥A∥` so `within Squash { let h <- q; … }`
+// and `within Squash::recover { let h <- q; … }` need no wrapper record.
+instance Bind<λ (A: Type) => ∥A∥> { bind := λ {A} {B} q f => squash_bind(q, f) }
+instance Pointed<λ (A: Type) => ∥A∥> { pure := λ {A} a => squash(a) }
+
+fn Squash::exit<P>(q: ∥P∥, o: SquashOut<P> := infer) → P { o.out(q) }
+
+fn Trunc::exit<P>(q: Trunc<P>, o: SquashOut<P> := infer) → P { o.out(q.val) }
+
+fn Trunc::exit_dec<P: Decide>(q: Trunc<P>) → P { Squash::recover(q.val) }
+
+// ---------------------------------------------------------------------------
+// Directed preorders and `Eventually`: pointwise filter proof world.
+
+class Directed<I>(le: I → I → Type) {
+    base: I,
+    refl: (x: I) → le(x, x),
+    trans: (x, y, z: I) → le(x, y) → le(y, z) → le(x, z),
+    combine: I → I → I,
+    left: (a, b: I) → le(a, combine(a, b)),
+    right: (a, b: I) → le(b, combine(a, b)),
+}
+
+instance Directed<Nat>(Nat::Le) {
+    base := 0,
+    refl := λ x => x.le_refl(),
+    trans := λ x y z xy yz => x.le_trans(y, z, xy, yz),
+    combine := λ a b => a.max(b),
+    left := λ a b => a.le_max_l(b),
+    right := λ a b => a.le_max_r(b),
+}
+
+// A predicate `P : I → Type` holding from some threshold `since` onward.
+record Eventually<I>(le: I → I → Type, P: I → Type) {
+    since: I,
+    holds: (x: I) → le(since, x) → P(x),
+}
+
+fn Eventually::always<I>({le: I → I → Type}, {P: I → Type},
+    f: (x: I) → P(x),
+    d: Directed<I>(le) := infer) → Eventually<I>(le, P)
+{
+    Eventually(d.base, λ x _ => f(x))
+}
+
+fn Eventually::use<I>({le: I → I → Type}, {P, Q: I → Type},
+    e: Eventually<I>(le, P),
+    k: Eventually<I>(le, λ x => P(x) → Q(x)),
+    d: Directed<I>(le) := infer) → Eventually<I>(le, Q)
+{
+    let s = d.combine(e.since, k.since);
+    Eventually(s, λ x hx =>
+        k.holds(x, d.trans(k.since, s, x, d.right(e.since, k.since), hx))(
+            e.holds(x, d.trans(e.since, s, x, d.left(e.since, k.since), hx))))
+}
+
+// Exit `Eventually` when the proved goal `G` does not depend on the index.
+fn Eventually::extract<I, G>({le: I → I → Type},
+    e: Eventually<I>(le, λ _ => G),
+    d: Directed<I>(le) := infer) → G
+{
+    e.holds(e.since, d.refl(e.since))
+}
+
+// Exit `Eventually` directly from a combined hypothesis `e : Eventually(P)`
+// and a body `(x: I) → P(x) → G` whose result `G` does not mention `x`.
+fn Eventually::extract_with<I, G>({le: I → I → Type}, {P: I → Type},
+    e: Eventually<I>(le, P),
+    f: (x: I) → P(x) → G,
+    d: Directed<I>(le) := infer) → G
+{
+    f(e.since, e.holds(e.since, d.refl(e.since)))
+}
+
+// Require that the index be at least `n` under `le`.
+fn Eventually::from<I>(le: I → I → Type, n: I) → Eventually<I>(le, λ x => le(n, x)) {
+    Eventually(n, λ x hx => hx)
+}
+
+// Require that a `Nat` index be at least `n`.
+fn Eventually::at_least(n: Nat) → Eventually<Nat>(Nat::Le, λ x => n <= x) {
+    Eventually(n, λ x hx => hx)
+}
+
+// Build an `Eventually` witness directly from a threshold `n` and proof.
+fn Eventually::of<I>({le: I → I → Type}, {P: I → Type},
+    n: I, h: (x: I) → le(n, x) → P(x)) → Eventually<I>(le, P)
+{
+    Eventually(n, h)
+}
+
+fn Eventually::map<I>({le: I → I → Type}, {P, Q: I → Type},
+    self e: Eventually<I>(le, P), f: (x: I) → P(x) → Q(x)) → Eventually<I>(le, Q)
+{
+    Eventually(e.since, λ x hx => f(x, e.holds(x, hx)))
+}
+
+// Default directed preorder on an index type, used by `require` inside
+// `within Eventually for x`.
+class DefaultOrder<I> { le: I → I → Type }
+
+instance DefaultOrder<Nat> { le := Nat::Le }
+
+// Synthesize an eventual fact from registered `evidence theorem`s (or local scope),
+// targeted by `require [h:] P;` inside `within Eventually for x`.
+fn Eventually::synth<I>(
+    P: I → Type,
+    o: DefaultOrder<I> := infer,
+    e: Eventually<I>(o.le, P) := infer) → Eventually<I>(o.le, P)
+{
+    e
+}
+
+evidence theorem Eventually::at_least_ev({n: Nat}):
+    Eventually<Nat>(Nat::Le, λ x => n <= x)
+{
+    Eventually(n, λ x hx => hx)
+}
+
+fn Eventually::both<I>({le: I → I → Type}, {P, Q: I → Type},
+    self a: Eventually<I>(le, P), b: Eventually<I>(le, Q),
+    d: Directed<I>(le) := infer) → Eventually<I>(le, λ x => P(x) ∧ Q(x))
+{
+    let s = d.combine(a.since, b.since);
+    Eventually(s, λ x hx => And(
+        a.holds(x, d.trans(a.since, s, x, d.left(a.since, b.since), hx)),
+        b.holds(x, d.trans(b.since, s, x, d.right(a.since, b.since), hx)),
+    ))
+}

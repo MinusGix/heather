@@ -586,7 +586,7 @@ fn tree(eqs: &[BranchEquation], cases: &[Case], goal: &Expr, group: &[usize], de
             // = g(h) → motive`) would be refined to one that does not check.
             let motive = crate::measure::lam(&["__induct_tested"], subst_all(goal, sigma), span);
             Ok(Expr {
-                kind: ExprKind::Match { form: MatchForm::Match, generated: false, scrut: Box::new(scrut), eqbind: Some(e), motive: Some(Box::new(motive)), arms },
+                kind: ExprKind::Match { form: MatchForm::Match, generated: false, scrut: Box::new(scrut), eqbind: Some(e), motive: Some(Box::new(motive)), arms, test: None },
                 span,
             })
         }
@@ -617,7 +617,7 @@ fn tree(eqs: &[BranchEquation], cases: &[Case], goal: &Expr, group: &[usize], de
                 });
             }
             Ok(Expr {
-                kind: ExprKind::Match { form: MatchForm::Match, generated: false, scrut: Box::new(subst_all(scrut, sigma)), eqbind: Some(e), motive: None, arms },
+                kind: ExprKind::Match { form: MatchForm::Match, generated: false, scrut: Box::new(subst_all(scrut, sigma)), eqbind: Some(e), motive: None, arms, test: None },
                 span,
             })
         }
@@ -645,7 +645,7 @@ fn tree(eqs: &[BranchEquation], cases: &[Case], goal: &Expr, group: &[usize], de
                 });
             }
             Ok(Expr {
-                kind: ExprKind::Match { form: MatchForm::Match, generated: false, scrut: Box::new(var(x, span)), eqbind: None, motive: None, arms },
+                kind: ExprKind::Match { form: MatchForm::Match, generated: false, scrut: Box::new(var(x, span)), eqbind: None, motive: None, arms, test: None },
                 span,
             })
         }

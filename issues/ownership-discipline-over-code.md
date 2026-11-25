@@ -5,7 +5,7 @@ labels: [compiler,design,runtime,metaprogramming]
 area: heather-in-heather
 milestone: [nh-ownership]
 created: 2026-08-11
-updated: 2026-11-09
+updated: 2026-11-24
 ---
 
 Direction, user-stated 2026-08-11 (explicitly still very much theoretical): a Rust-like ownership model for a subset of Heather so that fast, low-level, memory-safe code WITH mathematical proofs is excellent to write; linear types and similar disciplines by the same route.
@@ -21,3 +21,4 @@ Prerequisites, all owned elsewhere: the reflected-AST layer (elabcode-abstractio
 - 2026-10-31: 2026-10-31: `docs/native/runtime-fn-setups-design.md` §11 checks the setup record against this setup: after R3 a body has no mutation, so ownership over `rt` is a uniqueness judgment over SSA versions (a consumed version is not used again; borrows are non-consuming uses), its lowering updates buffers in place where the default copies, and its `sound` can reuse the default's cases. Same `rt`, stricter `judge`, its own `lower` and `sound`.
 - 2026-11-05: gardener: cites a file it shares with [[native-constant-time]] (`docs/surveys/constant-time-survey.md`); [[native-secret-erasure]] (`docs/surveys/constant-time-survey.md`).
 - 2026-11-09: 2026-11-09: the composable resource the setup needs (exclusive ownership of a footprint, split and rejoined across a borrow) is filed as [[separation-algebra-ownership]] (docs/surveys/native-mathematics-survey.md §7).
+- 2026-11-24: 2026-11-24: Minus's direction, written as a brief for a design session: docs/language/ownership-design.md. Ownership is stated and guaranteed (refusal, never a silent copy); borrows are values (a type former, with parameter modes as notation); the meaning stays pure (backward functions preferred, prophecies weighed); the checker is a proof search with runtime helpers per vision principle 13; stored references and shared mutation are both in scope; inference function-local first, module-wide later via the interface; and ownership becomes the default runtime fn discipline rather than a second setup.

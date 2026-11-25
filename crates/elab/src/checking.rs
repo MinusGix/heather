@@ -731,15 +731,36 @@ impl Checking<'_> {
                 arms,
                 eqbind,
                 generated,
+                test: _,
             } => (|| {
                 // Stage-2 motive synthesis (issues/elab-stage2-metas.md,
                 // docs/elaborator/goal-motive-synthesis-design.md): abstract the
                 // scrutinee out of the expected type so the motive is
                 // genuinely dependent; the non-dependent motive (expected
                 // under `z`) is what "no occurrence anywhere" falls back to.
-                let (scrut_t, scrut_ty, scrut_lvl) = self
-                    .elab_infer(cx, scrut)
-                    .map_err(|error| matching::if_resolution_error(*form, scrut, error))?;
+                let dne_expected = *form == heather_syntax::MatchForm::If
+                    && Bindings(self).is_dne_expected(cx, expected, e.span);
+                let inferred = if dne_expected {
+                    self.probe_unless(|| {
+                        let res = self.elab_infer(cx, scrut);
+                        let ok = res.is_ok();
+                        (res, ok)
+                    })
+                } else {
+                    self.elab_infer(cx, scrut)
+                };
+                let (scrut_t, scrut_ty, scrut_lvl) = match inferred {
+                    Ok(ok) => ok,
+                    Err(error) => {
+                        if dne_expected
+                            && let Some(classical) =
+                                Bindings(self).try_classical_if(cx, scrut, arms, expected, lvl, e.span)
+                        {
+                            return classical;
+                        }
+                        return Err(matching::if_resolution_error(*form, scrut, error));
+                    }
+                };
                 // A recursion whose self-calls vary a parameter generalizes it
                 // into the motive (docs/tactics/ih-generalization-design.md): the goal
                 // becomes a Π over the varied parameters, the arms are wrapped
@@ -1103,6 +1124,34 @@ impl Checking<'_> {
                     return err("`by` runs one tactic", e.span);
                 };
                 Host(self).run_by(cx, tactic, expected, lvl, e.span)
+            }
+            // `within W { body }` and `within W for x { body }`
+            // (docs/language/proof-worlds-design.md).
+            ExprKind::App { head, args, .. }
+                if matches!(&head.kind, ExprKind::Var(name) if name == heather_syntax::WITHIN) =>
+            {
+                let [world, body] = args.as_slice() else {
+                    return err("`within` expects a world and a block", e.span);
+                };
+                Bindings(self).elab_within_check(cx, world, body, expected, lvl, e.span)
+            }
+            ExprKind::App { head, args, .. }
+                if matches!(&head.kind, ExprKind::Var(name) if name == heather_syntax::WITHIN_FOR) =>
+            {
+                Bindings(self).elab_within_for_check(cx, args, expected, lvl, e.span)
+            }
+            ExprKind::App { head, args, .. }
+                if matches!(&head.kind, ExprKind::Var(name) if name == heather_syntax::SUFFICES) =>
+            {
+                Bindings(self).elab_suffices(cx, args, expected, lvl, e.span)
+            }
+            ExprKind::App { head, .. }
+                if matches!(&head.kind, ExprKind::Var(name) if name == heather_syntax::REQUIRE) =>
+            {
+                err(
+                    "`require` is only valid inside a pointwise `within W for x { … }` block",
+                    e.span,
+                )
             }
             // `rewrite(h, …, e)` rewrites the goal along equations, writing
             // `j`'s motive by abstracting each left side

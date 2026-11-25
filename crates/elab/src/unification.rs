@@ -950,13 +950,19 @@ fn unify_tm(u: &U<'_>, pat: &Term, subj: &Term, n: u32, d: u32, sols: &mut [Sol]
     // it: one that is no application, one that mentions none of the walk's
     // binders (a constant family's value, `λ a => Bool` read through
     // `C(a)`, where the alignment would pair `a` with an argument of the
-    // value), or a spine the flex-head guard refuses (`?in(a)` against
-    // `x.In(a)`: the leading `x` is a value). The abstraction is exact
-    // there. A spine the congruence does align keeps its first-order
-    // solution (`?C := Big` from `Big(a)`), which callers have always been
-    // given.
+    // value), a spine the flex-head guard refuses (`?in(a)` against
+    // `x.In(a)`: the leading `x` is a value), or a spine whose trailing
+    // arguments are not literally `x̄` (`?P(n)` against `Not(Q(n))`: first-
+    // order alignment would try to equate `n` with `Q(n)` and assign
+    // `?P := Not`, whereas Miller abstraction `?P := λ n => Not(Q(n))` is
+    // exact; issues/predicate-lambda-unification.md). A spine the congruence
+    // does align keeps its first-order solution (`?C := Big` from `Big(a)`),
+    // which callers have always been given.
     if let Some((slot, args)) = miller_spine(u, pat, n, d, sols)
-        && (!spelling::is_app(subj) || u.subject_tm(subj, d).is_some() || !matching_value_spine(u, pat, subj, d))
+        && (!spelling::is_app(subj)
+            || u.subject_tm(subj, d).is_some()
+            || !matching_value_spine(u, pat, subj, d)
+            || !eta_spine_args(subj, &args))
         && miller(u, slot, &args, subj, d, sols)
     {
         return;
@@ -1533,6 +1539,25 @@ fn miller_spine(u: &U<'_>, pat: &Term, n: u32, d: u32, sols: &[Sol]) -> Option<(
     let Term::GlobalTm { var, subst } = head else { return None };
     let slot = var.innermost(n)? as usize;
     (matches!(sols[slot], Sol::Unsolved) && *subst == embed(u.gamma, d)).then_some((slot, args))
+}
+
+/// Do the last `args.len()` arguments of `subj`'s application spine equal
+/// `LocalVar(args[0]), …, LocalVar(args[k-1])` in order? Only then can
+/// first-order alignment η-contract `?C(x̄) ≟ H(ā, x̄)` to `?C := H(ā)`;
+/// when any trailing argument transforms `xᵢ` (e.g. `Not(Q(n))`, `F(n + 1)`),
+/// Miller abstraction `?C := λ x̄ => subj` is exact
+/// (issues/predicate-lambda-unification.md).
+fn eta_spine_args(mut subj: &Term, args: &[u32]) -> bool {
+    for &i in args.iter().rev() {
+        let Some((fun, arg)) = spelling::app_of(subj) else {
+            return false;
+        };
+        if !matches!(&**arg, Term::Var(LocalVar(v)) if *v == i) {
+            return false;
+        }
+        subj = fun;
+    }
+    true
 }
 
 /// Solve the Miller pattern `?C(x̄) ≟ s` ([`miller_spine`]) by abstraction:
