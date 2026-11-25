@@ -448,3 +448,70 @@ theorem Format::project_unsigned_nonneg(self F: Format, mode: Mode, sat: Sat, x:
 theorem Format::unsigned_of_keep(self F: Format, mode: Mode, sat: Sat, f: Finite(F), nn: 0 <= f.val()): F.unsigned_of(mode, sat, Fin(f)) = Fin(f) {
     match Rat::le_dec(0, f.val()) { Inl(_) => refl, Inr(no) => false_elim(no(nn)) }
 }
+
+// ---------------------------------------------------------------------------
+// Round to odd (report §4.7.4, `RoundAway(ToOdd) = ν > 0 ∧ CodeIsEven`):
+// truncate toward zero, and step away from zero when that was inexact and
+// landed on an even code. It sits beside `Mode`, built from the two directed
+// roundings, rather than in it: a new `Mode` constructor would be a case in
+// every theorem about `RoundsTo`.
+
+// The directed mode away from zero at `x`.
+fn Format::away_mode(x: Rat) → Mode { match Rat::le_dec(0, x) { Inl(_) => TowardPos, Inr(_) => TowardNeg } }
+
+fn Format::round_odd_fin(self F: Format, x: Rat, f: Finite(F)) → Float(F) {
+    match Nat::even_dec(F.lsb(f.mag, f.bexp)) {
+        Inr(_) => Fin(f),
+        Inl(_) => match f.val().le_dec(x) {
+            Inl(_) => match x.le_dec(f.val()) { Inl(_) => Fin(f), Inr(_) => F.round_rat(Format::away_mode(x), x) },
+            Inr(_) => F.round_rat(Format::away_mode(x), x),
+        },
+    }
+}
+
+fn Format::round_odd(self F: Format, x: Rat) → Float(F) {
+    match F.round_rat(TowardZero, x) { Fin(f) => F.round_odd_fin(x, f), Inf(n, h) => Inf(n, h), NaN(h) => NaN(h) }
+}
+
+// Round to odd keeps the truncation or takes the step away.
+theorem Format::round_odd_fin_cases(self F: Format, x: Rat, f: Finite(F)):
+    F.round_odd_fin(x, f) = Float::Fin(f) ∨ F.round_odd_fin(x, f) = F.round_rat(Format::away_mode(x), x)
+{
+    let A = F.round_rat(Format::away_mode(x), x);
+    match Nat::even_dec(F.lsb(f.mag, f.bexp)) as λ d =>
+        (match d { Inr(_) => Float::Fin(f), Inl(_) => match f.val().le_dec(x) { Inl(_) => match x.le_dec(f.val()) { Inl(_) => Float::Fin(f), Inr(_) => A }, Inr(_) => A } }) = Float::Fin(f)
+        ∨ (match d { Inr(_) => Float::Fin(f), Inl(_) => match f.val().le_dec(x) { Inl(_) => match x.le_dec(f.val()) { Inl(_) => Float::Fin(f), Inr(_) => A }, Inr(_) => A } }) = A
+    {
+        Inr(_) => Inl(refl),
+        Inl(_) => match f.val().le_dec(x) as λ d2 =>
+            (match d2 { Inl(_) => match x.le_dec(f.val()) { Inl(_) => Float::Fin(f), Inr(_) => A }, Inr(_) => A }) = Float::Fin(f)
+            ∨ (match d2 { Inl(_) => match x.le_dec(f.val()) { Inl(_) => Float::Fin(f), Inr(_) => A }, Inr(_) => A }) = A
+        {
+            Inl(_) => match x.le_dec(f.val()) as λ d3 => (match d3 { Inl(_) => Float::Fin(f), Inr(_) => A }) = Float::Fin(f) ∨ (match d3 { Inl(_) => Float::Fin(f), Inr(_) => A }) = A {
+                Inl(_) => Inl(refl),
+                Inr(_) => Inr(refl),
+            },
+            Inr(_) => Inr(refl),
+        },
+    }
+}
+
+// A finite rounding to odd is a faithful rounding.
+theorem Format::round_odd_faithful(self F: Format, x: Rat, g: Finite(F), h: F.round_odd(x) = Fin(g)): Finite::Below(x, g) ∨ Finite::Above(x, g) {
+    let am = Format::away_mode(x);
+    let tz = F.round_rat_correct(TowardZero, x);
+    match F.round_rat(TowardZero, x) as λ r => RoundsTo(F, TowardZero, x, r)
+        → (match r { Fin(f) => F.round_odd_fin(x, f), Inf(n, hh) => Float::Inf(n, hh), NaN(hh) => Float::NaN(hh) }) = Float::Fin(g) → Finite::Below(x, g) ∨ Finite::Above(x, g)
+    {
+        Fin(f) => λ hf e => match F.round_odd_fin_cases(x, f) {
+            Inl(kept) => {
+                let fg: (Float::Fin(f) = Float::Fin(g)) = trans(sym(kept), e);
+                let gf: (g = f) = trans(sym(Float::fin_or_at(Float::Fin(f), g, f, fg)), refl);
+                j(sym(gf), λ v _ => Finite::Below(x, v) ∨ Finite::Above(x, v), F.rounds_faithful(TowardZero, x, f, hf))
+            },
+            Inr(stepped) => F.rounds_faithful(am, x, g, j(trans(sym(stepped), e), λ v _ => RoundsTo(F, am, x, v), F.round_rat_correct(am, x))),
+        },
+        Inf(n, hh) => λ no _ => false_elim(no),
+        NaN(hh) => λ no _ => false_elim(no),
+    }(tz, h)
+}

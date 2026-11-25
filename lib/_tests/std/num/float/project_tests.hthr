@@ -64,3 +64,29 @@ theorem ue_nonneg(x: Rat): (binary8p3ue().project_unsigned(NearestEven, SatNone,
 theorem se_faithful(x: Rat, f: Finite(binary8p3se()), h: binary8p3se().project(TowardPos, SatFinite, x) = Float::Fin(f)): Finite::Below(x, f) ∨ Finite::Above(x, f) {
     binary8p3se().project_faithful(TowardPos, SatFinite, x, f, h)
 }
+
+// ---------------------------------------------------------------------------
+// Round to odd.
+
+// E2M1's floats 1, 1.5, 2, 3 have codes even, odd, even, odd.
+theorem odd_up(): Rat::Same(val_or(e2m1().round_odd(Rat(5, 4)), 99), Rat(3, 2)) { refl }
+theorem odd_keep(): Rat::Same(val_or(e2m1().round_odd(Rat(7, 4)), 99), Rat(3, 2)) { refl }
+theorem odd_exact_even(): Rat::Same(val_or(e2m1().round_odd(1), 99), 1) { refl }
+theorem odd_carry(): Rat::Same(val_or(e2m1().round_odd(Rat(5, 2)), 99), 3) { refl }
+theorem odd_neg(): Rat::Same(val_or(e2m1().round_odd(Rat(-5, 4)), 99), Rat(-3, 2)) { refl }
+// At precision one the code is the exponent: 2 (0x41) is odd, 4 (0x42) even.
+theorem odd_p1_keep(): Rat::Same(val_or(binary8p1se().round_odd(3), 99), 2) { refl }
+theorem odd_p1_step(): Rat::Same(val_or(binary8p1se().round_odd(5), 99), 8) { refl }
+// Past the range (issues/float-round-to-odd.md): with infinities an even
+// largest float steps away to infinity, so an even result is still exact;
+// binary16's largest float is odd and is kept.
+theorem odd_b8_over(): inf_bit(binary8p3se().round_odd(50000)) = True { refl }
+theorem odd_b16_top(): Rat::Same(val_or(binary16().round_odd(65505), 99), 65504) { refl }
+// Negative control: E4M3 saturates, and its largest float 448 is even, so
+// round to odd returns an even float that is not the value.
+theorem odd_sat_even_inexact(): e4m3().round_odd(460) = Float::Fin(Finite::max_finite(e4m3()))
+    ∧ Nat::Even((Finite::max_finite(e4m3())).mag) ∧ ¬Rat::Same((Finite::max_finite(e4m3())).val(), 460)
+{
+    let v: Rat::Same((Finite::max_finite(e4m3())).val(), 448) = refl;
+    And(refl, And(trivial, λ h => { let b: Rat::Same(Rat::ofInt(448), 460) = Rat::same_trans(Rat::same_sym(v), h); omega(b) }))
+}
