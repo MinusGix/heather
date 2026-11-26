@@ -38,3 +38,4 @@ The bytes level's lowering ([[bytes-level-lowering-routines]]) refuses a routine
   - The out-of-room outcome (the old compiler's exit 139) has no meaning at the bytes level.
   - Owed lemma: for a program whose calls do not cycle, `depth_rooms` stops changing past the call graph's height, and that stable value is the one number a caller must provide. Probe by evaluation: `lend_rooms_settle`.
   - The recursion gate's programs through the new layer.
+- 2026-11-26: §17.9 of the design note designs the out-of-room stop (a resource stop as one alternative of the tracking clause; guards at calls within a strongly connected component; a table constant in depth). Built under [[bytes-level-out-of-room]]. The lemma owed above (that `depth_rooms` settles for an acyclic program) is not needed under it: the guarded table is constant by definition.

@@ -2220,7 +2220,8 @@ Probes: `down` (`bytes_level_routines_tests`), a routine that calls itself,
 is done at fuel 3 from 2 with `run_peak` 2 and is tracked. The control
 `down_no_constant_room` shows that no table constant in the depth is
 lawful for it. The run-time out-of-room outcome (the old compiler's exit
-139) has no meaning here: `issues/bytes-level-lowering-recursion.md`.
+139) has no meaning here: `issues/bytes-level-lowering-recursion.md`;
+§17.9 designs it.
 
 **The lowering, re-proved to `Tracks`** (`lower_program_tracks`), by two
 inductions on fuel:
@@ -2527,7 +2528,8 @@ guarded loads, `also` and levels remain.
    (`issues/asm-landing-both-ways.md`), for after the switch.
 4. The dead reference copy: done, dropped by the translation where the scope
    never reads it (sort's one).
-5. Levels and the out-of-room exit, designed separately.
+5. Levels and the out-of-room exit: designed in §17.9
+   (`issues/bytes-level-out-of-room.md`), not built.
 6. A refusal report from `Program::lower`.
 7. The theorem's remaining forms, and a decider for its premise.
 8. The optimizer and the planner on the new layer.
@@ -2541,6 +2543,109 @@ So the answer is: not yet in one move. The memory half translates exactly
 where proved, and its code is the same outside loops. With the access view,
 no row is blocked outright; what remains is the loops' cost, the theorem's
 remaining forms, and the optimizer and the planner on the new layer.
+
+### 17.9 Out of room: one resource stop (2026-11-26, the coordinating session)
+
+§17.7 left the out-of-room outcome without a meaning, and §17.8 lists it as
+"designed separately". This is that design. It is not built.
+
+**What stands.** `Site::Entering` asks `room(f, peak(n, f, args, heap, io)) <= i`:
+the room below the return address covers the deepest chain of calls this run
+enters. Under it the code tracks the meaning. Without it nothing is said, and
+the code is unguarded, so a recursion deeper than its stack writes below the
+stack the model gave it. FunctionIR's answer was `levels`: a depth counted in
+the code and a meaning truncated at that depth. The bytes level has no
+levels, and its meaning is not truncated.
+
+**What Minus settled** (§15.7): room is a premise of the machine theorem, the
+stop is a defined one, and the room a function needs is something a theorem
+can bound.
+
+**The meaning does not learn of room.** `Ran` gains no outcome and `run` no
+parameter. Room is the machine's, as ownership is: a licence for the run,
+never the meaning. A meaning that could answer "out of room" would put frame
+sizes into every theorem about a source function.
+
+**The contract gains one alternative.** A *resource stop* (`Spent`): the
+code exits with one reserved status, at a world whose past is a prefix of a
+history the meaning reaches at some fuel (or the meaning is stuck at some
+fuel). That is `MeetsGoing`'s conclusion, word for word: a run that ran out
+of room, like a run that ran out of fuel, did a prefix of what the meaning
+does and nothing else. The tracking clause becomes
+
+    Tracked(…, n, meaning(n, …))  ∨  (¬(room(f, peak(n, …)) <= i) ∧ Spent(…))
+
+under a premise that no longer mentions the run: `rooms(f) <= i`, a table by
+routine alone. Where today's premise holds, the second alternative is
+closed and the clause is today's `Tracks`. So today's theorem is the
+corollary, not a second contract.
+
+**Where the guards go.** Take the call graph's strongly connected
+components. A call whose callee can reach the caller (the two share a
+component; a self call is the least case) is *guarded*; every other call
+goes to a strictly lower component and is not. The table is then constant:
+
+    rooms(f) = f's largest frame + the largest, over f's unguarded calls,
+               of 24 + rooms(g)
+
+which is well founded on the components' order. A guarded call to `g`
+tests, before the CALL, that `24 + rooms(g)` fits in the room left, and
+otherwise jumps to the stop. So:
+
+- A program with no cycle has no guard, and its table is the old
+  `routine_rooms`. The lemma §17.7 owes (that `depth_rooms` settles past the
+  call graph's height) is not needed: the table is constant by definition.
+- A program with a cycle pays at its calls into the cycle and nowhere else:
+  a compare against the stack's floor and a forward branch.
+- `RoomLaw` at depth is kept as the proof that the guards do not fire where
+  `room(f, peak) <= i`: `depth_rooms` is the sum the guards check one round
+  at a time.
+
+**The floor.** The guard compares the stack pointer against the lowest
+address the stack may reach. `Stack<M>` already says what the process owns
+(`stack.at(0)` to `stack.size`), so the floor is no new premise. The entry
+(`_start`, or an export's prologue) computes it from the stack pointer it
+is given and the budget it was compiled with, and keeps it where the guard
+reads it. A data word is the first choice; a reserved register is a
+planner's decision later. The budget is a compile option, as it is today.
+
+**What the entry asks.** One number, static: `rooms(entry) <= budget`. For
+`_start` the compile checks it and refuses otherwise (the gate's "64 bytes
+refused"). The process theorem's premise about the system is that the stack
+it starts on has the budget's bytes, which says nothing of the program or
+its input.
+
+**Bounding it.** The stop is excluded where `room(f, peak(n, …)) <= i`.
+`peak` is defined by the run's own recursion, so a bound on it is a theorem
+beside the source function, proved once by its own induction
+(`sum::depth: peak(sum, [k]) <= k + 1`). With it an export's contract reads:
+given `c·k + d` bytes of stack, `sum(k)` returns its meaning's answer. No
+bound, no promise beyond the stop. This is §15.9's statement for the stack:
+the heap's is the same alternative. An owned `new` that finds no room is
+`Spent`, and `Cost2` is to the arena what `peak` is to the stack.
+
+**The status.** One reserved exit status (the old compiler's 139). A source
+`Exit` with the same status is indistinguishable to whoever reads the
+status. The alternative is to die by a signal, which a parent can tell from
+any exit; the machine model has no faults, so that is a change to the
+kernel model and waits for a need.
+
+**Rejected.**
+- *Room as an outcome of the meaning*: above.
+- *Room by fuel*: fuel also meters a loop's passes
+  (`issues/bytes-level-lowering-recursion.md`).
+- *An unguarded recursive lowering beside the guarded one*: two lowerings of
+  one call. Dropping a guard under a proved depth bound is a pass over the
+  lowered program with its own proof, not a second contract.
+- *The guard page*: not a defined stop in the model.
+
+**Test, before it is built on.** `down` (which calls itself) lowers with a
+guard by evaluation; at a budget its peak fits, the theorem's first
+alternative holds by the corollary; at a budget one frame short, the
+machine's run by evaluation exits with the reserved status after the writes
+the meaning makes before that depth. A two-routine cycle whose frames
+differ shows the guard checks the callee's room, not the caller's. A
+program with no cycle lowers to the bytes it lowers to today.
 
 ## 18. The world, termination, and level 2 fixed (2026-11-25)
 
