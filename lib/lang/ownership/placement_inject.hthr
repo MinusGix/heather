@@ -1,0 +1,1257 @@
+// The injection's own lemmas (docs/language/ownership-design.md §25.8;
+// issues/ownership-end-to-end-slice.md): what the seam's stages share about
+// `HeapInjects`, `Dyn::encode` and `Sel::locate` (placement_seam.hthr), the
+// seam's analogue of the lens laws. Nothing here is about a statement kind.
+//
+// - **The structures laid out** (`Strs::Laid`, placement.hthr beside
+//   `Shape::layout`, the layout's law): what the encoding needs of
+//   the structures, stated in the model the run reads them through
+//   (`Dyn::at`, `Dyn::over`, `Dyn::fits`, `Dyn::len`): a sequence whose
+//   element is a word is read at the index's number, an element fits only
+//   below the length, a write at one element leaves the others, and a
+//   window is its parent's elements from its start, as many as it says, of
+//   the same element; a record's fields are lenses apart. `StrsLaws` does
+//   not say the positional part (the library's lawful `Seq::list` reads only
+//   at a number), so it is the seam's premise (§25.8, F1).
+// - **What is located is what is selected** (`locate_reads`), and its
+//   bytes are the encoding's window there (`locate_image`); a word stored at
+//   a located element is the encoding of the level-2 put (`put_image`); the
+//   bytes of a place apart from a store are kept (`window_kept`).
+// - **`HeapInjects` kept**: by a store of the put's bytes inside one block
+//   (`injects_store`), by a death (`injects_kill`), and by anything that
+//   leaves both heaps (a new binding).
+import logic;
+import bool;
+import nat;
+import option;
+import list;
+import list_window;
+import pair;
+import bitvec;
+import span_set;
+import store;
+import atom;
+import steps;
+import shape;
+import body;
+import level2;
+import run;
+import placement;
+import placement_seam;
+import bytes_memory;
+import bytes_level;
+import x86_64_memory_contract;
+import x86_64_store;
+import omega;
+import bitvec_omega;
+
+// ---------------------------------------------------------------------------
+// Lists: a middle read and written
+
+theorem List::window_mid<A>(xs, ys, zs: List<A>): (xs ++ (ys ++ zs)).window(xs.len(), xs.len() + ys.len()) = ys {
+    let k: ((xs.len() + ys.len()) - xs.len() = ys.len()) = omega();
+    trans(cong_fn(λ (n: Nat) => (xs ++ (ys ++ zs)).drop(xs.len()).take(n), k),
+        trans(cong_fn(λ (l: List<A>) => l.take(ys.len()), xs.drop_append_len(ys ++ zs)), ys.take_append_len(zs)))
+}
+
+theorem List::put_window_mid<A>(xs: List<A>): (ys, zs, ys2: List<A>) → ys2.len() = ys.len() → (xs ++ (ys ++ zs)).put_window(xs.len(), ys2) = xs ++ (ys2 ++ zs) {
+    match xs {
+        Nil => λ ys zs ys2 e => trans((ys ++ zs).put_window_from_zero(ys2),
+            cong_fn(λ (l: List<A>) => ys2 ++ l, trans(cong_fn(λ (n: Nat) => (ys ++ zs).drop(n), e), ys.drop_append_len(zs)))),
+        Cons(h, t) => λ ys zs ys2 e => List::cong_cons(h, List::put_window_mid(t, ys, zs, ys2, e)),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// A sequence's encoding, element by element
+
+// The 64-bit index the encoding reads element `j` at.
+fn ix64(j: Nat) → Ix { IWord(64, BitVec::ofNat(j)) }
+
+// Element `j`'s bytes, as the encoding lays them.
+fn elem_bytes(tys: Nat → Type, strs: Strs(tys), d: Dyn(tys), size, j: Nat) → List<BitVec(8)> {
+    word_bytes_at(size, Dyn::index(tys, Dyn::at(tys, strs, el_sel(ix64(j)), d)))
+}
+
+theorem word_bytes_at_len(size, x: Nat, small: size <= 8): word_bytes_at(size, x).len() = size {
+    (word_bytes(BitVec::ofNat(x))).len_take(size, small)
+}
+
+theorem encode_elems_len(tys: Nat → Type, strs: Strs(tys), d: Dyn(tys), size: Nat, small: size <= 8, i, k: Nat): (Dyn::encode_elems(tys, strs, d, size, i, k)).len() = size * k {
+    match k {
+        Zero => refl,
+        Succ(k1) => {
+            let a = (elem_bytes(tys, strs, d, size, i)).len_append(Dyn::encode_elems(tys, strs, d, size, i + 1, k1));
+            let b: ((elem_bytes(tys, strs, d, size, i)).len() = size) = word_bytes_at_len(size, Dyn::index(tys, Dyn::at(tys, strs, el_sel(ix64(i)), d)), small);
+            let c = encode_elems_len(tys, strs, d, size, small, i + 1, k1);
+            let r: ((elem_bytes(tys, strs, d, size, i) ++ Dyn::encode_elems(tys, strs, d, size, i + 1, k1)).len() = size * Succ(k1)) = omega(a, b, c);
+            r
+        },
+    }
+}
+
+// Two encodings read alike where their elements are alike, each from its
+// own start.
+theorem encode_elems_ext(tys: Nat → Type, strs: Strs(tys), d1, d2: Dyn(tys), size: Nat, i1, i2, k: Nat):
+    ((t: Nat) → t < k → Dyn::at(tys, strs, el_sel(ix64(i1 + t)), d1) = Dyn::at(tys, strs, el_sel(ix64(i2 + t)), d2)) →
+    Dyn::encode_elems(tys, strs, d1, size, i1, k) = Dyn::encode_elems(tys, strs, d2, size, i2, k) {
+    match k {
+        Zero => λ _ => refl,
+        Succ(k1) => λ same => {
+            let here: (Dyn::at(tys, strs, el_sel(ix64(i1)), d1) = Dyn::at(tys, strs, el_sel(ix64(i2)), d2)) = same(0, omega());
+            let rest = encode_elems_ext(tys, strs, d1, d2, size, i1 + 1, i2 + 1, k1, λ t lt => {
+                let e1: (i1 + 1 + t = i1 + (t + 1)) = omega();
+                let e2: (i2 + 1 + t = i2 + (t + 1)) = omega();
+                trans(cong_fn(λ (j: Nat) => Dyn::at(tys, strs, el_sel(ix64(j)), d1), e1),
+                    trans(same(t + 1, omega(lt)), cong_fn(λ (j: Nat) => Dyn::at(tys, strs, el_sel(ix64(j)), d2), sym(e2))))
+            });
+            trans(cong_fn(λ (x: Dyn(tys)) => word_bytes_at(size, Dyn::index(tys, x)) ++ Dyn::encode_elems(tys, strs, d1, size, i1 + 1, k1), here),
+                cong_fn(λ (l: List<BitVec(8)>) => elem_bytes(tys, strs, d2, size, i2) ++ l, rest))
+        },
+    }
+}
+
+// An encoding split: the first `a` elements, then the next `b`.
+theorem encode_elems_split(tys: Nat → Type, strs: Strs(tys), d: Dyn(tys), size, b, i, a: Nat):
+    Dyn::encode_elems(tys, strs, d, size, i, b + a) = Dyn::encode_elems(tys, strs, d, size, i, a) ++ Dyn::encode_elems(tys, strs, d, size, i + a, b) {
+    match a {
+        Zero => refl,
+        Succ(a1) => {
+            let ih = encode_elems_split(tys, strs, d, size, b, i + 1, a1);
+            let e: (i + 1 + a1 = i + Succ(a1)) = omega();
+            trans(cong_fn(λ (l: List<BitVec(8)>) => elem_bytes(tys, strs, d, size, i) ++ l, ih),
+                trans(sym((elem_bytes(tys, strs, d, size, i)).append_assoc(Dyn::encode_elems(tys, strs, d, size, i + 1, a1), Dyn::encode_elems(tys, strs, d, size, i + 1 + a1, b))),
+                    cong_fn(λ (j: Nat) => Dyn::encode_elems(tys, strs, d, size, i, Succ(a1)) ++ Dyn::encode_elems(tys, strs, d, size, j, b), e)))
+        },
+    }
+}
+
+// An encoding in three: before `lo`, the `n` from it, after.
+theorem encode_elems_three(tys: Nat → Type, strs: Strs(tys), d: Dyn(tys), size, lo, n, k: Nat, inside: lo + n <= k):
+    Dyn::encode_elems(tys, strs, d, size, 0, k) = Dyn::encode_elems(tys, strs, d, size, 0, lo) ++
+        (Dyn::encode_elems(tys, strs, d, size, lo, n) ++ Dyn::encode_elems(tys, strs, d, size, lo + n, k - (lo + n))) {
+    let e1: (k = (k - (lo + n)) + (n + lo)) = omega(inside);
+    let s1 = encode_elems_split(tys, strs, d, size, k - (lo + n), 0, n + lo);
+    let s2 = encode_elems_split(tys, strs, d, size, n, 0, lo);
+    let z1: (0 + (n + lo) = lo + n) = omega();
+    let z2: (0 + lo = lo) = omega();
+    let first = trans(cong_fn(λ (m: Nat) => Dyn::encode_elems(tys, strs, d, size, 0, m), e1),
+        trans(s1, cong_fn(λ (j: Nat) => Dyn::encode_elems(tys, strs, d, size, 0, n + lo) ++ Dyn::encode_elems(tys, strs, d, size, j, k - (lo + n)), z1)));
+    let second = trans(s2, cong_fn(λ (j: Nat) => Dyn::encode_elems(tys, strs, d, size, 0, lo) ++ Dyn::encode_elems(tys, strs, d, size, j, n), z2));
+    trans(first, trans(cong_fn(λ (l: List<BitVec(8)>) => l ++ Dyn::encode_elems(tys, strs, d, size, lo + n, k - (lo + n)), second),
+        (Dyn::encode_elems(tys, strs, d, size, 0, lo)).append_assoc(Dyn::encode_elems(tys, strs, d, size, lo, n), Dyn::encode_elems(tys, strs, d, size, lo + n, k - (lo + n)))))
+}
+
+// The `n` elements from `lo` are the encoding's window there.
+theorem encode_elems_window(tys: Nat → Type, strs: Strs(tys), d: Dyn(tys), size, lo, n, k: Nat, small: size <= 8, inside: lo + n <= k):
+    (Dyn::encode_elems(tys, strs, d, size, 0, k)).window(size * lo, size * lo + size * n) = Dyn::encode_elems(tys, strs, d, size, lo, n) {
+    let la = encode_elems_len(tys, strs, d, size, small, 0, lo);
+    let lb = encode_elems_len(tys, strs, d, size, small, lo, n);
+    let parts = encode_elems_three(tys, strs, d, size, lo, n, k, inside);
+    let ends: (size * lo + size * n = (Dyn::encode_elems(tys, strs, d, size, 0, lo)).len() + (Dyn::encode_elems(tys, strs, d, size, lo, n)).len()) = omega(la, lb);
+    let start: (size * lo = (Dyn::encode_elems(tys, strs, d, size, 0, lo)).len()) = omega(la);
+    trans(cong_fn(λ (l: List<BitVec(8)>) => l.window(size * lo, size * lo + size * n), parts),
+        trans(cong_fn(λ (s: Nat) => (Dyn::encode_elems(tys, strs, d, size, 0, lo) ++ (Dyn::encode_elems(tys, strs, d, size, lo, n) ++
+                Dyn::encode_elems(tys, strs, d, size, lo + n, k - (lo + n)))).window(s, size * lo + size * n), start),
+        trans(cong_fn(λ (t: Nat) => (Dyn::encode_elems(tys, strs, d, size, 0, lo) ++ (Dyn::encode_elems(tys, strs, d, size, lo, n) ++
+                Dyn::encode_elems(tys, strs, d, size, lo + n, k - (lo + n)))).window((Dyn::encode_elems(tys, strs, d, size, 0, lo)).len(), t), ends),
+            List::window_mid(Dyn::encode_elems(tys, strs, d, size, 0, lo), Dyn::encode_elems(tys, strs, d, size, lo, n), Dyn::encode_elems(tys, strs, d, size, lo + n, k - (lo + n))))))
+}
+
+// Where two values' elements are alike outside the `n` from `lo`, the
+// second's encoding is the first's with those `n` put in.
+theorem encode_elems_put(tys: Nat → Type, strs: Strs(tys), d1, d2: Dyn(tys), size, lo, n, k: Nat, small: size <= 8, inside: lo + n <= k,
+    outside: (j: Nat) → j < k → (j < lo) ∨ (lo + n <= j) → Dyn::at(tys, strs, el_sel(ix64(j)), d2) = Dyn::at(tys, strs, el_sel(ix64(j)), d1)):
+    Dyn::encode_elems(tys, strs, d2, size, 0, k) = (Dyn::encode_elems(tys, strs, d1, size, 0, k)).put_window(size * lo, Dyn::encode_elems(tys, strs, d2, size, lo, n)) {
+    let before = encode_elems_ext(tys, strs, d2, d1, size, 0, 0, lo, λ t lt => {
+        let z: (0 + t = t) = omega();
+        trans(cong_fn(λ (j: Nat) => Dyn::at(tys, strs, el_sel(ix64(j)), d2), z),
+            trans(outside(t, omega(lt, inside), Inl(lt)), cong_fn(λ (j: Nat) => Dyn::at(tys, strs, el_sel(ix64(j)), d1), sym(z))))
+    });
+    let after = encode_elems_ext(tys, strs, d2, d1, size, lo + n, lo + n, k - (lo + n), λ t lt => outside(lo + n + t, omega(lt, inside), Inr(omega())));
+    let p1 = encode_elems_three(tys, strs, d1, size, lo, n, k, inside);
+    let p2 = encode_elems_three(tys, strs, d2, size, lo, n, k, inside);
+    let la = encode_elems_len(tys, strs, d1, size, small, 0, lo);
+    let lb1 = encode_elems_len(tys, strs, d1, size, small, lo, n);
+    let lb2 = encode_elems_len(tys, strs, d2, size, small, lo, n);
+    let start: (size * lo = (Dyn::encode_elems(tys, strs, d1, size, 0, lo)).len()) = omega(la);
+    let a1 = Dyn::encode_elems(tys, strs, d1, size, 0, lo);
+    let b1 = Dyn::encode_elems(tys, strs, d1, size, lo, n);
+    let b2 = Dyn::encode_elems(tys, strs, d2, size, lo, n);
+    let c1 = Dyn::encode_elems(tys, strs, d1, size, lo + n, k - (lo + n));
+    let mid = List::put_window_mid(a1, b1, c1, b2, omega(lb1, lb2));
+    trans(p2, trans(cong_fn(λ (l: List<BitVec(8)>) => l ++ (b2 ++ Dyn::encode_elems(tys, strs, d2, size, lo + n, k - (lo + n))), before),
+        trans(cong_fn(λ (l: List<BitVec(8)>) => a1 ++ (b2 ++ l), after),
+            sym(trans(cong_fn(λ (l: List<BitVec(8)>) => l.put_window(size * lo, b2), p1),
+                trans(cong_fn(λ (s: Nat) => (a1 ++ (b1 ++ c1)).put_window(s, b2), start), mid))))))
+}
+
+// ---------------------------------------------------------------------------
+// The structures laid out (§25.8, F1)
+
+// A value's bytes: a word's at its size, a value with a layout its encoding.
+fn Dyn::image(tys: Nat → Type, strs: Strs(tys), d: Dyn(tys)) → Option<List<BitVec(8)>> {
+    match d.code.word_size() { Some(size) => Some(word_bytes_at(size, Dyn::index(tys, d))), None => Dyn::encode(tys, strs, d) }
+}
+
+// ---------------------------------------------------------------------------
+// What `Sel::locate` reaches
+
+// One selection's offset at a layout, where `locate` takes it.
+fn Sel::step_at(l: Layout, s: Sel) → Option<Nat> {
+    match l {
+        LSeq(_, size, _) => match s {
+            OnSeq(a) => match a { SeqOne(i) => Some(i.toNat() * size), SeqRun(lo, _) => Some(lo.toNat() * size) },
+            _ => None,
+        },
+        LRecord(fs) => match s { OnField(i) => fields_offset(fs, i), _ => None },
+        LNone => None,
+    }
+}
+
+fn Sel::step_off(tys: Nat → Type, strs: Strs(tys), d: Dyn(tys), s: Sel) → Option<Nat> { Sel::step_at(Shape::layout(tys, strs, d.code), s) }
+
+// `locate`'s step at a layout, what follows it as `go`.
+fn locate_at<P>(l: Layout, s: Sel, go: Nat → Option<P>) → Option<P> {
+    match l {
+        LSeq(_, size, _) => match s {
+            OnSeq(a) => match a { SeqOne(i) => go(i.toNat() * size), SeqRun(lo, _) => go(lo.toNat() * size) },
+            _ => None,
+        },
+        LRecord(fs) => match s { OnField(i) => match fields_offset(fs, i) { None => None, Some(fo) => go(fo) }, _ => None },
+        LNone => None,
+    }
+}
+
+theorem locate_at_step<P>(l: Layout, s: Sel, go: Nat → Option<P>): locate_at(l, s, go) = (Sel::step_at(l, s)).and_then(go) {
+    match l {
+        LSeq(_, size, _) => match s {
+            OnSeq(a) => match a { SeqOne(i) => refl, SeqRun(lo, _) => refl },
+            OnField(_) => refl,
+            OnKey(_) => refl,
+            OnVariant(_) => refl,
+        },
+        LRecord(fs) => match s {
+            OnField(i) => match fields_offset(fs, i) as λ o => (match o as λ _ => Option<P> { None => None, Some(fo) => go(fo) }) = o.and_then(go) { None => refl, Some(fo) => refl },
+            OnSeq(_) => refl,
+            OnKey(_) => refl,
+            OnVariant(_) => refl,
+        },
+        LNone => refl,
+    }
+}
+
+theorem locate_cons(tys: Nat → Type, strs: Strs(tys), d: Dyn(tys), s: Sel, rest: List<Sel>, off: Nat):
+    Sel::locate(tys, strs, d, Cons(s, rest), off) = (Sel::step_off(tys, strs, d, s)).and_then(λ k => Sel::locate(tys, strs, Dyn::at(tys, strs, s, d), rest, off + k)) {
+    let go = λ (k: Nat) => Sel::locate(tys, strs, Dyn::at(tys, strs, s, d), rest, off + k);
+    let same: (Sel::locate(tys, strs, d, Cons(s, rest), off) = locate_at(Shape::layout(tys, strs, d.code), s, go)) = refl;
+    trans(same, locate_at_step(Shape::layout(tys, strs, d.code), s, go))
+}
+
+// A located selection went through its first step.
+theorem locate_cons_some(tys: Nat → Type, strs: Strs(tys), d: Dyn(tys), s: Sel, rest: List<Sel>, off: Nat, p: Pair<Nat, Dyn(tys)>,
+    at: Sel::locate(tys, strs, d, Cons(s, rest), off) = Some(p)):
+    Exists<Nat>(λ k => (Sel::step_off(tys, strs, d, s) = Some(k)) ∧ (Sel::locate(tys, strs, Dyn::at(tys, strs, s, d), rest, off + k) = Some(p))) {
+    Option::and_then_some(Sel::step_off(tys, strs, d, s), λ k => Sel::locate(tys, strs, Dyn::at(tys, strs, s, d), rest, off + k), p,
+        trans(sym(locate_cons(tys, strs, d, s, rest, off)), at))
+}
+
+// What is located is what the selections read.
+theorem locate_reads(tys: Nat → Type, strs: Strs(tys), ss: List<Sel>): (d: Dyn(tys)) → (off: Nat) → (p: Pair<Nat, Dyn(tys)>) →
+    Sel::locate(tys, strs, d, ss, off) = Some(p) → p.snd = Sel::read_at(tys, strs, ss, d) {
+    match ss {
+        Nil => λ d off p at => cong_fn(λ (q: Pair<Nat, Dyn(tys)>) => q.snd, sym(Option::some_inj(Pair(off, d), p, at))),
+        Cons(s, rest) => λ d off p at => {
+            let step = locate_cons_some(tys, strs, d, s, rest, off, p, at);
+            locate_reads(tys, strs, rest, Dyn::at(tys, strs, s, d), off + step.witness, p, step.proof.right)
+        },
+    }
+}
+
+// Two shifts of a located offset are one.
+theorem shift_shift(tys: Nat → Type, o: Option<Pair<Nat, Dyn(tys)>>, k, off: Nat):
+    (o.map(λ (p: Pair<Nat, Dyn(tys)>) => Pair(k + p.fst, p.snd))).map(λ (p: Pair<Nat, Dyn(tys)>) => Pair(off + p.fst, p.snd)) =
+        o.map(λ (p: Pair<Nat, Dyn(tys)>) => Pair(off + k + p.fst, p.snd)) {
+    match o {
+        None => refl,
+        Some(p) => cong_fn(λ (m: Nat) => Some(Pair(m, p.snd)), sym(off.add_assoc(k, p.fst))),
+    }
+}
+
+// Located from `off`, the offset is `off` past the one from zero.
+theorem locate_from(tys: Nat → Type, strs: Strs(tys), ss: List<Sel>): (d: Dyn(tys)) → (off: Nat) →
+    Sel::locate(tys, strs, d, ss, off) = (Sel::locate(tys, strs, d, ss, 0)).map(λ (p: Pair<Nat, Dyn(tys)>) => Pair(off + p.fst, p.snd)) {
+    match ss {
+        Nil => λ d off => refl,
+        Cons(s, rest) => λ d off => trans(locate_cons(tys, strs, d, s, rest, off), sym(trans(cong_fn(λ (o: Option<Pair<Nat, Dyn(tys)>>) => o.map(λ (p: Pair<Nat, Dyn(tys)>) => Pair(off + p.fst, p.snd)),
+                locate_cons(tys, strs, d, s, rest, 0)),
+            match Sel::step_off(tys, strs, d, s) as λ o => (o.and_then(λ k => Sel::locate(tys, strs, Dyn::at(tys, strs, s, d), rest, 0 + k))).map(λ (p: Pair<Nat, Dyn(tys)>) => Pair(off + p.fst, p.snd))
+                    = o.and_then(λ k => Sel::locate(tys, strs, Dyn::at(tys, strs, s, d), rest, off + k)) {
+                None => refl,
+                Some(k) => {
+                    let a = locate_from(tys, strs, rest, Dyn::at(tys, strs, s, d), 0 + k);
+                    let b = locate_from(tys, strs, rest, Dyn::at(tys, strs, s, d), off + k);
+                    let z: (0 + k = k) = omega();
+                    let inner = (Sel::locate(tys, strs, Dyn::at(tys, strs, s, d), rest, 0)).map(λ (p: Pair<Nat, Dyn(tys)>) => Pair(k + p.fst, p.snd));
+                    trans(cong_fn(λ (o: Option<Pair<Nat, Dyn(tys)>>) => o.map(λ (p: Pair<Nat, Dyn(tys)>) => Pair(off + p.fst, p.snd)), trans(a, cong_fn(λ (m: Nat) =>
+                            (Sel::locate(tys, strs, Dyn::at(tys, strs, s, d), rest, 0)).map(λ (p: Pair<Nat, Dyn(tys)>) => Pair(m + p.fst, p.snd)), z))),
+                        trans(shift_shift(tys, Sel::locate(tys, strs, Dyn::at(tys, strs, s, d), rest, 0), k, off), sym(b)))
+                },
+            }))),
+    }
+}
+
+theorem and_then_assoc<A, B, C>(o: Option<A>, f: A → Option<B>, g: B → Option<C>): (o.and_then(f)).and_then(g) = o.and_then(λ a => (f(a)).and_then(g)) {
+    match o { None => refl, Some(a) => refl }
+}
+
+// Located through two lists of selections, the second from where the first
+// reached.
+theorem locate_append(tys: Nat → Type, strs: Strs(tys), xs: List<Sel>): (ys: List<Sel>) → (d: Dyn(tys)) → (off: Nat) →
+    Sel::locate(tys, strs, d, xs ++ ys, off) = (Sel::locate(tys, strs, d, xs, off)).and_then(λ (p: Pair<Nat, Dyn(tys)>) => Sel::locate(tys, strs, p.snd, ys, p.fst)) {
+    match xs {
+        Nil => λ ys d off => refl,
+        Cons(s, rest) => λ ys d off => trans(locate_cons(tys, strs, d, s, rest ++ ys, off),
+            trans(Option::and_then_ext(Sel::step_off(tys, strs, d, s), λ k => Sel::locate(tys, strs, Dyn::at(tys, strs, s, d), rest ++ ys, off + k),
+                    λ k => (Sel::locate(tys, strs, Dyn::at(tys, strs, s, d), rest, off + k)).and_then(λ (p: Pair<Nat, Dyn(tys)>) => Sel::locate(tys, strs, p.snd, ys, p.fst)),
+                    λ k => locate_append(tys, strs, rest, ys, Dyn::at(tys, strs, s, d), off + k)),
+                sym(trans(cong_fn(λ (o: Option<Pair<Nat, Dyn(tys)>>) => o.and_then(λ (p: Pair<Nat, Dyn(tys)>) => Sel::locate(tys, strs, p.snd, ys, p.fst)), locate_cons(tys, strs, d, s, rest, off)),
+                    and_then_assoc(Sel::step_off(tys, strs, d, s), λ k => Sel::locate(tys, strs, Dyn::at(tys, strs, s, d), rest, off + k),
+                        λ (p: Pair<Nat, Dyn(tys)>) => Sel::locate(tys, strs, p.snd, ys, p.fst)))))),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Words, sizes, layouts
+
+// A word's size is one to eight bytes.
+theorem Width::size_range(w: Width, s: Nat, sized: w.size() = Some(s)): (1 <= s) ∧ (s <= 8) {
+    (match w as λ v => v.size() = Some(s) → (1 <= s) ∧ (s <= 8) {
+        WNat => λ never => absurd(never),
+        WBits(n) => λ e => (match n.same(8) as λ b => (match b { True => Some(1), False => match n.same(16) { True => Some(2), False => match n.same(32) { True => Some(4),
+                False => match n.same(64) { True => Some(8), False => None } } } }) = Some(s) → (1 <= s) ∧ (s <= 8) {
+            True => λ e1 => { let q = Option::some_inj(1, s, e1); ⟨omega(q), omega(q)⟩ },
+            False => λ e1 => (match n.same(16) as λ b => (match b { True => Some(2), False => match n.same(32) { True => Some(4),
+                    False => match n.same(64) { True => Some(8), False => None } } }) = Some(s) → (1 <= s) ∧ (s <= 8) {
+                True => λ e2 => { let q = Option::some_inj(2, s, e2); ⟨omega(q), omega(q)⟩ },
+                False => λ e2 => (match n.same(32) as λ b => (match b { True => Some(4), False => match n.same(64) { True => Some(8), False => None } }) = Some(s) → (1 <= s) ∧ (s <= 8) {
+                    True => λ e3 => { let q = Option::some_inj(4, s, e3); ⟨omega(q), omega(q)⟩ },
+                    False => λ e3 => (match n.same(64) as λ b => (match b { True => Some(8), False => None }) = Some(s) → (1 <= s) ∧ (s <= 8) {
+                        True => λ e4 => { let q = Option::some_inj(8, s, e4); ⟨omega(q), omega(q)⟩ },
+                        False => λ never => absurd(never),
+                    })(e3),
+                })(e2),
+            })(e1),
+        })(e),
+    })(sized)
+}
+
+theorem Shape::size_range(c: Shape, s: Nat, sized: c.word_size() = Some(s)): (1 <= s) ∧ (s <= 8) {
+    (match c as λ v => v.word_size() = Some(s) → (1 <= s) ∧ (s <= 8) { SWord(w) => λ e => Width::size_range(w, s, e), SNamed(_) => λ never => absurd(never) })(sized)
+}
+
+// A code with a layout is no word.
+theorem Shape::laid_no_word(tys: Nat → Type, strs: Strs(tys), c: Shape, l: Layout, lay: Shape::layout(tys, strs, c) = l, some: (l = LNone) → False): c.word_size() = None {
+    (match c as λ v => Shape::layout(tys, strs, v) = l → v.word_size() = None {
+        SWord(_) => λ e => false_elim(some(sym(e))),
+        SNamed(_) => λ _ => refl,
+    })(lay)
+}
+
+theorem encode_seq(tys: Nat → Type, strs: Strs(tys), d: Dyn(tys), el: Shape, size: Nat, wc: Option<Shape>, lay: Shape::layout(tys, strs, d.code) = LSeq(el, size, wc)):
+    Dyn::encode(tys, strs, d) = Some(Dyn::encode_elems(tys, strs, d, size, 0, Dyn::len(tys, strs, d))) {
+    j(sym(lay), λ l _ => (match l as λ _ => Option<List<BitVec(8)>> { LSeq(_, sz, _) => Some(Dyn::encode_elems(tys, strs, d, sz, 0, Dyn::len(tys, strs, d))),
+        LRecord(fs) => Dyn::encode_fields(tys, strs, d, fs, 0), LNone => None }) = Some(Dyn::encode_elems(tys, strs, d, size, 0, Dyn::len(tys, strs, d))), refl)
+}
+
+theorem encode_rec(tys: Nat → Type, strs: Strs(tys), d: Dyn(tys), fs: List<Shape>, lay: Shape::layout(tys, strs, d.code) = LRecord(fs)):
+    Dyn::encode(tys, strs, d) = Dyn::encode_fields(tys, strs, d, fs, 0) {
+    j(sym(lay), λ l _ => (match l as λ _ => Option<List<BitVec(8)>> { LSeq(_, sz, _) => Some(Dyn::encode_elems(tys, strs, d, sz, 0, Dyn::len(tys, strs, d))),
+        LRecord(gs) => Dyn::encode_fields(tys, strs, d, gs, 0), LNone => None }) = Dyn::encode_fields(tys, strs, d, fs, 0), refl)
+}
+
+theorem ix64_num(n: Nat, small: n < Nat::pow(2, 64)): (ix64(n)).toNat() = n {
+    let r: ((BitVec::ofNat(n): BitVec(64)).toNat() = n) = bv_omega;
+    r
+}
+
+theorem List::window_after<A>(xs, ys: List<A>, a, b: Nat): (xs ++ ys).window(xs.len() + a, xs.len() + b) = ys.window(a, b) {
+    let e1: ((xs.len() + b) - (xs.len() + a) = b - a) = omega();
+    let e2: (xs.len() + a = a + xs.len()) = omega();
+    let d: ((xs ++ ys).drop(a + xs.len()) = ys.drop(a)) = trans(sym((xs ++ ys).drop_drop(xs.len(), a)), cong_fn(λ (l: List<A>) => l.drop(a), xs.drop_append_len(ys)));
+    trans(cong_fn(λ (m: Nat) => (xs ++ ys).drop(xs.len() + a).take(m), e1),
+        trans(cong_fn(λ (m: Nat) => (xs ++ ys).drop(m).take(b - a), e2), cong_fn(λ (l: List<A>) => l.take(b - a), d)))
+}
+
+// A word code has no layout.
+theorem Shape::word_no_layout(tys: Nat → Type, strs: Strs(tys), c: Shape, s: Nat, sized: c.word_size() = Some(s)): Shape::layout(tys, strs, c) = LNone {
+    (match c as λ v => v.word_size() = Some(s) → Shape::layout(tys, strs, v) = LNone { SWord(_) => λ _ => refl, SNamed(_) => λ never => absurd(never) })(sized)
+}
+
+// A word's image is its bytes at its size.
+theorem image_word(tys: Nat → Type, strs: Strs(tys), x: Dyn(tys), size: Nat, sized: x.code.word_size() = Some(size)):
+    Dyn::image(tys, strs, x) = Some(word_bytes_at(size, Dyn::index(tys, x))) {
+    j(sym(sized), λ o _ => (match o as λ _ => Option<List<BitVec(8)>> { Some(sz) => Some(word_bytes_at(sz, Dyn::index(tys, x))), None => Dyn::encode(tys, strs, x) })
+        = Some(word_bytes_at(size, Dyn::index(tys, x))), refl)
+}
+
+// A value with a layout's image is its encoding.
+theorem image_laid(tys: Nat → Type, strs: Strs(tys), x: Dyn(tys), l: Layout, lay: Shape::layout(tys, strs, x.code) = l, some: (l = LNone) → False):
+    Dyn::image(tys, strs, x) = Dyn::encode(tys, strs, x) {
+    j(sym(Shape::laid_no_word(tys, strs, x.code, l, lay, some)), λ o _ => (match o as λ _ => Option<List<BitVec(8)>> { Some(sz) => Some(word_bytes_at(sz, Dyn::index(tys, x))),
+        None => Dyn::encode(tys, strs, x) }) = Dyn::encode(tys, strs, x), refl)
+}
+
+// An element located: inside, and its bytes the encoding's window at its
+// offset.
+theorem elem_image(tys: Nat → Type, strs: Strs(tys), laid: Strs::Laid(tys, strs), d: Dyn(tys), el: Shape, size: Nat, wc: Option<Shape>,
+    lay: Shape::layout(tys, strs, d.code) = LSeq(el, size, wc), i: Ix, fit: Dyn::fits(tys, strs, el_sel(i), d) = True, short: Dyn::len(tys, strs, d) < Nat::pow(2, 64)):
+    (i.toNat() + 1 <= Dyn::len(tys, strs, d)) ∧ ((Dyn::image(tys, strs, Dyn::at(tys, strs, el_sel(i), d)) = Some(word_bytes_at(size, Dyn::index(tys, Dyn::at(tys, strs, el_sel(i), d))))) ∧
+        ((Dyn::encode_elems(tys, strs, d, size, 0, Dyn::len(tys, strs, d))).window(size * i.toNat(), size * i.toNat() + size * 1) =
+            word_bytes_at(size, Dyn::index(tys, Dyn::at(tys, strs, el_sel(i), d))) ++ Nil)) {
+    let sl = laid.left(d.code, el, size, wc, lay).left;
+    let below: (i.toNat() < Dyn::len(tys, strs, d)) = sl.elem_fits(d.val, i, fit);
+    let rng = Shape::size_range(el, size, sl.el_size);
+    let w = encode_elems_window(tys, strs, d, size, i.toNat(), 1, Dyn::len(tys, strs, d), omega(rng), omega(below));
+    let num = sl.elem_num(d.val, ix64(i.toNat()), i, ix64_num(i.toNat(), omega(below, short)));
+    let code: ((Dyn::at(tys, strs, el_sel(i), d)).code.word_size() = Some(size)) = trans(cong_fn(λ (c: Shape) => c.word_size(), sl.elem_code(d.val, i)), sl.el_size);
+    ⟨omega(below), ⟨image_word(tys, strs, Dyn::at(tys, strs, el_sel(i), d), size, code),
+        trans(w, cong_fn(λ (x: Dyn(tys)) => word_bytes_at(size, Dyn::index(tys, x)) ++ Nil, num))⟩⟩
+}
+
+// A window located: inside, a sequence of the same element, and its bytes
+// the encoding's window at its offset.
+theorem win_image(tys: Nat → Type, strs: Strs(tys), laid: Strs::Laid(tys, strs), d: Dyn(tys), el: Shape, size: Nat, w: Shape,
+    lay: Shape::layout(tys, strs, d.code) = LSeq(el, size, Some(w)), lo, n: Ix, fit: Dyn::fits(tys, strs, win_sel(lo, n), d) = True,
+    short: Dyn::len(tys, strs, d) < Nat::pow(2, 64)):
+    (lo.toNat() + n.toNat() <= Dyn::len(tys, strs, d)) ∧ (Exists<Option<Shape>>(λ wc2 => Shape::layout(tys, strs, (Dyn::at(tys, strs, win_sel(lo, n), d)).code) = LSeq(el, size, wc2)) ∧
+        (Dyn::encode(tys, strs, Dyn::at(tys, strs, win_sel(lo, n), d)) =
+            Some((Dyn::encode_elems(tys, strs, d, size, 0, Dyn::len(tys, strs, d))).window(size * lo.toNat(), size * lo.toNat() + size * n.toNat())))) {
+    let both = laid.left(d.code, el, size, Some(w), lay);
+    let sl = both.left;
+    let wl: WinLaid(tys, strs, d.code, el, size, w) = both.right;
+    let x = Dyn::at(tys, strs, win_sel(lo, n), d);
+    let inside: (lo.toNat() + n.toNat() <= Dyn::len(tys, strs, d)) = wl.win_fits(d.val, lo, n, fit);
+    let rng = Shape::size_range(el, size, sl.el_size);
+    let wlay = wl.win_layout;
+    let xlay: (Shape::layout(tys, strs, x.code) = LSeq(el, size, wlay.witness)) = trans(cong_fn(λ (c: Shape) => Shape::layout(tys, strs, c), wl.win_code(d.val, lo, n)), wlay.proof);
+    let xlen: (Dyn::len(tys, strs, x) = n.toNat()) = wl.win_len(d.val, lo, n, fit);
+    let ext = encode_elems_ext(tys, strs, x, d, size, 0, lo.toNat(), n.toNat(), λ t lt => {
+        let a = ix64_num(0 + t, omega(lt, inside, short));
+        let b = ix64_num(lo.toNat() + t, omega(lt, inside, short));
+        wl.win_elem(d.val, lo, n, fit, ix64(0 + t), ix64(lo.toNat() + t), omega(a, lt), omega(a, b))
+    });
+    let win = encode_elems_window(tys, strs, d, size, lo.toNat(), n.toNat(), Dyn::len(tys, strs, d), omega(rng), inside);
+    ⟨inside, ⟨Exists(wlay.witness, xlay),
+        trans(encode_seq(tys, strs, x, el, size, wlay.witness, xlay), cong_fn(λ (l: List<BitVec(8)>) => Some(l),
+            trans(cong_fn(λ (m: Nat) => Dyn::encode_elems(tys, strs, x, size, 0, m), xlen), trans(ext, sym(win)))))⟩⟩
+}
+
+theorem map_some<A, B>(o: Option<A>, f: A → B, b: B): o.map(f) = Some(b) → Exists<A>(λ a => (o = Some(a)) ∧ (f(a) = b)) {
+    match o { None => λ h => absurd(h), Some(a) => λ h => Exists(a, ⟨refl, Option::some_inj(f(a), b, h)⟩) }
+}
+
+// A field's offset names a field.
+theorem fields_offset_nth(fs: List<Shape>): (i, k: Nat) → fields_offset(fs, i) = Some(k) → Exists<Shape>(λ f => fs.nth(i) = Some(f)) {
+    match fs {
+        Nil => λ i k never => absurd(never),
+        Cons(f0, rest) => λ i k => match i {
+            Zero => λ _ => Exists(f0, refl),
+            Succ(i1) => λ off => (match f0.word_size() as λ o => (match o as λ _ => Option<Nat> { None => None, Some(s) => fields_offset(rest, i1).map(λ x => s + x) }) = Some(k) →
+                    Exists<Shape>(λ f => rest.nth(i1) = Some(f)) {
+                None => λ never => absurd(never),
+                Some(s) => λ e => { let m = map_some(fields_offset(rest, i1), λ x => s + x, k, e); fields_offset_nth(rest, i1, m.witness, m.proof.left) },
+            })(off),
+        },
+    }
+}
+
+theorem zero_add(n: Nat): 0 + n = n { omega() }
+
+theorem add_eq(x, s0, k1, k: Nat, e: x = s0, kk: s0 + k1 = k): x + k1 = k { omega(e, kk) }
+
+theorem add_eq2(x, s0, k1, k, sz: Nat, e: x = s0, kk: s0 + k1 = k): x + (k1 + sz) = k + sz { omega(e, kk) }
+
+theorem prefix_fits<A>(xs, ys: List<A>, n: Nat, e: xs.len() = n): 0 + n <= (xs ++ ys).len() { omega(xs.len_append(ys), e) }
+
+theorem after_fits<A>(xs, ys: List<A>, n, k1, k, sz: Nat, e: xs.len() = n, kk: n + k1 = k, ih: k1 + sz <= ys.len()): k + sz <= (xs ++ ys).len() {
+    omega(xs.len_append(ys), e, kk, ih)
+}
+
+// A field located: its bytes the encoding's window at its offset.
+theorem fields_image(tys: Nat → Type, strs: Strs(tys), d: Dyn(tys), fs: List<Shape>): (j, t, k: Nat) → (f: Shape) → (sz: Nat) → (bs: List<BitVec(8)>) →
+    Dyn::encode_fields(tys, strs, d, fs, j) = Some(bs) → fields_offset(fs, t) = Some(k) → fs.nth(t) = Some(f) → f.word_size() = Some(sz) →
+    (k + sz <= bs.len()) ∧ (bs.window(k, k + sz) = word_bytes_at(sz, Dyn::index(tys, Dyn::at(tys, strs, OnField(j + t), d)))) {
+    match fs {
+        Nil => λ j t k f sz bs enc never => absurd(never),
+        Cons(f0, rest) => λ j t k f sz bs enc off nth fsz => {
+            let wb0 = λ (s0: Nat) => word_bytes_at(s0, Dyn::index(tys, Dyn::at(tys, strs, OnField(j), d)));
+            (match f0.word_size() as λ o => f0.word_size() = o →
+                    (match o as λ _ => Option<List<BitVec(8)>> { None => None, Some(s0) => (Dyn::encode_fields(tys, strs, d, rest, j + 1)).map(λ more => wb0(s0) ++ more) }) = Some(bs) →
+                    (match t as λ _ => Option<Nat> { Zero => Some(0), Succ(t1) => match o as λ _ => Option<Nat> { None => None, Some(s) => fields_offset(rest, t1).map(λ x => s + x) } }) = Some(k) →
+                    (k + sz <= bs.len()) ∧ (bs.window(k, k + sz) = word_bytes_at(sz, Dyn::index(tys, Dyn::at(tys, strs, OnField(j + t), d)))) {
+                None => λ _ never => absurd(never),
+                Some(s0) => λ e0 enc2 off2 => {
+                    let m = map_some(Dyn::encode_fields(tys, strs, d, rest, j + 1), λ more => wb0(s0) ++ more, bs, enc2);
+                    let more = m.witness;
+                    let rng = Shape::size_range(f0, s0, e0);
+                    let l0: ((wb0(s0)).len() = s0) = word_bytes_at_len(s0, Dyn::index(tys, Dyn::at(tys, strs, OnField(j), d)), omega(rng));
+                    let lb = (wb0(s0)).len_append(more);
+                    let bs_is: (wb0(s0) ++ more = bs) = m.proof.right;
+                    (match t as λ t0 => Cons(f0, rest).nth(t0) = Some(f) → (match t0 as λ _ => Option<Nat> { Zero => Some(0), Succ(t1) => fields_offset(rest, t1).map(λ x => s0 + x) }) = Some(k) →
+                            (k + sz <= bs.len()) ∧ (bs.window(k, k + sz) = word_bytes_at(sz, Dyn::index(tys, Dyn::at(tys, strs, OnField(j + t0), d)))) {
+                        Zero => λ nth0 off0 => {
+                            let k0: (0 = k) = Option::some_inj(0, k, off0);
+                            let ff: (f0 = f) = Option::some_inj(f0, f, nth0);
+                            let ss: (s0 = sz) = Option::some_inj(s0, sz, trans(sym(e0), trans(cong_fn(λ (c: Shape) => c.word_size(), ff), fsz)));
+                            let win: ((wb0(s0) ++ more).window(0, s0) = wb0(s0)) = trans((wb0(s0) ++ more).window_from_zero(s0),
+                                trans(cong_fn(λ (n: Nat) => (wb0(s0) ++ more).take(n), sym(l0)), (wb0(s0)).take_append_len(more)));
+                            j(bs_is, λ b2 _ => (k + sz <= b2.len()) ∧ (b2.window(k, k + sz) = word_bytes_at(sz, Dyn::index(tys, Dyn::at(tys, strs, OnField(j), d)))),
+                                j(k0, λ k2 _ => (k2 + sz <= (wb0(s0) ++ more).len()) ∧ ((wb0(s0) ++ more).window(k2, k2 + sz) = word_bytes_at(sz, Dyn::index(tys, Dyn::at(tys, strs, OnField(j), d)))),
+                                    j(ss, λ s2 _ => (0 + s2 <= (wb0(s0) ++ more).len()) ∧ ((wb0(s0) ++ more).window(0, 0 + s2) = word_bytes_at(s2, Dyn::index(tys, Dyn::at(tys, strs, OnField(j), d)))),
+                                        ⟨prefix_fits(wb0(s0), more, s0, l0), trans(cong_fn(λ (n: Nat) => (wb0(s0) ++ more).window(0, n), zero_add(s0)), win)⟩)))
+                        },
+                        Succ(t1) => λ nth1 off1 => {
+                            let m1 = map_some(fields_offset(rest, t1), λ x => s0 + x, k, off1);
+                            let k1 = m1.witness;
+                            let ih = fields_image(tys, strs, d, rest, j + 1, t1, k1, f, sz, more, m.proof.left, m1.proof.left, nth1, fsz);
+                            let kk: (s0 + k1 = k) = m1.proof.right;
+                            let jt: (j + 1 + t1 = j + Succ(t1)) = omega();
+                            let after = List::window_after(wb0(s0), more, k1, k1 + sz);
+                            let a1: ((wb0(s0)).len() + k1 = k) = add_eq((wb0(s0)).len(), s0, k1, k, l0, kk);
+                            let a2: ((wb0(s0)).len() + (k1 + sz) = k + sz) = add_eq2((wb0(s0)).len(), s0, k1, k, sz, l0, kk);
+                            let win: ((wb0(s0) ++ more).window(k, k + sz) = more.window(k1, k1 + sz)) =
+                                trans(cong_fn(λ (n: Nat) => (wb0(s0) ++ more).window(n, k + sz), sym(a1)), trans(cong_fn(λ (n: Nat) => (wb0(s0) ++ more).window((wb0(s0)).len() + k1, n), sym(a2)), after));
+                            j(bs_is, λ b2 _ => (k + sz <= b2.len()) ∧ (b2.window(k, k + sz) = word_bytes_at(sz, Dyn::index(tys, Dyn::at(tys, strs, OnField(j + Succ(t1)), d)))),
+                                ⟨after_fits(wb0(s0), more, s0, k1, k, sz, l0, kk, ih.left), trans(win, trans(ih.right, cong_fn(λ (n: Nat) => word_bytes_at(sz, Dyn::index(tys, Dyn::at(tys, strs, OnField(n), d))), jt)))⟩)
+                        },
+                    })(nth, off2)
+                },
+            })(refl, enc, off)
+        },
+    }
+}
+
+// An encoding is of a code with a layout, and is its image.
+theorem encode_laid(tys: Nat → Type, strs: Strs(tys), d: Dyn(tys), bs: List<BitVec(8)>, enc: Dyn::encode(tys, strs, d) = Some(bs)): (Shape::layout(tys, strs, d.code) = LNone) → False {
+    λ e => absurd(j(e, λ l _ => (match l as λ _ => Option<List<BitVec(8)>> { LSeq(_, sz, _) => Some(Dyn::encode_elems(tys, strs, d, sz, 0, Dyn::len(tys, strs, d))),
+        LRecord(fs) => Dyn::encode_fields(tys, strs, d, fs, 0), LNone => None }) = Some(bs), enc))
+}
+
+theorem image_of_encode(tys: Nat → Type, strs: Strs(tys), d: Dyn(tys), bs: List<BitVec(8)>, enc: Dyn::encode(tys, strs, d) = Some(bs)): Dyn::image(tys, strs, d) = Some(bs) {
+    trans(image_laid(tys, strs, d, Shape::layout(tys, strs, d.code), refl, encode_laid(tys, strs, d, bs, enc)), enc)
+}
+
+theorem List::window_whole<A>(xs: List<A>): xs.window(0, 0 + xs.len()) = xs {
+    trans(xs.window_from_zero(0 + xs.len()), trans(cong_fn(λ (n: Nat) => xs.take(n), zero_add(xs.len())), xs.take_all(xs.len(), omega())))
+}
+
+// What a located place's bytes are, against the bytes `bs` of the value
+// located in: its image, a window of `bs` from `r` past where the location
+// started.
+fn Located(tys: Nat → Type, strs: Strs(tys), bs: List<BitVec(8)>, off: Nat, p: Pair<Nat, Dyn(tys)>) → Type {
+    Exists<Nat>(λ r => (p.fst = off + r) ∧ Exists<List<BitVec(8)>>(λ ys => (Dyn::image(tys, strs, p.snd) = Some(ys)) ∧ ((r + ys.len() <= bs.len()) ∧ (bs.window(r, r + ys.len()) = ys))))
+}
+
+fn LocImage(tys: Nat → Type, strs: Strs(tys), ss: List<Sel>) → Type {
+    (d: Dyn(tys)) → (bs: List<BitVec(8)>) → Dyn::encode(tys, strs, d) = Some(bs) → bs.len() < Nat::pow(2, 64) → Sel::fit(tys, strs, ss, d) = True →
+        (off: Nat) → (p: Pair<Nat, Dyn(tys)>) → Sel::locate(tys, strs, d, ss, off) = Some(p) → Located(tys, strs, bs, off, p)
+}
+
+// Nothing is located past a word.
+theorem locate_past_word(tys: Nat → Type, strs: Strs(tys), x: Dyn(tys), size: Nat, sized: x.code.word_size() = Some(size), s: Sel, rest: List<Sel>, off: Nat,
+    p: Pair<Nat, Dyn(tys)>, at: Sel::locate(tys, strs, x, Cons(s, rest), off) = Some(p)): False {
+    let step = locate_cons_some(tys, strs, x, s, rest, off, p, at);
+    absurd(trans(sym(step.proof.left), cong_fn(λ (l: Layout) => Sel::step_at(l, s), Shape::word_no_layout(tys, strs, x.code, size, sized))))
+}
+
+// A word located after its one step: its image a window at the step's
+// offset.
+theorem word_located(tys: Nat → Type, strs: Strs(tys), x: Dyn(tys), size: Nat, sized: x.code.word_size() = Some(size), rest: List<Sel>, off, k: Nat,
+    p: Pair<Nat, Dyn(tys)>, at: Sel::locate(tys, strs, x, rest, off + k) = Some(p), bs: List<BitVec(8)>, inside: k + size <= bs.len(),
+    win: bs.window(k, k + size) = word_bytes_at(size, Dyn::index(tys, x))): Located(tys, strs, bs, off, p) {
+    let rng = Shape::size_range(x.code, size, sized);
+    let wl = word_bytes_at_len(size, Dyn::index(tys, x), omega(rng));
+    (match rest as λ r0 => Sel::locate(tys, strs, x, r0, off + k) = Some(p) → Located(tys, strs, bs, off, p) {
+        Nil => λ e => j(Option::some_inj(Pair(off + k, x), p, e), λ q _ => Located(tys, strs, bs, off, q),
+            Exists(k, ⟨refl, Exists(word_bytes_at(size, Dyn::index(tys, x)), ⟨image_word(tys, strs, x, size, sized),
+                ⟨omega(inside, wl), trans(cong_fn(λ (n: Nat) => bs.window(k, k + n), wl), win)⟩⟩)⟩)),
+        Cons(s, r2) => λ e => false_elim(locate_past_word(tys, strs, x, size, sized, s, r2, off + k, p, e)),
+    })(at)
+}
+
+// A sequence's length is below its encoding's.
+theorem len_below(tys: Nat → Type, strs: Strs(tys), d: Dyn(tys), size: Nat, rng: (1 <= size) ∧ (size <= 8), bs: List<BitVec(8)>,
+    is: Dyn::encode_elems(tys, strs, d, size, 0, Dyn::len(tys, strs, d)) = bs): Dyn::len(tys, strs, d) <= bs.len() {
+    let l = encode_elems_len(tys, strs, d, size, rng.right, 0, Dyn::len(tys, strs, d));
+    let m = Nat::mul_le_mono_r(Dyn::len(tys, strs, d), 1, size, rng.left);
+    let one = Nat::mul_left_one(Dyn::len(tys, strs, d));
+    let lb: (bs.len() = size * Dyn::len(tys, strs, d)) = trans(cong_fn(λ (x: List<BitVec(8)>) => x.len(), sym(is)), l);
+    omega(m, one, lb)
+}
+
+// Located through an element of a sequence.
+theorem elem_located(tys: Nat → Type, strs: Strs(tys), laid: Strs::Laid(tys, strs), d: Dyn(tys), el: Shape, size: Nat, wc: Option<Shape>,
+    lay: Shape::layout(tys, strs, d.code) = LSeq(el, size, wc), bs: List<BitVec(8)>, is: Dyn::encode_elems(tys, strs, d, size, 0, Dyn::len(tys, strs, d)) = bs,
+    short: bs.len() < Nat::pow(2, 64), i: Ix, fit: Dyn::fits(tys, strs, el_sel(i), d) = True, rest: List<Sel>, off: Nat, p: Pair<Nat, Dyn(tys)>,
+    at: Sel::locate(tys, strs, Dyn::at(tys, strs, el_sel(i), d), rest, off + i.toNat() * size) = Some(p)): Located(tys, strs, bs, off, p) {
+    let sl = laid.left(d.code, el, size, wc, lay).left;
+    let rng = Shape::size_range(el, size, sl.el_size);
+    let lb = len_below(tys, strs, d, size, rng, bs, is);
+    let ei = elem_image(tys, strs, laid, d, el, size, wc, lay, i, fit, omega(lb, short));
+    let x = Dyn::at(tys, strs, el_sel(i), d);
+    let code: (x.code.word_size() = Some(size)) = trans(cong_fn(λ (c: Shape) => c.word_size(), sl.elem_code(d.val, i)), sl.el_size);
+    let l = encode_elems_len(tys, strs, d, size, rng.right, 0, Dyn::len(tys, strs, d));
+    let lbs: (bs.len() = size * Dyn::len(tys, strs, d)) = trans(cong_fn(λ (y: List<BitVec(8)>) => y.len(), sym(is)), l);
+    let up = Nat::mul_le_mono_l(size, i.toNat() + 1, Dyn::len(tys, strs, d), ei.left);
+    let kc: (i.toNat() * size = size * i.toNat()) = Nat::mul_comm(i.toNat(), size);
+    let one: (size * 1 = size) = omega();
+    let w0 = trans(cong_fn(λ (y: List<BitVec(8)>) => y.window(size * i.toNat(), size * i.toNat() + size * 1), sym(is)), ei.right.right);
+    let w1: (bs.window(i.toNat() * size, i.toNat() * size + size) = word_bytes_at(size, Dyn::index(tys, x))) =
+        trans(cong_fn(λ (m: Nat) => bs.window(m, m + size), kc), trans(cong_fn(λ (m: Nat) => bs.window(size * i.toNat(), size * i.toNat() + m), sym(one)),
+            trans(w0, (word_bytes_at(size, Dyn::index(tys, x))).append_nil())));
+    let sp: (size * (i.toNat() + 1) = size * i.toNat() + size) = refl;
+    word_located(tys, strs, x, size, code, rest, off, i.toNat() * size, p, at, bs, omega(up, kc, lbs, sp), w1)
+}
+
+// Located through a window of a sequence: the rest located in the window.
+theorem win_located(tys: Nat → Type, strs: Strs(tys), laid: Strs::Laid(tys, strs), d: Dyn(tys), el: Shape, size: Nat, w: Shape,
+    lay: Shape::layout(tys, strs, d.code) = LSeq(el, size, Some(w)), bs: List<BitVec(8)>, is: Dyn::encode_elems(tys, strs, d, size, 0, Dyn::len(tys, strs, d)) = bs,
+    short: bs.len() < Nat::pow(2, 64), lo, n: Ix, fit: Dyn::fits(tys, strs, win_sel(lo, n), d) = True, rest: List<Sel>,
+    fit_rest: Sel::fit(tys, strs, rest, Dyn::at(tys, strs, win_sel(lo, n), d)) = True, ih: LocImage(tys, strs, rest), off: Nat, p: Pair<Nat, Dyn(tys)>,
+    at: Sel::locate(tys, strs, Dyn::at(tys, strs, win_sel(lo, n), d), rest, off + lo.toNat() * size) = Some(p)): Located(tys, strs, bs, off, p) {
+    let sl = laid.left(d.code, el, size, Some(w), lay).left;
+    let rng = Shape::size_range(el, size, sl.el_size);
+    let lb = len_below(tys, strs, d, size, rng, bs, is);
+    let wi = win_image(tys, strs, laid, d, el, size, w, lay, lo, n, fit, omega(lb, short));
+    let a = size * lo.toNat();
+    let b = size * lo.toNat() + size * n.toNat();
+    let l = encode_elems_len(tys, strs, d, size, rng.right, 0, Dyn::len(tys, strs, d));
+    let lbs: (bs.len() = size * Dyn::len(tys, strs, d)) = trans(cong_fn(λ (y: List<BitVec(8)>) => y.len(), sym(is)), l);
+    let up = Nat::mul_le_mono_l(size, lo.toNat() + n.toNat(), Dyn::len(tys, strs, d), wi.left);
+    let dist = Nat::mul_add_distr(size, lo.toNat(), n.toNat());
+    let enc: (Dyn::encode(tys, strs, Dyn::at(tys, strs, win_sel(lo, n), d)) = Some(bs.window(a, b))) =
+        trans(wi.right.right, cong_fn(λ (y: List<BitVec(8)>) => Some(y.window(a, b)), is));
+    let wlen: ((bs.window(a, b)).len() = b - a) = bs.len_window(a, b, omega(), omega(up, dist, lbs));
+    let inner = ih(Dyn::at(tys, strs, win_sel(lo, n), d), bs.window(a, b), enc, omega(wlen, short, up, dist, lbs), fit_rest, off + lo.toNat() * size, p, at);
+    let r1 = inner.witness;
+    let ys = inner.proof.right.witness;
+    let parts = inner.proof.right.proof;
+    let kc: (lo.toNat() * size = a) = Nat::mul_comm(lo.toNat(), size);
+    let ww = bs.window_window(a, b, r1, r1 + ys.len(), omega(parts.right.left, wlen));
+    let c1: (r1 + a = a + r1) = omega();
+    let c2: (r1 + ys.len() + a = a + r1 + ys.len()) = omega();
+    let win: (bs.window(a + r1, a + r1 + ys.len()) = ys) =
+        trans(cong_fn(λ (m: Nat) => bs.window(m, a + r1 + ys.len()), sym(c1)), trans(cong_fn(λ (m: Nat) => bs.window(r1 + a, m), sym(c2)), trans(sym(ww), parts.right.right)));
+    let fst: (p.fst = off + (a + r1)) = trans(inner.proof.left, trans(cong_fn(λ (m: Nat) => off + m + r1, kc), off.add_assoc(a, r1)));
+    Exists(a + r1, ⟨fst, Exists(ys, ⟨parts.left, ⟨omega(parts.right.left, wlen, up, dist, lbs), win⟩⟩)⟩)
+}
+
+// Located through a record's field.
+theorem field_located(tys: Nat → Type, strs: Strs(tys), laid: Strs::Laid(tys, strs), d: Dyn(tys), fs: List<Shape>,
+    lay: Shape::layout(tys, strs, d.code) = LRecord(fs), bs: List<BitVec(8)>, enc: Dyn::encode_fields(tys, strs, d, fs, 0) = Some(bs), i, k: Nat,
+    off_is: fields_offset(fs, i) = Some(k), rest: List<Sel>, off: Nat, p: Pair<Nat, Dyn(tys)>,
+    at: Sel::locate(tys, strs, Dyn::at(tys, strs, OnField(i), d), rest, off + k) = Some(p)): Located(tys, strs, bs, off, p) {
+    let rl = laid.right(d.code, fs, lay);
+    let fe = fields_offset_nth(fs, i, k, off_is);
+    let f = fe.witness;
+    let x = Dyn::at(tys, strs, OnField(i), d);
+    (match f.word_size() as λ o => f.word_size() = o → o.is_some() = True → Located(tys, strs, bs, off, p) {
+        None => λ _ never => absurd(never),
+        Some(sz) => λ fsz _ => {
+            let fi = fields_image(tys, strs, d, fs, 0, i, k, f, sz, bs, enc, off_is, fe.proof, fsz);
+            let code: (x.code.word_size() = Some(sz)) = trans(cong_fn(λ (c: Shape) => c.word_size(), rl.field_code(d.val, i, f, fe.proof)), fsz);
+            word_located(tys, strs, x, sz, code, rest, off, k, p, at, bs, fi.left,
+                trans(fi.right, cong_fn(λ (m: Nat) => word_bytes_at(sz, Dyn::index(tys, Dyn::at(tys, strs, OnField(m), d))), zero_add(i))))
+        },
+    })(refl, rl.field_sized(i, f, fe.proof))
+}
+
+// What is located in a value with an encoding is a window of it, its image
+// (§25.8).
+theorem locate_image(tys: Nat → Type, strs: Strs(tys), laid: Strs::Laid(tys, strs), ss: List<Sel>): LocImage(tys, strs, ss) {
+    match ss {
+        Nil => λ d bs enc short fit off p at => j(Option::some_inj(Pair(off, d), p, at), λ q _ => Located(tys, strs, bs, off, q),
+            Exists(0, ⟨refl, Exists(bs, ⟨image_of_encode(tys, strs, d, bs, enc), ⟨omega(), List::window_whole(bs)⟩⟩)⟩)),
+        Cons(s, rest) => λ d bs enc short fit off p at => {
+            let step = locate_cons_some(tys, strs, d, s, rest, off, p, at);
+            let k = step.witness;
+            let fits2 = Bool::and_true_parts(Dyn::fits(tys, strs, s, d), Sel::fit(tys, strs, rest, Dyn::at(tys, strs, s, d)), fit);
+            (match Shape::layout(tys, strs, d.code) as λ l => Shape::layout(tys, strs, d.code) = l → Sel::step_at(l, s) = Some(k) → Located(tys, strs, bs, off, p) {
+                LNone => λ _ never => absurd(never),
+                LSeq(el, size, wc) => λ lay so => {
+                    let is: (Dyn::encode_elems(tys, strs, d, size, 0, Dyn::len(tys, strs, d)) = bs) =
+                        Option::some_inj(Dyn::encode_elems(tys, strs, d, size, 0, Dyn::len(tys, strs, d)), bs, trans(sym(encode_seq(tys, strs, d, el, size, wc, lay)), enc));
+                    (match s as λ s0 => Sel::step_at(LSeq(el, size, wc), s0) = Some(k) → Dyn::fits(tys, strs, s0, d) = True → Sel::fit(tys, strs, rest, Dyn::at(tys, strs, s0, d)) = True →
+                            Sel::locate(tys, strs, Dyn::at(tys, strs, s0, d), rest, off + k) = Some(p) → Located(tys, strs, bs, off, p) {
+                        OnSeq(a) => match a {
+                            SeqOne(i) => λ so1 f1 _ at1 => elem_located(tys, strs, laid, d, el, size, wc, lay, bs, is, short, i, f1, rest, off, p,
+                                trans(cong_fn(λ (m: Nat) => Sel::locate(tys, strs, Dyn::at(tys, strs, el_sel(i), d), rest, off + m), Option::some_inj(i.toNat() * size, k, so1)), at1)),
+                            SeqRun(lo, n) => λ so1 f1 fr at1 => {
+                                let at2 = trans(cong_fn(λ (m: Nat) => Sel::locate(tys, strs, Dyn::at(tys, strs, win_sel(lo, n), d), rest, off + m), Option::some_inj(lo.toNat() * size, k, so1)), at1);
+                                (match wc as λ v => Shape::layout(tys, strs, d.code) = LSeq(el, size, v) → WinsLaid(tys, strs, d.code, el, size, v) → Located(tys, strs, bs, off, p) {
+                                    None => λ _ none => absurd(trans(sym(f1), none(d.val, lo, n))),
+                                    Some(w) => λ lay2 _ => win_located(tys, strs, laid, d, el, size, w, lay2, bs, is, short, lo, n, f1, rest, fr,
+                                        locate_image(tys, strs, laid, rest), off, p, at2),
+                                })(lay, laid.left(d.code, el, size, wc, lay).right)
+                            },
+                        },
+                        OnField(_) => λ never _ _ _ => absurd(never),
+                        OnKey(_) => λ never _ _ _ => absurd(never),
+                        OnVariant(_) => λ never _ _ _ => absurd(never),
+                    })(so, fits2.left, fits2.right, step.proof.right)
+                },
+                LRecord(fs) => λ lay so => {
+                    let enc2: (Dyn::encode_fields(tys, strs, d, fs, 0) = Some(bs)) = trans(sym(encode_rec(tys, strs, d, fs, lay)), enc);
+                    (match s as λ s0 => Sel::step_at(LRecord(fs), s0) = Some(k) → Sel::locate(tys, strs, Dyn::at(tys, strs, s0, d), rest, off + k) = Some(p) → Located(tys, strs, bs, off, p) {
+                        OnField(i) => λ so1 at1 => field_located(tys, strs, laid, d, fs, lay, bs, enc2, i, k, so1, rest, off, p, at1),
+                        OnSeq(_) => λ never _ => absurd(never),
+                        OnKey(_) => λ never _ => absurd(never),
+                        OnVariant(_) => λ never _ => absurd(never),
+                    })(so, step.proof.right)
+                },
+            })(refl, step.proof.left)
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// What a put stores
+
+theorem List::nth_at<A>(xs: List<A>, i, k: Nat, e: i = k): xs.nth(i) = xs.nth(k) { cong_fn(λ (m: Nat) => xs.nth(m), e) }
+
+// A window put into a window put back is the put at the sum of the starts.
+theorem List::put_window_nested<A>(bs: List<A>, a, b, r: Nat, xs: List<A>, ab: a <= b, bl: b <= bs.len(), fits: r + xs.len() <= b - a):
+    bs.put_window(a, bs.window(a, b).put_window(r, xs)) = bs.put_window(a + r, xs) {
+    let w = bs.window(a, b);
+    let lw: (w.len() = b - a) = bs.len_window(a, b, ab, bl);
+    let w2 = w.put_window(r, xs);
+    let lw2: (w2.len() = w.len()) = w.len_put_window(r, xs, omega(lw, fits));
+    let left_len = bs.len_put_window(a, w2, omega(lw, lw2, bl));
+    let right_len = bs.len_put_window(a + r, xs, omega(lw, fits, bl));
+    (bs.put_window(a, w2)).ext_nth(bs.put_window(a + r, xs), trans(left_len, sym(right_len)), λ k lt => {
+        let al: (a <= bs.len()) = omega(ab, bl);
+        let arl: (a + r <= bs.len()) = omega(lw, fits, bl);
+        match k.lt_or_ge(a) {
+            Inl(below) => trans(bs.nth_put_window_before(a, w2, k, below, al), sym(bs.nth_put_window_before(a + r, xs, k, omega(below), arl))),
+            Inr(ge_a) => match k.lt_or_ge(a + r) {
+                Inl(below_r) => {
+                    let e1: (k = (k - a) + a) = omega(ge_a);
+                    let l1 = trans(List::nth_at(bs.put_window(a, w2), k, (k - a) + a, e1), bs.nth_put_window_inside(a, w2, k - a, omega(lw, lw2, below_r, fits), al));
+                    let l2 = trans(w.nth_put_window_before(r, xs, k - a, omega(below_r, ge_a), omega(lw, fits)), bs.nth_window(a, b, k - a, omega(below_r, ge_a, lw, fits)));
+                    trans(l1, trans(l2, trans(List::nth_at(bs, k - a + a, k, sym(e1)), sym(bs.nth_put_window_before(a + r, xs, k, below_r, arl)))))
+                },
+                Inr(ge_r) => match k.lt_or_ge(a + r + xs.len()) {
+                    Inl(in_xs) => {
+                        let e1: (k = (k - a) + a) = omega(ge_a);
+                        let e2: (k - a = (k - a - r) + r) = omega(ge_r);
+                        let e3: (k = (k - a - r) + (a + r)) = omega(ge_r);
+                        let l1 = trans(List::nth_at(bs.put_window(a, w2), k, (k - a) + a, e1), bs.nth_put_window_inside(a, w2, k - a, omega(lw, lw2, in_xs, fits), al));
+                        let l2 = trans(List::nth_at(w2, k - a, (k - a - r) + r, e2), w.nth_put_window_inside(r, xs, k - a - r, omega(in_xs, ge_r), omega(lw, fits)));
+                        let r1 = trans(List::nth_at(bs.put_window(a + r, xs), k, (k - a - r) + (a + r), e3), bs.nth_put_window_inside(a + r, xs, k - a - r, omega(in_xs, ge_r), arl));
+                        trans(l1, trans(l2, sym(r1)))
+                    },
+                    Inr(past_xs) => match k.lt_or_ge(b) {
+                        Inl(in_w) => {
+                            let e1: (k = (k - a) + a) = omega(ge_a);
+                            let e2: (k - a = (k - a - r - xs.len()) + (xs.len() + r)) = omega(past_xs);
+                            let e3: (k = (k - a - r - xs.len()) + (xs.len() + (a + r))) = omega(past_xs);
+                            let l1 = trans(List::nth_at(bs.put_window(a, w2), k, (k - a) + a, e1), bs.nth_put_window_inside(a, w2, k - a, omega(lw, lw2, in_w, ge_a), al));
+                            let l2 = trans(List::nth_at(w2, k - a, (k - a - r - xs.len()) + (xs.len() + r), e2), w.nth_put_window_after(r, xs, k - a - r - xs.len(), omega(lw, fits)));
+                            let l3 = trans(List::nth_at(w, (k - a - r - xs.len()) + (xs.len() + r), k - a, sym(e2)), bs.nth_window(a, b, k - a, omega(in_w, ge_a, lw)));
+                            let r1 = trans(List::nth_at(bs.put_window(a + r, xs), k, (k - a - r - xs.len()) + (xs.len() + (a + r)), e3), bs.nth_put_window_after(a + r, xs, k - a - r - xs.len(), arl));
+                            trans(l1, trans(l2, trans(l3, trans(List::nth_at(bs, k - a + a, k, sym(e1)), trans(List::nth_at(bs, k, (k - a - r - xs.len()) + (xs.len() + (a + r)), e3), sym(r1))))))
+                        },
+                        Inr(past_w) => {
+                            let e1: (k = (k - a - w2.len()) + (w2.len() + a)) = omega(past_w, lw, lw2);
+                            let e3: (k = (k - a - r - xs.len()) + (xs.len() + (a + r))) = omega(past_xs);
+                            let l1 = trans(List::nth_at(bs.put_window(a, w2), k, (k - a - w2.len()) + (w2.len() + a), e1), bs.nth_put_window_after(a, w2, k - a - w2.len(), al));
+                            let r1 = trans(List::nth_at(bs.put_window(a + r, xs), k, (k - a - r - xs.len()) + (xs.len() + (a + r)), e3), bs.nth_put_window_after(a + r, xs, k - a - r - xs.len(), arl));
+                            trans(l1, trans(List::nth_at(bs, (k - a - w2.len()) + (w2.len() + a), (k - a - r - xs.len()) + (xs.len() + (a + r)), trans(sym(e1), e3)), sym(r1)))
+                        },
+                    },
+                },
+            },
+        }
+    })
+}
+
+// A word put at an element: the encoding with the word's bytes at the
+// element's offset.
+theorem elem_put_image(tys: Nat → Type, strs: Strs(tys), laid: Strs::Laid(tys, strs), d: Dyn(tys), el: Shape, size: Nat, wc: Option<Shape>,
+    lay: Shape::layout(tys, strs, d.code) = LSeq(el, size, wc), bs: List<BitVec(8)>, is: Dyn::encode_elems(tys, strs, d, size, 0, Dyn::len(tys, strs, d)) = bs,
+    short: bs.len() < Nat::pow(2, 64), i: Ix, fit: Dyn::fits(tys, strs, el_sel(i), d) = True, x: Dyn(tys), xc: x.code = el):
+    Dyn::encode(tys, strs, Dyn::over(tys, strs, el_sel(i), λ _ => x, d)) = Some(bs.put_window(size * i.toNat(), word_bytes_at(size, Dyn::index(tys, x)) ++ Nil)) {
+    let sl = laid.left(d.code, el, size, wc, lay).left;
+    let rng = Shape::size_range(el, size, sl.el_size);
+    let lb = len_below(tys, strs, d, size, rng, bs, is);
+    let below: (i.toNat() < Dyn::len(tys, strs, d)) = sl.elem_fits(d.val, i, fit);
+    let d2 = Dyn::over(tys, strs, el_sel(i), λ _ => x, d);
+    let len2: (Dyn::len(tys, strs, d2) = Dyn::len(tys, strs, d)) = sl.len_over(d.val, el_sel(i), λ _ => x);
+    let enc2 = trans(encode_seq(tys, strs, d2, el, size, wc, lay), cong_fn(λ (m: Nat) => Some(Dyn::encode_elems(tys, strs, d2, size, 0, m)), len2));
+    let put = encode_elems_put(tys, strs, d, d2, size, i.toNat(), 1, Dyn::len(tys, strs, d), omega(rng), omega(below), λ jj jl o => {
+        let jn = ix64_num(jj, omega(jl, lb, short));
+        sl.elem_other(d.val, ix64(jj), i, λ e => omega(e, jn, o), λ _ => x)
+    });
+    let here: (Dyn::at(tys, strs, el_sel(ix64(i.toNat())), d2) = x) =
+        trans(sl.elem_num(d2.val, ix64(i.toNat()), i, ix64_num(i.toNat(), omega(below, lb, short))), sl.elem_put(d.val, i, fit, x, xc));
+    trans(enc2, cong_fn(λ (l: List<BitVec(8)>) => Some(l), trans(put, trans(cong_fn(λ (l: List<BitVec(8)>) => l.put_window(size * i.toNat(), Dyn::encode_elems(tys, strs, d2, size, i.toNat(), 1)), is),
+        cong_fn(λ (y: Dyn(tys)) => bs.put_window(size * i.toNat(), word_bytes_at(size, Dyn::index(tys, y)) ++ Nil), here)))))
+}
+
+// A window put: the encoding with the window's bytes at its offset.
+theorem win_put_image(tys: Nat → Type, strs: Strs(tys), laid: Strs::Laid(tys, strs), d: Dyn(tys), el: Shape, size: Nat, w: Shape,
+    lay: Shape::layout(tys, strs, d.code) = LSeq(el, size, Some(w)), bs: List<BitVec(8)>, is: Dyn::encode_elems(tys, strs, d, size, 0, Dyn::len(tys, strs, d)) = bs,
+    short: bs.len() < Nat::pow(2, 64), lo, n: Ix, fit: Dyn::fits(tys, strs, win_sel(lo, n), d) = True, y: Dyn(tys), yc: y.code = w, ylen: Dyn::len(tys, strs, y) = n.toNat(),
+    ys: List<BitVec(8)>, yenc: Dyn::encode(tys, strs, y) = Some(ys)):
+    Dyn::encode(tys, strs, Dyn::over(tys, strs, win_sel(lo, n), λ _ => y, d)) = Some(bs.put_window(size * lo.toNat(), ys)) {
+    let both = laid.left(d.code, el, size, Some(w), lay);
+    let sl = both.left;
+    let wl: WinLaid(tys, strs, d.code, el, size, w) = both.right;
+    let rng = Shape::size_range(el, size, sl.el_size);
+    let lb = len_below(tys, strs, d, size, rng, bs, is);
+    let inside: (lo.toNat() + n.toNat() <= Dyn::len(tys, strs, d)) = wl.win_fits(d.val, lo, n, fit);
+    let d2 = Dyn::over(tys, strs, win_sel(lo, n), λ _ => y, d);
+    let len2: (Dyn::len(tys, strs, d2) = Dyn::len(tys, strs, d)) = sl.len_over(d.val, win_sel(lo, n), λ _ => y);
+    let enc2 = trans(encode_seq(tys, strs, d2, el, size, Some(w), lay), cong_fn(λ (m: Nat) => Some(Dyn::encode_elems(tys, strs, d2, size, 0, m)), len2));
+    let put = encode_elems_put(tys, strs, d, d2, size, lo.toNat(), n.toNat(), Dyn::len(tys, strs, d), omega(rng), inside, λ jj jl o => {
+        let jn = ix64_num(jj, omega(jl, lb, short));
+        wl.win_other(d.val, lo, n, ix64(jj), match o { Inl(a) => Inl(omega(a, jn)), Inr(b) => Inr(omega(b, jn)) }, λ _ => y)
+    });
+    let fit2: (Dyn::fits(tys, strs, win_sel(lo, n), d2) = True) = trans(sl.fits_len(d2.val, d.val, win_sel(lo, n), len2), fit);
+    let at2: (Dyn::at(tys, strs, win_sel(lo, n), d2) = y) = wl.win_put(d.val, lo, n, fit, y, yc, ylen);
+    let ext = encode_elems_ext(tys, strs, d2, Dyn::at(tys, strs, win_sel(lo, n), d2), size, lo.toNat(), 0, n.toNat(), λ t lt => {
+        let a = ix64_num(0 + t, omega(lt, inside, lb, short));
+        let b = ix64_num(lo.toNat() + t, omega(lt, inside, lb, short));
+        sym(wl.win_elem(d2.val, lo, n, fit2, ix64(0 + t), ix64(lo.toNat() + t), omega(a, lt), omega(a, b)))
+    });
+    let wlay = wl.win_layout;
+    let ylay: (Shape::layout(tys, strs, y.code) = LSeq(el, size, wlay.witness)) = trans(cong_fn(λ (c: Shape) => Shape::layout(tys, strs, c), yc), wlay.proof);
+    let yis: (Dyn::encode_elems(tys, strs, y, size, 0, n.toNat()) = ys) = Option::some_inj(Dyn::encode_elems(tys, strs, y, size, 0, n.toNat()), ys,
+        trans(sym(trans(encode_seq(tys, strs, y, el, size, wlay.witness, ylay), cong_fn(λ (m: Nat) => Some(Dyn::encode_elems(tys, strs, y, size, 0, m)), ylen))), yenc));
+    let mid: (Dyn::encode_elems(tys, strs, d2, size, lo.toNat(), n.toNat()) = ys) =
+        trans(ext, trans(cong_fn(λ (z: Dyn(tys)) => Dyn::encode_elems(tys, strs, z, size, 0, n.toNat()), at2), yis));
+    trans(enc2, cong_fn(λ (l: List<BitVec(8)>) => Some(l), trans(put, trans(cong_fn(λ (l: List<BitVec(8)>) => l.put_window(size * lo.toNat(), Dyn::encode_elems(tys, strs, d2, size, lo.toNat(), n.toNat())), is),
+        cong_fn(λ (l: List<BitVec(8)>) => bs.put_window(size * lo.toNat(), l), mid)))))
+}
+
+theorem List::put_window_prefix<A>(xs: List<A>): (ys, zs: List<A>) → (s: Nat) → (xs ++ ys).put_window(xs.len() + s, zs) = xs ++ ys.put_window(s, zs) {
+    match xs {
+        Nil => λ ys zs s => cong_fn(λ (m: Nat) => ys.put_window(m, zs), zero_add(s)),
+        Cons(h, t) => λ ys zs s => trans(cong_fn(λ (m: Nat) => (Cons(h, t) ++ ys).put_window(m, zs), Nat::add_succ_left(t.len(), s)),
+            List::cong_cons(h, List::put_window_prefix(t, ys, zs, s))),
+    }
+}
+
+// Two records' fields read alike from field `j` on: their encodings from
+// there are one.
+theorem encode_fields_ext(tys: Nat → Type, strs: Strs(tys), d1, d2: Dyn(tys), fs: List<Shape>): (j: Nat) →
+    ((m: Nat) → j <= m → Dyn::at(tys, strs, OnField(m), d2) = Dyn::at(tys, strs, OnField(m), d1)) → Dyn::encode_fields(tys, strs, d2, fs, j) = Dyn::encode_fields(tys, strs, d1, fs, j) {
+    match fs {
+        Nil => λ j _ => refl,
+        Cons(f0, rest) => λ j same => {
+            let ih = encode_fields_ext(tys, strs, d1, d2, rest, j + 1, λ m le => same(m, omega(le)));
+            match f0.word_size() as λ o => (match o as λ _ => Option<List<BitVec(8)>> { None => None,
+                    Some(s0) => (Dyn::encode_fields(tys, strs, d2, rest, j + 1)).map(λ more => word_bytes_at(s0, Dyn::index(tys, Dyn::at(tys, strs, OnField(j), d2))) ++ more) }) =
+                (match o as λ _ => Option<List<BitVec(8)>> { None => None,
+                    Some(s0) => (Dyn::encode_fields(tys, strs, d1, rest, j + 1)).map(λ more => word_bytes_at(s0, Dyn::index(tys, Dyn::at(tys, strs, OnField(j), d1))) ++ more) }) {
+                None => refl,
+                Some(s0) => trans(cong_fn(λ (o2: Option<List<BitVec(8)>>) => o2.map(λ more => word_bytes_at(s0, Dyn::index(tys, Dyn::at(tys, strs, OnField(j), d2))) ++ more), ih),
+                    cong_fn(λ (x: Dyn(tys)) => (Dyn::encode_fields(tys, strs, d1, rest, j + 1)).map(λ more => word_bytes_at(s0, Dyn::index(tys, x)) ++ more), same(j, omega()))),
+            }
+        },
+    }
+}
+
+// A word put at field `j + t`: the encoding with its bytes at the field's
+// offset.
+theorem fields_put(tys: Nat → Type, strs: Strs(tys), d1, d2: Dyn(tys), x: Dyn(tys), fs: List<Shape>): (j, t, k: Nat) → (f: Shape) → (sz: Nat) → (bs: List<BitVec(8)>) →
+    Dyn::encode_fields(tys, strs, d1, fs, j) = Some(bs) → fields_offset(fs, t) = Some(k) → fs.nth(t) = Some(f) → f.word_size() = Some(sz) →
+    ((m: Nat) → ¬(m = j + t) → Dyn::at(tys, strs, OnField(m), d2) = Dyn::at(tys, strs, OnField(m), d1)) → Dyn::at(tys, strs, OnField(j + t), d2) = x →
+    Dyn::encode_fields(tys, strs, d2, fs, j) = Some(bs.put_window(k, word_bytes_at(sz, Dyn::index(tys, x)))) {
+    match fs {
+        Nil => λ j t k f sz bs enc never => absurd(never),
+        Cons(f0, rest) => λ j t k f sz bs enc off nth fsz others here => {
+            let wb = λ (s0: Nat) (y: Dyn(tys)) => word_bytes_at(s0, Dyn::index(tys, Dyn::at(tys, strs, OnField(j), y)));
+            (match f0.word_size() as λ o => f0.word_size() = o →
+                    (match o as λ _ => Option<List<BitVec(8)>> { None => None, Some(s0) => (Dyn::encode_fields(tys, strs, d1, rest, j + 1)).map(λ more => wb(s0, d1) ++ more) }) = Some(bs) →
+                    (match t as λ _ => Option<Nat> { Zero => Some(0), Succ(t1) => match o as λ _ => Option<Nat> { None => None, Some(s) => fields_offset(rest, t1).map(λ y => s + y) } }) = Some(k) →
+                    (match o as λ _ => Option<List<BitVec(8)>> { None => None, Some(s0) => (Dyn::encode_fields(tys, strs, d2, rest, j + 1)).map(λ more => wb(s0, d2) ++ more) }) =
+                        Some(bs.put_window(k, word_bytes_at(sz, Dyn::index(tys, x)))) {
+                None => λ _ never => absurd(never),
+                Some(s0) => λ e0 enc2 off2 => {
+                    let m = map_some(Dyn::encode_fields(tys, strs, d1, rest, j + 1), λ more => wb(s0, d1) ++ more, bs, enc2);
+                    let more = m.witness;
+                    let rng = Shape::size_range(f0, s0, e0);
+                    let bs_is: (wb(s0, d1) ++ more = bs) = m.proof.right;
+                    (match t as λ t0 => Cons(f0, rest).nth(t0) = Some(f) → (match t0 as λ _ => Option<Nat> { Zero => Some(0), Succ(t1) => fields_offset(rest, t1).map(λ y => s0 + y) }) = Some(k) →
+                            ((mm: Nat) → ¬(mm = j + t0) → Dyn::at(tys, strs, OnField(mm), d2) = Dyn::at(tys, strs, OnField(mm), d1)) → Dyn::at(tys, strs, OnField(j + t0), d2) = x →
+                            (Dyn::encode_fields(tys, strs, d2, rest, j + 1)).map(λ more2 => wb(s0, d2) ++ more2) = Some(bs.put_window(k, word_bytes_at(sz, Dyn::index(tys, x)))) {
+                        Zero => λ nth0 off0 others0 here0 => {
+                            let k0: (0 = k) = Option::some_inj(0, k, off0);
+                            let ff: (f0 = f) = Option::some_inj(f0, f, nth0);
+                            let ss: (s0 = sz) = Option::some_inj(s0, sz, trans(sym(e0), trans(cong_fn(λ (c: Shape) => c.word_size(), ff), fsz)));
+                            let rest_same = encode_fields_ext(tys, strs, d1, d2, rest, j + 1, λ mm le => others0(mm, λ e => omega(e, le)));
+                            let l0: ((wb(s0, d1)).len() = s0) = word_bytes_at_len(s0, Dyn::index(tys, Dyn::at(tys, strs, OnField(j), d1)), omega(rng));
+                            let lx: ((word_bytes_at(sz, Dyn::index(tys, x))).len() = s0) = trans(word_bytes_at_len(sz, Dyn::index(tys, x), omega(rng, ss)), sym(ss));
+                            let pw: ((wb(s0, d1) ++ more).put_window(0, word_bytes_at(sz, Dyn::index(tys, x))) = word_bytes_at(sz, Dyn::index(tys, x)) ++ more) =
+                                trans((wb(s0, d1) ++ more).put_window_from_zero(word_bytes_at(sz, Dyn::index(tys, x))), cong_fn(λ (l: List<BitVec(8)>) => word_bytes_at(sz, Dyn::index(tys, x)) ++ l,
+                                    trans(cong_fn(λ (n: Nat) => (wb(s0, d1) ++ more).drop(n), trans(lx, sym(l0))), (wb(s0, d1)).drop_append_len(more))));
+                            let wbx: (wb(s0, d2) = word_bytes_at(sz, Dyn::index(tys, x))) =
+                                trans(cong_fn(λ (y: Dyn(tys)) => word_bytes_at(s0, Dyn::index(tys, y)), here0), cong_fn(λ (n: Nat) => word_bytes_at(n, Dyn::index(tys, x)), ss));
+                            trans(cong_fn(λ (o2: Option<List<BitVec(8)>>) => o2.map(λ more2 => wb(s0, d2) ++ more2), trans(rest_same, m.proof.left)),
+                                cong_fn(λ (l: List<BitVec(8)>) => Some(l), trans(cong_fn(λ (l: List<BitVec(8)>) => l ++ more, wbx),
+                                    trans(sym(pw), trans(cong_fn(λ (b2: List<BitVec(8)>) => b2.put_window(0, word_bytes_at(sz, Dyn::index(tys, x))), bs_is),
+                                        cong_fn(λ (n: Nat) => bs.put_window(n, word_bytes_at(sz, Dyn::index(tys, x))), k0))))))
+                        },
+                        Succ(t1) => λ nth1 off1 others1 here1 => {
+                            let m1 = map_some(fields_offset(rest, t1), λ y => s0 + y, k, off1);
+                            let k1 = m1.witness;
+                            let jt: (j + 1 + t1 = j + Succ(t1)) = omega();
+                            let ih = fields_put(tys, strs, d1, d2, x, rest, j + 1, t1, k1, f, sz, more, m.proof.left, m1.proof.left, nth1, fsz,
+                                λ mm ne => others1(mm, λ e => ne(trans(e, sym(jt)))), trans(cong_fn(λ (n: Nat) => Dyn::at(tys, strs, OnField(n), d2), jt), here1));
+                            let first: (Dyn::at(tys, strs, OnField(j), d2) = Dyn::at(tys, strs, OnField(j), d1)) = others1(j, λ e => omega(e));
+                            let l0: ((wb(s0, d1)).len() = s0) = word_bytes_at_len(s0, Dyn::index(tys, Dyn::at(tys, strs, OnField(j), d1)), omega(rng));
+                            let kk: ((wb(s0, d1)).len() + k1 = k) = add_eq((wb(s0, d1)).len(), s0, k1, k, l0, m1.proof.right);
+                            let pre = List::put_window_prefix(wb(s0, d1), more, word_bytes_at(sz, Dyn::index(tys, x)), k1);
+                            trans(cong_fn(λ (o2: Option<List<BitVec(8)>>) => o2.map(λ more2 => wb(s0, d2) ++ more2), ih),
+                                cong_fn(λ (l: List<BitVec(8)>) => Some(l), trans(cong_fn(λ (y: Dyn(tys)) => word_bytes_at(s0, Dyn::index(tys, y)) ++ more.put_window(k1, word_bytes_at(sz, Dyn::index(tys, x))), first),
+                                    trans(sym(pre), trans(cong_fn(λ (b2: List<BitVec(8)>) => b2.put_window((wb(s0, d1)).len() + k1, word_bytes_at(sz, Dyn::index(tys, x))), bs_is),
+                                        cong_fn(λ (n: Nat) => bs.put_window(n, word_bytes_at(sz, Dyn::index(tys, x))), kk))))))
+                        },
+                    })(nth, off2, others, here)
+                },
+            })(refl, enc, off)
+        },
+    }
+}
+
+// A write through one selection reads only what it selects.
+theorem over_at(tys: Nat → Type, strs: Strs(tys), s: Sel, g: Dyn(tys) → Dyn(tys), d: Dyn(tys)):
+    Dyn::over(tys, strs, s, g, d) = Dyn::over(tys, strs, s, λ _ => g(Dyn::at(tys, strs, s, d)), d) {
+    cong_fn(λ (v: El(tys, d.code)) => Dyn(d.code, v), Dyn::in_over_read(tys, Dyn::part(tys, strs, s, d.code), g, λ _ => g(Dyn::at(tys, strs, s, d)), d.val, refl))
+}
+
+// What a word put at a located place stores: the encoding with the word's
+// bytes at the place's offset (§25.8).
+fn PutImage(tys: Nat → Type, strs: Strs(tys), ss: List<Sel>) → Type {
+    (d: Dyn(tys)) → (bs: List<BitVec(8)>) → Dyn::encode(tys, strs, d) = Some(bs) → bs.len() < Nat::pow(2, 64) → Sel::fit(tys, strs, ss, d) = True →
+        (off: Nat) → (p: Pair<Nat, Dyn(tys)>) → Sel::locate(tys, strs, d, ss, off) = Some(p) → (size: Nat) → p.snd.code.word_size() = Some(size) →
+        (x: Dyn(tys)) → x.code = p.snd.code →
+        Exists<Nat>(λ r => (p.fst = off + r) ∧ ((r + size <= bs.len()) ∧
+            (Dyn::encode(tys, strs, Sel::write_at(tys, strs, ss, λ _ => x, d)) = Some(bs.put_window(r, word_bytes_at(size, Dyn::index(tys, x)))))))
+}
+
+// A put through a window: the rest's put inside the window, put back.
+theorem put_through_window(tys: Nat → Type, strs: Strs(tys), laid: Strs::Laid(tys, strs), d: Dyn(tys), el: Shape, size0: Nat, w: Shape,
+    lay: Shape::layout(tys, strs, d.code) = LSeq(el, size0, Some(w)), bs: List<BitVec(8)>, is: Dyn::encode_elems(tys, strs, d, size0, 0, Dyn::len(tys, strs, d)) = bs,
+    short: bs.len() < Nat::pow(2, 64), lo, n: Ix, f1: Dyn::fits(tys, strs, win_sel(lo, n), d) = True, rest: List<Sel>,
+    fr: Sel::fit(tys, strs, rest, Dyn::at(tys, strs, win_sel(lo, n), d)) = True, ih: PutImage(tys, strs, rest), off, k: Nat, kk: lo.toNat() * size0 = k,
+    p: Pair<Nat, Dyn(tys)>, at1: Sel::locate(tys, strs, Dyn::at(tys, strs, win_sel(lo, n), d), rest, off + k) = Some(p), size: Nat, sized: p.snd.code.word_size() = Some(size),
+    x: Dyn(tys), xc: x.code = p.snd.code):
+    Exists<Nat>(λ r => (p.fst = off + r) ∧ ((r + size <= bs.len()) ∧
+        (Dyn::encode(tys, strs, Sel::write_at(tys, strs, Cons(win_sel(lo, n), rest), λ _ => x, d)) = Some(bs.put_window(r, word_bytes_at(size, Dyn::index(tys, x))))))) {
+    let both = laid.left(d.code, el, size0, Some(w), lay);
+    let sl = both.left;
+    let wl: WinLaid(tys, strs, d.code, el, size0, w) = both.right;
+    let rng = Shape::size_range(el, size0, sl.el_size);
+    let lb = len_below(tys, strs, d, size0, rng, bs, is);
+    let wi = win_image(tys, strs, laid, d, el, size0, w, lay, lo, n, f1, omega(lb, short));
+    let at = Dyn::at(tys, strs, win_sel(lo, n), d);
+    let a = size0 * lo.toNat();
+    let b = size0 * lo.toNat() + size0 * n.toNat();
+    let l = encode_elems_len(tys, strs, d, size0, rng.right, 0, Dyn::len(tys, strs, d));
+    let lbs: (bs.len() = size0 * Dyn::len(tys, strs, d)) = trans(cong_fn(λ (y: List<BitVec(8)>) => y.len(), sym(is)), l);
+    let up = Nat::mul_le_mono_l(size0, lo.toNat() + n.toNat(), Dyn::len(tys, strs, d), wi.left);
+    let dist = Nat::mul_add_distr(size0, lo.toNat(), n.toNat());
+    let enc_at: (Dyn::encode(tys, strs, at) = Some(bs.window(a, b))) = trans(wi.right.right, cong_fn(λ (y: List<BitVec(8)>) => Some(y.window(a, b)), is));
+    let wlen: ((bs.window(a, b)).len() = b - a) = bs.len_window(a, b, omega(), omega(up, dist, lbs));
+    let inner = ih(at, bs.window(a, b), enc_at, omega(wlen, short, up, dist, lbs), fr, off + k, p, at1, size, sized, x, xc);
+    let r1 = inner.witness;
+    let xlay = wi.right.left;
+    let y = Sel::write_at(tys, strs, rest, λ _ => x, at);
+    let yfacts: (y.code = w) ∧ (Dyn::len(tys, strs, y) = n.toNat()) = (match rest as λ r0 => Sel::locate(tys, strs, at, r0, off + k) = Some(p) →
+            ((Sel::write_at(tys, strs, r0, λ _ => x, at)).code = w) ∧ (Dyn::len(tys, strs, Sel::write_at(tys, strs, r0, λ _ => x, at)) = n.toNat()) {
+        Nil => λ at2 => {
+            let pe = Option::some_inj(Pair(off + k, at), p, at2);
+            let none: (at.code.word_size() = None) = Shape::laid_no_word(tys, strs, at.code, LSeq(el, size0, xlay.witness), xlay.proof, λ e => absurd(e));
+            absurd(trans(sym(none), trans(cong_fn(λ (q: Pair<Nat, Dyn(tys)>) => q.snd.code.word_size(), pe), sized)))
+        },
+        Cons(s2, r2) => λ _ => ⟨wl.win_code(d.val, lo, n),
+            trans(laid.left(at.code, el, size0, xlay.witness, xlay.proof).left.len_over(at.val, s2, λ z => Sel::write_at(tys, strs, r2, λ _ => x, z)), wl.win_len(d.val, lo, n, f1))⟩,
+    })(at1);
+    let wp = win_put_image(tys, strs, laid, d, el, size0, w, lay, bs, is, short, lo, n, f1, y, yfacts.left, yfacts.right,
+        (bs.window(a, b)).put_window(r1, word_bytes_at(size, Dyn::index(tys, x))), inner.proof.right.right);
+    let srng = Shape::size_range(p.snd.code, size, sized);
+    let wbl = word_bytes_at_len(size, Dyn::index(tys, x), omega(srng));
+    let nested = List::put_window_nested(bs, a, b, r1, word_bytes_at(size, Dyn::index(tys, x)), omega(), omega(up, dist, lbs), omega(wbl, inner.proof.right.left, wlen));
+    let kc: (k = a) = trans(sym(kk), Nat::mul_comm(lo.toNat(), size0));
+    let wr: (Sel::write_at(tys, strs, Cons(win_sel(lo, n), rest), λ _ => x, d) = Dyn::over(tys, strs, win_sel(lo, n), λ _ => y, d)) =
+        over_at(tys, strs, win_sel(lo, n), λ z => Sel::write_at(tys, strs, rest, λ _ => x, z), d);
+    Exists(a + r1, ⟨trans(inner.proof.left, trans(cong_fn(λ (m: Nat) => off + m + r1, kc), off.add_assoc(a, r1))),
+        ⟨omega(inner.proof.right.left, wlen, up, dist, lbs),
+         trans(cong_fn(λ (z: Dyn(tys)) => Dyn::encode(tys, strs, z), wr), trans(wp, cong_fn(λ (l2: List<BitVec(8)>) => Some(l2), nested)))⟩⟩)
+}
+
+// A word put at a record's field.
+theorem put_field(tys: Nat → Type, strs: Strs(tys), laid: Strs::Laid(tys, strs), d: Dyn(tys), fs: List<Shape>, lay: Shape::layout(tys, strs, d.code) = LRecord(fs),
+    bs: List<BitVec(8)>, enc2: Dyn::encode_fields(tys, strs, d, fs, 0) = Some(bs), i, k: Nat, so1: fields_offset(fs, i) = Some(k), rest: List<Sel>, off: Nat,
+    p: Pair<Nat, Dyn(tys)>, at1: Sel::locate(tys, strs, Dyn::at(tys, strs, OnField(i), d), rest, off + k) = Some(p), size: Nat, sized: p.snd.code.word_size() = Some(size),
+    x: Dyn(tys), xc: x.code = p.snd.code):
+    Exists<Nat>(λ r => (p.fst = off + r) ∧ ((r + size <= bs.len()) ∧
+        (Dyn::encode(tys, strs, Sel::write_at(tys, strs, Cons(OnField(i), rest), λ _ => x, d)) = Some(bs.put_window(r, word_bytes_at(size, Dyn::index(tys, x))))))) {
+    let rl = laid.right(d.code, fs, lay);
+    let fe = fields_offset_nth(fs, i, k, so1);
+    let f = fe.witness;
+    let ex = Dyn::at(tys, strs, OnField(i), d);
+    let fcode: (ex.code = f) = rl.field_code(d.val, i, f, fe.proof);
+    (match f.word_size() as λ o => f.word_size() = o → o.is_some() = True →
+            Exists<Nat>(λ r => (p.fst = off + r) ∧ ((r + size <= bs.len()) ∧
+                (Dyn::encode(tys, strs, Sel::write_at(tys, strs, Cons(OnField(i), rest), λ _ => x, d)) = Some(bs.put_window(r, word_bytes_at(size, Dyn::index(tys, x))))))) {
+        None => λ _ never => absurd(never),
+        Some(sz) => λ fsz _ => {
+            let ecode: (ex.code.word_size() = Some(sz)) = trans(cong_fn(λ (c: Shape) => c.word_size(), fcode), fsz);
+            (match rest as λ r0 => Sel::locate(tys, strs, ex, r0, off + k) = Some(p) →
+                    Exists<Nat>(λ r => (p.fst = off + r) ∧ ((r + size <= bs.len()) ∧
+                        (Dyn::encode(tys, strs, Sel::write_at(tys, strs, Cons(OnField(i), r0), λ _ => x, d)) = Some(bs.put_window(r, word_bytes_at(size, Dyn::index(tys, x))))))) {
+                Cons(s2, r2) => λ at2 => false_elim(locate_past_word(tys, strs, ex, sz, ecode, s2, r2, off + k, p, at2)),
+                Nil => λ at2 => {
+                    let pe: (Pair(off + k, ex) = p) = Option::some_inj(Pair(off + k, ex), p, at2);
+                    let szs: (sz = size) = Option::some_inj(sz, size, trans(sym(ecode), trans(cong_fn(λ (q: Pair<Nat, Dyn(tys)>) => q.snd.code.word_size(), pe), sized)));
+                    let xf: (x.code = f) = trans(xc, trans(cong_fn(λ (q: Pair<Nat, Dyn(tys)>) => q.snd.code, sym(pe)), fcode));
+                    let d2 = Dyn::over(tys, strs, OnField(i), λ _ => x, d);
+                    let fp = fields_put(tys, strs, d, d2, x, fs, 0, i, k, f, sz, bs, enc2, so1, fe.proof, fsz,
+                        λ m ne => rl.field_other(d.val, m, i, λ e => ne(trans(e, sym(zero_add(i)))), λ _ => x),
+                        trans(cong_fn(λ (m: Nat) => Dyn::at(tys, strs, OnField(m), d2), zero_add(i)), rl.field_put(d.val, i, f, fe.proof, x, xf)));
+                    let fi = fields_image(tys, strs, d, fs, 0, i, k, f, sz, bs, enc2, so1, fe.proof, fsz);
+                    Exists(k, ⟨cong_fn(λ (q: Pair<Nat, Dyn(tys)>) => q.fst, sym(pe)), ⟨omega(fi.left, szs),
+                        trans(encode_rec(tys, strs, d2, fs, lay), trans(fp, cong_fn(λ (m: Nat) => Some(bs.put_window(k, word_bytes_at(m, Dyn::index(tys, x)))), szs)))⟩⟩)
+                },
+            })(at1)
+        },
+    })(refl, rl.field_sized(i, f, fe.proof))
+}
+
+theorem put_image(tys: Nat → Type, strs: Strs(tys), laid: Strs::Laid(tys, strs), ss: List<Sel>): PutImage(tys, strs, ss) {
+    match ss {
+        Nil => λ d bs enc short fit off p at size sized x xc => {
+            let pe = Option::some_inj(Pair(off, d), p, at);
+            let none: (d.code.word_size() = None) = Shape::laid_no_word(tys, strs, d.code, Shape::layout(tys, strs, d.code), refl, encode_laid(tys, strs, d, bs, enc));
+            absurd(trans(sym(none), trans(cong_fn(λ (q: Pair<Nat, Dyn(tys)>) => q.snd.code.word_size(), pe), sized)))
+        },
+        Cons(s, rest) => λ d bs enc short fit off p at size sized x xc => {
+            let step = locate_cons_some(tys, strs, d, s, rest, off, p, at);
+            let k = step.witness;
+            let fits2 = Bool::and_true_parts(Dyn::fits(tys, strs, s, d), Sel::fit(tys, strs, rest, Dyn::at(tys, strs, s, d)), fit);
+            (match Shape::layout(tys, strs, d.code) as λ l => Shape::layout(tys, strs, d.code) = l → Sel::step_at(l, s) = Some(k) → Exists<Nat>(λ r => (p.fst = off + r) ∧ ((r + size <= bs.len()) ∧
+                (Dyn::encode(tys, strs, Sel::write_at(tys, strs, Cons(s, rest), λ _ => x, d)) = Some(bs.put_window(r, word_bytes_at(size, Dyn::index(tys, x))))))) {
+                LNone => λ _ never => absurd(never),
+                LSeq(el, size0, wc) => λ lay so => {
+                    let is: (Dyn::encode_elems(tys, strs, d, size0, 0, Dyn::len(tys, strs, d)) = bs) =
+                        Option::some_inj(Dyn::encode_elems(tys, strs, d, size0, 0, Dyn::len(tys, strs, d)), bs, trans(sym(encode_seq(tys, strs, d, el, size0, wc, lay)), enc));
+                    let sl = laid.left(d.code, el, size0, wc, lay).left;
+                    let rng = Shape::size_range(el, size0, sl.el_size);
+                    let lb = len_below(tys, strs, d, size0, rng, bs, is);
+                    (match s as λ s0 => Sel::step_at(LSeq(el, size0, wc), s0) = Some(k) → Dyn::fits(tys, strs, s0, d) = True → Sel::fit(tys, strs, rest, Dyn::at(tys, strs, s0, d)) = True →
+                            Sel::locate(tys, strs, Dyn::at(tys, strs, s0, d), rest, off + k) = Some(p) →
+                            Exists<Nat>(λ r => (p.fst = off + r) ∧ ((r + size <= bs.len()) ∧
+                                (Dyn::encode(tys, strs, Sel::write_at(tys, strs, Cons(s0, rest), λ _ => x, d)) = Some(bs.put_window(r, word_bytes_at(size, Dyn::index(tys, x))))))) {
+                        OnSeq(a) => match a {
+                            SeqOne(i) => λ so1 f1 _ at1 => {
+                                let kk: (i.toNat() * size0 = k) = Option::some_inj(i.toNat() * size0, k, so1);
+                                let ex = Dyn::at(tys, strs, el_sel(i), d);
+                                let ecode: (ex.code.word_size() = Some(size0)) = trans(cong_fn(λ (c: Shape) => c.word_size(), sl.elem_code(d.val, i)), sl.el_size);
+                                (match rest as λ r0 => Sel::locate(tys, strs, ex, r0, off + k) = Some(p) →
+                                        Exists<Nat>(λ r => (p.fst = off + r) ∧ ((r + size <= bs.len()) ∧
+                                            (Dyn::encode(tys, strs, Sel::write_at(tys, strs, Cons(el_sel(i), r0), λ _ => x, d)) = Some(bs.put_window(r, word_bytes_at(size, Dyn::index(tys, x))))))) {
+                                    Cons(s2, r2) => λ at2 => false_elim(locate_past_word(tys, strs, ex, size0, ecode, s2, r2, off + k, p, at2)),
+                                    Nil => λ at2 => {
+                                        let pe: (Pair(off + k, ex) = p) = Option::some_inj(Pair(off + k, ex), p, at2);
+                                        let szs: (size0 = size) = Option::some_inj(size0, size, trans(sym(ecode), trans(cong_fn(λ (q: Pair<Nat, Dyn(tys)>) => q.snd.code.word_size(), pe), sized)));
+                                        let xel: (x.code = el) = trans(xc, trans(cong_fn(λ (q: Pair<Nat, Dyn(tys)>) => q.snd.code, sym(pe)), sl.elem_code(d.val, i)));
+                                        let ei = elem_image(tys, strs, laid, d, el, size0, wc, lay, i, f1, omega(lb, short));
+                                        let pi = elem_put_image(tys, strs, laid, d, el, size0, wc, lay, bs, is, short, i, f1, x, xel);
+                                        let kc: (size0 * i.toNat() = k) = trans(Nat::mul_comm(size0, i.toNat()), kk);
+                                        let l = encode_elems_len(tys, strs, d, size0, rng.right, 0, Dyn::len(tys, strs, d));
+                                        let lbs: (bs.len() = size0 * Dyn::len(tys, strs, d)) = trans(cong_fn(λ (y: List<BitVec(8)>) => y.len(), sym(is)), l);
+                                        let up = Nat::mul_le_mono_l(size0, i.toNat() + 1, Dyn::len(tys, strs, d), ei.left);
+                                        let sp: (size0 * (i.toNat() + 1) = size0 * i.toNat() + size0) = refl;
+                                        let stored: (Dyn::encode(tys, strs, Sel::write_at(tys, strs, [el_sel(i)], λ _ => x, d)) = Some(bs.put_window(k, word_bytes_at(size, Dyn::index(tys, x))))) =
+                                            trans(pi, cong_fn(λ (q: Pair<Nat, List<BitVec(8)>>) => Some(bs.put_window(q.fst, q.snd)),
+                                                trans(cong_fn(λ (m: Nat) => Pair(m, word_bytes_at(size0, Dyn::index(tys, x)) ++ Nil), kc),
+                                                    trans(cong_fn(λ (l2: List<BitVec(8)>) => Pair(k, l2), (word_bytes_at(size0, Dyn::index(tys, x))).append_nil()),
+                                                        cong_fn(λ (m: Nat) => Pair(k, word_bytes_at(m, Dyn::index(tys, x))), szs)))));
+                                        Exists(k, ⟨cong_fn(λ (q: Pair<Nat, Dyn(tys)>) => q.fst, sym(pe)), ⟨omega(up, sp, kc, lbs, szs), stored⟩⟩)
+                                    },
+                                })(at1)
+                            },
+                            SeqRun(lo, n) => λ so1 f1 fr at1 => {
+                                let kk: (lo.toNat() * size0 = k) = Option::some_inj(lo.toNat() * size0, k, so1);
+                                (match wc as λ v => Shape::layout(tys, strs, d.code) = LSeq(el, size0, v) → WinsLaid(tys, strs, d.code, el, size0, v) →
+                                        Exists<Nat>(λ r => (p.fst = off + r) ∧ ((r + size <= bs.len()) ∧
+                                            (Dyn::encode(tys, strs, Sel::write_at(tys, strs, Cons(win_sel(lo, n), rest), λ _ => x, d)) = Some(bs.put_window(r, word_bytes_at(size, Dyn::index(tys, x))))))) {
+                                    None => λ _ none => absurd(trans(sym(f1), none(d.val, lo, n))),
+                                    Some(w) => λ lay2 wins => put_through_window(tys, strs, laid, d, el, size0, w, lay2, bs, is, short, lo, n, f1, rest, fr,
+                                        put_image(tys, strs, laid, rest), off, k, kk, p, at1, size, sized, x, xc),
+                                })(lay, laid.left(d.code, el, size0, wc, lay).right)
+                            },
+                        },
+                        OnField(_) => λ never _ _ _ => absurd(never),
+                        OnKey(_) => λ never _ _ _ => absurd(never),
+                        OnVariant(_) => λ never _ _ _ => absurd(never),
+                    })(so, fits2.left, fits2.right, step.proof.right)
+                },
+                LRecord(fs) => λ lay so => (match s as λ s0 => Sel::step_at(LRecord(fs), s0) = Some(k) → Sel::locate(tys, strs, Dyn::at(tys, strs, s0, d), rest, off + k) = Some(p) →
+                        Exists<Nat>(λ r => (p.fst = off + r) ∧ ((r + size <= bs.len()) ∧
+                            (Dyn::encode(tys, strs, Sel::write_at(tys, strs, Cons(s0, rest), λ _ => x, d)) = Some(bs.put_window(r, word_bytes_at(size, Dyn::index(tys, x))))))) {
+                    OnField(i) => λ so1 at1 => put_field(tys, strs, laid, d, fs, lay, bs, trans(sym(encode_rec(tys, strs, d, fs, lay)), enc), i, k, so1, rest, off, p, at1, size, sized, x, xc),
+                    OnSeq(_) => λ never _ => absurd(never),
+                    OnKey(_) => λ never _ => absurd(never),
+                    OnVariant(_) => λ never _ => absurd(never),
+                })(so, step.proof.right),
+            })(refl, step.proof.left)
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The injection kept
+
+theorem obj_nth(tys: Nat → Type, h: level2::Heap(tys), b: Nat, o: Obj(tys), live: level2::Heap::obj(tys, h, b) = Some(o)): h.nth(b) = Some(Live(o)) {
+    (match h.nth(b) as λ v => (match v as λ _ => Option<Obj(tys)> { Some(bl) => match bl as λ _ => Option<Obj(tys)> { Live(o2) => Some(o2), Dead => None }, None => None }) = Some(o) →
+            v = Some(Live(o)) {
+        None => λ never => absurd(never),
+        Some(bl) => match bl as λ bl2 => (match bl2 as λ _ => Option<Obj(tys)> { Live(o2) => Some(o2), Dead => None }) = Some(o) → Some(bl2) = Some(Live(o)) {
+            Live(o2) => λ e => cong_fn(λ (x: Obj(tys)) => Some(Live(x)), Option::some_inj(o2, o, e)),
+            Dead => λ never => absurd(never),
+        },
+    })(live)
+}
+
+theorem obj_of_nth(tys: Nat → Type, h: level2::Heap(tys), c: Nat, bl: Block(tys), e: h.nth(c) = Some(bl)):
+    level2::Heap::obj(tys, h, c) = (match bl as λ _ => Option<Obj(tys)> { Live(o2) => Some(o2), Dead => None }) {
+    cong_fn(λ (v: Option<Block(tys)>) => match v as λ _ => Option<Obj(tys)> { Some(bl2) => match bl2 as λ _ => Option<Obj(tys)> { Live(o2) => Some(o2), Dead => None }, None => None }, e)
+}
+
+theorem obj_update_other(tys: Nat → Type, h: level2::Heap(tys), b: Nat, f: Block(tys) → Block(tys), c: Nat, ne: ¬(c = b)):
+    level2::Heap::obj(tys, h.update(b, f), c) = level2::Heap::obj(tys, h, c) {
+    cong_fn(λ (v: Option<Block(tys)>) => match v as λ _ => Option<Obj(tys)> { Some(bl2) => match bl2 as λ _ => Option<Obj(tys)> { Live(o2) => Some(o2), Dead => None }, None => None },
+        h.nth_update_other(b, f, c, ne))
+}
+
+// A block stored: live with the new value and its holes; the others as they were.
+theorem obj_store(tys: Nat → Type, h: level2::Heap(tys), b: Nat, o: Obj(tys), live: level2::Heap::obj(tys, h, b) = Some(o), d: Dyn(tys), c: Nat, o2: Obj(tys),
+    after: level2::Heap::obj(tys, run::Heap::store(tys, h, b, d), c) = Some(o2)): ((c = b) ∧ (o2 = Obj(d, o.holes))) ∨ ((¬(c = b)) ∧ (level2::Heap::obj(tys, h, c) = Some(o2))) {
+    match Nat::dec(c, b) {
+        Inl(e) => {
+            let f = λ (bl: Block(tys)) => match bl as λ _ => Block(tys) { Live(o3) => Live(Obj(d, o3.holes)), Dead => Dead };
+            let here = h.nth_update_here(b, f, Live(o), obj_nth(tys, h, b, o, live));
+            let ob = obj_of_nth(tys, h.update(b, f), b, Live(Obj(d, o.holes)), here);
+            Inl(⟨e, sym(Option::some_inj(Obj(d, o.holes), o2, trans(sym(ob), trans(cong_fn(λ (m: Nat) => level2::Heap::obj(tys, run::Heap::store(tys, h, b, d), m), sym(e)), after))))⟩)
+        },
+        Inr(ne) => Inr(⟨ne, trans(sym(obj_update_other(tys, h, b, λ (bl: Block(tys)) => match bl as λ _ => Block(tys) { Live(o3) => Live(Obj(d, o3.holes)), Dead => Dead }, c, ne)), after)⟩),
+    }
+}
+
+// A block killed: no longer live; the others as they were.
+theorem obj_kill(tys: Nat → Type, h: level2::Heap(tys), b, c: Nat, o2: Obj(tys), after: level2::Heap::obj(tys, run::Heap::kill(tys, h, b), c) = Some(o2)):
+    (¬(c = b)) ∧ (level2::Heap::obj(tys, h, c) = Some(o2)) {
+    match Nat::dec(c, b) {
+        Inl(e) => {
+            let at = h.nth_update_map(b, λ (_: Block(tys)) => Dead);
+            let none: (level2::Heap::obj(tys, run::Heap::kill(tys, h, b), b) = None) =
+                (match h.nth(b) as λ v => (h.update(b, λ (_: Block(tys)) => Dead)).nth(b) = v.map(λ (_: Block(tys)) => Dead) → level2::Heap::obj(tys, run::Heap::kill(tys, h, b), b) = None {
+                    None => λ e2 => cong_fn(λ (v: Option<Block(tys)>) => match v as λ _ => Option<Obj(tys)> { Some(bl2) => match bl2 as λ _ => Option<Obj(tys)> { Live(o3) => Some(o3), Dead => None }, None => None }, e2),
+                    Some(_) => λ e2 => cong_fn(λ (v: Option<Block(tys)>) => match v as λ _ => Option<Obj(tys)> { Some(bl2) => match bl2 as λ _ => Option<Obj(tys)> { Live(o3) => Some(o3), Dead => None }, None => None }, e2),
+                })(at);
+            absurd(trans(sym(none), trans(cong_fn(λ (m: Nat) => level2::Heap::obj(tys, run::Heap::kill(tys, h, b), m), sym(e)), after)))
+        },
+        Inr(ne) => ⟨ne, trans(sym(obj_update_other(tys, h, b, λ (_: Block(tys)) => Dead, c, ne)), after)⟩,
+    }
+}
+
+// A death keeps the injection.
+theorem injects_kill(tys: Nat → Type, strs: Strs(tys), inj: Nat → Nat, h: level2::Heap(tys), hb: x86_64_memory_contract::Heap, hi: HeapInjects(tys, strs, inj, h, hb), b: Nat):
+    HeapInjects(tys, strs, inj, run::Heap::kill(tys, h, b), hb) {
+    ⟨λ c o2 after => hi.left(c, o2, (obj_kill(tys, h, b, c, o2, after)).right),
+     λ c1 c2 o1 o2 a1 a2 same => hi.right(c1, c2, o1, o2, (obj_kill(tys, h, b, c1, o1, a1)).right, (obj_kill(tys, h, b, c2, o2, a2)).right, same)⟩
+}
+
+// What a clearing leaves was there.
+theorem mem_cleared(b, k, n: Nat, e: Pointer, shadow: List<Pointer>): Mem(e, cleared(shadow, b, k, n)) → Mem(e, shadow) {
+    match shadow {
+        Nil => λ m => m,
+        Cons(e0, rest) => (match e0.overlaps(b, k, n) as λ v => Mem(e, match v { True => cleared(rest, b, k, n), False => Cons(e0, cleared(rest, b, k, n)) }) → Mem(e, Cons(e0, rest)) {
+            True => λ m => Inr(mem_cleared(b, k, n, e, rest, m)),
+            False => λ m => match m { Inl(here) => Inl(here), Inr(there) => Inr(mem_cleared(b, k, n, e, rest, there)) },
+        }),
+    }
+}
+
+theorem trans_lt({a, b, c, d: Nat}, ab: a = b, bc: b = c, lt: c < d): a < d { omega(ab, bc, lt) }
+
+// A store of plain bytes inside one live block, of the bytes the block's
+// new value encodes to there, keeps the injection.
+theorem injects_store(tys: Nat → Type, strs: Strs(tys), inj: Nat → Nat, h: level2::Heap(tys), hb: x86_64_memory_contract::Heap, hi: HeapInjects(tys, strs, inj, h, hb),
+    b: Nat, o: Obj(tys), live: level2::Heap::obj(tys, h, b) = Some(o), d: Dyn(tys), r: Nat, ys: List<BitVec(8)>, fits: r + ys.len() <= hb.bytes(inj(b)).len(),
+    enc: Dyn::encode(tys, strs, d) = Some(hb.bytes(inj(b)).put_window(r, ys))):
+    HeapInjects(tys, strs, inj, run::Heap::store(tys, h, b, d), hb.placed(x86_64_memory_contract::Loc(inj(b), r), Piece::plain(ys))) {
+    let loc = x86_64_memory_contract::Loc(inj(b), r);
+    let hb2 = hb.placed(loc, Piece::plain(ys));
+    let undef = λ (c: Nat) (none: (j: Nat) → hb.undefined(c, j) = False) (jj: Nat) => {
+        let cf: (hb2.undefined(c, jj) = hb.undefined(c, jj) && !within(inj(b), r, ys.len(), c, jj)) = cleared_flags(hb.flags, inj(b), r, ys.len(), c, jj);
+        trans(cf, cong_fn(λ (x: Bool) => x && !within(inj(b), r, ys.len(), c, jj), none(jj)))
+    };
+    let shadow = λ (c: Nat) (np: Heap::NoPointerIn(hb, c)) => λ (e: Pointer) (m: Mem(e, hb2.shadow)) => np(e, mem_cleared(inj(b), r, ys.len(), e, hb.shadow, m));
+    ⟨λ c o2 after => match obj_store(tys, h, b, o, live, d, c, o2, after) {
+        Inl(here) => {
+            let old = hi.left(b, o, live);
+            let bytes: (hb2.bytes(inj(b)) = hb.bytes(inj(b)).put_window(r, ys)) =
+                trans(hb.placed_bytes(loc, Piece::plain(ys), fits, inj(b)), set_block_here(λ (dd: Nat) => hb.bytes(dd), inj(b), hb.bytes(inj(b)).put_window(r, ys)));
+            j(sym(here.left), λ c2 _ => (o2.holes = Nil) ∧ ((Dyn::encode(tys, strs, o2.val) = Some(hb2.bytes(inj(c2)))) ∧ (((jj: Nat) → hb2.undefined(inj(c2), jj) = False) ∧ (Heap::NoPointerIn(hb2, inj(c2)) ∧ (hb2.bytes(inj(c2)).len() < Nat::pow(2, 64))))),
+                j(sym(here.right), λ o3 _ => (o3.holes = Nil) ∧ ((Dyn::encode(tys, strs, o3.val) = Some(hb2.bytes(inj(b)))) ∧ (((jj: Nat) → hb2.undefined(inj(b), jj) = False) ∧ (Heap::NoPointerIn(hb2, inj(b)) ∧ (hb2.bytes(inj(b)).len() < Nat::pow(2, 64))))),
+                    ⟨old.left, ⟨trans(enc, cong_fn(λ (l: List<BitVec(8)>) => Some(l), sym(bytes))), ⟨undef(inj(b), old.right.right.left), ⟨shadow(inj(b), old.right.right.right.left),
+                        trans_lt(cong_fn(λ (l: List<BitVec(8)>) => l.len(), bytes), hb.bytes(inj(b)).len_put_window(r, ys, omega(fits)), old.right.right.right.right)⟩⟩⟩⟩))
+        },
+        Inr(other) => {
+            let old = hi.left(c, o2, other.right);
+            let apart: (inj(c) ≠ inj(b)) = λ e => other.left(hi.right(c, b, o2, o, other.right, live, e));
+            let bytes: (hb2.bytes(inj(c)) = hb.bytes(inj(c))) =
+                trans(hb.placed_bytes(loc, Piece::plain(ys), fits, inj(c)), set_block_other(λ (dd: Nat) => hb.bytes(dd), inj(b), hb.bytes(inj(b)).put_window(r, ys), inj(c), apart));
+            ⟨old.left, ⟨trans(old.right.left, cong_fn(λ (l: List<BitVec(8)>) => Some(l), sym(bytes))), ⟨undef(inj(c), old.right.right.left), ⟨shadow(inj(c), old.right.right.right.left), trans_lt(cong_fn(λ (l: List<BitVec(8)>) => l.len(), bytes), (refl: hb.bytes(inj(c)).len() = hb.bytes(inj(c)).len()), old.right.right.right.right)⟩⟩⟩⟩
+        },
+    },
+     λ c1 c2 o1 o2 a1 a2 same => {
+        let back = λ (c: Nat) (oc: Obj(tys)) (ac: level2::Heap::obj(tys, run::Heap::store(tys, h, b, d), c) = Some(oc)) => match obj_store(tys, h, b, o, live, d, c, oc, ac) as λ _ => Exists<Obj(tys)>(λ o4 => level2::Heap::obj(tys, h, c) = Some(o4)) {
+            Inl(here) => Exists(o, trans(cong_fn(λ (m: Nat) => level2::Heap::obj(tys, h, m), here.left), live)),
+            Inr(other) => Exists(oc, other.right),
+        };
+        let l1 = back(c1, o1, a1);
+        let l2 = back(c2, o2, a2);
+        hi.right(c1, c2, l1.witness, l2.witness, l1.proof, l2.proof, same)
+     }⟩
+}
+
+// A store at one place leaves the bytes of a place apart from it: in another
+// block, or before or after it in the same one.
+theorem window_kept(hb: x86_64_memory_contract::Heap, b, r: Nat, ys: List<BitVec(8)>, fits: r + ys.len() <= hb.bytes(b).len(), c, a, e: Nat,
+    apart: (¬(c = b)) ∨ ((e <= r) ∨ (r + ys.len() <= a))):
+    (hb.placed(x86_64_memory_contract::Loc(b, r), Piece::plain(ys)).bytes(c)).window(a, e) = (hb.bytes(c)).window(a, e) {
+    let at = hb.placed_bytes(x86_64_memory_contract::Loc(b, r), Piece::plain(ys), fits, c);
+    match Nat::dec(c, b) {
+        Inr(ne) => cong_fn(λ (l: List<BitVec(8)>) => l.window(a, e), trans(at, set_block_other(λ (dd: Nat) => hb.bytes(dd), b, hb.bytes(b).put_window(r, ys), c, ne))),
+        Inl(same) => {
+            let here: (hb.placed(x86_64_memory_contract::Loc(b, r), Piece::plain(ys)).bytes(c) = hb.bytes(c).put_window(r, ys)) =
+                trans(at, j(same, λ x _ => set_block(λ (dd: Nat) => hb.bytes(dd), x, hb.bytes(x).put_window(r, ys), c) = hb.bytes(c).put_window(r, ys),
+                    set_block_here(λ (dd: Nat) => hb.bytes(dd), c, hb.bytes(c).put_window(r, ys))));
+            let inside: (r <= (hb.bytes(c)).len()) = j(sym(same), λ x _ => r <= (hb.bytes(x)).len(), omega(fits));
+            trans(cong_fn(λ (l: List<BitVec(8)>) => l.window(a, e), here), match apart {
+                Inl(ne) => false_elim(ne(same)),
+                Inr(sides) => match sides {
+                    Inl(before) => (hb.bytes(c)).window_put_window_before(r, ys, a, e, before, inside),
+                    Inr(after) => (hb.bytes(c)).window_put_window_after(r, ys, a, e, omega(after), inside),
+                },
+            })
+        },
+    }
+}

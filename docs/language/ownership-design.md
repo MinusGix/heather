@@ -5570,6 +5570,56 @@ land and are read.
   one does (a table of bytes-level routines, each proved to compute its
   world entry).
 
+### 25.8 The statement corrected, and the injection's lemmas (2026-11-26, the slice's second session)
+
+Starting the stages showed the statement false in six ways. The first four
+were confirmed by evaluating a closed program (a scratch probe; `codes_compared` in
+`placement_tests.hthr` keeps the fourth). The coordinating session ruled on
+each:
+
+| | Finding | Smallest program | Ruling |
+|---|---|---|---|
+| F1 | No premise on the structures. `Dyn::encode` reads element `i` at `IWord(64, i)`; `StrsLaws` does not say that get and inside read only the index's number, that inside means below the length, or that a window is its parent's elements from its start, of the same element | `fn first(xs: &[u8]) → u8 { xs[0] }` over the library's lawful `Seq::list` (number-indexed): checked and placed, but on [5] level 2 answers 5 and the bytes level the pad, 0 | `Strs::Laid`, the layout's law (beside `Shape::layout` in `placement.hthr`), is a premise of `PlacementSoundAll` and `EndToEndAll` beside `StrsLaws`. `Seq::words` and `Seq::vec` owe it, `Seq::list` does not meet it |
+| F2 | No premise that the arguments have the parameters' codes; `Dyn::words` computes at the first operand's own width | `fn f(x: u64) → u64 { x + 255 }` at the u8 1: 1 against 256 | `PlacementSound` takes `Value::ReadAll` and `Dyn::Coded` of the arguments (what `EndClause` already has); `SlotHolds` carries the slot's code as its value's code |
+| F3 | `StageRel` has no freshness: a leaf writing `next` breaks a slot already at `next` | — | every slot's ids below `next` in `StageRel`; `StageRet`/`StageJump` take the leave's ids apart from the slots and below `next` |
+| F4 | `place` reads one slot's code where level 2 reads two things at one code, and level 2 answers junk at a mismatch (a word of another code read as zero, a store of one ignored) | `1u64 + 2u8`: 1 against 3 (the checker refuses it, `WCodes`) | interim: `place` compares codes at the six sites (an operation's and a test's second operand, a stored word, a call's argument, a `Ret`'s and a `Jump`'s values, a shared join's second arm), each marked. The run is to be stuck wherever the meaning takes a fallback, and the comparisons go then; a stage reads "the codes agree" through one named lemma per site |
+| F5 | An offset is a word (`Offset`, the index scaled by `ShiftLeft(64)`) | — | `HeapInjects` bounds each live image below 2^64 bytes |
+| F6 | A leaf stage took level 2's step as a hypothesis (`m2`, `Stmt::Steps`), but `Steps` is "for every continuation", which says nothing of `m2`'s environment, and the body induction holds `s.run(m, K)`, not an `m2` | — | a leaf stage concludes: level 2 stuck for every continuation, or stepping to an `m2` the stage names, related to the configuration the leaf runs to. `StageTest` stays first-order |
+
+All six are now in `placement_seam.hthr`, and `end_to_end` is re-checked over them.
+The run's fallbacks are listed for the soundness thread: `Dyn::words`, `Dyn::back` through `Dyn::over_in`,
+`Dyn::at_in`/`over_in` at no part, `Dyn::ix`/`index` of a non-word,
+`REnv::ixs`, `Atom::ix`, `REnv::get`, the parameter defaults of
+`Cell::pass_all`/`args`/`Origin::owns`, the padding of `Cell::results`, and
+`Kind::len` of a non-sequence.
+
+**The injection's lemmas** (`placement_inject.hthr`, no axioms), the seam's
+analogue of the lens laws, stated over `Dyn::encode` and the layout:
+
+- `Strs::Laid`'s working form is the model's own operations: `SeqLaid` (elements of
+  the element's code, read at the number, below the length, a put read back
+  and the others kept, lengths kept), `WinLaid` (a window a sequence of the
+  same element, inside, as long as it says, its parent's slice, a put read
+  back, the outside kept), `RecLaid` (fields lenses apart, of word codes).
+  No proof cases on `strs`.
+- `locate_cons`/`locate_reads`/`locate_from`/`locate_append`: what
+  `Sel::locate` reaches is what the selections read; offsets shift.
+- `locate_image`: in a value whose encoding is `bs`, what is located is its
+  image (a word's bytes at its size, a layout's encoding), the window of
+  `bs` at the located offset. This holds through elements, windows of windows, and
+  fields.
+- `put_image`: a word put at a located place gives the encoding of the put,
+  which is `bs` with the word's bytes at the offset. Through a window it is the inner put,
+  put back (`List::put_window_nested`).
+- `window_kept`: a store leaves the bytes of an apart place.
+  `injects_store`: a store of the put's bytes inside one live block keeps
+  `HeapInjects`. `injects_kill`: a death keeps it.
+
+**Next**: `Laid` for `Seq::words` and `Seq::vec` in `sequences.hthr`. Then the
+leaf stages in `placement_stages.hthr`, in this order: `StageLit`, `StageOp`, `StageTest`, `StageDeath`,
+`StageTake`, `StageRead`, `StageView`. The stages that need the
+stuck-on-mismatch run come last. Then `StageRet`/`StageJump`, then the packed join.
+
 ## 26. The soundness proof restated: local agreement, footprints, shape (2026-11-26, the coordinating session)
 
 Minus, on the state of `check_sound`'s proof (one file of sixteen thousand
