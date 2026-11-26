@@ -5173,6 +5173,19 @@ the code at `steps` in its parameter's, by `Shape::steps_ok` (the function
 by the parameter's code. Probes: `obj_as_word`, `word_as_obj` and
 `view_as_point`, each refused where it is written and at the call.
 
+**A gap in the proof's own invariant, fixed: an owner's cell is owned**
+(`Inv.hown`, `CSt::HOwn`). Binding a moved argument answered back needs the
+caller's holder to have handed the reference over, which the run does only
+from an owned cell (`Cell::pass`); from an unowned one the argument goes as
+a plain copy, the result comes back plain (`ViewIs`) while the object's root
+keeps the block, and `href` breaks. It does not follow from `own` (the
+converse), `href` or `args`, so it is a clause: a level holding an object
+to own whose object has a root has an owned cell. It holds at every builder:
+`Cell::args` owns a taken argument that refers (`Cell::args_owned`), `Fresh`
+and a call's fresh result push owned cells, `Take` of a whole holder pushes
+the same cell, and the rest keep the cells (`CSt::hown_push`, `hown_sub`,
+`hown_gone`, as `href`'s).
+
 **C. A signature's results are a telescope.** A view result's steps name
 parameters and earlier results only, as a dependent answer is scoped
 (`(i: Nat, v: view of xs[i])`). A clause of `Sig::ok`, so tested where the
@@ -5556,3 +5569,117 @@ land and are read.
   every function's `SafeAt` and a primitive's has no statement until placing
   one does (a table of bytes-level routines, each proved to compute its
   world entry).
+
+## 26. The soundness proof restated: local agreement, footprints, shape (2026-11-26, the coordinating session)
+
+Minus, on the state of `check_sound`'s proof (one file of sixteen thousand
+lines, an invariant of 28 clauses each edited into fourteen builders, a
+whole-file check of minutes): make it compositional and conceptual, now.
+This section is the restatement. It is a design, not yet built, and by §24
+it is tested by evaluation along runs before anything is proved over it.
+
+### 26.1 What made the present invariant heavy
+
+Three things, each a global statement of something local.
+
+1. **Agreement is stated against a patched meaning.** The run writes
+   through a view in place, the meaning writes the view back later, so
+   between the two a parent's meaning is stale under its child. The present
+   invariant repairs the *meaning*: `Sim` holds of `s.patched(e, m)`, the
+   environment with every pending view written up into its ancestors, a
+   fold over all levels. Every stage then reasons about that fold: the walk
+   `up`, `pfold`, `patched_back`, several chains meeting at a parent
+   (§23.15), `Like.pend` on the chains (§23.16), the call's `puts_mean`
+   against the fold by levels (§23.20's trap for P6). The clauses `wpar`,
+   `uni`, `chain`, `cfit` and `sib` exist to make the fold well behaved.
+2. **Disjointness is stated five times**: `apart` (objects' roots), `excl`
+   (views of one object), `sib` (children of one parent), `one` and `own`
+   (holders and blocks).
+3. **Fit and like-ness are carried clause by clause**: `cfit`,
+   `LentFrame.like`, `Like` and its steps, `WriteVal`, each saying of one
+   situation that a value put somewhere has the code and lengths of what
+   was there.
+
+### 26.2 The restatement
+
+Write `val(l)` for what level `l`'s cell reads (through the heap if it
+refers, itself if it is a copy), `d(l)` for its meaning, and call a live
+view to write opened on `l` a *write child* of `l`, at its place.
+
+- **Agreement, per variable** (replaces `Sim` of the patched environment):
+  `val(l)` is `d(l)` outside the places of `l`'s write children. As an
+  equation, in the form the frame already has (§23.18):
+  `val(l) = puts(write children's places, what val(l) holds there, d(l))`.
+  It mentions `l` and its direct children only. No environment is patched
+  and nothing is folded.
+- **Sync, per view** (what a write-back establishes): a view to read, and
+  a view to write that is written back, is its parent's meaning at its
+  place: `get(at, d(parent)) = d(view)`. For a copy that is written back,
+  also `get(at, val(parent)) = val(view)`.
+- **Where a cell lives** (the present `refs`, `uni`, `href`, `args`,
+  `hown`): a holder's cell is its object's root; a view's is its parent's
+  narrowed at its place, or a copy where the parent is a copy.
+- **Footprints apart, once**: two live levels neither of which is an
+  ancestor of the other, one of which may write, have footprints that are
+  apart (their references apart; a copy's footprint is its own cell).
+- **Shape is stable, once**: a value's *shape* is its code with the length
+  of every sequence in it. Every block's value keeps the shape it had when
+  the block was made or lent, and `d(l)` has the shape of `val(l)`. A
+  selection's fit depends on the shape and the index words only, and a
+  write the checker accepts puts a value of the shape that was there
+  (`RFits`). The fit and like-ness clauses are consequences.
+- **The object table against the heap** (the frame as the lens equation,
+  growth, `Stays`, no holes, where roots lie) and **the checker's state
+  well formed** (`CSt::Wf`, with no machine in it), as §24's consolidation
+  already groups them.
+
+What each statement then does, which is the test of the restatement:
+
+| Statement | Agreement | Sync |
+|---|---|---|
+| a read of `l` at `p` | the licence puts `p` apart from every write view, so the equation gives `get(p, val) = get(p, d)` | untouched |
+| a write through `l` at `p` | `l`'s equation by put-put and commuting with the children's apart places; an ancestor's is untouched because the store is inside a place it excludes; everything else by the one frame lemma | `l`'s own is dropped (it is no longer written back) |
+| `View` | the new child's place is excluded from the parent's equation from now on; the child's own holds by narrowing | a read view's holds by narrowing |
+| `Back(p, x)` | nothing changes for a referring view; a copy stores | established: get-put |
+| a view's death | the parent regains the place: `val(parent)` there is `val(view)` is `d(view)` is `get(at, d(parent))` | consumed |
+| a call | a written argument's slot is a write view of the argument at the whole place (the run now binds the argument's own cell, §23.22), so the argument's equation is vacuous and the slot's is `Written` with `ReadAll`; everything apart by the frame | none yet: the body writes the slots back with `Back` |
+| `Ret`, `Jump` | where every write view under a holder is written back, agreement and sync give `val = d` whole, by one induction on levels | used |
+
+So the call's P4 to P6 (the callee's heap as puts in the written list's
+order, the swap, the fold's agreement with the fold by levels) are not
+needed: nothing is written up at a call.
+
+### 26.3 The modules
+
+One subject each, importing only what it uses, so an edit re-checks its
+module and what follows it, not sixteen thousand lines:
+
+1. selections and the lens laws; 2. shape; 3. steps, apartness and the
+licence's soundness; 4. the run's own lemmas; 5. the checker's state and
+`CSt::Wf`; 6. the heap and the frame; 7. the invariant's groups, each with
+its transport lemmas (the frame lemma: a store at a footprint keeps every
+group's facts about a variable whose footprint is apart from it); 8. one
+module of stages per statement kind; 9. the return; 10. the call; 11. the
+body induction and the theorem.
+
+### 26.4 The order
+
+1. The present file split along 26.3, no statement changed (in hand).
+2. The restated invariant as definitions, and **evaluated**: its clauses as
+   deciders, checked after every statement of every run of every small
+   checked program (`issues/ownership-soundness-oracle.md` has the
+   generator and the deciders for `SafeAt`). A clause that fails on a
+   checked program is wrong or the checker is; a clause no stage would
+   need is dropped. Reported before any stage is proved over it.
+3. The stages re-proved over it, simplest first (`Lit`, `Op`, `Read`,
+   `Fresh`, the takes and deaths of holders), then `View`, `Write`, `Back`,
+   a view's death and take, `Ret`, `Len`, then the call, then the body
+   induction, joins, `Jump` and fuel. The libraries of 26.3's items 1 to 6
+   are kept; what is replaced is `Sim` of the patch, the builders and the
+   stages over them.
+4. The old invariant and its stages are deleted when the new ones cover
+   every statement kind they covered, not kept beside them.
+
+The risk is that the restatement misses something the 28 clauses caught
+by accretion (the copy chains, a join's meet). Step 2 is the guard: it is
+cheap, and it runs before step 3 costs anything.
