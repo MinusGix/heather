@@ -1729,20 +1729,21 @@ fn File::plain_entry(self file: File, saves: Nat, inputs, parameters: List<Nat>,
     }
 }
 
-// The code after a pass: the exit bit's test, a jump to C where it is
-// clear; where set the next words moved into the state's registers and a
-// jump to J; at C the same moves and a jump to the head H; then J. Labels:
-// H is `names + 1`, C `names + 2`, J `names + 3`.
-fn plain_jumped(pass: Prog, test: Test, moves: List<Instruction>, names: Nat, short: List<Nat>) → Prog {
-    At(At(pass.branched_by(test, names + 2, shorts(short, names + 2)), 0, Block(moves)), 0, jmp_item(shorts(short, names + 3), names + 3))
-}
+// The code after a pass: the next words moved into the state's registers,
+// the exit bit's test, a jump forward to J where it is set, and a jump back
+// to the head H; then J. A pass that goes on falls through the test and
+// takes the one jump back, the step the fuel pays for; one that exits takes
+// the test's jump, the outputs already in the state's registers. `test` is
+// the exit bit's (taken where it is clear) and the code tests its negation.
+// Labels: H is `names + 1`, J `names + 3`.
+fn plain_moved(pass: Prog, moves: List<Instruction>) → Prog { At(pass, 0, Block(moves)) }
 
-fn plain_back(pass: Prog, test: Test, moves: List<Instruction>, names: Nat, short: List<Nat>) → Prog {
-    At(At(plain_jumped(pass, test, moves, names, short), names + 2, Block([])), 0, Block(moves))
+fn plain_tested(pass: Prog, test: Test, moves: List<Instruction>, names: Nat, short: List<Nat>) → Prog {
+    plain_moved(pass, moves).branched_by(test.negated(), names + 3, shorts(short, names + 3))
 }
 
 fn plain_again(pass: Prog, test: Test, moves: List<Instruction>, names: Nat, short: List<Nat>) → Prog {
-    At(plain_back(pass, test, moves, names, short), 0, jmp_item(shorts(short, names + 1), names + 1))
+    At(plain_tested(pass, test, moves, names, short), 0, jmp_item(shorts(short, names + 1), names + 1))
 }
 
 fn plain_done(pass: Prog, test: Test, moves: List<Instruction>, names: Nat, short: List<Nat>) → Prog {
@@ -1751,18 +1752,19 @@ fn plain_done(pass: Prog, test: Test, moves: List<Instruction>, names: Nat, shor
 
 fn plain_head(prog: Prog, code: List<Instruction>, names: Nat) → Prog { At(At(prog, 0, Block(code)), names + 1, Block([])) }
 
-// After the pass: refused where the exit bit has no test, the next words do
-// not all reach the state's registers, or the moves touch a register the
-// body keeps. The file after the loop has its outputs in those registers.
+// After the pass: refused where the next words do not all reach the state's
+// registers, the moves touch a register the body keeps, or the exit bit has
+// no test in the file after the moves. The file after the loop has its
+// outputs in those registers.
 fn Emitted::plain_close(self pass: Emitted, saves: Nat, registers: List<Gpr>, exit: Nat, next, outputs: List<Nat>, names: Nat, short: List<Nat>) →
     Option<Emitted> {
-    match pass.file.branch_test(exit) {
+    match pass.file.move_outputs(word_ports(next), registers) {
         None => None,
-        Some(tested) => match pass.file.move_outputs(word_ports(next), registers) {
-            None => None,
-            Some(moves) => match moves.file.outputs_check(word_ports(next), registers) && leaves_all(moves.code, body_kept(saves)) {
-                False => None,
-                True => match input_file(word_ports(outputs), registers) {
+        Some(moves) => match moves.file.outputs_check(word_ports(next), registers) && leaves_all(moves.code, body_kept(saves)) {
+            False => None,
+            True => match moves.file.branch_test(exit) {
+                None => None,
+                Some(tested) => match input_file(word_ports(outputs), registers) {
                     None => None,
                     Some(out) => Some(Emitted(plain_done(pass.prog, tested.test, moves.code, names, short), out, pass.placement, pass.names)),
                 },
@@ -2743,91 +2745,126 @@ fn Body::emit(self body: Body, saves, slots: Nat, short: List<Nat>, bound, spare
 // ---------------------------------------------------------------------------
 // The plain loop's code meets its meaning
 
-// The exit bit set, after a pass: the test falls through, the next words
-// move into the state's registers, JMP J.
+// After a pass, its moves: the next words in the state's registers, and
+// the file after them describing the registers, for the exit bit's test.
+fn PlainMoved<M>(saves: Nat, keep: M → Type, s0: MachineState<M>, after: File, values: Valuation(), registers: List<Gpr>, ids: List<Nat>) →
+    Gprs → M → Type {
+    λ g m => after.Represents(values, g) ∧ (ArgsIn(words_of(values, ids), registers, g) ∧ (Kept(body_kept(saves), s0.gprs, g) ∧ keep(m)))
+}
+
+theorem plain_moves_run<M>(saves: Nat, site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data), keep: M → Type,
+    s0: MachineState<M>, pass: Prog, file, after: File, moves: List<Instruction>, ids: List<Nat>, registers: List<Gpr>,
+    moved_in: plain_moved(pass, moves).Within(site.program), values: Valuation(),
+    moved: (s: MachineState<M>) → file.Represents(values, s.gprs) → after.Represents(values, execute_block_normal(moves, s).gprs),
+    into: MovesInto<M>(saves, values, file, ids, registers, moves)):
+    site.Moves(stack.writes, prog_len(pass), prog_len(plain_moved(pass, moves)),
+        λ (s: MachineState<M>) => stack.LoopPassed(saves, keep, s0, file, values)(s.gprs, s.memory),
+        λ (t: MachineState<M>) => PlainMoved<M>(saves, keep, s0, after, values, registers, ids)(t.gprs, t.memory)) {
+    let program = site.program;
+    site.moves_block(stack.writes, program.laid_out_fits(laid), moved_in.witness, pass, 0, moves, moved_in.proof,
+        program.block_reads_at(laid, moved_in.witness, pass, 0, moves, moved_in.proof), stack.LoopPassed(saves, keep, s0, file, values),
+        PlainMoved<M>(saves, keep, s0, after, values, registers, ids),
+        λ s memory held => {
+            let ran = into(s, held.left);
+            ⟨moved(s, held.left), ⟨ran.left, ⟨kept_trans(body_kept(saves), s0.gprs, s.gprs, execute_block_normal(moves, s).gprs, held.right.left, ran.right),
+                held.right.right⟩⟩⟩
+        })
+}
+
+// The exit bit set, after a pass: the moves, then the test's jump to J.
 theorem plain_leaves<M>(saves: Nat, site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data), keep: M → Type,
-    s0: MachineState<M>, pass: Prog, file: File, test: Test, exit: Nat, moves: List<Instruction>, ids: List<Nat>, registers: List<Gpr>, names: Nat,
-    short: List<Nat>, jumped_in: plain_jumped(pass, test, moves, names, short).Within(site.program),
-    c_lands: asm_target(site.program, names + 2) = prog_len(plain_jumped(pass, test, moves, names, short)),
+    s0: MachineState<M>, pass: Prog, file, after: File, test: Test, exit: Nat, moves: List<Instruction>, ids: List<Nat>, registers: List<Gpr>,
+    names: Nat, short: List<Nat>, again_in: plain_again(pass, test, moves, names, short).Within(site.program),
     j_at: Nat, j_lands: asm_target(site.program, names + 3) = j_at, values: Valuation(),
-    selects: (g: Gprs) → file.Represents(values, g) → test.taken(g) = !values(1, exit).head_bit(),
+    moved: (s: MachineState<M>) → file.Represents(values, s.gprs) → after.Represents(values, execute_block_normal(moves, s).gprs),
+    selects: (g: Gprs) → after.Represents(values, g) → test.taken(g) = !values(1, exit).head_bit(),
     into: MovesInto<M>(saves, values, file, ids, registers, moves), set: values(1, exit).head_bit() = True):
     site.Moves(stack.writes, prog_len(pass), j_at,
         λ (s: MachineState<M>) => stack.LoopPassed(saves, keep, s0, file, values)(s.gprs, s.memory),
         λ (t: MachineState<M>) => stack.LoopAt(saves, keep, s0, registers, words_of(values, ids))(t.gprs, t.memory)) {
     let program = site.program;
     let fits = program.laid_out_fits(laid);
-    let lands = program.laid_out_lands(laid);
-    let c_name = names + 2;
     let j_name = names + 3;
-    let short_c = shorts(short, c_name);
     let short_j = shorts(short, j_name);
-    let left = pass.branched_by(test, c_name, short_c);
-    let leave = At(left, 0, Block(moves));
-    let jumped = plain_jumped(pass, test, moves, names, short);
-    let leave_in = leave.within_before(0, jmp_item(short_j, j_name), program, jumped_in);
-    let left_in = left.within_before(0, Block(moves), program, leave_in);
-    let tested = pass.tested(test);
-    let test_in = tested.within_before(0, jcc_item(short_c, test.cc(), c_name), program, left_in);
-    let else_lands = j(c_lands, λ target _ => JccLands(asm_labels(program), prog_len(tested), short_c, test.cc(), c_name, target),
-        jcc_item_lands(asm_labels(program), left_in.witness, program, tested, 0, short_c, test.cc(), c_name, lands, left_in.proof));
-    let jump_lands = j(j_lands, λ target _ => JmpLands(asm_labels(program), prog_len(leave), short_j, j_name, target),
-        jmp_item_lands(asm_labels(program), jumped_in.witness, program, leave, 0, short_j, j_name, lands, jumped_in.proof));
-    let pre = stack.LoopPassed(saves, keep, s0, file, values);
+    let flipped = test.negated();
+    let moved_p = plain_moved(pass, moves);
+    let tested_p = plain_tested(pass, test, moves, names, short);
+    let tested_in = tested_p.within_before(0, jmp_item(shorts(short, names + 1), names + 1), program, again_in);
+    let test_in = moved_p.tested(flipped).within_before(0, jcc_item(short_j, flipped.cc(), j_name), program, tested_in);
+    let moved_in = moved_p.within_before(0, Block([flipped.instruction()]), program, test_in);
+    let out_lands = j(j_lands, λ target _ => JccLands(asm_labels(program), prog_len(moved_p.tested(flipped)), short_j, flipped.cc(), j_name, target),
+        jcc_item_lands(asm_labels(program), tested_in.witness, program, moved_p.tested(flipped), 0, short_j, flipped.cc(), j_name,
+            program.laid_out_lands(laid), tested_in.proof));
+    let mid = PlainMoved<M>(saves, keep, s0, after, values, registers, ids);
     let post = stack.LoopAt(saves, keep, s0, registers, words_of(values, ids));
-    site.moves_test_by(stack.writes, fits, pass, test, c_name, short_c, test_in.witness, test_in.proof, left_in.witness, left_in.proof,
-        prog_len(jumped), else_lands, j_at, pre, λ (t: MachineState<M>) => post(t.gprs, t.memory),
-        site.moves_trans(stack.writes, prog_len(left), prog_len(leave), j_at,
-            λ (s: MachineState<M>) => pre(s.gprs, s.memory) ∧ test.taken(s.gprs) = False,
-            λ (s: MachineState<M>) => post(s.gprs, s.memory), λ (t: MachineState<M>) => post(t.gprs, t.memory),
-            site.moves_weaken(stack.writes, prog_len(left), prog_len(leave), λ (s: MachineState<M>) => pre(s.gprs, s.memory),
+    site.moves_trans(stack.writes, prog_len(pass), prog_len(moved_p), j_at,
+        λ (s: MachineState<M>) => stack.LoopPassed(saves, keep, s0, file, values)(s.gprs, s.memory),
+        λ (s: MachineState<M>) => mid(s.gprs, s.memory), λ (t: MachineState<M>) => post(t.gprs, t.memory),
+        plain_moves_run<M>(saves, site, laid, stack, keep, s0, pass, file, after, moves, ids, registers, moved_in, values, moved, into),
+        site.moves_test_by(stack.writes, fits, moved_p, flipped, j_name, short_j, test_in.witness, test_in.proof, tested_in.witness, tested_in.proof,
+            j_at, out_lands, j_at, mid, λ (t: MachineState<M>) => post(t.gprs, t.memory),
+            site.moves_absurd(stack.writes, prog_len(tested_p), j_at, λ (s: MachineState<M>) => mid(s.gprs, s.memory) ∧ flipped.taken(s.gprs) = False,
                 λ (t: MachineState<M>) => post(t.gprs, t.memory),
-                λ (s: MachineState<M>) => pre(s.gprs, s.memory) ∧ test.taken(s.gprs) = False,
-                λ (t: MachineState<M>) => post(t.gprs, t.memory),
-                site.moves_block(stack.writes, fits, leave_in.witness, left, 0, moves, leave_in.proof,
-                    program.block_reads_at(laid, leave_in.witness, left, 0, moves, leave_in.proof), pre, post,
-                    λ s memory held => {
-                        let ran = into(s, held.left);
-                        ⟨ran.left, ⟨kept_trans(body_kept(saves), s0.gprs, s.gprs, execute_block_normal(moves, s).gprs, held.right.left, ran.right),
-                            held.right.right⟩⟩
-                    }),
-                λ s held => held.left, λ t held => held),
-            site.moves_jump_item(stack.writes, fits, jumped_in.witness, leave, 0, short_j, j_name, jumped_in.proof, j_at, jump_lands, post)),
-        site.moves_absurd(stack.writes, prog_len(jumped), j_at,
-            λ (s: MachineState<M>) => pre(s.gprs, s.memory) ∧ test.taken(s.gprs) = True,
-            λ (t: MachineState<M>) => post(t.gprs, t.memory),
-            λ s held => {
-                let bad: (True = False) = trans(sym(held.right), trans(selects(s.gprs, held.left.left), cong_fn<Bool, Bool>(λ b => !b, set)));
-                absurd(bad)
-            }))
+                λ s held => {
+                    let bad: (False = True) = trans(sym(held.right), trans(test.negated_taken(s.gprs),
+                        trans(cong_fn<Bool, Bool>(λ b => !b, trans(selects(s.gprs, held.left.left), cong_fn<Bool, Bool>(λ b => !b, set))), refl)));
+                    absurd(sym(bad))
+                }),
+            site.moves_refl(stack.writes, j_at, λ (s: MachineState<M>) => mid(s.gprs, s.memory) ∧ flipped.taken(s.gprs) = True,
+                λ (t: MachineState<M>) => post(t.gprs, t.memory), λ s held => held.left.right)))
 }
 
-// The exit bit clear: `loop_turns` (the test jumps to C, the moves there),
-// then JMP H.
-theorem plain_turns<M>(saves: Nat, site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data), keep: M → Type,
-    s0: MachineState<M>, pass: Prog, file: File, test: Test, exit: Nat, moves: List<Instruction>, ids: List<Nat>, registers: List<Gpr>, names: Nat,
-    short: List<Nat>, again_in: plain_again(pass, test, moves, names, short).Within(site.program),
-    c_lands: asm_target(site.program, names + 2) = prog_len(plain_jumped(pass, test, moves, names, short)),
+// The exit bit clear, as a claim: the moves, the test falling through, and
+// the JMP to the head, the one step the fuel pays for.
+theorem plain_turns_claim<M, W>(saves: Nat, site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data),
+    kernel: Kernel<M, W>, World: W → Type, keep: M → Type,
+    s0: MachineState<M>, pass: Prog, file, after: File, test: Test, exit: Nat, moves: List<Instruction>, ids: List<Nat>, registers: List<Gpr>,
+    names: Nat, short: List<Nat>, again_in: plain_again(pass, test, moves, names, short).Within(site.program),
     h_at: Nat, h_lands: asm_target(site.program, names + 1) = h_at, values: Valuation(),
-    selects: (g: Gprs) → file.Represents(values, g) → test.taken(g) = !values(1, exit).head_bit(),
+    moved: (s: MachineState<M>) → file.Represents(values, s.gprs) → after.Represents(values, execute_block_normal(moves, s).gprs),
+    selects: (g: Gprs) → after.Represents(values, g) → test.taken(g) = !values(1, exit).head_bit(),
     into: MovesInto<M>(saves, values, file, ids, registers, moves), clear: values(1, exit).head_bit() = False):
-    site.Moves(stack.writes, prog_len(pass), h_at,
-        λ (s: MachineState<M>) => stack.LoopPassed(saves, keep, s0, file, values)(s.gprs, s.memory),
-        λ (t: MachineState<M>) => stack.LoopAt(saves, keep, s0, registers, words_of(values, ids))(t.gprs, t.memory)) {
+    site.Claims(stack.writes, kernel, 0, 1, prog_len(pass),
+        λ (r: Running<M, W>) => stack.LoopPassed(saves, keep, s0, file, values)(r.state.gprs, r.state.memory) ∧ World(r.io),
+        site.Arrived(h_at, λ (t: Running<M, W>) => stack.LoopAt(saves, keep, s0, registers, words_of(values, ids))(t.state.gprs, t.state.memory) ∧ World(t.io))) {
     let program = site.program;
-    let back = plain_back(pass, test, moves, names, short);
+    let fits = program.laid_out_fits(laid);
+    let j_name = names + 3;
+    let short_j = shorts(short, j_name);
     let short_h = shorts(short, names + 1);
-    let back_in = back.within_before(0, jmp_item(short_h, names + 1), program, again_in);
-    let jump_lands = j(h_lands, λ target _ => JmpLands(asm_labels(program), prog_len(back), short_h, names + 1, target),
-        jmp_item_lands(asm_labels(program), again_in.witness, program, back, 0, short_h, names + 1, program.laid_out_lands(laid), again_in.proof));
+    let flipped = test.negated();
+    let moved_p = plain_moved(pass, moves);
+    let tested_p = plain_tested(pass, test, moves, names, short);
+    let tested_in = tested_p.within_before(0, jmp_item(short_h, names + 1), program, again_in);
+    let test_in = moved_p.tested(flipped).within_before(0, jcc_item(short_j, flipped.cc(), j_name), program, tested_in);
+    let moved_in = moved_p.within_before(0, Block([flipped.instruction()]), program, test_in);
+    let out_lands = jcc_item_lands(asm_labels(program), tested_in.witness, program, moved_p.tested(flipped), 0, short_j, flipped.cc(), j_name,
+        program.laid_out_lands(laid), tested_in.proof);
+    let jump_lands = j(h_lands, λ target _ => JmpLands(asm_labels(program), prog_len(tested_p), short_h, names + 1, target),
+        jmp_item_lands(asm_labels(program), again_in.witness, program, tested_p, 0, short_h, names + 1, program.laid_out_lands(laid), again_in.proof));
+    let mid = PlainMoved<M>(saves, keep, s0, after, values, registers, ids);
     let post = stack.LoopAt(saves, keep, s0, registers, words_of(values, ids));
-    site.moves_trans(stack.writes, prog_len(pass), prog_len(back), h_at,
+    let goal = site.Arrived(h_at, λ (t: Running<M, W>) => post(t.state.gprs, t.state.memory) ∧ World(t.io));
+    site.claims_after_moves(stack.writes, kernel, 0, 1, prog_len(pass), prog_len(moved_p),
         λ (s: MachineState<M>) => stack.LoopPassed(saves, keep, s0, file, values)(s.gprs, s.memory),
-        λ (s: MachineState<M>) => post(s.gprs, s.memory), λ (t: MachineState<M>) => post(t.gprs, t.memory),
-        loop_turns<M>(saves, site, laid, stack, keep, s0, pass, file, test, exit, moves, ids, registers, plain_jumped(pass, test, moves, names, short),
-            names + 2, shorts(short, names + 2), Exists(2, refl), back_in, c_lands, values, selects, into, clear),
-        site.moves_jump_item(stack.writes, program.laid_out_fits(laid), again_in.witness, back, 0, short_h, names + 1, again_in.proof, h_at, jump_lands,
-            post))
+        λ (s: MachineState<M>) => mid(s.gprs, s.memory), World, goal,
+        plain_moves_run<M>(saves, site, laid, stack, keep, s0, pass, file, after, moves, ids, registers, moved_in, values, moved, into),
+        site.claims_test_by(stack.writes, kernel, fits, moved_p, flipped, j_name, short_j, test_in.witness, test_in.proof, tested_in.witness,
+            tested_in.proof, asm_target(program, j_name), out_lands, 0, 1, λ (g: Gprs) (m: M) (w: W) => mid(g, m) ∧ World(w), goal,
+            site.claims_weaken(stack.writes, kernel, 0, 1, prog_len(tested_p),
+                λ (r: Running<M, W>) => post(r.state.gprs, r.state.memory) ∧ World(r.io), goal,
+                λ (r: Running<M, W>) => (mid(r.state.gprs, r.state.memory) ∧ World(r.io)) ∧ flipped.taken(r.state.gprs) = False, goal,
+                site.claims_jump_item(stack.writes, kernel, fits, again_in.witness, tested_p, 0, short_h, names + 1, again_in.proof, h_at, jump_lands,
+                    λ (g: Gprs) (m: M) (w: W) => post(g, m) ∧ World(w)),
+                λ r held => ⟨held.left.left.right, held.left.right⟩, λ t at => at),
+            site.claims_absurd(stack.writes, kernel, 0, 1, asm_target(program, j_name),
+                λ (r: Running<M, W>) => (mid(r.state.gprs, r.state.memory) ∧ World(r.io)) ∧ flipped.taken(r.state.gprs) = True, goal,
+                λ r held => {
+                    let bad: (True = False) = trans(sym(held.right), trans(test.negated_taken(r.state.gprs),
+                        trans(cong_fn<Bool, Bool>(λ b => !b, trans(selects(r.state.gprs, held.left.left.left), cong_fn<Bool, Bool>(λ b => !b, clear))),
+                            refl)));
+                    absurd(bad)
+                })))
 }
 
 // A label's item is empty.
@@ -2851,8 +2888,6 @@ fn PlainAtNow<M>(saves: Nat, site: Site<M>, stack: Stack<M>(site.fetch, site.dat
 record PlainLabels<M>(site: Site<M>, prog: Prog, code: List<Instruction>, pass: Prog, test: Test, moves: List<Instruction>, names: Nat,
     short: List<Nat>) {
     again_in: plain_again(pass, test, moves, names, short).Within(site.program),
-    jumped_in: plain_jumped(pass, test, moves, names, short).Within(site.program),
-    c_lands: asm_target(site.program, names + 2) = prog_len(plain_jumped(pass, test, moves, names, short)),
     h_lands: asm_target(site.program, names + 1) = prog_len(At(prog, 0, Block(code))),
     j_lands: asm_target(site.program, names + 3) = prog_len(plain_again(pass, test, moves, names, short)),
 }
@@ -2862,13 +2897,9 @@ theorem plain_labels<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), p
     done_in: plain_done(pass, test, moves, names, short).Within(site.program)): PlainLabels<M>(site, prog, code, pass, test, moves, names, short) {
     let program = site.program;
     let unique = program.laid_out_unique(laid);
-    let jumped = plain_jumped(pass, test, moves, names, short);
     let again = plain_again(pass, test, moves, names, short);
-    let again_in: again.Within(program) = again.within_before(names + 3, Block([]), program, done_in);
-    let c_in: At(jumped, names + 2, Block([])).Within(program) = Prog::within_trans(Exists(2, refl), again_in);
-    let head_in: plain_head(prog, code, names).Within(program) = Prog::within_trans(head_pass, Prog::within_trans(Exists(8, refl), done_in));
-    PlainLabels(again_in := again_in, jumped_in := Prog::within_trans(Exists(3, refl), again_in),
-        c_lands := label_target(c_in.witness, program, jumped, names + 1, Block([]), unique, c_in.proof),
+    let head_in: plain_head(prog, code, names).Within(program) = Prog::within_trans(head_pass, Prog::within_trans(Exists(5, refl), done_in));
+    PlainLabels(again_in := again.within_before(names + 3, Block([]), program, done_in),
         h_lands := label_target(head_in.witness, program, At(prog, 0, Block(code)), names, Block([]), unique, head_in.proof),
         j_lands := label_target(done_in.witness, program, again, names + 2, Block([]), unique, done_in.proof))
 }
@@ -2883,7 +2914,9 @@ theorem plain_step<M>(saves: Nat, site: Site<M>, laid: site.program.laid_out().I
     pass_emits: (v: Valuation()) → (from, to: Now) →
         EmitsNow<M>(saves, site, stack, spans, v, w, s0, plain_head(prog, code, names), head, Pass(v, from, to), from, to, pass),
     pass_in: pass.prog.Within(site.program),
-    selects: (v: Valuation()) → (g: Gprs) → pass.file.Represents(v, g) → test.taken(g) = !v(1, exit).head_bit(),
+    next_file: File, moved: (v: Valuation()) → (s: MachineState<M>) → pass.file.Represents(v, s.gprs) →
+        next_file.Represents(v, execute_block_normal(moves, s).gprs),
+    selects: (v: Valuation()) → (g: Gprs) → next_file.Represents(v, g) → test.taken(g) = !v(1, exit).head_bit(),
     into: (v: Valuation()) → MovesInto<M>(saves, v, pass.file, typed_ids(next), registers, moves),
     final: List<BitVec(64)>, after: Now, m: Nat, state: List<BitVec(64)>, now: Now, v: Valuation(),
     eq: words_of(v, typed_ids(parameters)) = state, mid: Now, passed: Pass(v, now, mid),
@@ -2920,8 +2953,8 @@ theorem plain_step<M>(saves: Nat, site: Site<M>, laid: site.program.laid_out().I
             Exists<Nat>(λ c => site.Claims(stack.writes, kernel, c, 0, h_at, PlainAtNow<M>(saves, site, stack, spans, w, s0, registers, state, now),
                 site.Arrived(h_at, PlainAtNow<M>(saves, site, stack, spans, w, s0, registers, later, left)))))) {
         True => λ set done => {
-            let out = plain_leaves<M>(saves, site, laid, stack, keep_mid, s0, pass.prog, pass.file, test, exit, moves, typed_ids(next), registers, names, short,
-                labels.jumped_in, labels.c_lands, j_at, labels.j_lands, v, selects(v), into(v), set);
+            let out = plain_leaves<M>(saves, site, laid, stack, keep_mid, s0, pass.prog, pass.file, next_file, test, exit, moves, typed_ids(next), registers, names,
+                short, labels.again_in, j_at, labels.j_lands, v, moved(v), selects(v), into(v), set);
             let leave = site.claims_of_moves(stack.writes, kernel, prog_len(pass.prog), j_at, passed_at,
                 PlainAt<M>(saves, site, stack, spans, w, s0, registers, words_of(v, typed_ids(next)), mid), at_mid, out);
             let both = site.claims_trans(stack.writes, kernel, calls_between(now, mid), 0, 0, 0, h_at, prog_len(pass.prog),
@@ -2935,10 +2968,11 @@ theorem plain_step<M>(saves: Nat, site: Site<M>, laid: site.program.laid_out().I
                     site.Arrived(j_at, PlainAtNow<M>(saves, site, stack, spans, w, s0, registers, f, mid))), both))))
         },
         False => λ clear later => {
-            let turn = site.claims_of_moves(stack.writes, kernel, prog_len(pass.prog), h_at, passed_at,
-                PlainAt<M>(saves, site, stack, spans, w, s0, registers, words_of(v, typed_ids(next)), mid), at_mid,
-                plain_turns<M>(saves, site, laid, stack, keep_mid, s0, pass.prog, pass.file, test, exit, moves, typed_ids(next), registers, names, short,
-                    labels.again_in, labels.c_lands, h_at, labels.h_lands, v, selects(v), into(v), clear));
+            let turn = site.claims_loosen(stack.writes, kernel, 0, 1, 0, 0, prog_len(pass.prog), λ (r: Running<M, Io>) => passed_at(r.state) ∧ at_mid(r.io),
+                site.Arrived(h_at, λ (t: Running<M, Io>) => PlainAt<M>(saves, site, stack, spans, w, s0, registers, words_of(v, typed_ids(next)), mid)(t.state) ∧
+                    at_mid(t.io)), { omega },
+                plain_turns_claim<M, Io>(saves, site, laid, stack, kernel, at_mid, keep_mid, s0, pass.prog, pass.file, next_file, test, exit, moves,
+                    typed_ids(next), registers, names, short, labels.again_in, h_at, labels.h_lands, v, moved(v), selects(v), into(v), clear));
             Inr(Exists(words_of(v, typed_ids(next)), Exists(mid, ⟨later, Exists(0 + calls_between(now, mid),
                 site.claims_trans(stack.writes, kernel, calls_between(now, mid), 0, 0, 0, h_at, prog_len(pass.prog),
                     PlainAtNow<M>(saves, site, stack, spans, w, s0, registers, state, now), λ (t: Running<M, Io>) => passed_at(t.state) ∧ at_mid(t.io),
@@ -2957,7 +2991,9 @@ theorem plain_passes<M>(saves: Nat, site: Site<M>, laid: site.program.laid_out()
     pass_emits: (v: Valuation()) → (from, to: Now) →
         EmitsNow<M>(saves, site, stack, spans, v, w, s0, plain_head(prog, code, names), head, Pass(v, from, to), from, to, pass),
     pass_in: pass.prog.Within(site.program),
-    selects: (v: Valuation()) → (g: Gprs) → pass.file.Represents(v, g) → test.taken(g) = !v(1, exit).head_bit(),
+    next_file: File, moved: (v: Valuation()) → (s: MachineState<M>) → pass.file.Represents(v, s.gprs) →
+        next_file.Represents(v, execute_block_normal(moves, s).gprs),
+    selects: (v: Valuation()) → (g: Gprs) → next_file.Represents(v, g) → test.taken(g) = !v(1, exit).head_bit(),
     into: (v: Valuation()) → MovesInto<M>(saves, v, pass.file, typed_ids(next), registers, moves),
     final: List<BitVec(64)>, after: Now, n: Nat, state: List<BitVec(64)>, now: Now,
     ran: PassesHold(Pass, parameters, exit, next, n, state, now, final, after)):
@@ -2971,7 +3007,7 @@ theorem plain_passes<M>(saves: Nat, site: Site<M>, laid: site.program.laid_out()
         λ (k: Nat) (st: List<BitVec(64)>) (at: Now) => PassesHold(Pass, parameters, exit, next, k, st, at, final, after),
         λ st at never => false_elim(never),
         λ k st at holds => plain_step<M>(saves, site, laid, stack, spans, Pass, w, s0, prog, code, head, registers, parameters, exit, next, names, short, pass,
-            test, moves, labels, head_ok, pass_emits, pass_in, selects, into, final, after, k, st, at, holds.witness, holds.proof.left,
+            test, moves, labels, head_ok, pass_emits, pass_in, next_file, moved, selects, into, final, after, k, st, at, holds.witness, holds.proof.left,
             holds.proof.right.witness, holds.proof.right.proof.left, holds.proof.right.proof.right),
         n, state, now, ran)
 }
@@ -2986,7 +3022,9 @@ theorem plain_loop_emits<M>(saves: Nat, site: Site<M>, laid: site.program.laid_o
     pass: Emitted,
     pass_emits: (v: Valuation()) → (from, to: Now) →
         EmitsNow<M>(saves, site, stack, spans, v, w, s0, plain_head(prog, entry.code, names), entry.head, Pass(v, from, to), from, to, pass),
-    tested: Tested(pass.file, exit), moves: List<Instruction>, into: (v: Valuation()) → MovesInto<M>(saves, v, pass.file, typed_ids(next), registers, moves),
+    moves: List<Instruction>, next_file: File,
+    moved: (v: Valuation()) → (s: MachineState<M>) → pass.file.Represents(v, s.gprs) → next_file.Represents(v, execute_block_normal(moves, s).gprs),
+    tested: Tested(next_file, exit), into: (v: Valuation()) → MovesInto<M>(saves, v, pass.file, typed_ids(next), registers, moves),
     out: File, out_ok: (g: Gprs) → ArgsIn(words_of(values, typed_ids(outputs)), registers, g) → out.Represents(values, g), before, after: Now):
     EmitsNow<M>(saves, site, stack, spans, values, w, s0, prog, file,
         Exists<Nat>(λ n => PassesHold(Pass, parameters, exit, next, n, words_of(values, typed_ids(inputs)), before, words_of(values, typed_ids(outputs)),
@@ -3003,14 +3041,14 @@ theorem plain_loop_emits<M>(saves: Nat, site: Site<M>, laid: site.program.laid_o
     let pre = λ (g: Gprs) (m: M) => (file.Represents(values, g) ∧ facts) ∧
         (Kept(body_kept(saves), s0.gprs, g) ∧ stack.TrailBy(spans, mem, w, s0.memory, before, m));
     let into_head: prog.Within(plain_head(prog, code, names)) = Exists(2, refl);
-    let pass_done: pass.prog.Within(plain_done(pass.prog, test, moves, names, short)) = Exists(8, refl);
+    let pass_done: pass.prog.Within(plain_done(pass.prog, test, moves, names, short)) = Exists(5, refl);
     let done_prog = plain_done(pass.prog, test, moves, names, short);
     let goal = NowPost<M>(saves, site, stack, spans, values, w, s0, prog_len(done_prog), out, after);
     let start_pre = NowPre<M>(saves, site, stack, spans, values, w, s0, file, facts, before);
     ⟨Prog::within_trans(into_head, Prog::within_trans(head_pass, pass_done)),
      λ within r here resident held => {
         let labels = plain_labels<M>(site, laid, prog, code, pass.prog, test, moves, names, short, head_pass, within);
-        let pass_in: pass.prog.Within(program) = Prog::within_trans(Exists(8, refl), within);
+        let pass_in: pass.prog.Within(program) = Prog::within_trans(Exists(5, refl), within);
         let entered_in: At(prog, 0, Block(code)).Within(program) = Prog::within_trans(Exists(1, refl), Prog::within_trans(head_pass, pass_in));
         let entry_run = site.moves_block(stack.writes, program.laid_out_fits(laid), entered_in.witness, prog, 0, code, entered_in.proof,
             program.block_reads_at(laid, entered_in.witness, prog, 0, code, entered_in.proof), pre,
@@ -3022,7 +3060,7 @@ theorem plain_loop_emits<M>(saves: Nat, site: Site<M>, laid: site.program.laid_o
                     held_x.right.right⟩⟩
             });
         let passes = plain_passes<M>(saves, site, laid, stack, spans, Pass, w, s0, prog, code, entry.head, registers, parameters, exit, next, names, short,
-            pass, test, moves, labels, head_ok, pass_emits, pass_in, tested.selects, into, words_of(values, typed_ids(outputs)), after,
+            pass, test, moves, labels, head_ok, pass_emits, pass_in, next_file, moved, tested.selects, into, words_of(values, typed_ids(outputs)), after,
             held.left.left.right.witness, words_of(values, typed_ids(inputs)), before, held.left.left.right.proof);
         let whole = site.claims_after_moves(stack.writes, kernel, passes.witness, 0, prog_len(prog), prog_len(At(prog, 0, Block(code))),
             λ (x: MachineState<M>) => pre(x.gprs, x.memory), PlainAt<M>(saves, site, stack, spans, w, s0, registers, words_of(values, typed_ids(inputs)), before),
@@ -3092,53 +3130,42 @@ theorem plain_close_emits<M>(saves: Nat, site: Site<M>, laid: site.program.laid_
         words_of(values, typed_ids(outputs)), after));
     let nexts = word_ports(typed_ids(next));
     let outs = word_ports(typed_ids(outputs));
-    match pass.file.branch_test(exit) as λ t => MayEmitNow<M>(saves, site, stack, spans, values, w, s0, prog, file, facts, before, after, match t {
+    (match pass.file.move_outputs(nexts, registers) as λ o => ((v: Valuation()) → MayKeep<M>(v, pass.file, True, o)) →
+        MayEmitNow<M>(saves, site, stack, spans, values, w, s0, prog, file, facts, before, after, match o {
             None => None,
-            Some(tested) => match pass.file.move_outputs(nexts, registers) {
-                None => None,
-                Some(moves) => match moves.file.outputs_check(nexts, registers) && leaves_all(moves.code, body_kept(saves)) {
-                    False => None,
-                    True => match input_file(outs, registers) {
-                        None => None,
-                        Some(out) => Some(Emitted(plain_done(pass.prog, tested.test, moves.code, names, short), out, pass.placement, pass.names)),
-                    },
+            Some(moves) => match moves.file.outputs_check(nexts, registers) && leaves_all(moves.code, body_kept(saves)) {
+                False => None,
+                True => match moves.file.branch_test(exit) {
+                    None => None,
+                    Some(tested) => match input_file(outs, registers) { None => None, Some(out) => Some(Emitted(plain_done(pass.prog, tested.test, moves.code, names, short), out, pass.placement, pass.names)) },
                 },
             },
         }) {
-        None => trivial,
-        Some(tested) => (match pass.file.move_outputs(nexts, registers) as λ o => ((v: Valuation()) → MayKeep<M>(v, pass.file, True, o)) →
-            MayEmitNow<M>(saves, site, stack, spans, values, w, s0, prog, file, facts, before, after, match o {
-                None => None,
-                Some(moves) => match moves.file.outputs_check(nexts, registers) && leaves_all(moves.code, body_kept(saves)) {
-                    False => None,
-                    True => match input_file(outs, registers) {
+        None => λ _ => trivial,
+        Some(moves) => λ keeps => match checked: moves.file.outputs_check(nexts, registers) && leaves_all(moves.code, body_kept(saves)) {
+            False => trivial,
+            True => {
+                let parts = Bool::is_true_and(moves.file.outputs_check(nexts, registers), leaves_all(moves.code, body_kept(saves)),
+                    is_true_of_eq(moves.file.outputs_check(nexts, registers) && leaves_all(moves.code, body_kept(saves)), checked));
+                match moves.file.branch_test(exit) as λ t => MayEmitNow<M>(saves, site, stack, spans, values, w, s0, prog, file, facts, before, after, match t {
                         None => None,
-                        Some(out) => Some(Emitted(plain_done(pass.prog, tested.test, moves.code, names, short), out, pass.placement, pass.names)),
-                    },
-                },
-            }) {
-            None => λ _ => trivial,
-            Some(moves) => λ keeps => match checked: moves.file.outputs_check(nexts, registers) && leaves_all(moves.code, body_kept(saves)) {
-                False => trivial,
-                True => {
-                    let parts = Bool::is_true_and(moves.file.outputs_check(nexts, registers), leaves_all(moves.code, body_kept(saves)),
-                        is_true_of_eq(moves.file.outputs_check(nexts, registers) && leaves_all(moves.code, body_kept(saves)), checked));
-                    (match input_file(outs, registers) as λ o =>
+                        Some(tested) => match input_file(outs, registers) { None => None, Some(out) => Some(Emitted(plain_done(pass.prog, tested.test, moves.code, names, short), out, pass.placement, pass.names)) },
+                    }) {
+                    None => trivial,
+                    Some(tested) => (match input_file(outs, registers) as λ o =>
                         ((g: Gprs) → PortsAt(values, outs, registers, g) → o.All(λ (f: File) => f.Represents(values, g))) →
-                        MayEmitNow<M>(saves, site, stack, spans, values, w, s0, prog, file, facts, before, after, match o {
-                            None => None,
-                            Some(out) => Some(Emitted(plain_done(pass.prog, tested.test, moves.code, names, short), out, pass.placement, pass.names)),
-                        }) {
+                        MayEmitNow<M>(saves, site, stack, spans, values, w, s0, prog, file, facts, before, after, match o { None => None, Some(out) => Some(Emitted(plain_done(pass.prog, tested.test, moves.code, names, short), out, pass.placement, pass.names)) }) {
                         None => λ _ => trivial,
                         Some(out) => λ out_ok => plain_loop_emits<M>(saves, site, laid, stack, spans, Pass, values, w, s0, prog, file, inputs, parameters, exit,
-                            next, outputs, names, short, registers, entry, entry_ok.left, entry_ok.right, pass, pass_emits, tested, moves.code,
+                            next, outputs, names, short, registers, entry, entry_ok.left, entry_ok.right, pass, pass_emits, moves.code, moves.file,
+                            λ v u rep => keeps(v)(u, rep, trivial), tested,
                             λ v => moves_into<M>(saves, v, pass.file, typed_ids(next), registers, moves, keeps(v), parts.left, parts.right), out,
                             λ g args => out_ok(g, args_ports(values, typed_ids(outputs), registers, g, args)), before, after),
-                    })(λ g placed => input_file_represents(values, g, outs, registers, placed))
-                },
+                    })(λ g placed => input_file_represents(values, g, outs, registers, placed)),
+                }
             },
-        })(λ v => move_outputs_keeps<M>(v, nexts, pass.file, registers)),
-    }
+        },
+    })(λ v => move_outputs_keeps<M>(v, nexts, pass.file, registers))
 }
 
 // The loop's code, as `Body::emit` checks it, from its body's emission at
@@ -3591,37 +3618,6 @@ theorem branch_heap_stops<M>(x: Stop, saves: Nat, site: Site<M>, laid: site.prog
      }⟩
 }
 
-// The turn round as a claim: the test falls to C, the next words move into
-// the state's registers, and the JMP to the head, the one step the fuel
-// pays for.
-theorem plain_turns_claim<M, W>(saves: Nat, site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data),
-    kernel: Kernel<M, W>, World: W → Type, keep: M → Type,
-    s0: MachineState<M>, pass: Prog, file: File, test: Test, exit: Nat, moves: List<Instruction>, ids: List<Nat>, registers: List<Gpr>, names: Nat,
-    short: List<Nat>, again_in: plain_again(pass, test, moves, names, short).Within(site.program),
-    c_lands: asm_target(site.program, names + 2) = prog_len(plain_jumped(pass, test, moves, names, short)),
-    h_at: Nat, h_lands: asm_target(site.program, names + 1) = h_at, values: Valuation(),
-    selects: (g: Gprs) → file.Represents(values, g) → test.taken(g) = !values(1, exit).head_bit(),
-    into: MovesInto<M>(saves, values, file, ids, registers, moves), clear: values(1, exit).head_bit() = False):
-    site.Claims(stack.writes, kernel, 0, 1, prog_len(pass),
-        λ (r: Running<M, W>) => stack.LoopPassed(saves, keep, s0, file, values)(r.state.gprs, r.state.memory) ∧ World(r.io),
-        site.Arrived(h_at, λ (t: Running<M, W>) => stack.LoopAt(saves, keep, s0, registers, words_of(values, ids))(t.state.gprs, t.state.memory) ∧ World(t.io))) {
-    let program = site.program;
-    let back = plain_back(pass, test, moves, names, short);
-    let short_h = shorts(short, names + 1);
-    let back_in = back.within_before(0, jmp_item(short_h, names + 1), program, again_in);
-    let jump_lands = j(h_lands, λ target _ => JmpLands(asm_labels(program), prog_len(back), short_h, names + 1, target),
-        jmp_item_lands(asm_labels(program), again_in.witness, program, back, 0, short_h, names + 1, program.laid_out_lands(laid), again_in.proof));
-    let post = stack.LoopAt(saves, keep, s0, registers, words_of(values, ids));
-    site.claims_after_moves(stack.writes, kernel, 0, 1, prog_len(pass), prog_len(back),
-        λ (s: MachineState<M>) => stack.LoopPassed(saves, keep, s0, file, values)(s.gprs, s.memory),
-        λ (s: MachineState<M>) => post(s.gprs, s.memory), World,
-        site.Arrived(h_at, λ (t: Running<M, W>) => post(t.state.gprs, t.state.memory) ∧ World(t.io)),
-        loop_turns<M>(saves, site, laid, stack, keep, s0, pass, file, test, exit, moves, ids, registers, plain_jumped(pass, test, moves, names, short),
-            names + 2, shorts(short, names + 2), Exists(2, refl), back_in, c_lands, values, selects, into, clear),
-        site.claims_jump_item(stack.writes, kernel, program.laid_out_fits(laid), again_in.witness, back, 0, short_h, names + 1, again_in.proof, h_at,
-            jump_lands, λ (g: Gprs) (m: M) (w: W) => post(g, m) ∧ World(w)))
-}
-
 // The head's claim at a loop stopped, from the state `state` over
 // `now`: at least `least` machine steps.
 fn PlainStops<M>(x: Stop, saves: Nat, site: Site<M>, stack: Stack<M>(site.fetch, site.data), spans: Spans, w: Nat, s0: MachineState<M>, registers: List<Gpr>,
@@ -3642,7 +3638,9 @@ theorem plain_pass_stops<M>(x: Stop, saves: Nat, site: Site<M>, laid: site.progr
     cap: Nat, pass_stops: (v: Valuation()) → (k: Nat) → k <= cap → (from: Now) →
         StopsHeap<M>(x, saves, site, stack, spans, v, w, s0, plain_head(prog, code, names), head, PassStops(v, k, from), from, x.least(k), pass),
     pass_in: pass.prog.Within(site.program),
-    selects: (v: Valuation()) → (g: Gprs) → pass.file.Represents(v, g) → test.taken(g) = !v(1, exit).head_bit(),
+    next_file: File, moved: (v: Valuation()) → (s: MachineState<M>) → pass.file.Represents(v, s.gprs) →
+        next_file.Represents(v, execute_block_normal(moves, s).gprs),
+    selects: (v: Valuation()) → (g: Gprs) → next_file.Represents(v, g) → test.taken(g) = !v(1, exit).head_bit(),
     into: (v: Valuation()) → MovesInto<M>(saves, v, pass.file, typed_ids(next), registers, moves),
     fuel: Nat, Later: List<BitVec(64)> → Now → Type, least: Nat,
     later: (st: List<BitVec(64)>) → (at: Now) → Later(st, at) →
@@ -3666,8 +3664,8 @@ theorem plain_pass_stops<M>(x: Stop, saves: Nat, site: Site<M>, laid: site.progr
                 done.proof.left);
             let start = j(eq, λ ws _ => site.Claims(stack.writes, linux, calls_between(now, mid), 0, h_at,
                 PlainAtNow<M>(saves, site, stack, spans, w, s0, registers, ws, now), site.Arrived(prog_len(pass.prog), passed_at)), ran_body);
-            let turn = plain_turns_claim<M, Io>(saves, site, laid, stack, linux, λ (io: Io) => NowWorld()(mid, io), keep_mid, s0, pass.prog, pass.file, test, exit,
-                moves, typed_ids(next), registers, names, short, labels.again_in, labels.c_lands, h_at, labels.h_lands, v, selects(v), into(v),
+            let turn = plain_turns_claim<M, Io>(saves, site, laid, stack, linux, λ (io: Io) => NowWorld()(mid, io), keep_mid, s0, pass.prog, pass.file, next_file,
+                test, exit, moves, typed_ids(next), registers, names, short, labels.again_in, h_at, labels.h_lands, v, moved(v), selects(v), into(v),
                 done.proof.right.left);
             let onward = site.claims_trans(stack.writes, linux, 0, 1, x.calls_from(mid), least, prog_len(pass.prog), h_at, passed_at,
                 PlainAtNow<M>(saves, site, stack, spans, w, s0, registers, words_of(v, typed_ids(next)), mid),
@@ -3694,13 +3692,15 @@ theorem plain_passes_stops<M>(x: Stop, saves: Nat, site: Site<M>, laid: site.pro
     cap: Nat, pass_stops: (v: Valuation()) → (k: Nat) → k <= cap → (from: Now) →
         StopsHeap<M>(x, saves, site, stack, spans, v, w, s0, plain_head(prog, code, names), head, PassStops(v, k, from), from, x.least(k), pass),
     pass_in: pass.prog.Within(site.program),
-    selects: (v: Valuation()) → (g: Gprs) → pass.file.Represents(v, g) → test.taken(g) = !v(1, exit).head_bit(),
+    next_file: File, moved: (v: Valuation()) → (s: MachineState<M>) → pass.file.Represents(v, s.gprs) →
+        next_file.Represents(v, execute_block_normal(moves, s).gprs),
+    selects: (v: Valuation()) → (g: Gprs) → next_file.Represents(v, g) → test.taken(g) = !v(1, exit).head_bit(),
     into: (v: Valuation()) → MovesInto<M>(saves, v, pass.file, typed_ids(next), registers, moves), fuel: Nat):
     fuel <= cap → (state: List<BitVec(64)>) → (now: Now) → PassesStop(Pass, PassStops, parameters, exit, next, x.ZeroAt(), fuel, state, now) →
     PlainStops<M>(x, saves, site, stack, spans, w, s0, registers, prog_len(At(prog, 0, Block(code))), x.least(fuel), state, now) {
     match fuel {
         Zero => λ capped state now ran => plain_pass_stops<M>(x, saves, site, laid, stack, spans, Pass, PassStops, w, s0, prog, code, head, registers, parameters, exit,
-            next, names, short, pass, test, moves, labels, head_ok, pass_emits, cap, pass_stops, pass_in, selects, into, 0,
+            next, names, short, pass, test, moves, labels, head_ok, pass_emits, cap, pass_stops, pass_in, next_file, moved, selects, into, 0,
             LaterStop(Pass, PassStops, parameters, exit, next, x.ZeroAt(), 0), 0,
             λ st at zero => site.claims_stop_exact(stack, x, 0, 0, prog_len(At(prog, 0, Block(code))),
                 PlainAtNow<M>(saves, site, stack, spans, w, s0, registers, st, at), at, λ r held => held.right.left,
@@ -3708,10 +3708,10 @@ theorem plain_passes_stops<M>(x: Stop, saves: Nat, site: Site<M>, laid: site.pro
                     x.reached_zero(site, stack, Running<M, Io>(r.state, r.io), j(sym(held.right.left), λ io _ => x.Zero(io), zero))⟩⟩))),
             { let low = x.least_le(0); omega }, capped, state, now, ran),
         Succ(rest) => λ capped state now ran => plain_pass_stops<M>(x, saves, site, laid, stack, spans, Pass, PassStops, w, s0, prog, code, head, registers, parameters,
-            exit, next, names, short, pass, test, moves, labels, head_ok, pass_emits, cap, pass_stops, pass_in, selects, into, Succ(rest),
+            exit, next, names, short, pass, test, moves, labels, head_ok, pass_emits, cap, pass_stops, pass_in, next_file, moved, selects, into, Succ(rest),
             LaterStop(Pass, PassStops, parameters, exit, next, x.ZeroAt(), Succ(rest)), x.least(rest),
             plain_passes_stops<M>(x, saves, site, laid, stack, spans, Pass, PassStops, w, s0, prog, code, head, registers, parameters, exit, next, names, short,
-                pass, test, moves, labels, head_ok, pass_emits, cap, pass_stops, pass_in, selects, into, rest, { omega }), x.least_succ(rest), capped, state, now, ran),
+                pass, test, moves, labels, head_ok, pass_emits, cap, pass_stops, pass_in, next_file, moved, selects, into, rest, { omega }), x.least_succ(rest), capped, state, now, ran),
     }
 }
 
@@ -3727,7 +3727,9 @@ theorem plain_loop_stops<M>(x: Stop, saves: Nat, site: Site<M>, laid: site.progr
         EmitsNow<M>(saves, site, stack, spans, v, w, s0, plain_head(prog, entry.code, names), entry.head, Pass(v, from, to), from, to, pass),
     cap: Nat, pass_stops: (v: Valuation()) → (k: Nat) → k <= cap → (from: Now) →
         StopsHeap<M>(x, saves, site, stack, spans, v, w, s0, plain_head(prog, entry.code, names), entry.head, PassStops(v, k, from), from, x.least(k), pass),
-    tested: Tested(pass.file, exit), moves: List<Instruction>, into: (v: Valuation()) → MovesInto<M>(saves, v, pass.file, typed_ids(next), registers, moves),
+    moves: List<Instruction>, next_file: File,
+    moved: (v: Valuation()) → (s: MachineState<M>) → pass.file.Represents(v, s.gprs) → next_file.Represents(v, execute_block_normal(moves, s).gprs),
+    tested: Tested(next_file, exit), into: (v: Valuation()) → MovesInto<M>(saves, v, pass.file, typed_ids(next), registers, moves),
     out: File, before: Now, fuel: Nat, capped: fuel <= cap):
     StopsHeap<M>(x, saves, site, stack, spans, values, w, s0, prog, file,
         PassesStop(Pass, PassStops, parameters, exit, next, x.ZeroAt(), fuel, words_of(values, typed_ids(inputs)), before), before, x.least(fuel),
@@ -3740,11 +3742,11 @@ theorem plain_loop_stops<M>(x: Stop, saves: Nat, site: Site<M>, laid: site.progr
     let pre = λ (g: Gprs) (m: M) => (file.Represents(values, g) ∧ facts) ∧
         (Kept(body_kept(saves), s0.gprs, g) ∧ stack.TrailBy(spans, now_in<M>(site.data, spans), w, s0.memory, before, m));
     let into_head: prog.Within(plain_head(prog, code, names)) = Exists(2, refl);
-    let pass_done: pass.prog.Within(plain_done(pass.prog, test, moves, names, short)) = Exists(8, refl);
+    let pass_done: pass.prog.Within(plain_done(pass.prog, test, moves, names, short)) = Exists(5, refl);
     ⟨Prog::within_trans(into_head, Prog::within_trans(head_pass, pass_done)),
      λ within r here resident held => {
         let labels = plain_labels<M>(site, laid, prog, code, pass.prog, test, moves, names, short, head_pass, within);
-        let pass_in: pass.prog.Within(program) = Prog::within_trans(Exists(8, refl), within);
+        let pass_in: pass.prog.Within(program) = Prog::within_trans(Exists(5, refl), within);
         let entered_in: At(prog, 0, Block(code)).Within(program) = Prog::within_trans(Exists(1, refl), Prog::within_trans(head_pass, pass_in));
         let entry_run = site.moves_block(stack.writes, program.laid_out_fits(laid), entered_in.witness, prog, 0, code, entered_in.proof,
             program.block_reads_at(laid, entered_in.witness, prog, 0, code, entered_in.proof), pre,
@@ -3756,7 +3758,7 @@ theorem plain_loop_stops<M>(x: Stop, saves: Nat, site: Site<M>, laid: site.progr
                     held_x.right.right⟩⟩
             });
         let passes = plain_passes_stops<M>(x, saves, site, laid, stack, spans, Pass, PassStops, w, s0, prog, code, entry.head, registers, parameters, exit, next,
-            names, short, pass, test, moves, labels, head_ok, pass_emits, cap, pass_stops, pass_in, tested.selects, into, fuel, capped,
+            names, short, pass, test, moves, labels, head_ok, pass_emits, cap, pass_stops, pass_in, next_file, moved, tested.selects, into, fuel, capped,
             words_of(values, typed_ids(inputs)), before, held.left.left.right);
         site.claims_after_moves(stack.writes, site.linux_kernel(stack), x.calls_from(before), x.least(fuel), prog_len(prog),
             prog_len(At(prog, 0, Block(code))), λ (u: MachineState<M>) => pre(u.gprs, u.memory),
@@ -3783,53 +3785,42 @@ theorem plain_close_stops<M>(x: Stop, saves: Nat, site: Site<M>, laid: site.prog
     let facts: Type = PassesStop(Pass, PassStops, parameters, exit, next, x.ZeroAt(), fuel, words_of(values, typed_ids(inputs)), before);
     let nexts = word_ports(typed_ids(next));
     let outs = word_ports(typed_ids(outputs));
-    match pass.file.branch_test(exit) as λ t => MayStopHeap<M>(x, saves, site, stack, spans, values, w, s0, prog, file, facts, before, x.least(fuel), match t {
+    (match pass.file.move_outputs(nexts, registers) as λ o => ((v: Valuation()) → MayKeep<M>(v, pass.file, True, o)) →
+        MayStopHeap<M>(x, saves, site, stack, spans, values, w, s0, prog, file, facts, before, x.least(fuel), match o {
             None => None,
-            Some(tested) => match pass.file.move_outputs(nexts, registers) {
-                None => None,
-                Some(moves) => match moves.file.outputs_check(nexts, registers) && leaves_all(moves.code, body_kept(saves)) {
-                    False => None,
-                    True => match input_file(outs, registers) {
-                        None => None,
-                        Some(out) => Some(Emitted(plain_done(pass.prog, tested.test, moves.code, names, short), out, pass.placement, pass.names)),
-                    },
+            Some(moves) => match moves.file.outputs_check(nexts, registers) && leaves_all(moves.code, body_kept(saves)) {
+                False => None,
+                True => match moves.file.branch_test(exit) {
+                    None => None,
+                    Some(tested) => match input_file(outs, registers) { None => None, Some(out) => Some(Emitted(plain_done(pass.prog, tested.test, moves.code, names, short), out, pass.placement, pass.names)) },
                 },
             },
         }) {
-        None => trivial,
-        Some(tested) => (match pass.file.move_outputs(nexts, registers) as λ o => ((v: Valuation()) → MayKeep<M>(v, pass.file, True, o)) →
-            MayStopHeap<M>(x, saves, site, stack, spans, values, w, s0, prog, file, facts, before, x.least(fuel), match o {
-                None => None,
-                Some(moves) => match moves.file.outputs_check(nexts, registers) && leaves_all(moves.code, body_kept(saves)) {
-                    False => None,
-                    True => match input_file(outs, registers) {
+        None => λ _ => trivial,
+        Some(moves) => λ keeps => match checked: moves.file.outputs_check(nexts, registers) && leaves_all(moves.code, body_kept(saves)) {
+            False => trivial,
+            True => {
+                let parts = Bool::is_true_and(moves.file.outputs_check(nexts, registers), leaves_all(moves.code, body_kept(saves)),
+                    is_true_of_eq(moves.file.outputs_check(nexts, registers) && leaves_all(moves.code, body_kept(saves)), checked));
+                match moves.file.branch_test(exit) as λ t => MayStopHeap<M>(x, saves, site, stack, spans, values, w, s0, prog, file, facts, before, x.least(fuel), match t {
                         None => None,
-                        Some(out) => Some(Emitted(plain_done(pass.prog, tested.test, moves.code, names, short), out, pass.placement, pass.names)),
-                    },
-                },
-            }) {
-            None => λ _ => trivial,
-            Some(moves) => λ keeps => match checked: moves.file.outputs_check(nexts, registers) && leaves_all(moves.code, body_kept(saves)) {
-                False => trivial,
-                True => {
-                    let parts = Bool::is_true_and(moves.file.outputs_check(nexts, registers), leaves_all(moves.code, body_kept(saves)),
-                        is_true_of_eq(moves.file.outputs_check(nexts, registers) && leaves_all(moves.code, body_kept(saves)), checked));
-                    (match input_file(outs, registers) as λ o =>
+                        Some(tested) => match input_file(outs, registers) { None => None, Some(out) => Some(Emitted(plain_done(pass.prog, tested.test, moves.code, names, short), out, pass.placement, pass.names)) },
+                    }) {
+                    None => trivial,
+                    Some(tested) => (match input_file(outs, registers) as λ o =>
                         ((g: Gprs) → PortsAt(values, outs, registers, g) → o.All(λ (f: File) => f.Represents(values, g))) →
-                        MayStopHeap<M>(x, saves, site, stack, spans, values, w, s0, prog, file, facts, before, x.least(fuel), match o {
-                            None => None,
-                            Some(out) => Some(Emitted(plain_done(pass.prog, tested.test, moves.code, names, short), out, pass.placement, pass.names)),
-                        }) {
+                        MayStopHeap<M>(x, saves, site, stack, spans, values, w, s0, prog, file, facts, before, x.least(fuel), match o { None => None, Some(out) => Some(Emitted(plain_done(pass.prog, tested.test, moves.code, names, short), out, pass.placement, pass.names)) }) {
                         None => λ _ => trivial,
                         Some(out) => λ out_ok => plain_loop_stops<M>(x, saves, site, laid, stack, spans, Pass, PassStops, values, w, s0, prog, file, inputs, parameters,
-                            exit, next, names, short, registers, entry, entry_ok.left, entry_ok.right, pass, pass_emits, cap, pass_stops, tested, moves.code,
+                            exit, next, names, short, registers, entry, entry_ok.left, entry_ok.right, pass, pass_emits, cap, pass_stops, moves.code, moves.file,
+                            λ v u rep => keeps(v)(u, rep, trivial), tested,
                             λ v => moves_into<M>(saves, v, pass.file, typed_ids(next), registers, moves, keeps(v), parts.left, parts.right), out,
                             before, fuel, capped),
-                    })(λ g placed => input_file_represents(values, g, outs, registers, placed))
-                },
+                    })(λ g placed => input_file_represents(values, g, outs, registers, placed)),
+                }
             },
-        })(λ v => move_outputs_keeps<M>(v, nexts, pass.file, registers)),
-    }
+        },
+    })(λ v => move_outputs_keeps<M>(v, nexts, pass.file, registers))
 }
 
 // The loop's code stopped, as `Body::emit` checks it.

@@ -840,28 +840,16 @@ theorem emit_instrs_grows(saves: Nat, instrs: List<Instr>): (prog: Prog) → (fi
 
 theorem plain_close_grows(pass: Emitted, saves: Nat, registers: List<Gpr>, exit: Nat, next, outputs: List<Nat>, names: Nat, short: List<Nat>, start: Prog,
     grown: start.Within(pass.prog)): Grows(start, pass.plain_close(saves, registers, exit, next, outputs, names, short)) {
-    match pass.file.branch_test(exit) as λ t => Grows(start, match t {
-            None => None,
-            Some(tested) => match pass.file.move_outputs(word_ports(next), registers) {
-                None => None,
-                Some(moves) => match moves.file.outputs_check(word_ports(next), registers) && leaves_all(moves.code, body_kept(saves)) {
-                    False => None,
-                    True => match input_file(word_ports(outputs), registers) {
-                        None => None,
-                        Some(out) => Some(Emitted(plain_done(pass.prog, tested.test, moves.code, names, short), out, pass.placement, pass.names)),
-                    },
-                },
-            },
-        }) {
+    match pass.file.move_outputs(word_ports(next), registers) {
         None => trivial,
-        Some(tested) => match pass.file.move_outputs(word_ports(next), registers) {
-            None => trivial,
-            Some(moves) => match moves.file.outputs_check(word_ports(next), registers) && leaves_all(moves.code, body_kept(saves)) {
-                False => trivial,
-                True => match input_file(word_ports(outputs), registers) {
+        Some(moves) => match moves.file.outputs_check(word_ports(next), registers) && leaves_all(moves.code, body_kept(saves)) {
+            False => trivial,
+            True => match moves.file.branch_test(exit) {
+                None => trivial,
+                Some(tested) => match input_file(word_ports(outputs), registers) {
                     None => trivial,
                     Some(out) => {
-                        let closed: pass.prog.Within(plain_done(pass.prog, tested.test, moves.code, names, short)) = Exists(8, refl);
+                        let closed: pass.prog.Within(plain_done(pass.prog, tested.test, moves.code, names, short)) = Exists(5, refl);
                         Prog::within_trans(grown, closed)
                     },
                 },

@@ -168,6 +168,23 @@ theorem countdown_meets_done<M>(program: Prog, lowered: countdown_program().lowe
     lower_program_meets_done<M>(countdown_program(), countdown_places(), program, lowered, fetch, data, last, origin, stack, top, spans, ends, blocks)
 }
 
+// The same loop with the next state placed in the state's register, so the
+// pass's end moves nothing (every export's loop): the exit bit's test and a
+// jump forward out where it is set, else the one jump back to the head.
+fn countdown_straight_places() → List<Place> { into([Rcx, Rax, Rcx, Rax, Rsi]) }
+
+theorem countdown_straight_lowers(): lowers(countdown_program(), countdown_straight_places()) = True { refl }
+
+theorem countdown_straight_meets_done<M>(program: Prog, lowered: countdown_program().lower(countdown_straight_places()) = Some(program),
+    fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64), stack: Stack<M>(fetch, data), top: Nat, spans: Spans,
+    ends: EmptyEnds<M>(stack.writes, spans), blocks: Blocks):
+    Site<M>(fetch, data, program, last, origin).MeetsDone(stack, spans, top, blocks.Lent(spans), depth_rooms(countdown_program().routines),
+        λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run_peak(countdown_program(), blocks, n, f, args, heap, io), 1,
+        λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run(countdown_program(), blocks, n, f, args, heap, io)) {
+    lower_program_meets_done<M>(countdown_program(), countdown_straight_places(), program, lowered, fetch, data, last, origin, stack, top, spans, ends,
+        blocks)
+}
+
 // Control: an id a pass bound, bound again after the loop, is refused: the
 // pass's ids are counted bound in the routine's scope.
 fn countdown_reusing() → Routine {
@@ -514,3 +531,20 @@ theorem echo_runs_as<M>(program: Prog, lowered: echo_program(2).lower(echo_place
         lower_program_tracks<M>(echo_program(2), echo_places(), program, lowered, fetch, data, last, origin, stack, top, spans, ends, blocks,
             depth_rooms(echo_program(2).routines), depth_rooms_lawful(echo_program(2).routines)))
 }
+
+// ---------------------------------------------------------------------------
+// Every memory node lowered by evaluation through `Program::lower` (each
+// layout premise met): a reference stored and loaded back, a word stored and
+// loaded at eight bytes and a doubleword at four, both from and at the
+// 64-bit view, and a doubleword loaded at the 32-bit view, byte-swapped and
+// stored from that view (issues/bytes-level-access-view.md).
+fn accesses() → Routine {
+    Routine([ref_id(0), ref_id(1), word_id(2)],
+        Leaf([StoreRef(0, 1), LoadRef(3, 0), Store(8, 64, 1, 2), Load(8, 64, 4, 1), Store(4, 64, 1, 4), Load(4, 64, 5, 1), Load(1, 64, 6, 1),
+            Load(4, 32, 7, 1), Compute(ByteSwap(32, 8, 7)), Store(4, 32, 1, 8)]),
+        [word_id(5)])
+}
+
+fn accesses_places() → List<Place> { into([Rax, Rax, Rax, Rax, Rax, Rax, Rcx, Rcx, Rdx, Rax, Rax]) }
+
+theorem accesses_lowers(): lowers(Program([accesses()]), accesses_places()) = True { refl }
