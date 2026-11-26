@@ -62,3 +62,41 @@ Beside it:
   - The per-row counts are in the comparison's entry.
   - Verification: `scripts/fmt --check` and `scripts/lib-closures` are clean, and `scripts/linked --check` is unchanged.
   - `HEATHER_PR_NATIVE=all scripts/test --pr`: `== suite: 4139 passed, 0 failed, 3 ignored ==`.
+- 2026-11-26: **Item 2, first attempt (01c4136), reverted (9b5a90a).** A straight tail (test; `Jcc H`; `J:`), with its proofs (`PlainTail`, a counted taken-Jcc claim).
+  - Every module and the suite were green, yet the first comparison refused every loop routine at `Program::lower`'s `laid_out()`.
+  - The assembler model (`item_lands`, `JccLands` in `x86_64_asm_runs`) lands a JCC only forward.
+  - So the proofs held under a premise no such program meets, and no test lowered such a loop by evaluation.
+  - The coordinator's rule from this, for this round and after: **an emitter form is not landed until a program using it lowers by evaluation.** That means `Program::lower` answers `Some` for it by `refl` in a probe, and the comparison runs it.
+
+  **Item 2, landed (7a56255): the tail jumps forward out and once back.**
+  - The coordinator ruled the old shape, forward only. Corrected here: the moves must come first, since an exit needs the outputs in place.
+  - The tail is now: moves; the exit bit's test negated; `Jcc J` (taken where the bit is set); `JMP H`; `J:`.
+    - A continuing pass falls through the `Jcc` and takes the one counted `JMP H` (`claims_jump_item`).
+    - One layout serves empty and non-empty moves.
+    - The test is `branch_test` on the file after the moves, which `Keeps` describes.
+    - A program whose moves overwrite the exit bit's register is now refused, where the jumped layout lowered it.
+  - std additions only, in `x86_64_asm_runs`: `ConditionCode::negate` with `negate_holds`, and `Test::negated` with `negated_taken`. A bit's `TEST` becomes `CMP r, 0` with `NE`, because `Test` has no TEST-with-JNE form; the rows' exit bits are folded comparisons.
+  - Proofs:
+    - `plain_moves_run` (the moves block, the file after them kept) feeds `plain_leaves` (out to J) and `plain_turns_claim` (round to H).
+    - `plain_step`, `plain_passes`, `plain_pass_stops` and `plain_passes_stops` take the file after the moves and its `Keeps`.
+    - `plain_close`, `plain_close_emits`, `plain_close_stops` and `plain_close_grows` move first, then test.
+    - `plain_turns` (uncounted) and `loop_turns`' use are gone, as are the old `plain_jumped` and `plain_back`.
+  - **The rule, checked over every form.** Lowering by evaluation through `Program::lower` (routines_tests), before this round:
+    - byte load and store at 64: `lend_lowers` and `echo_lowers`;
+    - `Offset`: `lend_lowers`;
+    - call: `lend_lowers` and `both_lowers`;
+    - recursive call and branch: `down_lowers`;
+    - loop with non-empty moves: `countdown_lowers`;
+    - `Sys` read and write: `echo_lowers` and `rtl_lowers`;
+    - `Exit`: `exits_lowers` and `exits_nested_lowers`.
+
+    Forms whose only evidence was `Body::emit` (no layout premise) or a theorem under `laid_out`:
+    - four- and eight-byte loads and stores;
+    - the 32-bit view;
+    - `LoadRef` and `StoreRef`;
+    - a loop with empty continuing moves.
+
+    Added: `countdown_straight_lowers`, with its done clause, and `accesses_lowers` (every memory node at both views). `Copy` has no emitter.
+  - Verification:
+    - `scripts/fmt --check` and `scripts/lib-closures` are clean, and `scripts/linked --check` is unchanged.
+    - `HEATHER_PR_NATIVE=all scripts/test --pr`: `== suite: 4139 passed, 0 failed, 3 ignored ==`.
