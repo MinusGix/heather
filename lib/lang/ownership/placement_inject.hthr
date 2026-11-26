@@ -1174,3 +1174,142 @@ theorem put_image(tys: Nat → Type, strs: Strs(tys), laid: Strs::Laid(tys, strs
         },
     }
 }
+
+// ---------------------------------------------------------------------------
+// The injection kept
+
+theorem obj_nth(tys: Nat → Type, h: level2::Heap(tys), b: Nat, o: Obj(tys), live: level2::Heap::obj(tys, h, b) = Some(o)): h.nth(b) = Some(Live(o)) {
+    (match h.nth(b) as λ v => (match v as λ _ => Option<Obj(tys)> { Some(bl) => match bl as λ _ => Option<Obj(tys)> { Live(o2) => Some(o2), Dead => None }, None => None }) = Some(o) →
+            v = Some(Live(o)) {
+        None => λ never => absurd(never),
+        Some(bl) => match bl as λ bl2 => (match bl2 as λ _ => Option<Obj(tys)> { Live(o2) => Some(o2), Dead => None }) = Some(o) → Some(bl2) = Some(Live(o)) {
+            Live(o2) => λ e => cong_fn(λ (x: Obj(tys)) => Some(Live(x)), Option::some_inj(o2, o, e)),
+            Dead => λ never => absurd(never),
+        },
+    })(live)
+}
+
+theorem obj_of_nth(tys: Nat → Type, h: level2::Heap(tys), c: Nat, bl: Block(tys), e: h.nth(c) = Some(bl)):
+    level2::Heap::obj(tys, h, c) = (match bl as λ _ => Option<Obj(tys)> { Live(o2) => Some(o2), Dead => None }) {
+    cong_fn(λ (v: Option<Block(tys)>) => match v as λ _ => Option<Obj(tys)> { Some(bl2) => match bl2 as λ _ => Option<Obj(tys)> { Live(o2) => Some(o2), Dead => None }, None => None }, e)
+}
+
+theorem obj_update_other(tys: Nat → Type, h: level2::Heap(tys), b: Nat, f: Block(tys) → Block(tys), c: Nat, ne: ¬(c = b)):
+    level2::Heap::obj(tys, h.update(b, f), c) = level2::Heap::obj(tys, h, c) {
+    cong_fn(λ (v: Option<Block(tys)>) => match v as λ _ => Option<Obj(tys)> { Some(bl2) => match bl2 as λ _ => Option<Obj(tys)> { Live(o2) => Some(o2), Dead => None }, None => None },
+        h.nth_update_other(b, f, c, ne))
+}
+
+// A block stored: live with the new value and its holes; the others as they were.
+theorem obj_store(tys: Nat → Type, h: level2::Heap(tys), b: Nat, o: Obj(tys), live: level2::Heap::obj(tys, h, b) = Some(o), d: Dyn(tys), c: Nat, o2: Obj(tys),
+    after: level2::Heap::obj(tys, run::Heap::store(tys, h, b, d), c) = Some(o2)): ((c = b) ∧ (o2 = Obj(d, o.holes))) ∨ ((¬(c = b)) ∧ (level2::Heap::obj(tys, h, c) = Some(o2))) {
+    match Nat::dec(c, b) {
+        Inl(e) => {
+            let f = λ (bl: Block(tys)) => match bl as λ _ => Block(tys) { Live(o3) => Live(Obj(d, o3.holes)), Dead => Dead };
+            let here = h.nth_update_here(b, f, Live(o), obj_nth(tys, h, b, o, live));
+            let ob = obj_of_nth(tys, h.update(b, f), b, Live(Obj(d, o.holes)), here);
+            Inl(⟨e, sym(Option::some_inj(Obj(d, o.holes), o2, trans(sym(ob), trans(cong_fn(λ (m: Nat) => level2::Heap::obj(tys, run::Heap::store(tys, h, b, d), m), sym(e)), after))))⟩)
+        },
+        Inr(ne) => Inr(⟨ne, trans(sym(obj_update_other(tys, h, b, λ (bl: Block(tys)) => match bl as λ _ => Block(tys) { Live(o3) => Live(Obj(d, o3.holes)), Dead => Dead }, c, ne)), after)⟩),
+    }
+}
+
+// A block killed: no longer live; the others as they were.
+theorem obj_kill(tys: Nat → Type, h: level2::Heap(tys), b, c: Nat, o2: Obj(tys), after: level2::Heap::obj(tys, run::Heap::kill(tys, h, b), c) = Some(o2)):
+    (¬(c = b)) ∧ (level2::Heap::obj(tys, h, c) = Some(o2)) {
+    match Nat::dec(c, b) {
+        Inl(e) => {
+            let at = h.nth_update_map(b, λ (_: Block(tys)) => Dead);
+            let none: (level2::Heap::obj(tys, run::Heap::kill(tys, h, b), b) = None) =
+                (match h.nth(b) as λ v => (h.update(b, λ (_: Block(tys)) => Dead)).nth(b) = v.map(λ (_: Block(tys)) => Dead) → level2::Heap::obj(tys, run::Heap::kill(tys, h, b), b) = None {
+                    None => λ e2 => cong_fn(λ (v: Option<Block(tys)>) => match v as λ _ => Option<Obj(tys)> { Some(bl2) => match bl2 as λ _ => Option<Obj(tys)> { Live(o3) => Some(o3), Dead => None }, None => None }, e2),
+                    Some(_) => λ e2 => cong_fn(λ (v: Option<Block(tys)>) => match v as λ _ => Option<Obj(tys)> { Some(bl2) => match bl2 as λ _ => Option<Obj(tys)> { Live(o3) => Some(o3), Dead => None }, None => None }, e2),
+                })(at);
+            absurd(trans(sym(none), trans(cong_fn(λ (m: Nat) => level2::Heap::obj(tys, run::Heap::kill(tys, h, b), m), sym(e)), after)))
+        },
+        Inr(ne) => ⟨ne, trans(sym(obj_update_other(tys, h, b, λ (_: Block(tys)) => Dead, c, ne)), after)⟩,
+    }
+}
+
+// A death keeps the injection.
+theorem injects_kill(tys: Nat → Type, strs: Strs(tys), inj: Nat → Nat, h: level2::Heap(tys), hb: x86_64_memory_contract::Heap, hi: HeapInjects(tys, strs, inj, h, hb), b: Nat):
+    HeapInjects(tys, strs, inj, run::Heap::kill(tys, h, b), hb) {
+    ⟨λ c o2 after => hi.left(c, o2, (obj_kill(tys, h, b, c, o2, after)).right),
+     λ c1 c2 o1 o2 a1 a2 same => hi.right(c1, c2, o1, o2, (obj_kill(tys, h, b, c1, o1, a1)).right, (obj_kill(tys, h, b, c2, o2, a2)).right, same)⟩
+}
+
+// What a clearing leaves was there.
+theorem mem_cleared(b, k, n: Nat, e: Pointer, shadow: List<Pointer>): Mem(e, cleared(shadow, b, k, n)) → Mem(e, shadow) {
+    match shadow {
+        Nil => λ m => m,
+        Cons(e0, rest) => (match e0.overlaps(b, k, n) as λ v => Mem(e, match v { True => cleared(rest, b, k, n), False => Cons(e0, cleared(rest, b, k, n)) }) → Mem(e, Cons(e0, rest)) {
+            True => λ m => Inr(mem_cleared(b, k, n, e, rest, m)),
+            False => λ m => match m { Inl(here) => Inl(here), Inr(there) => Inr(mem_cleared(b, k, n, e, rest, there)) },
+        }),
+    }
+}
+
+// A store of plain bytes inside one live block, of the bytes the block's
+// new value encodes to there, keeps the injection.
+theorem injects_store(tys: Nat → Type, strs: Strs(tys), inj: Nat → Nat, h: level2::Heap(tys), hb: x86_64_memory_contract::Heap, hi: HeapInjects(tys, strs, inj, h, hb),
+    b: Nat, o: Obj(tys), live: level2::Heap::obj(tys, h, b) = Some(o), d: Dyn(tys), r: Nat, ys: List<BitVec(8)>, fits: r + ys.len() <= hb.bytes(inj(b)).len(),
+    enc: Dyn::encode(tys, strs, d) = Some(hb.bytes(inj(b)).put_window(r, ys))):
+    HeapInjects(tys, strs, inj, run::Heap::store(tys, h, b, d), hb.placed(x86_64_memory_contract::Loc(inj(b), r), Piece::plain(ys))) {
+    let loc = x86_64_memory_contract::Loc(inj(b), r);
+    let hb2 = hb.placed(loc, Piece::plain(ys));
+    let undef = λ (c: Nat) (none: (j: Nat) → hb.undefined(c, j) = False) (jj: Nat) => {
+        let cf: (hb2.undefined(c, jj) = hb.undefined(c, jj) && !within(inj(b), r, ys.len(), c, jj)) = cleared_flags(hb.flags, inj(b), r, ys.len(), c, jj);
+        trans(cf, cong_fn(λ (x: Bool) => x && !within(inj(b), r, ys.len(), c, jj), none(jj)))
+    };
+    let shadow = λ (c: Nat) (np: Heap::NoPointerIn(hb, c)) => λ (e: Pointer) (m: Mem(e, hb2.shadow)) => np(e, mem_cleared(inj(b), r, ys.len(), e, hb.shadow, m));
+    ⟨λ c o2 after => match obj_store(tys, h, b, o, live, d, c, o2, after) {
+        Inl(here) => {
+            let old = hi.left(b, o, live);
+            let bytes: (hb2.bytes(inj(b)) = hb.bytes(inj(b)).put_window(r, ys)) =
+                trans(hb.placed_bytes(loc, Piece::plain(ys), fits, inj(b)), set_block_here(λ (dd: Nat) => hb.bytes(dd), inj(b), hb.bytes(inj(b)).put_window(r, ys)));
+            j(sym(here.left), λ c2 _ => (o2.holes = Nil) ∧ ((Dyn::encode(tys, strs, o2.val) = Some(hb2.bytes(inj(c2)))) ∧ (((jj: Nat) → hb2.undefined(inj(c2), jj) = False) ∧ Heap::NoPointerIn(hb2, inj(c2)))),
+                j(sym(here.right), λ o3 _ => (o3.holes = Nil) ∧ ((Dyn::encode(tys, strs, o3.val) = Some(hb2.bytes(inj(b)))) ∧ (((jj: Nat) → hb2.undefined(inj(b), jj) = False) ∧ Heap::NoPointerIn(hb2, inj(b)))),
+                    ⟨old.left, ⟨trans(enc, cong_fn(λ (l: List<BitVec(8)>) => Some(l), sym(bytes))), ⟨undef(inj(b), old.right.right.left), shadow(inj(b), old.right.right.right)⟩⟩⟩))
+        },
+        Inr(other) => {
+            let old = hi.left(c, o2, other.right);
+            let apart: (inj(c) ≠ inj(b)) = λ e => other.left(hi.right(c, b, o2, o, other.right, live, e));
+            let bytes: (hb2.bytes(inj(c)) = hb.bytes(inj(c))) =
+                trans(hb.placed_bytes(loc, Piece::plain(ys), fits, inj(c)), set_block_other(λ (dd: Nat) => hb.bytes(dd), inj(b), hb.bytes(inj(b)).put_window(r, ys), inj(c), apart));
+            ⟨old.left, ⟨trans(old.right.left, cong_fn(λ (l: List<BitVec(8)>) => Some(l), sym(bytes))), ⟨undef(inj(c), old.right.right.left), shadow(inj(c), old.right.right.right)⟩⟩⟩
+        },
+    },
+     λ c1 c2 o1 o2 a1 a2 same => {
+        let back = λ (c: Nat) (oc: Obj(tys)) (ac: level2::Heap::obj(tys, run::Heap::store(tys, h, b, d), c) = Some(oc)) => match obj_store(tys, h, b, o, live, d, c, oc, ac) as λ _ => Exists<Obj(tys)>(λ o4 => level2::Heap::obj(tys, h, c) = Some(o4)) {
+            Inl(here) => Exists(o, trans(cong_fn(λ (m: Nat) => level2::Heap::obj(tys, h, m), here.left), live)),
+            Inr(other) => Exists(oc, other.right),
+        };
+        let l1 = back(c1, o1, a1);
+        let l2 = back(c2, o2, a2);
+        hi.right(c1, c2, l1.witness, l2.witness, l1.proof, l2.proof, same)
+     }⟩
+}
+
+// A store at one place leaves the bytes of a place apart from it: in another
+// block, or before or after it in the same one.
+theorem window_kept(hb: x86_64_memory_contract::Heap, b, r: Nat, ys: List<BitVec(8)>, fits: r + ys.len() <= hb.bytes(b).len(), c, a, e: Nat,
+    apart: (¬(c = b)) ∨ ((e <= r) ∨ (r + ys.len() <= a))):
+    (hb.placed(x86_64_memory_contract::Loc(b, r), Piece::plain(ys)).bytes(c)).window(a, e) = (hb.bytes(c)).window(a, e) {
+    let at = hb.placed_bytes(x86_64_memory_contract::Loc(b, r), Piece::plain(ys), fits, c);
+    match Nat::dec(c, b) {
+        Inr(ne) => cong_fn(λ (l: List<BitVec(8)>) => l.window(a, e), trans(at, set_block_other(λ (dd: Nat) => hb.bytes(dd), b, hb.bytes(b).put_window(r, ys), c, ne))),
+        Inl(same) => {
+            let here: (hb.placed(x86_64_memory_contract::Loc(b, r), Piece::plain(ys)).bytes(c) = hb.bytes(c).put_window(r, ys)) =
+                trans(at, j(same, λ x _ => set_block(λ (dd: Nat) => hb.bytes(dd), x, hb.bytes(x).put_window(r, ys), c) = hb.bytes(c).put_window(r, ys),
+                    set_block_here(λ (dd: Nat) => hb.bytes(dd), c, hb.bytes(c).put_window(r, ys))));
+            let inside: (r <= (hb.bytes(c)).len()) = j(sym(same), λ x _ => r <= (hb.bytes(x)).len(), omega(fits));
+            trans(cong_fn(λ (l: List<BitVec(8)>) => l.window(a, e), here), match apart {
+                Inl(ne) => false_elim(ne(same)),
+                Inr(sides) => match sides {
+                    Inl(before) => (hb.bytes(c)).window_put_window_before(r, ys, a, e, before, inside),
+                    Inr(after) => (hb.bytes(c)).window_put_window_after(r, ys, a, e, omega(after), inside),
+                },
+            })
+        },
+    }
+}
