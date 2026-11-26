@@ -14354,3 +14354,66 @@ theorem Inv::put_view(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(tys, cx.strs
     Inv::store_rest(tys, strs, sl, inv, none, pe.obj, r0, rt0, Inr(Exists(pe, ⟨pmem, ⟨refl, pw⟩⟩)), nwb, ob, hv, ff, hb, fr0, k2.left, k2.right, s1.up(tys, strs, e2, l, nl), us,
         λ k ir => Sim::plain_same(tys, strs, sim, us, refl, k, (inv.words(k, ir)).left, (inv.words(k, ir)).right))
 }
+
+// The meaning after one written argument's value is put: its variable set to
+// it, its chain written up.
+fn CSt::put_mean(self s: CSt, tys: Nat → Type, strs: Strs(tys), e: Env(tys), x: Var, l: Nat, o: Dyn(tys)) → Env(tys) {
+    s.up(tys, strs, Env::set(tys, e, x, λ d => Dyn::write(tys, strs, Env::ixs(tys, e), Nil<Step>(), λ _ => o, d)), l, s.na + s.nd)
+}
+
+theorem Inv::put_view_mean(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(tys, cx.strs), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>}, inv: Inv(tys, cx.strs, s, e, m, h0, lent),
+    none: s.pending() = False, x: Var, l: Nat, hl: s.lvl(x) = Some(l), hr2: s.role(l) = KView, nrf: s.in_regions(l) = False,
+    pe: VEnt, hents: s.ents(l) = [pe], pw: pe.mode.writes() = True,
+    desc: (ey: VEnt) → Mem(ey, s.views) → ey.obj = pe.obj → ¬(ey.lvl = l) → l.member(s.anc_of(ey, s.na + s.nd)) = True →
+        Sel::Apart(tys, cx.strs, Steps::sels(s.unsteps(ey.reg), Mach::ixs(tys, cx.strs, m)), Steps::sels(s.unsteps(pe.reg), Mach::ixs(tys, cx.strs, m)) ++ Nil<Sel>()),
+    r0: Ref, rt0: inv.root(pe.obj) = Some(r0), ob: Dyn(tys), hv: Heap::val(tys, cx.strs, m.heap, r0.b) = Some(ob),
+    cv2: (REnv::get(tys, m.env, x)).v = Refer(r0.narrow(Mach::ixs(tys, cx.strs, m), s.unsteps(pe.reg))),
+    fr: Sel::fit(tys, cx.strs, r0.sels ++ Steps::sels(s.unsteps(pe.reg), Mach::ixs(tys, cx.strs, m)), ob) = True,
+    rdo: Sel::read_at(tys, cx.strs, r0.sels ++ Steps::sels(s.unsteps(pe.reg), Mach::ixs(tys, cx.strs, m)), ob) = Env::get(tys, e, x),
+    o: Dyn(tys), oc: o.code = (Env::get(tys, e, x)).code, ol: Dyn::len(tys, cx.strs, o) = Dyn::len(tys, cx.strs, Env::get(tys, e, x))):
+    Inv(tys, cx.strs, s, s.put_mean(tys, cx.strs, e, x, l, o),
+        Mach(Heap::store(tys, m.heap, r0.b, Sel::write_at(tys, cx.strs, (r0.sels ++ Steps::sels(s.unsteps(pe.reg), Mach::ixs(tys, cx.strs, m))) ++ Nil<Sel>(), λ _ => o, ob)), m.env, m.io), h0, lent)
+{
+    let e2 = Env::set(tys, e, x, λ d => Dyn::write(tys, cx.strs, Env::ixs(tys, e), Nil<Step>(), λ _ => o, d));
+    j(CSt::up_rekin(s.na + s.nd, s, tys, cx.strs, λ (y: VEnt) => y.unbacked(l), λ y => y.unbacked_kin(l), Cons(l, s.touched), Cons(l, s.wrote), e2, l),
+        λ z _ => Inv(tys, cx.strs, s, z, Mach(Heap::store(tys, m.heap, r0.b, Sel::write_at(tys, cx.strs, (r0.sels ++ Steps::sels(s.unsteps(pe.reg), Mach::ixs(tys, cx.strs, m))) ++ Nil<Sel>(), λ _ => o, ob)), m.env, m.io), h0, lent),
+        Inv::put_view(tys, cx, sl, inv, none, x, l, hl, hr2, nrf, pe, hents, pw, desc, r0, rt0, ob, hv, cv2, fr, rdo, o, oc, ol))
+}
+
+// A holder's case: the holder write (`Inv::store`) of the whole place; its
+// chain is itself.
+theorem Inv::put_hold(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(tys, cx.strs), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>}, inv: Inv(tys, cx.strs, s, e, m, h0, lent),
+    none: s.pending() = False, x: Var, l: Nat, hl: s.lvl(x) = Some(l), nrf: s.in_regions(l) = False, ob_o: Nat, a: Acc, hr: s.role(l) = KHold(ob_o, a), aw: a.writes() = True,
+    r: Ref, cr: (REnv::get(tys, m.env, x)).v = Refer(r), old: Dyn(tys), hv: Heap::val(tys, cx.strs, m.heap, r.b) = Some(old), fr: Sel::fit(tys, cx.strs, r.sels, old) = True,
+    rdo: Sel::read_at(tys, cx.strs, r.sels, old) = Env::get(tys, e, x),
+    o: Dyn(tys), oc: o.code = (Env::get(tys, e, x)).code, ol: Dyn::len(tys, cx.strs, o) = Dyn::len(tys, cx.strs, Env::get(tys, e, x)),
+    lic: (en: VEnt) → Mem(en, s.views) → en.obj = ob_o → Sel::Apart(tys, cx.strs, Steps::sels(s.unsteps(en.reg), Mach::ixs(tys, cx.strs, m)), Nil<Sel>())):
+    Inv(tys, cx.strs, s, s.put_mean(tys, cx.strs, e, x, l, o), Mach(Heap::store(tys, m.heap, r.b, Sel::write_at(tys, cx.strs, r.sels ++ Nil<Sel>(), λ _ => o, old)), m.env, m.io), h0, lent)
+{
+    let strs = cx.strs;
+    let sim = Inv::sim_now(tys, strs, inv, none);
+    let g = λ (_: Dyn(tys)) => o;
+    let ws = Env::ixs(tys, e);
+    let f = λ (d: Dyn(tys)) => Dyn::write(tys, strs, ws, Nil<Step>(), g, d);
+    let ss = Nil<Sel>();
+    let nw = Sel::write_at(tys, strs, r.sels ++ ss, g, old);
+    let ff = λ (y: Dyn(tys)) => Sel::write_at(tys, strs, ss, g, y);
+    let hb: (nw = Sel::write_at(tys, strs, r.sels, ff, old)) = Sel::write_append(tys, strs, r.sels, ss, g, old);
+    let hc: ((g(Sel::read_at(tys, strs, ss, Sel::read_at(tys, strs, r.sels, old)))).code = (Sel::read_at(tys, strs, ss, Sel::read_at(tys, strs, r.sels, old))).code) =
+        j(sym(rdo), λ t _ => o.code = (Sel::read_at(tys, strs, ss, t)).code, oc);
+    let hln: (Dyn::len(tys, strs, g(Sel::read_at(tys, strs, ss, Sel::read_at(tys, strs, r.sels, old)))) = Dyn::len(tys, strs, Sel::read_at(tys, strs, ss, Sel::read_at(tys, strs, r.sels, old)))) =
+        j(sym(rdo), λ t _ => Dyn::len(tys, strs, o) = Dyn::len(tys, strs, Sel::read_at(tys, strs, ss, t)), ol);
+    let wk = Sel::write_keeps(tys, strs, sl, g, ss, Sel::read_at(tys, strs, r.sels, old), hc, hln);
+    let wg = Sel::write_get(tys, strs, sl, ff, r.sels, old, fr, wk.left, wk.right);
+    let fx: (ff(Env::get(tys, e, x)) = f(Env::get(tys, e, x))) = sym(Steps::write_sels(tys, strs, ws, Nil<Step>(), g, Env::get(tys, e, x)));
+    let agr: (Sel::get(tys, strs, r.sels, nw) = Some(f(Env::get(tys, e, x)))) =
+        trans(cong_fn(λ (t: Dyn(tys)) => Sel::get(tys, strs, r.sels, t), hb),
+            trans(Sel::get_fit(tys, strs, r.sels, Sel::write_at(tys, strs, r.sels, ff, old), wg.left), cong_fn(λ (t: Dyn(tys)) => Some(t), trans(wg.right, trans(cong_fn(ff, rdo), fx)))));
+    let code: ((f(Env::get(tys, e, x))).code = (s.var(l)).code) = trans(cong_fn(λ (t: Dyn(tys)) => t.code, sym(fx)), trans(oc, sim.codes(x, l, hl)));
+    let away = λ (q: List<Sel>) (ap: Sel::Apart(tys, strs, r.sels, q)) => Sel::get_apart(tys, strs, r.sels ++ ss, q, Sel::apart_ext_l(tys, strs, r.sels, ss, q, ap), g, old);
+    let under = λ (vs: List<Sel>) (ap: Sel::Apart(tys, strs, vs, ss)) => Sel::get_under(tys, strs, sl, r.sels, ss, vs, ap, g, old, fr, hc, hln);
+    let iv = Inv::store(tys, strs, sl, inv, none, x, l, hl, nrf, ob_o, a, hr, aw, r, cr, old, hv, ss, nw, f, agr, code, away, ff, hb, fr, wk.left, wk.right, under, lic);
+    let e2 = Env::set(tys, e, x, f);
+    let un: (s.put_mean(tys, strs, e, x, l, o) = e2) = CSt::up_nil(s.na + s.nd, s, tys, strs, e2, l, s.ents_hold_nil(λ en me => (inv.vents(en, me)).right.right, l, ob_o, a, hr));
+    j(sym(un), λ z _ => Inv(tys, strs, s, z, Mach(Heap::store(tys, m.heap, r.b, nw), m.env, m.io), h0, lent), iv)
+}
