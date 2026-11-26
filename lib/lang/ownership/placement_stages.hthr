@@ -99,7 +99,7 @@ theorem holds_agree(tys: Nat → Type, strs: Strs(tys), inj: Nat → Nat, h: lev
         Nil => λ _ cs hs => hs,
         Cons(s, sr) => λ b cs => (match cs as λ c2 => SlotsHold(tys, strs, inj, h, Cons(s, sr), c2, l) → SlotsHold(tys, strs, inj, h, Cons(s, sr), c2, l2) {
             Nil => λ hs => hs,
-            Cons(c, cr) => λ hs => ⟨⟨trans(read_values_agree(l, l2, next, a, s.ids, b(0, s, refl)), hs.left.left), hs.left.right⟩,
+            Cons(c, cr) => λ hs => ⟨λ live => ⟨trans(read_values_agree(l, l2, next, a, s.ids, b(0, s, refl)), (hs.left(live)).left), (hs.left(live)).right⟩,
                 holds_agree(tys, strs, inj, h, l, l2, next, a, sr, λ k s2 e2 => b(Succ(k), s2, e2), cr, hs.right)⟩,
         }),
     }
@@ -234,7 +234,7 @@ theorem lit_goal(tys: Nat → Type, strs: Strs(tys), fns: Nat → Func, call: Ca
         let lowered: (value_lower(tys, strs, inj, m.heap, cell.v) = Some([x86_64_call_contract::Word(BitVec::ofNat(v))])) =
             trans(cong_fn(λ (z: Option<Nat>) => match z as λ _ => Option<List<x86_64_call_contract::Value>> { Some(_) => Some([x86_64_call_contract::Word(BitVec::ofNat((BitVec::ofNat(n, n := b)).toNat()))]), None => None }, sz),
                 cong_fn(λ (x: Nat) => Some([x86_64_call_contract::Word(BitVec::ofNat(x))]), BitVec::toNat_ofNat_mod(b, n)));
-        let sh: SlotHolds(tys, strs, inj, m.heap, PSlot(SWord(WBits(b)), [word_id(next)], PNone, False), cell, l2) = ⟨trans(read, sym(lowered)), refl⟩;
+        let sh: SlotHolds(tys, strs, inj, m.heap, PSlot(SWord(WBits(b)), [word_id(next)], PNone, False), cell, l2) = λ _ => ⟨trans(read, sym(lowered)), refl⟩;
         Inr(Exists(Mach::push(tys, m, cell), ⟨λ k => refl, Exists(Config(l2, c.memory, c.io), ⟨refl,
             rel_push(tys, strs, inj, blocks, e, m, c, next, rel, l2, Locals::agree_set(c.locals, next, λ (w: Nat) => BitVec::ofNat(v), next, { omega }),
                 PSlot(SWord(WBits(b)), [word_id(next)], PNone, False), cell, next + 1, { omega }, one_below(next), sh, λ no => absurd(no))⟩)⟩))
@@ -255,4 +255,94 @@ theorem stage_lit(tys: Nat → Type, strs: Strs(tys), sigs: Nat → Sig, prim: N
                 λ o2 _ => LeafGoal(tys, strs, fns, call, blocks, Stmt::Lit(WBits(b), n), e, next, o2), lit_goal(tys, strs, fns, call, blocks, b, n, sz0, sz, e, next)),
         })(hp2),
     })(hp)
+}
+
+// ---------------------------------------------------------------------------
+// `Death`: no code; level 2 kills an owner's block
+
+theorem holds_map(tys: Nat → Type, strs: Strs(tys), inj: Nat → Nat, h1, h2: level2::Heap(tys), l1, l2: Locals,
+    f: (s: PSlot) → (c: Cell(tys)) → SlotHolds(tys, strs, inj, h1, s, c, l1) → SlotHolds(tys, strs, inj, h2, s, c, l2), ss: List<PSlot>):
+    (cs: List<Cell(tys)>) → SlotsHold(tys, strs, inj, h1, ss, cs, l1) → SlotsHold(tys, strs, inj, h2, ss, cs, l2)
+{
+    match ss {
+        Nil => λ cs hs => hs,
+        Cons(s, sr) => λ cs => (match cs as λ c2 => SlotsHold(tys, strs, inj, h1, Cons(s, sr), c2, l1) → SlotsHold(tys, strs, inj, h2, Cons(s, sr), c2, l2) {
+            Nil => λ hs => hs,
+            Cons(c, cr) => λ hs => ⟨f(s, c, hs.left), holds_map(tys, strs, inj, h1, h2, l1, l2, f, sr, cr, hs.right)⟩,
+        }),
+    }
+}
+
+// The relation after a kill, at the same configuration.
+theorem rel_kill(tys: Nat → Type, strs: Strs(tys), inj: Nat → Nat, blocks: Blocks, e: PEnv, m: Mach(tys), c: Config, next: Nat,
+    rel: StageRel(tys, strs, inj, blocks, e, m, c, next), b: Nat): StageRel(tys, strs, inj, blocks, e, Mach(run::Heap::kill(tys, m.heap, b), m.env, m.io), c, next)
+{
+    ⟨injects_kill(tys, strs, inj, m.heap, c.memory, rel.left, b), ⟨rel.right.left,
+        ⟨holds_map(tys, strs, inj, m.heap, run::Heap::kill(tys, m.heap, b), c.locals, c.locals,
+            λ s cl hs => slot_kill(tys, strs, inj, m.heap, c.memory, rel.left, b, s, cl, c.locals, hs), e.vars, m.env.args ++ m.env.locs.rev(), rel.right.right.left),
+        ⟨rel.right.right.right.left, ⟨rel.right.right.right.right.left, rel.right.right.right.right.right⟩⟩⟩⟩⟩
+}
+
+// The run of a death, as `Stmt::run` spells it.
+fn death_go(tys: Nat → Type, m: Mach(tys), k: Mach(tys) → level2::Ran(tys), st: List<Step>, v: level2::Value(tys), own: Bool) → level2::Ran(tys) {
+    match st {
+        Cons(_, _) => k(m),
+        Nil => match own {
+            False => k(m),
+            True => match v {
+                Plain(_) => k(m),
+                Refer(r) => match level2::Heap::obj(tys, m.heap, r.b) { Some(_) => k(Mach(run::Heap::kill(tys, m.heap, r.b), m.env, m.io)), None => level2::Stuck },
+            },
+        },
+    }
+}
+
+// Stuck, or the machine as it was, or a block killed: for every continuation.
+fn DeathRuns(tys: Nat → Type, m: Mach(tys), st: List<Step>, v: level2::Value(tys), own: Bool) → Type {
+    ((k: Mach(tys) → level2::Ran(tys)) → death_go(tys, m, k, st, v, own) = level2::Stuck) ∨
+        (((k: Mach(tys) → level2::Ran(tys)) → death_go(tys, m, k, st, v, own) = k(m)) ∨
+            Exists<Nat>(λ b => (k: Mach(tys) → level2::Ran(tys)) → death_go(tys, m, k, st, v, own) = k(Mach(run::Heap::kill(tys, m.heap, b), m.env, m.io))))
+}
+
+theorem death_cases(tys: Nat → Type, m: Mach(tys), st: List<Step>, v: level2::Value(tys), own: Bool): DeathRuns(tys, m, st, v, own) {
+    match st {
+        Cons(_, _) => Inr(Inl(λ k => refl)),
+        Nil => match own {
+            False => Inr(Inl(λ k => refl)),
+            True => match v {
+                Plain(_) => Inr(Inl(λ k => refl)),
+                Refer(r) => (match level2::Heap::obj(tys, m.heap, r.b) as λ ob =>
+                        ((k: Mach(tys) → level2::Ran(tys)) → (match ob { Some(_) => k(Mach(run::Heap::kill(tys, m.heap, r.b), m.env, m.io)), None => level2::Stuck }) = level2::Stuck) ∨
+                        (((k: Mach(tys) → level2::Ran(tys)) → (match ob { Some(_) => k(Mach(run::Heap::kill(tys, m.heap, r.b), m.env, m.io)), None => level2::Stuck }) = k(m)) ∨
+                            Exists<Nat>(λ b => (k: Mach(tys) → level2::Ran(tys)) →
+                                (match ob { Some(_) => k(Mach(run::Heap::kill(tys, m.heap, r.b), m.env, m.io)), None => level2::Stuck }) = k(Mach(run::Heap::kill(tys, m.heap, b), m.env, m.io)))) {
+                    Some(_) => Inr(Inr(Exists(r.b, λ k => refl))),
+                    None => Inl(λ k => refl),
+                }),
+            },
+        },
+    }
+}
+
+theorem death_goal(tys: Nat → Type, strs: Strs(tys), fns: Nat → Func, call: Caller(tys), blocks: Blocks, p: body::Place, e: PEnv, next: Nat):
+    LeafGoal(tys, strs, fns, call, blocks, Death(p), e, next, SOut(leaf(Nil), e, next))
+{
+    λ inj m c rel => {
+        let cl = REnv::get(tys, m.env, p.root);
+        match death_cases(tys, m, p.steps, cl.v, cl.own) {
+            Inl(stuck) => Inl(stuck),
+            Inr(more) => match more {
+                Inl(same) => Inr(Exists(m, ⟨same, Exists(c, ⟨refl, rel⟩)⟩)),
+                Inr(killed) => Inr(Exists(Mach(run::Heap::kill(tys, m.heap, killed.witness), m.env, m.io),
+                    ⟨killed.proof, Exists(c, ⟨refl, rel_kill(tys, strs, inj, blocks, e, m, c, next, rel, killed.witness)⟩)⟩)),
+            },
+        }
+    }
+}
+
+theorem stage_death(tys: Nat → Type, strs: Strs(tys), sigs: Nat → Sig, prim: Nat → Bool, fns: Nat → Func, call: Caller(tys), blocks: Blocks):
+    StageDeath(tys, strs, sigs, prim, fns, call, blocks)
+{
+    λ p e next o hp => j(Option::some_inj(SOut(leaf(Nil), e, next), o, hp), λ o2 _ => LeafGoal(tys, strs, fns, call, blocks, Death(p), e, next, o2),
+        death_goal(tys, strs, fns, call, blocks, p, e, next))
 }

@@ -1177,6 +1177,53 @@ theorem injects_kill(tys: Nat → Type, strs: Strs(tys), inj: Nat → Nat, h: le
      λ c1 c2 o1 o2 a1 a2 same => hi.right(c1, c2, o1, o2, (obj_kill(tys, h, b, c1, o1, a1)).right, (obj_kill(tys, h, b, c2, o2, a2)).right, same)⟩
 }
 
+// A block of no holes reads as its value, through any heap at any fuel.
+theorem fill_nil(tys: Nat → Type, strs: Strs(tys), h: level2::Heap(tys), n: Nat, d: Dyn(tys)): Obj::fill(tys, strs, h, n, d, Nil) = Some(d) { match n { Zero => refl, Succ(_) => refl } }
+
+theorem read_no_holes(tys: Nat → Type, strs: Strs(tys), h: level2::Heap(tys), n: Nat, o: Obj(tys), nh: o.holes = Nil): Obj::read(tys, strs, h, n, o) = Some(o.val) {
+    j(sym(nh), λ hs _ => Obj::fill(tys, strs, h, n, o.val, hs) = Some(o.val), fill_nil(tys, strs, h, n, o.val))
+}
+
+// A block live after a kill reads as it did.
+theorem val_kill(tys: Nat → Type, strs: Strs(tys), inj: Nat → Nat, h: level2::Heap(tys), hb: x86_64_memory_contract::Heap, hi: HeapInjects(tys, strs, inj, h, hb), b, c: Nat,
+    o2: Obj(tys), after: level2::Heap::obj(tys, run::Heap::kill(tys, h, b), c) = Some(o2)): run::Heap::val(tys, strs, run::Heap::kill(tys, h, b), c) = run::Heap::val(tys, strs, h, c)
+{
+    let ok = obj_kill(tys, h, b, c, o2, after);
+    let nh = (hi.left(c, o2, ok.right)).left;
+    let h2 = run::Heap::kill(tys, h, b);
+    trans(cong_fn(λ (ob: Option<Obj(tys)>) => match ob as λ _ => Option<Dyn(tys)> { Some(o) => Obj::read(tys, strs, h2, h2.len(), o), None => None }, after),
+        trans(read_no_holes(tys, strs, h2, h2.len(), o2, nh),
+            sym(trans(cong_fn(λ (ob: Option<Obj(tys)>) => match ob as λ _ => Option<Dyn(tys)> { Some(o) => Obj::read(tys, strs, h, h.len(), o), None => None }, ok.right),
+                read_no_holes(tys, strs, h, h.len(), o2, nh)))))
+}
+
+// A death keeps every slot holding: one over the killed block now
+// constrains nothing, one over another block reads as it did (§25.9, F7).
+theorem slot_kill(tys: Nat → Type, strs: Strs(tys), inj: Nat → Nat, h: level2::Heap(tys), hb: x86_64_memory_contract::Heap, hi: HeapInjects(tys, strs, inj, h, hb), b: Nat,
+    s: PSlot, c: Cell(tys), l: Locals, hs: SlotHolds(tys, strs, inj, h, s, c, l)): SlotHolds(tys, strs, inj, run::Heap::kill(tys, h, b), s, c, l)
+{
+    let h2 = run::Heap::kill(tys, h, b);
+    (match c.v as λ v => (value_live(tys, h, v) = True → (read_values(s.ids, l) = value_lower(tys, strs, inj, h, v)) ∧
+                ((Value::get(tys, strs, h, v, Nil)).map(λ (d: Dyn(tys)) => d.code) = Some(s.code))) →
+            (value_live(tys, h2, v) = True → (read_values(s.ids, l) = value_lower(tys, strs, inj, h2, v)) ∧
+                ((Value::get(tys, strs, h2, v, Nil)).map(λ (d: Dyn(tys)) => d.code) = Some(s.code))) {
+        Plain(_) => λ p => p,
+        Refer(r) => λ p live2 => (match ob: level2::Heap::obj(tys, h2, r.b) as λ o => o.is_some() = True →
+                (read_values(s.ids, l) = value_lower(tys, strs, inj, h2, Refer(r))) ∧ ((Value::get(tys, strs, h2, Refer(r), Nil)).map(λ (d: Dyn(tys)) => d.code) = Some(s.code)) {
+            None => λ no => absurd(no),
+            Some(o2) => λ _ => {
+                let ok = obj_kill(tys, h, b, r.b, o2, ob);
+                let q = p(cong_fn(λ (x: Option<Obj(tys)>) => x.is_some(), ok.right));
+                let lower = cong_fn(λ (x: Option<Obj(tys)>) => Ref::lower(tys, strs, inj, r, x), trans(ok.right, sym(ob)));
+                let got: (Value::get(tys, strs, h2, Refer(r), Nil) = Value::get(tys, strs, h, Refer(r), Nil)) =
+                    cong_fn(λ (dv: Option<Dyn(tys)>) => match dv as λ _ => Option<Dyn(tys)> { Some(d) => run::Sel::get(tys, strs, r.sels ++ Nil, d), None => None },
+                        val_kill(tys, strs, inj, h, hb, hi, b, r.b, o2, ob));
+                ⟨trans(q.left, lower), trans(cong_fn(λ (x: Option<Dyn(tys)>) => x.map(λ (d: Dyn(tys)) => d.code), got), q.right)⟩
+            },
+        })(live2),
+    })(hs)
+}
+
 // What a clearing leaves was there.
 theorem mem_cleared(b, k, n: Nat, e: Pointer, shadow: List<Pointer>): Mem(e, cleared(shadow, b, k, n)) → Mem(e, shadow) {
     match shadow {

@@ -605,3 +605,22 @@ fn mixed_l2() → Option<List<x86_64_call_contract::Value>> {
 }
 
 theorem mixed_reads_zero(): mixed_l2() = Some([x86_64_call_contract::Word(BitVec::ofNat(1))]) { refl }
+
+// ---------------------------------------------------------------------------
+// A death of an owner against `StageRel` (§25.9): the dying variable stays
+// in both environments, its slot reading the reference it read, while its
+// block is dead on level 2, where `value_lower` answers nothing.
+
+fn owner_env() → REnv(tys()) { REnv([Cell(obj(0), True)], Nil) }
+
+fn owner_slot() → PSlot { PSlot(buf_s(), [ref_id(0), word_id(1)], PNone, True) }
+
+fn after_death() → Option<level2::Heap(tys())> {
+    match (Death(whole(Arg(0)))).run(tys(), strs(), funcs_at(Nil), λ _ _ _ _ => level2::Stuck, Mach(heap1(text()), owner_env(), io0()), λ m2 => Done(Answer(Nil, m2.heap, m2.io))) {
+        Done(a) => Some(a.heap), Exited(_, _) => None, Going(_) => None, Stuck => None,
+    }
+}
+
+theorem death_breaks_rel(): Pair((Death(whole(Arg(0)))).place(tys(), PCx(strs(), sigs_of(Nil), no_prim()), PEnv(1, [owner_slot()]), 2).is_some(),
+        Pair(value_lower(tys(), strs(), ident(), heap1(text()), obj(0)).is_some(), after_death().map(λ (h: level2::Heap(tys())) => value_lower(tys(), strs(), ident(), h, obj(0)).is_some())))
+    = Pair(True, Pair(True, Some(False))) { refl }
