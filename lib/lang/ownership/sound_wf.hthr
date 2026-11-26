@@ -19,6 +19,8 @@
 // - `wpar`: a view to write whose parent is a view has that parent as its
 //   only entry, itself to write (the writes through views).
 // - `nbase`: the arguments' objects are counted (`Ret`).
+// - `lens`: the lists hold the counts (new with the restatement, §26.6: a
+//   role set at a level reads back only where its list is that long).
 import logic;
 import bool;
 import nat;
@@ -47,6 +49,7 @@ record StWf(s: CSt) {
     chain: (en: VEnt) → Mem(en, s.views) → (en.par < en.lvl) ∧ s.Parent(en),
     wpar: (en: VEnt) → Mem(en, s.views) → en.mode.writes() = True → s.WPar(en),
     nbase: s.na <= s.nobj,
+    lens: (s.args.len() = s.na) ∧ (s.locs.len() = s.nd),
 }
 
 fn CSt::Wf(self s: CSt) → Type { StWf(s) }
@@ -87,4 +90,163 @@ fn CSt::wpar_b(self s: CSt) → Bool {
     s.views.all_bit(λ en => !en.mode.writes() || match s.role(en.par) { KView => VEnt::only_write(s.ents(en.par)), KHold(_, _) => True, KPlain => True, KGone => True })
 }
 
-fn CSt::wf_b(self s: CSt) → Bool { s.one_b() && s.words_b() && s.held_b() && s.vents_b() && s.chain_b() && s.wpar_b() && s.na.leb(s.nobj) }
+fn CSt::wf_b(self s: CSt) → Bool { s.one_b() && s.words_b() && s.held_b() && s.vents_b() && s.chain_b() && s.wpar_b() && s.na.leb(s.nobj) && s.args.len().same(s.na) && s.locs.len().same(s.nd) }
+
+// ---------------------------------------------------------------------------
+// The transitions: each checker step keeps the state well formed
+
+// A level set to a role reads it back, where the lists hold the counts.
+theorem List::nth_update_role(self xs: List<CVar>, r: Role): (i: Nat) → i < xs.len() → ((xs.update(i, λ c => CVar(c.code, r))).nth(i).unwrap_or(CVar::none())).role = r {
+    match xs {
+        Nil => λ i no => { let f: False = omega(no); false_elim(f) },
+        Cons(_, t) => λ i => match i { Zero => λ _ => refl, Succ(k) => λ b => t.nth_update_role(r, k, omega(b)) },
+    }
+}
+
+theorem CSt::role_set_here(self s: CSt, l: Nat, r: Role, la: s.args.len() = s.na, ll: s.locs.len() = s.nd, b: l < s.na + s.nd): (CSt::set(s, l, r)).role(l) = r {
+    (match (l + 1).leb(s.na) as λ c => (l + 1).leb(s.na) = c → (s.var_in(s.set_args(l, r, c), s.set_locs(l, r, c), l, c)).role = r {
+        True => λ e => s.args.nth_update_role(r, l, omega(Nat::le_of_leb(l + 1, s.na, e), la)),
+        False => λ e => {
+            let ge: ¬(l + 1 <= s.na) = λ le => absurd(trans(sym(e), Nat::leb_true(l + 1, s.na, le)));
+            s.locs.nth_update_role(r, s.na + s.nd - 1 - l, omega(ge, b, ll))
+        },
+    })(refl)
+}
+
+// The role of a level after a set: the new one there, the old elsewhere.
+theorem CSt::role_set(self s: CSt, l, l2: Nat, r: Role, la: s.args.len() = s.na, ll: s.locs.len() = s.nd, b: l < s.na + s.nd, b2: l2 < s.na + s.nd):
+    ((l2 = l) ∧ ((CSt::set(s, l, r)).role(l2) = r)) ∨ ((¬(l2 = l)) ∧ ((CSt::set(s, l, r)).role(l2) = s.role(l2)))
+{
+    match Nat::eq_or_ne(l2, l) {
+        Inl(eq) => Inl(⟨eq, j(sym(eq), λ q _ => (CSt::set(s, l, r)).role(q) = r, s.role_set_here(l, r, la, ll, b))⟩),
+        Inr(ne) => Inr(⟨ne, s.role_set_other(l, l2, r, ne, b, b2)⟩),
+    }
+}
+
+theorem StWf::parent_keep(s, s2: CSt, en: VEnt, role: s2.role(en.par) = s.role(en.par), ents: s2.ents(en.par) = s.ents(en.par), p: s.Parent(en)): s2.Parent(en) {
+    let p2: (match s.role(en.par) { KHold(o, _) => (o = en.obj) ∧ (en.reg = en.at), KView => VEnt::Any(s2.ents(en.par), λ pe => (pe.obj = en.obj) ∧ (en.reg = pe.reg ++ en.at)),
+            KPlain => False, KGone => False }) = j(sym(ents), λ q _ => match s.role(en.par) { KHold(o, _) => (o = en.obj) ∧ (en.reg = en.at),
+                KView => VEnt::Any(q, λ pe => (pe.obj = en.obj) ∧ (en.reg = pe.reg ++ en.at)), KPlain => False, KGone => False }, p);
+    j(sym(role), λ r _ => match r { KHold(o, _) => (o = en.obj) ∧ (en.reg = en.at), KView => VEnt::Any(s2.ents(en.par), λ pe => (pe.obj = en.obj) ∧ (en.reg = pe.reg ++ en.at)),
+        KPlain => False, KGone => False }, p2)
+}
+
+// A role bound by a push that holds an object holds one that exists and
+// that no level holds already.
+fn CSt::NewHold(self s: CSt, r: Role) → Type { (o: Nat) → (a: Acc) → r = KHold(o, a) → (o < s.nobj) ∧ ((l: Nat) → l < s.na + s.nd → (a2: Acc) → s.role(l) = KHold(o, a2) → False) }
+
+// A push: `Lit`, `Op`, `Read`, `Len`, a take of a part, a plain view, and
+// (with `fresh_obj` before it) `Fresh`; a view's push with its entry is
+// `StWf::open`.
+theorem StWf::pushed(s: CSt, wf: StWf(s), cv: CVar, nh: s.NewHold(cv.role), nv: ¬(cv.role = KView)): StWf(CSt::push(s, cv)) {
+    let s2 = CSt::push(s, cv);
+    let n = s.na + s.nd;
+    let top: (s2.role(n) = cv.role) = cong_fn(λ (v: CVar) => v.role, s.var_pushed(cv));
+    let par_below: ((en: VEnt) → Mem(en, s.views) → en.par < s.na + s.nd) = λ en mem => omega((wf.chain(en, mem)).left, (wf.vents(en, mem)).right.left);
+    StWf(
+        λ l1 l2 o a1 a2 b1 b2 ne h1 h2 => match Nat::below_succ(l1, n, b1) {
+            Inr(at1) => match Nat::below_succ(l2, n, b2) {
+                Inr(at2) => ne(trans(at1, sym(at2))),
+                Inl(c2) => (nh(o, a1, trans(sym(top), j(at1, λ q _ => s2.role(q) = KHold(o, a1), h1)))).right(l2, c2, a2, trans(sym(s.role_push(cv, l2, c2)), h2)),
+            },
+            Inl(c1) => match Nat::below_succ(l2, n, b2) {
+                Inr(at2) => (nh(o, a2, trans(sym(top), j(at2, λ q _ => s2.role(q) = KHold(o, a2), h2)))).right(l1, c1, a1, trans(sym(s.role_push(cv, l1, c1)), h1)),
+                Inl(c2) => wf.one(l1, l2, o, a1, a2, c1, c2, ne, trans(sym(s.role_push(cv, l1, c1)), h1), trans(sym(s.role_push(cv, l2, c2)), h2)),
+            },
+        },
+        λ l w => {
+            let ww = wf.words(l, w);
+            ⟨omega(ww.left), trans(cong_fn(λ (q: Role) => q.plain(), s.role_push(cv, l, ww.left)), ww.right)⟩
+        },
+        λ l o a b hr => match Nat::below_succ(l, n, b) {
+            Inr(at) => (nh(o, a, trans(sym(top), j(at, λ q _ => s2.role(q) = KHold(o, a), hr)))).left,
+            Inl(c1) => wf.held(l, o, a, c1, trans(sym(s.role_push(cv, l, c1)), hr)),
+        },
+        λ en mem => {
+            let vv = wf.vents(en, mem);
+            ⟨vv.left, ⟨omega(vv.right.left), trans(s.role_push(cv, en.lvl, vv.right.left), vv.right.right)⟩⟩
+        },
+        λ en mem => ⟨(wf.chain(en, mem)).left, StWf::parent_keep(s, s2, en, s.role_push(cv, en.par, par_below(en, mem)), refl, (wf.chain(en, mem)).right)⟩,
+        λ en mem w => CSt::wpar_keep(s, s2, en, s.role_push(cv, en.par, par_below(en, mem)), refl, wf.wpar(en, mem, w)),
+        wf.nbase,
+        ⟨wf.lens.left, cong_fn(λ (k: Nat) => Succ(k), wf.lens.right)⟩)
+}
+
+// One more object counted.
+theorem StWf::fresh_obj(s: CSt, wf: StWf(s)): StWf(s.fresh_obj()) {
+    StWf(wf.one, wf.words, λ l o a b hr => omega(wf.held(l, o, a, b, hr)),
+        λ en mem => { let vv = wf.vents(en, mem); ⟨omega(vv.left), vv.right⟩ },
+        wf.chain, wf.wpar, omega(wf.nbase), wf.lens)
+}
+
+// `Fresh`: a holder of the next object, owning it.
+theorem StWf::fresh(s: CSt, wf: StWf(s), c: Shape): StWf((CSt::push(s, CVar(c, KHold(s.nobj, AcOwn)))).fresh_obj()) {
+    StWf::pushed(s.fresh_obj(), StWf::fresh_obj(s, wf), CVar(c, KHold(s.nobj, AcOwn)),
+        λ o a e => {
+            let oe: (s.nobj = o) = cong_fn(λ (r: Role) => match r { KHold(k, _) => k, KPlain => 0, KView => 0, KGone => 0 }, e);
+            ⟨omega(oe), λ l b a2 hr => { let lt: (o < s.nobj) = wf.held(l, o, a2, b, hr); let f: False = omega(lt, oe); f }⟩
+        },
+        λ no => absurd(no))
+}
+
+theorem CSt::set_args_len(self s: CSt, l: Nat, r: Role, c: Bool): (s.set_args(l, r, c)).len() = s.args.len() {
+    match c { True => s.args.len_update(l, λ q => CVar(q.code, r)), False => refl }
+}
+
+theorem CSt::set_locs_len(self s: CSt, l: Nat, r: Role, c: Bool): (s.set_locs(l, r, c)).len() = s.locs.len() {
+    match c { True => refl, False => s.locs.len_update(s.na + s.nd - 1 - l, λ q => CVar(q.code, r)) }
+}
+
+// A level's role set: a death, a take, the access a join keeps. What the
+// set may not break: a holder's object exists and is held once, a level a
+// region reads stays plain, a view's level stays a view, a parent keeps its
+// role.
+record SetOk(s: CSt, l: Nat, r: Role) {
+    hold: (o: Nat) → (a: Acc) → r = KHold(o, a) → (o < s.nobj) ∧ ((l2: Nat) → l2 < s.na + s.nd → ¬(l2 = l) → (a2: Acc) → s.role(l2) = KHold(o, a2) → False),
+    words: s.in_regions(l) = True → r.plain() = True,
+    vents: (en: VEnt) → Mem(en, s.views) → en.lvl = l → r = KView,
+    pars: (en: VEnt) → Mem(en, s.views) → en.par = l → r = s.role(l),
+}
+
+theorem StWf::reset(s: CSt, wf: StWf(s), l: Nat, r: Role, b: l < s.na + s.nd, ok: SetOk(s, l, r)): StWf(CSt::set(s, l, r)) {
+    let s2 = CSt::set(s, l, r);
+    let la = wf.lens.left;
+    let ll = wf.lens.right;
+    let same_par: ((en: VEnt) → Mem(en, s.views) → (CSt::set(s, l, r)).role(en.par) = s.role(en.par)) = λ en mem => match s.role_set(l, en.par, r, la, ll, b, omega((wf.chain(en, mem)).left, (wf.vents(en, mem)).right.left)) {
+        Inl(p) => trans(p.right, j(sym(p.left), λ q _ => r = s.role(q), ok.pars(en, mem, p.left))),
+        Inr(p) => p.right,
+    };
+    StWf(
+        λ l1 l2 o a1 a2 b1 b2 ne h1 h2 => match s.role_set(l, l1, r, la, ll, b, b1) {
+            Inl(p1) => match s.role_set(l, l2, r, la, ll, b, b2) {
+                Inl(p2) => ne(trans(p1.left, sym(p2.left))),
+                Inr(p2) => (ok.hold(o, a1, trans(sym(p1.right), h1))).right(l2, b2, p2.left, a2, trans(sym(p2.right), h2)),
+            },
+            Inr(p1) => match s.role_set(l, l2, r, la, ll, b, b2) {
+                Inl(p2) => (ok.hold(o, a2, trans(sym(p2.right), h2))).right(l1, b1, p1.left, a1, trans(sym(p1.right), h1)),
+                Inr(p2) => wf.one(l1, l2, o, a1, a2, b1, b2, ne, trans(sym(p1.right), h1), trans(sym(p2.right), h2)),
+            },
+        },
+        λ l2 w => {
+            let ww = wf.words(l2, w);
+            match s.role_set(l, l2, r, la, ll, b, ww.left) {
+                Inl(p) => ⟨ww.left, trans(cong_fn(λ (q: Role) => q.plain(), p.right), ok.words(j(p.left, λ q _ => s.in_regions(q) = True, w)))⟩,
+                Inr(p) => ⟨ww.left, trans(cong_fn(λ (q: Role) => q.plain(), p.right), ww.right)⟩,
+            }
+        },
+        λ l2 o a b2 hr => match s.role_set(l, l2, r, la, ll, b, b2) {
+            Inl(p) => (ok.hold(o, a, trans(sym(p.right), hr))).left,
+            Inr(p) => wf.held(l2, o, a, b2, trans(sym(p.right), hr)),
+        },
+        λ en mem => {
+            let vv = wf.vents(en, mem);
+            ⟨vv.left, ⟨vv.right.left, match s.role_set(l, en.lvl, r, la, ll, b, vv.right.left) {
+                Inl(p) => trans(p.right, ok.vents(en, mem, p.left)),
+                Inr(p) => trans(p.right, vv.right.right),
+            }⟩⟩
+        },
+        λ en mem => ⟨(wf.chain(en, mem)).left, StWf::parent_keep(s, s2, en, same_par(en, mem), refl, (wf.chain(en, mem)).right)⟩,
+        λ en mem w => CSt::wpar_keep(s, s2, en, same_par(en, mem), refl, wf.wpar(en, mem, w)),
+        wf.nbase,
+        ⟨trans(s.set_args_len(l, r, (l + 1).leb(s.na)), la), trans(s.set_locs_len(l, r, (l + 1).leb(s.na)), ll)⟩)
+}
