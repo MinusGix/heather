@@ -9320,3 +9320,115 @@ theorem CSt::sig_sels(self s: CSt, all: List<Nat>, ws, wl: List<Ix>, w: CSt::Sig
         },
     }
 }
+
+theorem CSt::ix_of_arg(self s: CSt, i: Nat, lt: i < s.na): s.ix_of(i) = i {
+    j(sym(Nat::leb_true(i + 1, s.na, lt)), λ c _ => (match c as λ _ => Nat { True => i, False => s.na + (s.nd - 1 - (i - s.na)) }) = i, refl)
+}
+
+theorem CSt::ix_of_loc(self s: CSt, k: Nat, lt: k < s.nd): s.ix_of(s.na + s.nd - 1 - k) = s.na + k {
+    let e2: (s.na + (s.nd - 1 - ((s.na + s.nd - 1 - k) - s.na)) = s.na + k) = omega(lt);
+    j(sym(Nat::leb_false(s.na + s.nd - 1 - k + 1, s.na, omega(lt))), λ c _ =>
+        (match c as λ _ => Nat { True => s.na + s.nd - 1 - k, False => s.na + (s.nd - 1 - ((s.na + s.nd - 1 - k) - s.na)) }) = s.na + k, e2)
+}
+
+// A variable's word in the meaning's words, at its level's index.
+theorem Sim::env_ix(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, sim: Sim(tys, strs, s, e, m), x: Var, l: Nat, hl: s.lvl(x) = Some(l)):
+    (Env::ixs(tys, e)).nth(s.ix_of(l)) = Some(Dyn::ix(tys, Env::get(tys, e, x)))
+{
+    (match x as λ y => s.lvl(y) = Some(l) → (Env::ixs(tys, e)).nth(s.ix_of(l)) = Some(Dyn::ix(tys, Env::get(tys, e, y))) {
+        Arg(i) => λ h => {
+            let p = Bool::then_some((i + 1).leb(s.na), Some(i), l, h);
+            let il: (i = l) = Option::some_inj(i, l, p.right);
+            let lt: (i < s.na) = omega(Nat::le_of_leb(i + 1, s.na, p.left));
+            match List::nth_present(e.args, i, omega(lt, sim.eargs)) {
+                ⟨d, hd⟩ => {
+                    let a1: ((Dyn::ixs(tys, e.args)).nth(i) = Some(Dyn::ix(tys, d))) =
+                        trans(e.args.nth_map_opt(λ (q: Dyn(tys)) => Dyn::ix(tys, q), i), cong_fn(λ (o: Option<Dyn(tys)>) => o.map(λ (q: Dyn(tys)) => Dyn::ix(tys, q)), hd));
+                    let a2 = (Dyn::ixs(tys, e.args)).nth_append_l(Dyn::ixs(tys, e.locs), i, Dyn::ix(tys, d), a1);
+                    let gd: (Env::get(tys, e, Arg(i)) = d) = cong_fn(λ (o: Option<Dyn(tys)>) => o.unwrap_or(Dyn::none(tys)), hd);
+                    j(il, λ q _ => (Env::ixs(tys, e)).nth(s.ix_of(q)) = Some(Dyn::ix(tys, Env::get(tys, e, Arg(i)))),
+                        j(sym(s.ix_of_arg(i, lt)), λ q _ => (Env::ixs(tys, e)).nth(q) = Some(Dyn::ix(tys, Env::get(tys, e, Arg(i)))),
+                            j(sym(gd), λ q _ => (Env::ixs(tys, e)).nth(i) = Some(Dyn::ix(tys, q)), a2)))
+                },
+            }
+        },
+        Loc(k) => λ h => {
+            let p = Bool::then_some((k + 1).leb(s.nd), Some(s.na + s.nd - 1 - k), l, h);
+            let kl: (s.na + s.nd - 1 - k = l) = Option::some_inj(s.na + s.nd - 1 - k, l, p.right);
+            let lt: (k < s.nd) = omega(Nat::le_of_leb(k + 1, s.nd, p.left));
+            match List::nth_present(e.locs, k, omega(lt, sim.elocs)) {
+                ⟨d, hd⟩ => {
+                    let a1: ((Dyn::ixs(tys, e.locs)).nth(k) = Some(Dyn::ix(tys, d))) =
+                        trans(e.locs.nth_map_opt(λ (q: Dyn(tys)) => Dyn::ix(tys, q), k), cong_fn(λ (o: Option<Dyn(tys)>) => o.map(λ (q: Dyn(tys)) => Dyn::ix(tys, q)), hd));
+                    let la: ((Dyn::ixs(tys, e.args)).len() = s.na) = trans(e.args.len_map(λ (q: Dyn(tys)) => Dyn::ix(tys, q)), sim.eargs);
+                    let a2 = (Dyn::ixs(tys, e.args)).nth_append_r(Dyn::ixs(tys, e.locs), k);
+                    let ix: (s.ix_of(l) = k + (Dyn::ixs(tys, e.args)).len()) = trans(j(kl, λ q _ => s.ix_of(q) = s.na + k, s.ix_of_loc(k, lt)), omega(la));
+                    let gd: (Env::get(tys, e, Loc(k)) = d) = cong_fn(λ (o: Option<Dyn(tys)>) => o.unwrap_or(Dyn::none(tys)), hd);
+                    trans(cong_fn(λ (q: Nat) => (Env::ixs(tys, e)).nth(q), ix), trans(a2, trans(a1, cong_fn(λ (q: Dyn(tys)) => Some(Dyn::ix(tys, q)), sym(gd)))))
+                },
+            }
+        },
+    })(hl)
+}
+
+theorem CSt::lvls_nth(self s: CSt, xs: List<Var>): (ls: List<Nat>) → s.lvls(xs) = Some(ls) → (i, l: Nat) → ls.nth(i) = Some(l) → Exists<Var>(λ x => (xs.nth(i) = Some(x)) ∧ (s.lvl(x) = Some(l))) {
+    match xs {
+        Nil => λ ls h i l hi => absurd(j(sym(Option::some_inj(Nil, ls, h)), λ q _ => q.nth(i) = Some(l), hi)),
+        Cons(x, rest) => λ ls h => {
+            let a = Option::and_then_some(s.lvl(x), λ l0 => s.lvls(rest).map(λ lt => Cons(l0, lt)), ls, h);
+            match Option::map_some_inv(s.lvls(rest), λ (lt: List<Nat>) => Cons(a.witness, lt), ls, a.proof.right) {
+                ⟨lr, pl⟩ => λ i l hi => {
+                    let hi2: ((Cons(a.witness, lr)).nth(i) = Some(l)) = j(sym(pl.right), λ q _ => q.nth(i) = Some(l), hi);
+                    (match i as λ i2 => (Cons(a.witness, lr)).nth(i2) = Some(l) → Exists<Var>(λ y => ((Cons(x, rest)).nth(i2) = Some(y)) ∧ (s.lvl(y) = Some(l))) {
+                        Zero => λ h0 => Exists(x, ⟨refl, trans(a.proof.left, h0)⟩),
+                        Succ(k) => λ hk => CSt::lvls_nth(s, rest, lr, pl.left, k, l, hk),
+                    })(hi2)
+                },
+            }
+        },
+    }
+}
+
+// The words a returned view's signature names, at `Ret`: an argument never
+// written is its entry value (`Like.keep`), a result the plain variable the
+// `Ret` lists there.
+theorem Inv::ret_words(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: Nat → Bool}, inv: Inv(tys, strs, s, e, m, h0, lent),
+    none: s.pending() = False, ps: List<Param>, ds: List<Dyn(tys)>, lk: Like(tys, strs, ps, ds, s, e), dl: ds.len() = s.na, xs: List<Var>, ls: List<Nat>, hl: s.lvls(xs) = Some(ls)):
+    CSt::SigWords(s, ls, Dyn::ixs(tys, ds ++ xs.map(λ x => Env::get(tys, e, x))), Mach::ixs(tys, strs, m))
+{
+    let sim = Inv::sim_now(tys, strs, inv, none);
+    let outs = xs.map(λ x => Env::get(tys, e, x));
+    let f = λ (q: Dyn(tys)) => Dyn::ix(tys, q);
+    λ k l h ir => {
+        let ww = inv.words(l, ir);
+        let left = Sim::lvl_ix(tys, strs, sim, l, ww.left, ww.right);
+        let ws_at: ((Dyn::ixs(tys, ds ++ outs)).nth(k) = (ds ++ outs).nth(k).map(f)) = (ds ++ outs).nth_map_opt(f, k);
+        match s.sig_atom_cases(ls, k, Var(l), h) {
+            Inl(c) => {
+                let lk_: (l = k) = cong_fn(λ (a: Atom) => match a { Var(q) => q, Lit(_) => 0 }, c.right.right);
+                let hk: (s.lvl(Arg(k)) = Some(l)) = j(sym(lk_), λ q _ => s.lvl(Arg(k)) = Some(q), CSt::lvl_arg(s, k, c.left));
+                let ev = Sim::env_ix(tys, strs, sim, Arg(k), l, hk);
+                match List::nth_present(ds, k, omega(c.left, dl)) {
+                    ⟨d, hd⟩ => {
+                        let kd: (Env::get(tys, e, Arg(k)) = d) = trans(lk.keep(k, c.left, c.right.left), cong_fn(λ (o: Option<Dyn(tys)>) => o.unwrap_or(Dyn::none(tys)), hd));
+                        trans(left, trans(ev, trans(cong_fn(λ (q: Dyn(tys)) => Some(f(q)), kd),
+                            sym(trans(ws_at, cong_fn(λ (o: Option<Dyn(tys)>) => o.map(f), ds.nth_append_l(outs, k, d, hd)))))))
+                    },
+                }
+            },
+            Inr(⟨l2, c⟩) => {
+                let ll: (l = l2) = cong_fn(λ (a: Atom) => match a { Var(q) => q, Lit(_) => 0 }, c.right.right.right);
+                match CSt::lvls_nth(s, xs, ls, hl, k - s.na, l2, c.right.left) {
+                    ⟨x, px⟩ => {
+                        let ev = Sim::env_ix(tys, strs, sim, x, l, j(sym(ll), λ q _ => s.lvl(x) = Some(q), px.right));
+                        let kk: (k = (k - s.na) + ds.len()) = omega(c.left, dl);
+                        let on: ((ds ++ outs).nth(k) = Some(Env::get(tys, e, x))) =
+                            trans(cong_fn(λ (q: Nat) => (ds ++ outs).nth(q), kk), trans(ds.nth_append_r(outs, k - s.na),
+                                trans(xs.nth_map_opt(λ x => Env::get(tys, e, x), k - s.na), cong_fn(λ (o: Option<Var>) => o.map(λ x => Env::get(tys, e, x)), px.left))));
+                        trans(left, trans(ev, sym(trans(ws_at, cong_fn(λ (o: Option<Dyn(tys)>) => o.map(f), on)))))
+                    },
+                }
+            },
+        }
+    }
+}
