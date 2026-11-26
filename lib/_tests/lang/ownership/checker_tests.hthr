@@ -523,7 +523,6 @@ fn once_plain() → Func { Func(Sig([Param(nat_s(), ByTake)], [Result(nat_s(), O
 
 theorem once_plain_callee_refused(): refusal_in([once_plain()], 0) = Some(WOwn) { refl }
 
-
 fn once_fresh() → Func { Func(Sig([Param(nat_s(), ByTake)], [Result(nat_s(), OFresh)]), Ret([x()])) }
 
 fn once_fresh_caller() → Func { Func(Sig([Param(nat_s(), ByTake)], Nil), seq([Call(0, [x()], 1)], Ret(Nil))) }
