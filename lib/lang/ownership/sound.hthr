@@ -9432,3 +9432,125 @@ theorem Inv::ret_words(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys
         }
     }
 }
+
+// One result at `Ret`, as `CSt::returns` checked it: `Value::ViewIs`.
+theorem Inv::ret_one(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: Nat → Bool}, inv: Inv(tys, strs, s, e, m, h0, lent),
+    ps: List<Param>, vs: List<Value(tys)>, ent: REnv::ArgsKept(tys, m.env, REnv(Cell::args(tys, ps, vs), Nil)), vl: vs.len() = s.na,
+    ws: List<Ix>, all: List<Nat>, sw: CSt::SigWords(s, all, ws, Mach::ixs(tys, strs, m)), x: Var, l: Nat, hl: s.lvl(x) = Some(l), code: Shape, og: Origin,
+    ok: s.returns(tys, strs, all, l, Result(code, og)) = True): Value::ViewIs(tys, strs, h0.len(), vs, ws, code, og, (REnv::get(tys, m.env, x)).v)
+{
+    let cv = (REnv::get(tys, m.env, x)).v;
+    // The argument at `i`: present, its root its reference.
+    let argv = λ (i: Nat) (lt: i < s.na) => List::nth_present(vs, i, omega(lt, vl));
+    (match og as λ o => s.returns(tys, strs, all, l, Result(code, o)) = True → Value::ViewIs(tys, strs, h0.len(), vs, ws, code, o, cv) {
+        OFresh => λ okf => Inv::ret_fresh(tys, strs, inv, all, vs, ws, x, l, hl, code, okf),
+        OParam(i) => λ okp => {
+            let p1 = Bool::and_true_parts((i + 1).leb(s.na) && True, match s.role(l) { KHold(o, _) => o.same(i), _ => False }, okp);
+            let lt: (i < s.na) = omega(Nat::le_of_leb(i + 1, s.na, (Bool::and_true_parts((i + 1).leb(s.na), True, p1.left)).left));
+            let ha: Exists<Acc>(λ a => (s.role(l) = KHold(i, a))) = (match s.role(l) as λ r => s.role(l) = r → (match r { KHold(o, _) => o.same(i), _ => False }) = True → Exists<Acc>(λ a => (s.role(l) = KHold(i, a))) {
+                KHold(o, a) => λ er c => Exists(a, trans(er, cong_fn(λ (q: Nat) => KHold(q, a), Nat::same_sound(o, i, c)))),
+                KPlain => λ _ no => absurd(no), KView => λ _ no => absurd(no), KGone => λ _ no => absurd(no),
+            })(refl, p1.right);
+            match ha {
+                ⟨a, hr⟩ => match argv(i, lt) {
+                    ⟨v, hv⟩ => j(sym(hv), λ q _ => (match q as λ _ => Type { Some(w) => match w as λ _ => Type { Refer(r) => cv = Refer(r), Plain(_) => Value::refers(tys, cv) = False }, None => False }),
+                        (match v as λ u => vs.nth(i) = Some(u) → (match u as λ _ => Type { Refer(r) => cv = Refer(r), Plain(_) => Value::refers(tys, cv) = False }) {
+                            Refer(r) => λ hv2 => inv.href(x, l, i, a, hl, hr, r, Inv::arg_root(tys, strs, inv, ps, vs, ent, i, lt, Refer(r), hv2)),
+                            Plain(d) => λ hv2 => {
+                                let rn: (inv.root(i) = None) = Inv::arg_root(tys, strs, inv, ps, vs, ent, i, lt, level2::Plain(d), hv2);
+                                (match cv as λ u => cv = u → Value::refers(tys, u) = False {
+                                    Plain(_) => λ _ => refl,
+                                    Refer(q) => λ cq => {
+                                        let rk: (inv.root(i) = Some(q)) = j(hr, λ rr _ => match rr { KHold(o2, _) => inv.root(o2) = Some(q),
+                                            KView => VEnt::Any(s.ents(l), λ en => (inv.root(en.obj)).map(λ r0 => r0.narrow(Mach::ixs(tys, strs, m), s.unsteps(en.reg))) = Some(q)), KPlain => False, KGone => True },
+                                            inv.refs(x, l, hl, q, cq));
+                                        absurd(trans(sym(rn), rk))
+                                    },
+                                })(refl)
+                            },
+                        })(hv)),
+                },
+            }
+        },
+        OView(i, sx) => λ okv => {
+            let inner = match s.sig_steps(all, sx) { Some(ys) => match s.ents(l) { Cons(en, rest) => match rest { Nil => en.obj.same(i) && Steps::same(en.reg, ys) && !en.mode.writes(), Cons(_, _) => False }, Nil => False }, None => False };
+            let p1 = Bool::and_true_parts((i + 1).leb(s.na) && True, inner, okv);
+            let lt: (i < s.na) = omega(Nat::le_of_leb(i + 1, s.na, (Bool::and_true_parts((i + 1).leb(s.na), True, p1.left)).left));
+            // The view's one entry: of object `i`, its region the signature's steps at this function's levels.
+            let one: Exists<List<Step>>(λ ys => (s.sig_steps(all, sx) = Some(ys)) ∧ Exists<VEnt>(λ en => (s.ents(l) = [en]) ∧ ((en.obj = i) ∧ (en.reg = ys)))) =
+                (match s.sig_steps(all, sx) as λ o => s.sig_steps(all, sx) = o → (match o { Some(ys) => match s.ents(l) { Cons(en, rest) => match rest { Nil => en.obj.same(i) && Steps::same(en.reg, ys) && !en.mode.writes(), Cons(_, _) => False }, Nil => False }, None => False }) = True →
+                        Exists<List<Step>>(λ ys => (s.sig_steps(all, sx) = Some(ys)) ∧ Exists<VEnt>(λ en => (s.ents(l) = [en]) ∧ ((en.obj = i) ∧ (en.reg = ys)))) {
+                    None => λ _ no => absurd(no),
+                    Some(ys) => λ hs c => Exists(ys, ⟨hs, (match s.ents(l) as λ q => s.ents(l) = q → (match q { Cons(en, rest) => match rest { Nil => en.obj.same(i) && Steps::same(en.reg, ys) && !en.mode.writes(), Cons(_, _) => False }, Nil => False }) = True →
+                            Exists<VEnt>(λ en => (s.ents(l) = [en]) ∧ ((en.obj = i) ∧ (en.reg = ys))) {
+                        Nil => λ _ no => absurd(no),
+                        Cons(en, rest) => λ he c2 => (match rest as λ q => s.ents(l) = Cons(en, q) → (match q { Nil => en.obj.same(i) && Steps::same(en.reg, ys) && !en.mode.writes(), Cons(_, _) => False }) = True →
+                                Exists<VEnt>(λ en2 => (s.ents(l) = [en2]) ∧ ((en2.obj = i) ∧ (en2.reg = ys))) {
+                            Cons(_, _) => λ _ no => absurd(no),
+                            Nil => λ he2 c3 => {
+                                let q1 = Bool::and_true_parts(en.obj.same(i) && Steps::same(en.reg, ys), !en.mode.writes(), c3);
+                                let q2 = Bool::and_true_parts(en.obj.same(i), Steps::same(en.reg, ys), q1.left);
+                                Exists(en, ⟨he2, ⟨Nat::same_sound(en.obj, i, q2.left), Steps::same_sound(en.reg, ys, q2.right)⟩⟩)
+                            },
+                        })(he, c2),
+                    })(refl, c)⟩),
+                })(refl, p1.right);
+            match one {
+                ⟨ys, py⟩ => match py.right {
+                    ⟨en, pe⟩ => {
+                        let inents: Mem(en, s.ents(l)) = j(sym(pe.left), λ q _ => Mem(en, q), Inl(refl));
+                        let mem: Mem(en, s.views) = s.views.mem_filter(en, λ q => q.lvl.same(l), inents);
+                        let el: (en.lvl = l) = Nat::same_sound(en.lvl, l, s.views.mem_filter_holds(en, λ q => q.lvl.same(l), inents));
+                        // What the entry's object's root makes of the cell: its reference narrowed by the region.
+                        let refok = λ (q: Ref) (cq: cv = Refer(q)) => {
+                            let rk = inv.refs(x, l, hl, q, cq);
+                            let rv: (s.role(l) = KView) = j(el, λ k _ => s.role(k) = KView, (inv.vents(en, mem)).right.right);
+                            let any: VEnt::Any([en], λ e2 => ((inv.root(e2.obj)).map(λ r0 => r0.narrow(Mach::ixs(tys, strs, m), s.unsteps(e2.reg))) = Some(q))) =
+                                j(pe.left, λ es _ => VEnt::Any(es, λ e2 => (inv.root(e2.obj)).map(λ r0 => r0.narrow(Mach::ixs(tys, strs, m), s.unsteps(e2.reg))) = Some(q)),
+                                    j(rv, λ rr _ => match rr { KHold(o2, _) => inv.root(o2) = Some(q),
+                                        KView => VEnt::Any(s.ents(l), λ e2 => (inv.root(e2.obj)).map(λ r0 => r0.narrow(Mach::ixs(tys, strs, m), s.unsteps(e2.reg))) = Some(q)), KPlain => False, KGone => True }, rk));
+                            let at: ((inv.root(en.obj)).map(λ r0 => r0.narrow(Mach::ixs(tys, strs, m), s.unsteps(en.reg))) = Some(q)) = match any { Inl(h1) => h1, Inr(no) => false_elim(no) };
+                            j(pe.right.left, λ k _ => (inv.root(k)).map(λ r0 => r0.narrow(Mach::ixs(tys, strs, m), s.unsteps(en.reg))) = Some(q), at)
+                        };
+                        match argv(i, lt) {
+                            ⟨v, hv⟩ => j(sym(hv), λ q _ => (match q as λ _ => Type { Some(w) => match w as λ _ => Type { Refer(r) => cv = Refer(r.narrow(ws, sx)), Plain(_) => Value::refers(tys, cv) = False }, None => False }),
+                                (match v as λ u => vs.nth(i) = Some(u) → (match u as λ _ => Type { Refer(r) => cv = Refer(r.narrow(ws, sx)), Plain(_) => Value::refers(tys, cv) = False }) {
+                                    Refer(r) => λ hv2 => {
+                                        let rt: (inv.root(i) = Some(r)) = Inv::arg_root(tys, strs, inv, ps, vs, ent, i, lt, Refer(r), hv2);
+                                        let rt2: (inv.root(en.obj) = Some(r)) = j(sym(pe.right.left), λ k _ => inv.root(k) = Some(r), rt);
+                                        let hh: (Value::refers(tys, (REnv::get(tys, m.env, s.var_at(l))).v) = True) = j(el, λ k _ => Value::refers(tys, (REnv::get(tys, m.env, s.var_at(k))).v) = True,
+                                            Inv::ent_refers(tys, strs, inv, s.na + s.nd, en, mem, (inv.vents(en, mem)).right.left, r, rt2));
+                                        let refers: (Value::refers(tys, cv) = True) = j(s.lvl_var(x, l, hl), λ y _ => Value::refers(tys, (REnv::get(tys, m.env, y)).v) = True, hh);
+                                        let inr: ((k: Nat) → k.member(Steps::lvls(ys)) = True → s.in_regions(k) = True) = λ k mk =>
+                                            s.region_lvl(en, mem, k, j(sym(pe.right.right), λ q _ => k.member(Steps::lvls(q)) = True, mk));
+                                        let sels: (Steps::sels(s.unsteps(ys), Mach::ixs(tys, strs, m)) = Steps::sels(sx, ws)) = s.sig_sels(all, ws, Mach::ixs(tys, strs, m), sw, sx, ys, py.left, inr);
+                                        (match cv as λ u => cv = u → Value::refers(tys, u) = True → u = Refer(r.narrow(ws, sx)) {
+                                            Plain(_) => λ _ no => absurd(no),
+                                            Refer(q) => λ cq _ => {
+                                                let at = refok(q, cq);
+                                                let qq: (r.narrow(Mach::ixs(tys, strs, m), s.unsteps(en.reg)) = q) = Option::some_inj(r.narrow(Mach::ixs(tys, strs, m), s.unsteps(en.reg)), q,
+                                                    trans(cong_fn(λ (o: Option<Ref>) => o.map(λ r0 => r0.narrow(Mach::ixs(tys, strs, m), s.unsteps(en.reg))), sym(rt)), at));
+                                                cong_fn(λ (z: Ref) => Refer(z), trans(sym(qq), j(sym(pe.right.right), λ q2 _ => r.narrow(Mach::ixs(tys, strs, m), s.unsteps(q2)) = r.narrow(ws, sx),
+                                                    cong_fn(λ (t: List<Sel>) => Ref(r.b, r.sels ++ t), sels))))
+                                            },
+                                        })(refl, refers)
+                                    },
+                                    Plain(d) => λ hv2 => {
+                                        let rn: (inv.root(i) = None) = Inv::arg_root(tys, strs, inv, ps, vs, ent, i, lt, level2::Plain(d), hv2);
+                                        (match cv as λ u => cv = u → Value::refers(tys, u) = False {
+                                            Plain(_) => λ _ => refl,
+                                            Refer(q) => λ cq => {
+                                                let at = refok(q, cq);
+                                                absurd(trans(sym(at), cong_fn(λ (o: Option<Ref>) => o.map(λ r0 => r0.narrow(Mach::ixs(tys, strs, m), s.unsteps(en.reg))),
+                                                    rn)))
+                                            },
+                                        })(refl)
+                                    },
+                                })(hv)),
+                        }
+                    },
+                },
+            }
+        },
+    })(ok)
+}
