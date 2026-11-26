@@ -29,119 +29,72 @@ Items 1 and 2 are definitions and evaluation; item 3 waits for the coordinating 
 
 `CheckSound` has an inhabitant for the fragment, the experiments' programs are probes or theorems of the real modules, and the experiment modules are gone.
 
-## Handoff (2026-11-26, item 3 in progress)
+## Handoff (2026-11-26, item 3: the write stages in progress)
 
-Item 3 continues in a fresh session from branch `claude/ownership-checker`.
-Everything below is in `lib/lang/ownership/sound.hthr`, in this order:
-selection lemmas, levels, `Sim`, reads and fits, `ReadInv`, the stages, the
-words, the read stage, `Inv`, the entry.
+Continue on branch `claude/ownership-checker-sound` (the coordinating
+session's item list and rails are in its brief; this section is the state).
+Everything is in `lib/lang/ownership/sound.hthr` unless named. Design
+§23.8–§23.10 says what changed and why; read them first.
 
-**The invariant, clause by clause** (`Inv(tys, strs, s, e, m, h0, lent)`):
+**Done in item 3**: the stages `Lit`, `Op`, `Read`, `Fresh`, `Take` (part,
+plain, holder), `Death` (part, plain, holder), `View` (plain; to read and to
+write, of a holder and of a view), and `Write` whose root is plain
+(`Stmt::stage_write_plain`), each concluding `Stepped` against the whole
+`Inv` from `none: s.pending() = False`.
 
-- `sim: Sim(s, s.patched(e), m)`. `Sim` holds the environments' lengths
-  (`eargs`, `margs`, `elocs`, `mlocs`: a level names one slot in each),
-  `vars` (each live variable's cell agrees with its meaning as its role
-  says: plain holds `Plain(d)`; holder or view `Value::Reads`, the run's
-  read at no selections, so block live and selections fitting; gone
-  nothing), and `codes` (each live variable's meaning has the checker's
-  code; the stage lemmas need it to discharge `is_word`, part codes and
-  `Dyn::read_code`). `patched` is the meaning with the pending chain
-  written up: the write through a view changes the heap at once, but the
-  meaning only that view, until each write-back carries it one ancestor
-  up. Eager write-back (§15.2, a refusal in the checker) keeps one chain
-  at most. When nothing is pending, `Inv::sim_now` gives `Sim(s, e, m)`.
-- `root`, `refs`: one run reference per object; a live holder's reference
-  is its root, a live view's its root narrowed by one of its entries'
-  region (`CSt::RefOk`; regions are at levels, read at the body's words by
-  `CSt::unsteps`). The licence decides apartness of regions of one object.
-  This clause is what makes that apartness of the run's references, which
-  is what a write needs to leave every other live variable's read alone.
-  A plain cell has no reference, so `RefOk` is `False` at `KPlain`; a
-  holder or view of a value held plain (a copy) has `Plain` cells, and
-  the clause says nothing of it.
-- `apart`: two live references to different objects, one of which
-  something live may change through (`CSt::changes`), are `Ref::Apart`.
-  At entry this is `Lendable.apart`; a fresh object is a new block.
-- `owned`: every live reference is to a lent block or one made here
-  (`h0.len() <= r.b`). With `frame` (`Heap::Frame(h0, m.heap, lent)`) and
-  `grows`, this gives `SafeAt`'s `Frame` at `Ret`.
+**Next, in order**:
 
-**Proved**:
+1. **Write through a holder** (`KHold(o, a)`, `a.writes()`). Two cells:
+   - the holder's cell is `Plain(d)` (an object held by value, no root):
+     as `stage_write_plain`, but the role is a holder, so `Cell::Agrees` is
+     `Value::Reads` (`Value::get(h, Plain(nw), Nil) = Some(nw)`).
+   - `Refer(r)`, `r = root(o)` (from `refs`): the run stores
+     `write_at(r.sels ++ ss, λ _ => vd, old)` into block `r.b`
+     (`Stmt::write_runs_ref`, `Heap::val_store_here`, `bare`). Every other
+     live reference reads as before: another object's in the same block by
+     `apart(o, …)` (`Changes(o)` from the holder's `a.writes()`) widened
+     with `Sel::apart_ext_l/_r`, then `Sel::get_apart`; a view of `o` by
+     the licence (`CSt::write_lic_hold` then `Inv::lic_apart` with
+     `pl = Pl(o, xs)`, `CSt::unsteps_steps` to get `p.steps` back), then
+     `Sel::get_under` with prefix `r.sels`; other blocks by
+     `Heap::val_store_other`. The holder itself reads `write_at(ss, …, R)`
+     by `Sel::write_get`, which is `e2`'s root by `Steps::write_sels`.
+     `frame`: the block is `owned` (lent or new); `grows`, `inheap`,
+     `bare` by `Heap::store_len`, `Heap::obj_store_holes`.
+   - The state after is `s.written(l).unback(l)`: equal views (no entry's
+     level is a holder's: `vents`), different `touched`/`wrote`. `Inv`
+     must be rebuilt for it (§23.10: `unsteps`, `anc_of`, `Parent`, `up`
+     do not convert between the two states); write `Inv::touch` once,
+     with `refok_keep`, `excl_keep`, `parent_keep`, as `Inv::gone` does.
+   - The words regions read are unchanged at `m2`: plain levels' cells are
+     not touched and a plain cell reads without the heap; copy
+     `stage_write_plain`'s `wsame` (via `Sim::lvl_ix` on the new `Sim`).
+2. **Write through a view** (one writing entry `pe`): the heap changes in
+   the root's block at `root(pe.obj).sels ++ unsteps(pe.reg) ++ ss`; the
+   state becomes pending (`unback`), so `Sim` is against
+   `s2.patched(e2)`, the chain written up by `CSt::up`. Ancestors read the
+   new heap, which is what `up` writes into them; needs lemmas on `up`
+   (one step: `Env::set` of the parent at `en.at`) and `put_back`.
+   Entries not related to `l` are apart by `excl`; descendants by the
+   licence (`write_lic_view`, `meets_view`).
+3. **The write-back** (`is_back`): a pending state's stage; `backed(lv)`;
+   the heap does not change, the meaning catches up one ancestor.
+4. Death and Take of a view's root; `Ret`; then item 4 (`Call`, with the
+   defects B and C reported to the coordinator: written slot is the
+   argument where it refers; distinct fresh results).
 
-- The entry, `Inv::start`, from `ReadAll`, `Dyn::Coded` and `Lendable`
-  (with `Slot`, `Sim::start`, `CSt::start_*`, `Value::get_of_read`).
-- Stages against `Sim`: `Stmt::stage_lit`, `Stmt::stage_op` (with an
-  `is_word` hypothesis on the first operand's code), `Stmt::stage_read`.
-  Each gives `Stepped`: the run continues as `k(m2)` and `Sim` holds after.
-- Words: `Sim::atom_ix` and `Sim::steps_same` (atoms at plain levels: one
-  list of selections in the run and the meaning); `Sim::place` (the run
-  reads a place the checker read at the meaning's value, given the read's
-  residuals).
+**Costs and traps found this session**:
 
-**Stated but open**: nothing is stated without a proof. Still to state and
-prove:
-
-- the stages against `Inv` (lift `Lit`, `Op` and `Read` through
-  `Inv::sim_now`: `Do` runs them only when nothing is pending; every other
-  clause is untouched by a push of a plain cell);
-- `Fresh`; `Take`; `View`; `Write` through a holder and through a view, and
-  the write-back (needs `put_back` and lemmas on `CSt::up`); `Death`;
-  `Call`; `Ret`; then `SafeAt` for a body with no join and no `Jump`;
-- `Dyn::Coded` at each callee from `Stmt::code_step`'s `Call` case.
-
-**The proof shape that worked** (the `Read` stage, end to end; the model
-for the rest):
-
-1. Invert the checker's verdict once into a record (`ReadInv` from
-   `CSt::read_inv`, through `Option::and_then_some` at each `and_then`, the
-   last `map` closed by a `_close` lemma). The stage never re-reads the
-   checker's definition.
-2. Split the residuals the verdict owes (`Residual::all_app`,
-   `Residual::all_true`) and feed them to the meaning-side lemma
-   (`Place::fit_from`: a fit in the meaning).
-3. Carry the meaning's selections to the run's (`Sim::steps_same`), then
-   read through the cell (`Value::get_more` from `Sim::val`).
-4. The run's step is then `j` on the run's own `match` (`λ k => j(sym(at),
-   λ o _ => (match o {…}) = k(m2), refl)`), and `Sim::push` gives the
-   invariant after (with `okc` from the code lemma).
-
-Each step is a lemma with neutral parameters. A `match` on a
-generalized scrutinee (`match x as λ b => x = b → …`) is the one tool for
-every case split on a computed `Bool` or `Option`.
-
-**What cost more than expected, and how it was staged**:
-
-- The indices of atoms (arguments, then locals newest first) against
-  levels: `Sim::atom_ix` splits the argument and local cases. The local
-  case needs `nth_append_r` with an index rewritten by `j` on an `omega`
-  equation.
-- `ReadInv` first lacked the atom residuals and the `rs` split. Extending
-  it meant threading `ha` through `read_inv_close`. Put every fact a later
-  stage needs into the inversion record when you first write it.
-- Method-call syntax on `self` parameters after leading `tys, strs`
-  arguments is mis-resolved. Call `Sim::val(tys, strs, sim, …)`
-  explicitly. `Plain` is ambiguous in expressions (`level2::Plain`), but
-  not in patterns.
-- Recursion that varies a parameter must put the matched parameter first
-  (`Sim::steps_same(self ps, …)`).
-
-**In the interfaces, possibly wrong, not yet raised**:
-
-- `Heap::Frame` exempts every lent block, including those lent to read.
-  A read-lent block is never written (the checker refuses it), so the
-  clause is weaker than it could be, not unsound. The caller's side of a
-  call (its other variables' reads of a read-lent block) then rests on
-  `Written`, `ReadAll` and the licence, not on `Frame`.
-- `Stmt::stage_op` needs the operand's code to be a word. That comes from
-  the code check (`Func::coded`), a separate pass whose results the
-  checker's state does not record. Either fold the code conditions into
-  the checker's pass (planned in §23.7; then the stage gets them from the
-  verdict's inversion), or prove that `Func::coded`'s `CEnv` agrees with
-  the checker's codes at each statement. The first is cheaper.
-- `CSt::RefOk` at a view takes any entry. For straight-line code there
-  is one; after a join a read view has several (its region the union).
-  This should be right, since the licence checks every entry, but item 4
-  will tell.
+- Re-spelling a checker definition's nested `match` inside an inversion
+  (`and_then_some` lambdas) made the kernel's conversion overflow its
+  stack (abort 134, `--timings` `.open.tsv` named the item). Split the
+  checker function so the inversion names the tail (`CSt::write_last`).
+- A `let` whose value is a `match` (even in a lambda) needs its type or a
+  motive (`as λ _ => T`). Constructors `Plain` need `level2::Plain` in
+  expressions.
+- Before adding a lemma, grep: `Sel::get_fit`, `Sel::get_parts`,
+  `Sel::fit_append`, `CSt::var_in` (a function) already existed.
+- Whole-folder check without the cache: about a minute for `sound.hthr`.
 
 ## Log
 
@@ -156,3 +109,4 @@ every case split on a computed `Bool` or `Option`.
 - 2026-11-26: item 3 in progress: stages `Fresh`, `Take` (part, plain, holder), `Death` (part, plain, holder), `View` (plain; to read and to write, of a holder and of a view), with `Inv::push_hold`, `Inv::push_view`, `Inv::gone`, `Inv::kill` and the licence's soundness (`CSt::license_sound`, `Inv::lic_apart`); the invariant gained `young`, `held`, `vents`, `bare`, `chain`, `excl`; the checker's `anc_of` takes the level count as fuel and follows every entry of a parent; `CSt::set` restructured (design §23.9).
 - 2026-11-26: `b771b8e` (the `Fresh`, `Take`, `Death` and `View` stages): `scripts/test --pr`: `== suite: 4140 passed, 0 failed, 3 ignored ==`.
 - 2026-11-26: item 3, the write's groundwork: `Sel::Apart` keeps fits (`SelApart`, model law `fits_over`, `Steps::apart_fit`), `CSt::write_last` split out, `Stmt::stage_write_plain` and the lemmas the holder and view writes use (design §23.10).
+- 2026-11-26: `187e2f5` (apartness keeps fits, the plain write): `scripts/test --pr`: `== suite: 4140 passed, 0 failed, 3 ignored ==`. Handoff rewritten.
