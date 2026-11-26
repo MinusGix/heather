@@ -132,3 +132,114 @@ theorem load_injected(hb: x86_64_memory_contract::Heap, c, off, n: Nat, np: Heap
         trans(cong_fn(λ (o: Option<Piece>) => match o as λ _ => Option<List<BitVec(8)>> { None => None, Some(piece) => piece.plain_bytes() }, taken), plain);
     cong_fn(λ (o: Option<List<BitVec(8)>>) => match o as λ _ => Option<BitVec(64)> { None => None, Some(bytes) => Some(word_of_bytes(bytes)) }, read)
 }
+
+// ---------------------------------------------------------------------------
+// An index atom: its word is level 2's index, modulo 2^64
+
+theorem ix_index(tys: Nat → Type, d: Dyn(tys)): (Dyn::ix(tys, d)).toNat() = Dyn::index(tys, d) {
+    match d {
+        Dyn(c, v) => (match c as λ c2 => (v2: El(tys, c2)) → (Dyn::ix(tys, Dyn(c2, v2))).toNat() = Dyn::index(tys, Dyn(c2, v2)) {
+            SWord(wd) => (match wd as λ w2 => (v2: El(tys, SWord(w2))) → (Dyn::ix(tys, Dyn(SWord(w2), v2))).toNat() = Dyn::index(tys, Dyn(SWord(w2), v2)) {
+                WNat => λ v2 => refl,
+                WBits(_) => λ v2 => refl,
+            }),
+            SNamed(_) => λ v2 => refl,
+        })(v),
+    }
+}
+
+fn word_of_value(o: Option<x86_64_call_contract::Value>) → BitVec(64) {
+    match o { Some(v) => match v { Word(w) => w, Ref(_) => BitVec::ofNat(0) }, None => BitVec::ofNat(0) }
+}
+
+// A word id below where two locals agree reads the same word in both.
+theorem agree_word(l, l2: Locals, next: Nat, ag: Locals::Agree(l, l2, next), t: Typed, k: t.kind = WordKind, lt: t.id < next): l2.word(t.id) = l.word(t.id) {
+    let at = λ (lx: Locals) => cong_fn(λ (kd: ValueKind) => word_of_value(match kd as λ _ => Option<x86_64_call_contract::Value> {
+        WordKind => Some(x86_64_call_contract::Word(lx.words(64, t.id))), RefKind => lx.refs(t.id).map(λ (loc: x86_64_memory_contract::Loc) => x86_64_call_contract::Ref(loc)) }), k);
+    trans(sym(at(l2)), trans(cong_fn(λ (o: Option<x86_64_call_contract::Value>) => word_of_value(o), ag(t, lt)), at(l)))
+}
+
+theorem agree_weaken(l, l2: Locals, a, b: Nat, ag: Locals::Agree(l, l2, b), le: a <= b): Locals::Agree(l, l2, a) { λ t lt => ag(t, { omega }) }
+
+// Where `level` finds a local, it is below the environment's length.
+theorem level_loc(e: PEnv, jj, l: Nat, h: e.level(Loc(jj)) = Some(l)): e.na + jj + 1 <= e.vars.len() {
+    (match q: (e.na + jj + 1).leb(e.vars.len()) as λ bq => (match bq { True => Some(e.vars.len() - 1 - jj), False => None }) = Some(l) → e.na + jj + 1 <= e.vars.len() {
+        True => λ _ => omega(q),
+        False => λ no => absurd(no),
+    })(h)
+}
+
+// The variable an atom names, where `PEnv::get` finds it, is the one level
+// 2's words list holds at the atom's number.
+theorem ixs_at(tys: Nat → Type, e: PEnv, env: REnv(tys), na: e.na = env.args.len(), len: e.vars.len() = (env.args ++ env.locs.rev()).len(), w: Nat, s: PSlot,
+    eg: e.get(atom_var_of(e.na, w)) = Some(s)): (env.args ++ env.locs).nth(w) = Some(REnv::get(tys, env, atom_var_of(e.na, w)))
+{
+    (match q: (w + 1).leb(e.na) as λ bq => e.get(match bq { True => Arg(w), False => Loc(w - e.na) }) = Some(s) →
+            (env.args ++ env.locs).nth(w) = Some(REnv::get(tys, env, match bq { True => Arg(w), False => Loc(w - e.na) })) {
+        True => λ _ => {
+            let lt: (w < env.args.len()) = omega(q, na);
+            trans(List::nth_append_below(env.args, env.locs, w, lt), nth_unwrap(env.args, w, Cell::none(tys), lt))
+        },
+        False => λ eg2 => {
+            let lv = Option::bind_some(eg2);
+            let below = level_loc(e, w - e.na, lv.witness, lv.proof.left);
+            let la = List::len_append(env.args, env.locs.rev());
+            let lr = List::rev_len(env.locs);
+            let lt: (w - e.na < env.locs.len()) = omega(below, na, len, la, lr, q);
+            let at: (w - e.na + env.args.len() = w) = omega(q, na);
+            trans(cong_fn(λ (k: Nat) => (env.args ++ env.locs).nth(k), sym(at)), trans(List::nth_append_r(env.args, env.locs, w - e.na), nth_unwrap(env.locs, w - e.na, Cell::none(tys), lt)))
+        },
+    })(eg)
+}
+
+// What an atom's code leaves.
+fn AtomRan(tys: Nat → Type, strs: Strs(tys), blocks: Blocks, m: Mach(tys), a: Atom, nx: Nat, w1: Word1, cw: Config) → Type {
+    Exists<Config>(λ cw2 => (run_instrs(blocks, w1.instrs, cw) = Some(cw2)) ∧ ((cw2.memory = cw.memory) ∧ ((cw2.io = cw.io) ∧ (Locals::Agree(cw.locals, cw2.locals, nx) ∧
+        ((nx <= w1.next) ∧ ((w1.id < w1.next) ∧ ((cw2.locals.word(w1.id)).toNat() = ((a.ix(Mach::ixs(tys, strs, m))).toNat()).mod(Nat::pow(2, 64)))))))))
+}
+
+theorem atom_lit(tys: Nat → Type, strs: Strs(tys), blocks: Blocks, m: Mach(tys), n, nx: Nat, cw: Config):
+    AtomRan(tys, strs, blocks, m, Lit(n), nx, Word1([Compute(Const(64, nx, n))], nx, nx + 1), cw)
+{
+    let value = λ (w: Nat) => BitVec::ofNat(n, n := w);
+    let l2 = Locals(Valuation::set(cw.locals.words, nx, value), cw.locals.refs);
+    Exists(Config(l2, cw.memory, cw.io), ⟨refl, ⟨refl, ⟨refl, ⟨Locals::agree_set(cw.locals, nx, value, nx, { omega }), ⟨{ omega }, ⟨{ omega },
+        trans(cong_fn(λ (x: BitVec(64)) => x.toNat(), Valuation::set_here(cw.locals.words, nx, value, 64)), BitVec::toNat_ofNat_mod(64, n))⟩⟩⟩⟩⟩⟩)
+}
+
+theorem atom_sound(tys: Nat → Type, strs: Strs(tys), inj: Nat → Nat, blocks: Blocks, act: Act, e: PEnv, m: Mach(tys), c0: Config, next0: Nat,
+    rel: StageRel(tys, strs, inj, blocks, act, e, m, c0, next0), cw: Config, ag: Locals::Agree(c0.locals, cw.locals, next0), a: Atom, nx: Nat, le: next0 <= nx,
+    w1: Word1, h: e.atom(a, nx) = Some(w1)): AtomRan(tys, strs, blocks, m, a, nx, w1, cw)
+{
+    (match a as λ a2 => e.atom(a2, nx) = Some(w1) → AtomRan(tys, strs, blocks, m, a2, nx, w1, cw) {
+        Lit(n) => λ h2 => j(Option::some_inj(Word1([Compute(Const(64, nx, n))], nx, nx + 1), w1, h2), λ w2 _ => AtomRan(tys, strs, blocks, m, Lit(n), nx, w2, cw),
+            atom_lit(tys, strs, blocks, m, n, nx, cw)),
+        Var(w) => λ h2 => match Option::bind_some(h2) as λ _ => AtomRan(tys, strs, blocks, m, Var(w), nx, w1, cw) { Exists(s, p) =>
+            match Option::bind_some(p.right) as λ _ => AtomRan(tys, strs, blocks, m, Var(w), nx, w1, cw) { Exists(t, p2) => {
+                let g = Bool::guard_some(p2.right);
+                let x = atom_var_of(e.na, w);
+                let sl = slot_of(tys, strs, inj, blocks, act, e, m, c0, next0, rel, x, s, p.left);
+                let cell = REnv::get(tys, m.env, x);
+                let wi = one_word_is(s.ids, t, p2.left);
+                let tlt: (t.id < next0) = sl.right(t, j(sym(wi.left), λ ids _ => Mem(t, ids), Inl(refl)));
+                let pd = word_cell(tys, strs, inj, m.heap, s, cell, c0.locals, sl.left, t, p2.left);
+                let d = pd.witness;
+                let wd: (c0.locals.word(t.id) = BitVec::ofNat(Dyn::index(tys, d))) = match word_slot(tys, strs, inj, m.heap, s, cell, c0.locals, sl.left, t, p2.left) {
+                    Inl(none) => absurd(trans(sym(cong_fn(λ (v: level2::Value(tys)) => Value::get(tys, strs, m.heap, v, Nil), pd.proof)), none)),
+                    Inr(dd) => trans(dd.proof.right.right, cong_fn(λ (z: Dyn(tys)) => BitVec::ofNat(Dyn::index(tys, z), n := 64),
+                        Option::some_inj(dd.witness, d, cong_fn(λ (v: level2::Value(tys)) => Value::get(tys, strs, m.heap, v, Nil), trans(sym(dd.proof.left), pd.proof))))),
+                };
+                let cs = m.env.args ++ m.env.locs.rev();
+                let at = ixs_at(tys, e, m.env, rel.right.left, holds_len(tys, strs, inj, m.heap, c0.locals, e.vars, cs, rel.right.right.left), w, s, p.left);
+                let f = λ (cl: Cell(tys)) => Dyn::ix(tys, Value::get(tys, strs, m.heap, cl.v, Nil).unwrap_or(Dyn::none(tys)));
+                let ixe: (Atom::ix(Var(w), Mach::ixs(tys, strs, m)) = Dyn::ix(tys, d)) =
+                    trans(cong_fn(λ (o: Option<Ix>) => o.unwrap_or(INat(0)), List::nth_map_some(m.env.args ++ m.env.locs, f, w, cell, at)),
+                        cong_fn(λ (v: level2::Value(tys)) => Dyn::ix(tys, Value::get(tys, strs, m.heap, v, Nil).unwrap_or(Dyn::none(tys))), pd.proof));
+                let word: ((cw.locals.word(t.id)).toNat() = ((Atom::ix(Var(w), Mach::ixs(tys, strs, m))).toNat()).mod(Nat::pow(2, 64))) =
+                    trans(cong_fn(λ (z: BitVec(64)) => z.toNat(), trans(agree_word(c0.locals, cw.locals, next0, ag, t, wi.right, tlt), wd)),
+                        trans(BitVec::toNat_ofNat_mod(64, Dyn::index(tys, d)), cong_fn(λ (k: Nat) => k.mod(Nat::pow(2, 64)), sym(trans(cong_fn(λ (i: Ix) => i.toNat(), ixe), ix_index(tys, d))))));
+                j(Option::some_inj(Word1(Nil, t.id, nx), w1, g.right), λ w2 _ => AtomRan(tys, strs, blocks, m, Var(w), nx, w2, cw),
+                    Exists(cw, ⟨refl, ⟨refl, ⟨refl, ⟨Locals::agree_refl(cw.locals, nx), ⟨{ omega }, ⟨{ omega }, word⟩⟩⟩⟩⟩⟩))
+            } } },
+    })(h)
+}

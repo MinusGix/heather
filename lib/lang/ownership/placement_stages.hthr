@@ -510,6 +510,32 @@ theorem word_slot(tys: Nat → Type, strs: Strs(tys), inj: Nat → Nat, h: level
 }
 
 // ---------------------------------------------------------------------------
+// A slot holding, by the cell's value alone
+
+fn ValueHolds(tys: Nat → Type, strs: Strs(tys), inj: Nat → Nat, h: level2::Heap(tys), s: PSlot, v: level2::Value(tys), l: Locals) → Type {
+    (value_live(tys, h, v) = True →
+        (read_values(s.ids, l) = value_lower(tys, strs, inj, h, v)) ∧ ((Value::get(tys, strs, h, v, Nil)).map(λ (d: Dyn(tys)) => d.code) = Some(s.code))) ∧
+    (s.word().is_some() = True → Value::refers(tys, v) = False)
+}
+
+theorem holds_value(tys: Nat → Type, strs: Strs(tys), inj: Nat → Nat, h: level2::Heap(tys), s: PSlot, c1, c2: Cell(tys), l: Locals, e: c1.v = c2.v,
+    hs: SlotHolds(tys, strs, inj, h, s, c1, l)): SlotHolds(tys, strs, inj, h, s, c2, l)
+{
+    j(e, λ v _ => ValueHolds(tys, strs, inj, h, s, v, l), hs)
+}
+
+// A word slot's cell is a plain value.
+theorem word_cell(tys: Nat → Type, strs: Strs(tys), inj: Nat → Nat, h: level2::Heap(tys), s: PSlot, c: Cell(tys), l: Locals,
+    hs: SlotHolds(tys, strs, inj, h, s, c, l), t: Typed, sw: s.word() = Some(t)): Exists<Dyn(tys)>(λ d => c.v = Plain(d))
+{
+    let nr: (Value::refers(tys, c.v) = False) = hs.right(cong_fn(λ (o: Option<Typed>) => o.is_some(), sw));
+    (match c.v as λ v => Value::refers(tys, v) = False → Exists<Dyn(tys)>(λ d => v = Plain(d)) {
+        Plain(d) => λ _ => Exists(d, refl),
+        Refer(_) => λ no => absurd(no),
+    })(nr)
+}
+
+// ---------------------------------------------------------------------------
 // `Op`: a word operation at 64 bits
 
 theorem Shape::eq_of_same(a, b: Shape, h: a.same(b) = True): a = b {

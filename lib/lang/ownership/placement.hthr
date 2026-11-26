@@ -317,17 +317,22 @@ record Walk { instrs: List<Instr>, place: Nat, len: Option<Nat>, code: Shape, ne
 // An atom's word id: a literal is a constant, a variable its word.
 record Word1 { instrs: List<Instr>, id: Nat, next: Nat }
 
+// `x` where `b` holds.
+fn Bool::guard<B>(b: Bool, x: Option<B>) → Option<B> { match b { True => x, False => None } }
+
+// A body's variable numbered as atoms number it: the arguments, then the
+// locals newest first.
+fn atom_var_of(na, w: Nat) → Var { match (w + 1).leb(na) { True => Arg(w), False => Loc(w - na) } }
+
+// A narrow word is held zero-extended: its 64-bit view is its value.
+fn PSlot::atom_word(self s: PSlot, next: Nat) → Option<Word1> {
+    s.word().and_then(λ t => Bool::guard(s.code.word_size().is_some(), Some(Word1(Nil, t.id, next))))
+}
+
 fn PEnv::atom(self e: PEnv, a: Atom, next: Nat) → Option<Word1> {
     match a {
         Lit(n) => Some(Word1([Compute(Const(64, next, n))], next, next + 1)),
-        Var(w) => {
-            let v = match (w + 1).leb(e.na) { True => Arg(w), False => Loc(w - e.na) };
-            match e.get(v) {
-                None => None,
-                // A narrow word is held zero-extended: its 64-bit view is its value.
-                Some(s) => match s.code { SWord(wd) => match wd.size() { Some(_) => s.word().map(λ t => Word1(Nil, t.id, next)), None => None }, SNamed(_) => None },
-            }
-        },
+        Var(w) => e.get(atom_var_of(e.na, w)).and_then(λ s => s.atom_word(next)),
     }
 }
 
@@ -502,9 +507,6 @@ fn PEnv::read_place(tys: Nat → Type, strs: Strs(tys), self e: PEnv, p: Place, 
         },
     }
 }
-
-// `x` where `b` holds.
-fn Bool::guard<B>(b: Bool, x: Option<B>) → Option<B> { match b { True => x, False => None } }
 
 // A word code's width.
 fn Shape::word_of(self c: Shape) → Option<Width> { match c { SWord(w) => Some(w), SNamed(_) => None } }
