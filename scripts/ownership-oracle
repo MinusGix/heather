@@ -265,15 +265,19 @@ def run_search(path, np, k, jobs, cap, label=""):
     parts = [(lo, min(chunk, total - lo)) for lo in range(0, total, chunk)]
     t0 = time.time()
     with ThreadPoolExecutor(jobs) as ex:
-        res = list(ex.map(lambda p: heather_eval(path, f"search_enc({np}, {k}, {p[0]}, {p[1]}, {cap})"), parts))
+        res = list(ex.map(lambda p: heather_eval(path, f"search_stream({np}, {k}, {p[0]}, {p[1]})"), parts))
     dt = time.time() - t0
     counts = [0] * 5
     found = []
     for xs in res:
-        for i in range(5):
-            counts[i] += xs[i]
-        r = Rd(xs[5:])
-        found += r.many(lambda: finding(r))
+        r = Rd(xs)
+        while r.i < len(xs):
+            counts[0] += 1
+            for i in (1, 2, 3):
+                counts[i] += r.n()
+            fs = r.many(lambda: finding(r))
+            counts[4] += len(fs)
+            found += fs
     return counts, found, dt
 
 

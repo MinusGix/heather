@@ -266,7 +266,10 @@ record Tally { progs: Nat, tried: Nat, owed: Nat, due: Nat, found: List<Finding>
 
 fn Tally::zero() → Tally { Tally(0, 0, 0, 0, Nil) }
 
-fn Tally::add(self a, b: Tally) → Tally { Tally(a.progs + b.progs, a.tried + b.tried, a.owed + b.owed, a.due + b.due, a.found ++ b.found) }
+fn Tally::add(self a, b: Tally) → Tally { Tally(a.progs + b.progs, a.tried + b.tried, a.owed + b.owed, a.due + b.due, b.found ++ a.found) }
+
+// The tallies of a short list, summed.
+fn gen_flat_tally<A>(xs: List<A>, f: A → Tally) → Tally { match xs { Nil => Tally::zero(), Cons(x, r) => (f(x)).add(gen_flat_tally(r, f)) } }
 
 fn gen_try(f: Func, d: Owes, vs: List<Value(tys())>) → Tally {
     let p = gen_prog(f);
@@ -284,11 +287,10 @@ fn gen_try(f: Func, d: Owes, vs: List<Value(tys())>) → Tally {
     }
 }
 
-fn gen_run_one(f: Func) → Tally {
-    match check(tys())(strs(), λ g => match g { Zero => f.sig, Succ(_) => none_f().sig }, λ _ => False, λ _ => False, 0, f) {
-        None => Tally::zero(),
-        Some(d) => (gen_args(f.sig.params)).foldl(λ (t: Tally) (vs: List<Value(tys())>) => t.add(gen_try(f, d, vs)), Tally(1, 0, 0, 0, Nil)),
-    }
+// The checker's pass over a `Ret` at a prefix's state: a filter before the
+// whole function is checked by `check`.
+fn gen_leaf_ok(sg: Sig, s: CSt, xs: List<Var>) → Bool {
+    match (Ret(xs)).verdict(tys(), strs(), λ _ => sg, λ _ => False, λ _ => False, 0, s) { VOk(_) => True, VNo(_) => False }
 }
 
 // Every function over the parameters `ps` with a body of at most `k`
@@ -297,20 +299,13 @@ fn gen_funcs(ps: List<Param>, k: Nat) → List<Func> {
     let sigs = λ (_: Nat) => Sig(ps, Nil);
     let na = ps.len();
     gen_flat(gen_prefixes(sigs, na, k, Prefix(Nil, CSt::start(tys(), strs(), Sig(ps, Nil)), 0)),
-        λ pre => (gen_rets(ps, pre.st, na, pre.nl)).map(λ ro => Func(Sig(ps, ro.fst), seq(pre.ss.rev(), Ret(ro.snd)))))
+        λ pre => ((gen_rets(ps, pre.st, na, pre.nl)).filter(λ ro => gen_leaf_ok(Sig(ps, ro.fst), pre.st, ro.snd))).map(λ ro => Func(Sig(ps, ro.fst), seq(pre.ss.rev(), Ret(ro.snd)))))
 }
 
 // The search at parameter lists of at most `np` parameters and bodies of
 // at most `k` statements; the parameter lists are cut to those from index
 // `lo`, `n` of them, so a driver can split the work.
 fn gen_param_lists(np: Nat) → List<List<Param>> { gen_lists(gen_params(), np) }
-
-fn search(np, k, lo, n: Nat) → Tally {
-    (((gen_param_lists(np)).drop(lo)).take(n)).foldl(λ (t: Tally) (ps: List<Param>) => (gen_funcs(ps, k)).foldl(λ (t2: Tally) (f: Func) => t2.add(gen_run_one(f)), t), Tally::zero())
-}
-
-// The counts alone: programs checked, inputs tried, owed, due, findings.
-fn search_counts(np, k, lo, n: Nat) → List<Nat> { let t = search(np, k, lo, n); [t.progs, t.tried, t.owed, t.due, t.found.len()] }
 
 // How many functions the generator offers the checker.
 fn count_funcs(np, k, lo, n: Nat) → Nat { (((gen_param_lists(np)).drop(lo)).take(n)).foldl(λ (c: Nat) (ps: List<Param>) => c + (gen_funcs(ps, k)).len(), 0) }
@@ -329,8 +324,15 @@ fn encd(d: Dyn(tys())) → List<Nat> {
 
 fn enc_finding(x: Finding) → List<Nat> { Cons(x.clause, enc_func(x.f) ++ enc_list(λ (v: Value(tys())) => enc_value(tys(), encd, v), x.vs)) }
 
-// The search's counts, then its first `cap` findings, as numbers.
-fn search_enc(np, k, lo, n, cap: Nat) → List<Nat> {
-    let t = search(np, k, lo, n);
-    [t.progs, t.tried, t.owed, t.due, t.found.len()] ++ enc_list(enc_finding, t.found.take(cap))
+// The search as a stream of numbers, one record per checked function: the
+// inputs tried, owed, and owing, then its findings (each its clause, the
+// function, the arguments). Nothing accumulates: the driver reads the
+// stream as it is made and sums it.
+fn gen_record(t: Tally) → List<Nat> { [t.tried, t.owed, t.due] ++ enc_list(enc_finding, t.found) }
+
+fn search_stream(np, k, lo, n: Nat) → List<Nat> {
+    gen_flat(((gen_param_lists(np)).drop(lo)).take(n), λ ps => gen_flat(gen_funcs(ps, k), λ f => match check(tys())(strs(), λ g => match g { Zero => f.sig, Succ(_) => none_f().sig }, λ _ => False, λ _ => False, 0, f) {
+        None => Nil,
+        Some(d) => gen_record(gen_flat_tally(gen_args(f.sig.params), λ vs => gen_try(f, d, vs))),
+    }))
 }
