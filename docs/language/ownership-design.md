@@ -4014,8 +4014,28 @@ written twice.
   entry is on no chain, and a level with a pending entry need not be shown to
   have one entry.
 
-No new invariant clause; `pone` stays until the write-back stages are
-restated over `patched_back`, and then goes. `BackAt` collects what a stage
-supplies: `sib` at the meaning's words, `uni`, `wpar` and `chain` through
-`Walkable`, the levels a place reads plain (`words`), and `nk` from the
-verdict.
+No new invariant clause, and `pone` is gone. `BackAt` collects what a stage
+supplies (`Stmt::back_at`): `sib` at the meaning's words (`Inv::at_sels`:
+the patch keeps the plain variables, `CSt::pfold_agree`), `uni`, `wpar` and
+`chain` through `Walkable`, the levels a place reads plain (`words`), and
+`nk` from the write's read licence (`Stmt::back_nk`).
+
+**The stages restated.**
+- **The chain refers, the child pending** (`stage_back_ref_pend`). The
+  stage is now `patched_back` alone: the meaning after is the fold's step at
+  the child (`wstep_one`), and the heap is unchanged.
+- **The chain refers, nothing pending** (`stage_back_ref_none`). Unchanged.
+  With the child written back, the checker allows it only while nothing is
+  pending.
+- **The chain is copies** (`stage_back_copy`), with other chains pending
+  elsewhere. A level on a chain the patch writes up refers
+  (`CSt::pend_refers`, `uni` up `anc_of`), so the patch never writes a copy
+  (`CSt::pfold_plain`). Setting a copy's cell and meaning commutes with the
+  patch (`CSt::patched_copy_set`, over `pfold_set`). The two flags the
+  write-back changes are on copies, so they move no chain
+  (`CSt::patched_reback_copy`). `Inv::set_cell` now works over the patched
+  meaning: it takes the meaning at the variable as patched
+  (`Env::get(patched, x) = Env::get(e, x)`) and the patch after it as the
+  patch before, set there.
+- The view's death and `Inv::rekin` lost their `pone` premise. Nothing else
+  changed.
