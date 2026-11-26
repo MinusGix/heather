@@ -653,3 +653,12 @@ fn view_loop_r() → Func {
 }
 
 theorem view_loop_refused(): Pair(why([view_loop_r()], 0), Pair(in_fragment([view_loop_r()]), placed([view_loop_r()]).is_some())) = Pair(None, Pair([True], False)) { refl }
+
+// An index into elements of eight bytes is shifted by three (§25.10): the
+// shift is `ShiftLeft`'s literal amount, one node, its output the scaled
+// index.
+theorem scaled_shifts(): Pair(scaled(Word1(Nil, 5, 9), 8), scaled(Word1(Nil, 5, 9), 1)) = Pair(Word1([Compute(ShiftLeft(64, 9, 5, 3))], 9, 10), Word1(Nil, 5, 9)) { refl }
+
+// The node shifts 7 to 56.
+theorem scaled_value(): ((Compute(ShiftLeft(64, 9, 5, 3))).step(Blocks(λ _ => False), Config(Locals(Valuation::set(Valuation::zero(), 5, λ (w: Nat) => BitVec::ofNat(7)), λ _ => None),
+        x86_64_memory_contract::Heap(Nil, Nil, Nil), io0()))).map(λ (c: Config) => c.locals.word(9).toNat()) = Some(56) { refl }

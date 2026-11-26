@@ -331,11 +331,13 @@ fn PEnv::atom(self e: PEnv, a: Atom, next: Nat) → Option<Word1> {
     }
 }
 
-// An index scaled to bytes.
+// An index scaled to bytes: shifted left by the element size's exponent,
+// `ShiftLeft`'s amount being the literal shift (§25.10: it was once the
+// id the shift was put in, wrong at every element wider than a byte).
 fn scaled(i: Word1, size: Nat) → Word1 {
     match size.same(1) {
         True => i,
-        False => Word1(i.instrs ++ [Compute(Const(64, i.next, size_shift(size))), Compute(ShiftLeft(64, i.next + 1, i.id, i.next))], i.next + 1, i.next + 2),
+        False => Word1(i.instrs ++ [Compute(ShiftLeft(64, i.next, i.id, size_shift(size)))], i.next, i.next + 1),
     }
 }
 
