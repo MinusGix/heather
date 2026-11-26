@@ -29,106 +29,94 @@ Items 1 and 2 are definitions and evaluation; item 3 waits for the coordinating 
 
 `CheckSound` has an inhabitant for the fragment, the experiments' programs are probes or theorems of the real modules, and the experiment modules are gone.
 
-## Handoff (2026-11-26, end of the tenth session: P4 done, P5's builders, three questions open)
+## Handoff (2026-11-26, end of the eleventh session: step 0 landed, P5 begun)
 
-Continue on branch `claude/ownership-checker-sound`. Read design §23.20
-(this session) after §23.17–§23.19. The call's parts are at the end of
-`lib/lang/ownership/sound.hthr`, after `LentFrame::call`.
+Continue on branch `claude/ownership-checker-sound`. Read design §23.21
+(this session) after §23.17–§23.20. The call's parts are at the end of
+`lib/lang/ownership/sound.hthr`, after `LentFrame::call`. The coordinating
+session's branch (`origin/claude/focused-darwin-it31c1`, design §24) is
+merged in: put new §23 subsections **before the line `## 24.`**. Findings
+from its soundness search arrive batched, each to be landed as its own
+commit before continuing.
 
 **Done this session:**
-- **P4 complete.** The swap is `Inv::call_swap` (block by block via
-  `Heap::call_block`; `Inv::call_untaken` over `CSt::lend_all_take`,
-  `lend_all_gone`, `lend_all_thin`, `lend_take`). The assembly is
-  `Inv::call_after`: from `SafeAt`'s Done conclusions, the invariant at
-  `nl.st`, meaning `s.puts_mean(…)`, machine `Mach(a.heap, m.env, a.io)`,
-  the same `root`.
-- **Roots are an index of `Inv` and `Stepped`** (`Inv(tys, strs, s, e, m,
-  h0, lent, root)`), no longer a field. Every builder states its roots.
-  Theorems take `{root: Nat → Option<Ref>}` beside `{lent}`.
-- **`Inv::fresh` is heap growth then `Inv::bind_fresh`** (`Inv::heap_rest_ws`
-  takes the region words directly). Also `Inv::bump`.
-- **P5's builders**: `Inv::bind_fresh` (a fresh result at the callee's
-  block), `Inv::bind_fresh_plain` (passed by value), `Inv::bind_moved` (a
-  moved argument answered back; `CSt::holds_none`). A plain result is
-  `Inv::push_plain`; a read view will be `Inv::push_view`.
-- **A checker defect fixed**: a moved parameter answered twice gave the
-  caller two owners (`CSt::holds` in `CSt::result`; probes
-  `twice_param_refused`, `once_param_checked`).
-- `issues/native-linked-gate-fails-under-load.md` filed: the gate's
-  compiles were OOM-killed (empty stderr) while a `heather check` ran
-  beside the suite.
-- `issues/ownership-sound-consolidate.md` filed (the coordinating
-  session's item 3). The roots-as-index step is its first piece.
-
-**The coordinating session's rulings (after this session's reports):**
-- **Results' codes (accepted).** Add to `SafeAt`'s `Done` part
-  `Dyn::Coded(tys, (w(g, ds)).take(nres), result codes)`.
-  - A body gives it from its `Ret` (in `RetOk`).
-  - A primitive's from a new premise of `CheckSound`, `World::Coded`, in
-    `verdict.hthr` beside the world's type.
-  - Probes: the checked caller `y = g(); z = Read(y.f)`, and the `¬`
-    theorem that without the law the run is stuck at a world answering a
-    word.
-  - Add both to §23.17's list. Ask the same question of everything else
-    a primitive answers.
-- **`twice_param`.** Part 1 is done (e1f701d): the callee's `Ret` refuses
-  answering an owned object twice.
-  - Part 2: `Value::FreshApart` becomes "every owning result, fresh or a
-    moved parameter, in different blocks" (rename it, extend
-    `Inv::ret_fresh_apart`/`fresh_hold` to `OParam` of a taken parameter).
-    Watch for this: an owning holder at `Ret` need not be `AcOwn` by any
-    `Inv` clause. A cell with `own` gives `own`'s "alone in its block",
-    which may be the better route.
-  - Part 3: then drop the caller-side `CSt::holds` test, with `noh` from
-    the interface (two owning results in different blocks, both the
-    argument by `ViewIs`: a contradiction).
-- **P6 by peeling: accepted.**
-- **Suite rule:** `--pr` only on a clean committed tree with nothing else
-  heavy running. Edit in a second worktree with its own
-  `HEATHER_CACHE_DIR`, or wait.
-
-**Still open with the coordinating session:** forward atoms in a view
-result's region (`found_sig`), and a view result whose region names a
-caller level that is a view of a word (`at_by_view0`; §23.20).
+- **Step 0, the four rulings** (§23.21; suite green at da2faef):
+  - A. `SafeAt`'s Done part concludes the results coded
+    (`Dyn::Coded(…, (p.w(g, ds)).take(nres), sig.res_params())`); a
+    primitive's by the world's law `Prog::Coded`, a premise of
+    `CheckSound`; a body's from `Ret` (`RetOk.coded`, `Sim::coded_res`).
+  - B. `Value::OwnedApart` (every owning result, fresh or a moved
+    parameter) replaces `FreshApart`, proved at `Ret`
+    (`Inv::owned_hold`, `ret_not_owned`, `ret_owned_apart`). The
+    caller-side `CSt::holds` is gone. `CSt::returns` asks a parameter
+    answered back to be held `AcOwn` (`CSt::returns_param`): a test that
+    never refuses under `Sig::ok`, standing in for an invariant.
+  - B′/C. **`Sig::ok`** (checker.hthr), tested in `Func::verdict` and at
+    each call: `OParam` names a taken parameter, `OView` a read one; a
+    result's code is what its origin gives (the parameter's, or the code at
+    the view's steps by `Shape::steps_ok`); a view's steps name parameters
+    and earlier results only (the telescope).
+  - D. `CSt::result`'s `OView` case runs `atoms_ok` on the levels its
+    region names.
+  - `Body::stage_ret` now takes `ld: Lendable`, `sok: Sig::ok` and `cd`
+    (the `Ret` code check).
+- **P5 begun**: `Ref::Grown` (how a binding leaves the roots: all kept, a
+  new one the block of the result that owns it) and
+  **`Inv::bind_fresh_result`**: a fresh result bound, all three kinds
+  (plain value; holder with no root; holder of the callee's block), from
+  per-result facts `SafeAt` gives.
 
 **Next, in this order:**
-0. The two interface changes above (codes, owning results apart) and the
-   `Ret` stage's proofs of them; then drop the caller-side `CSt::holds`.
-1. P5's binding over `CSt::results` and `Cell::results` (results first,
-   then the slots, the run pushing all `n` cells at once). Carry the facts
-   relating each state to the pre-call `s`:
-   - the same `na`;
-   - the old levels' roles as after the lends;
-   - the old views kept, new entries at new levels, all `Reading` and
-     back;
-   - the roots agreeing below `s.nobj`, each later root a fresh block's.
-   Then the view-result builder from `push_view`, after question 2.
-   `Inv::bind_moved` takes `own`, `owned` and `apart` of the moved holder
-   before the call, and `!s.holds(o)` from the checker.
-2. P6 by peeling (§23.20):
-   - Weaken `BackAt.nk` to pending children. Its uses are `step_keeps`
-     (give it `pend_in` at the level, as `pfold_back` has `pt`) and
-     `CSt::noanc` (thread `pend_in` along the ancestors). A first attempt
-     showed only those two sites break.
-   - Then build `BackAt` at each virtual state up each slot's chain, the
-     slots pushed as written-back views then `Inv::rekin`. The final
-     agreement is `s3.patched(push_all(e, …)) = push_all(eK, …)` pointwise.
-3. P7 (the moved argument: likely already covered by `Inv::lends` and the
-   swap; check), P8 (`Like` at the call with `CallFits`), P9 (the stage).
-   Then the consolidation issue, then the body induction.
+1. **P5, the proof's own invariant first**: binding a moved argument needs
+   its holder's cell to be owned. `Cell::pass` hands over the reference only
+   when `c.own`; otherwise the result comes back a plain copy (`ViewIs`)
+   while `root(o)` keeps the block, and `href` breaks. It does not follow
+   from `own` (the converse), `href` or `args`. Add an `Inv` clause: "a
+   level holding an object to own (`KHold(o, AcOwn)`) whose object has a
+   root has an owned cell". About fifteen `Inv(…)` construction sites
+   (`grep -n "^    Inv(" sound.hthr`). It holds at each: `Inv::start` from
+   `Cell::args` (`own = take && refers`), `Fresh` and `bind_fresh` push owned
+   cells, `bind_fresh_plain` has no root, `Take` of a whole holder pushes
+   the same cell (`run.hthr`, `Take(p)`), a call's results are
+   `owns && refers` (`Cell::results`). Record it in
+   §23.21 (the coordinating session agreed it is the proof's).
+2. **P5, the moved result**: `Inv::bind_moved_result` beside
+   `bind_fresh_result`. `CSt::result` at `OParam(i)` decides by the
+   parameter's code: plain → `push_plain` (the argument was passed by value,
+   `Lendable.plain`; `ViewIs` gives a plain cell), moving → `bind_moved`.
+   Generalise `bind_moved` to a cell `c` with `c.v = Refer(r)`,
+   `c.own = True` (record eta holds by `refl`). Its `nh` (no level holds
+   `o`): the moved holder is gone after the lends (`CSt::lend_take`), and an
+   earlier result holding `o` would be a second owning result in the same
+   block (`OwnedApart`; `ViewIs` says both are the argument).
+3. **P5, the view result**: from `Inv::push_view`, its region's levels
+   plain by `atoms_ok` (ruling D) and bound before it (the telescope).
+4. **P5, the fold**: over `CSt::results` and `Cell::results`/`Dyn::take_n`
+   (split lemmas: the first `nres` cells are the results', the rest the
+   slots'). Carry, from the pre-call `s`: the same `na`; the old levels'
+   roles as after the lends; the old views kept, new entries at new levels,
+   `Reading` and back; `Ref::Grown` step by step, which with `OwnedApart`
+   discharges the next fresh result's `fr`. `SafeAt` gives per result:
+   `ReadAll` (the cell reads `d`), `Coded` (`d.code = r.code`), `Views`
+   (`ViewIs`), the cell's `own` by `Cell::results` (`owns && refers`).
+5. P6 by peeling (§23.20: `BackAt.nk` weakened to pending children, through
+   `step_keeps` and `CSt::noanc`), P7–P9, then report to the coordinating
+   session.
 
 **Traps found this session:**
-- A lambda binder typed `Refer(r) = Refer(r2)` cannot infer `tys`. Bind a
-  `let cl: Cell(tys) = …` and type it `cl.v = Refer(r2)`.
-- A theorem declared later in the file is out of scope (`Inv::heap_rest`
-  at the end could not serve `Inv::fresh`). Make a variant taking what the
-  late lemma derived (`heap_rest_ws`).
-- Do not run a whole-file `heather check` while the suite's native gates
-  run: the shared memory limit OOM-kills a compile (the
-  native-linked-gate issue).
-- `--cache` reports "0 declarations kernel-checked" on a rerun after a
-  passing check: the first run checked it. A deliberate break confirms a
-  new theorem is really checked.
+- `fn Roots::Grown` fails: a member needs an existing owner type
+  (`Ref::Grown`).
+- A `let` typed `(match … ) = True` must be parenthesised whole:
+  `let h: ((match …) = True) = …`.
+- A value `Cell(Refer(Ref(b, Nil)), True)` in a type cannot infer `tys`
+  even under `let x: (… = c)`; bind `let mk = λ (u: Value(tys)) (z: Bool) =>
+  Cell(u, z)` and a typed `let rq0: Value(tys) = Refer(…)`.
+- `j(eq, P, P(a))` rewrites forward to `P(b)`: to get a property of `c.v`
+  from one of `Refer(q)` use `sym(cq)`.
+- `git checkout <file>` to clean a scratch edit reverts all of the file's
+  work: copy scratch files to the scratchpad instead.
+- The full `sound.hthr` check with the cache takes some ten minutes after
+  an edit near its end; `--timings` with `.open.tsv` names the item running.
 
 ## Log
 
@@ -160,3 +148,4 @@ caller level that is a view of a word (`at_by_view0`; §23.20).
 - 2026-11-26 (ninth session): P4 built but for the swap and the assembly: the lends (`Inv::lends`), the frame's premises (`Inv::call_un`, `Inv::call_lk`), `Inv::heap_rest`, the licence across the lends (`CSt::license_eq`, `Inv::view_off_by`), the puts (`Inv::put_arg`, `Inv::puts`, `Inv::put_at_arg`), the swap's block and list lemmas; design §23.19. `scripts/test --pr` at `0ba781f`: `== suite: 4139 passed, 1 failed, 3 ignored ==`, the failure `native_linked.rs` (`linked_exports_are_what_the_compiler_emits`, the sha256 certificate check), which this branch does not touch (only `sound.hthr` changed); rerun alone (`scripts/test --pr --test native_linked`): `== suite: 2 passed, 0 failed, 0 ignored ==`, a flake under the suite's load beside the library gate. `f535c5a` (list lemmas) after it is checked by `heather check --cache` only.
 - 2026-11-26 (tenth session): P4 complete (`Inv::call_swap` over `Heap::call_block` and `Inv::call_untaken`; `Inv::call_after`); roots an index of `Inv`/`Stepped`; `Inv::fresh` as growth then `Inv::bind_fresh`; P5's builders `bind_fresh_plain`, `bind_moved`; checker fix: a moved parameter answered twice refused (`CSt::holds`, `twice_param_refused`). Issues `native-linked-gate-fails-under-load` (a resource kill, not a nondeterminism) and `ownership-sound-consolidate` filed; three questions for the coordinating session (results' codes, forward atoms, non-plain atoms in a result view's region). Design §23.20. `scripts/test --pr` at 42e9bfd: `== suite: 4140 passed, 0 failed, 3 ignored ==`.
 - 2026-11-26 (tenth session, after the rulings): native_linked prints a failed compile's exit status (a5405d9, issue closed); the callee's `Ret` answers an owned object once, `twice_param_refused` at the callee (e1f701d); rulings recorded in §23.20 and the handoff. `scripts/test --pr` at dfdc63c, clean tree, nothing else running: `== suite: 4140 passed, 0 failed, 3 ignored ==`.
+- 2026-11-26 (eleventh session): step 0, the four rulings (§23.21): results coded (`Prog::Coded`), owning results apart (`Value::OwnedApart`), `Sig::ok` (modes, codes by origin, the telescope), atoms plain at a view result; `scripts/test --pr` at da2faef: `== suite: 4140 passed, 0 failed, 3 ignored ==` (the run before, at dde16c0, `4138 passed, 2 failed`: `scripts/fmt` on checker_tests, and native_linked's compile killed by signal 9 under the suite's own load, passing on the rerun). Then `Sig::ok`'s code clause and P5's `Inv::bind_fresh_result`: `--pr` at 6af0289: `== suite: 4140 passed, 0 failed, 3 ignored ==`. Merged the coordinating branch (design §24).
