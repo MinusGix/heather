@@ -114,8 +114,20 @@ opened on the written root at the written steps is a `Back`.
   write on a pending chain. The restatement replaces both with agreement
   outside live write views and a sync clause.
 
+**Verification base:** `HEATHER_PR_BASE=4bf882b scripts/test --pr` (the
+coordinating session's full gate passed 4bf882b on its own); quote the base
+with the suite line. Do not merge the coordinating branch (the slice's
+`placement*.hthr` match on statement kinds; the slice session merges this
+branch and adapts).
+
 **Next, in order** (the coordinating session's list; ask it for the order
-of the restatement's pieces): the restatement of §26 on the split modules,
+of the restatement's pieces): with the restated stages, **the run stuck
+wherever the meaning takes a fallback** (§26.5 on the coordinating branch: an
+operation or test on words of different codes, a store whose value's code is
+not the place's, an argument, result or `Jump` argument of the wrong code, a
+join's arm yielding a different code; the coordinating session has the exact
+list of fallbacks), each stage gaining "not stuck by codes" from the code
+check; the restatement of §26 on the split modules,
 starting from the clauses above; the body induction; joins, `Jump`, fuel,
 `CheckSound`; the experiments retired.
 

@@ -3735,6 +3735,10 @@ Retired: `value_steps.hthr`, `coded.hthr` and their probes, and
     `Sel::same`. Probes: `view_clause` (a view narrowed at `IWord(64, i)`)
     and `view_of_plain` (a view of a by-value parameter owes `False`).
   - `CheckSound` quantifies over a checker, since the checker is not built.
+  - **The body's statements, later (§23.23):** a write-back is its own
+    statement `Back(p, x)` (a `Write` of that shape is refused), and
+    `Len(p, w)` reads a place's length as a word, owing `RLen` at a bounded
+    width. Bodies that wrote back with `Write` say `Back`.
 
 ### 22.3 What was measured
 
