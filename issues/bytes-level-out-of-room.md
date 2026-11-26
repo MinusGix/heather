@@ -48,6 +48,7 @@ A routine that calls itself lowers with a guard and a theorem whose premise does
 - 2026-11-26: Step 3 item 1 at 057f2f0: the contract restated with the escape inside the claim (Tracked with the escape, SpentAt, OutOfRoom, TracksAt closing it, MeetsDone/MeetsExited at their outcome, tracked_prefix and performs_or_meet over an exiting escape; bytes_level_whole's LinuxRuns and RunsAsMeaning with the alternative at each branch's end). HEATHER_PR_NATIVE=all scripts/test --pr: '== suite: 4140 passed, 0 failed, 3 ignored =='; scripts/linked --check unchanged; scripts/fmt --check, scripts/lib-closures clean.
 - 2026-11-26: Step 3 item 2 at 4a04831: the guard's stage lemma Site::guard_claims (bytes_level_lower), with Stack::offset_small, Stack::room_word, guard_immediate, guard_taken. Item 3 foundations at 44ea99a: Kernel::escaping and its conversions (x86_64_stack_runs), HistoryExtends of the meaning (bytes_level_scope, bytes_level_routines). The coordinating session accepted item 1 as built (RunsAsMeaning as LinuxRuns) and the kernel-step encoding with conditions (below).
 
+- 2026-11-26: Verified at 37021c5 (items 1–2 and item 3's foundations): HEATHER_PR_NATIVE=all scripts/test --pr '== suite: 4140 passed, 0 failed, 3 ignored =='. The ceiling count at K_E (Site::escaping_ceiling) after it, checked by heather check on the contract and its importers. Handoff (third session) below.
 ## Handoff (2026-11-26, third session, after step 3 items 1–2 and item 3's foundations)
 
 **Done.**
@@ -57,6 +58,7 @@ A routine that calls itself lowers with a guard and a theorem whose premise does
   - `Kernel::escaping(kernel, E)`: E's states are calls with nothing owed.
   - `performs_or_of_escaping` converts a claim at `escaping(E)` into the root's `PerformsOr(goal, E)`, at the same count; `escaping_of_performs_or` and `claims_escaping` go the other way at one call more; `performs_or_kernel` widens a kernel.
   - `HistoryExtends`, of the meaning alone: `Body::run_extends`, `Routine::call_extends`, `program_extends`.
+  - The ceiling count at `K_E` (x86_64_call_contract): `Site::linux_escaping`, `Site::escaping_reaches`, `Site::escaping_ceiling` (a claim whose goal's and escape's worlds are no longer than `top`'s has the count `|top| − |from| + 1`), `ceiling_absurd`, `extends_len`.
 
 **The coordinating session's conditions on item 3** (ruled; build on them):
 1. The contract's statement does not change: `Tracks` stays in `LinuxPerformsOr(goal, E)`. `K_E = linux_kernel(stack).escaping(E)` is the regions' working form. There is **one** conversion at the routine boundary (`performs_or_of_escaping`), and nothing above the boundary mentions `K_E`.
@@ -71,7 +73,7 @@ A routine that calls itself lowers with a guard and a theorem whose premise does
 - **Counts.** An escape at `K_E` spends one call. So a region's count cannot be `calls_between(before, after)`: a guard firing at a call whose callee makes no exchange has no call to spend. Existential counts do not compose either. FunctionIR's `may_emit_claim_seq` wants one count for every `mid`, which is why today's `emits_now_up` lifts each part to the whole's count.
 - **Ceiling counts.** Fix, for a whole routine's proof, a ceiling world `TOP`: the outcome's world, `a.io` done or the stop's world. Give every region from `before` the count `|TOP.past| − |before.io.past| + 1`.
   - Every branch makes at most that many kernel steps. A goal branch makes its world's exchanges, at most `TOP`'s. An escape branch makes its world's exchanges and one more, and its world is at most `TOP`'s.
-  - The one new exactness lemma is the ceiling recount at `K_E`, the analogue of `linux_performs_exact`: a claim whose goal's and escape's worlds are no longer than `TOP`'s has the count `|TOP| − |from| + 1`. It needs a "reaches" lemma at `K_E` so that a continuing branch's world stays below `TOP`.
+  - The one new exactness lemma is the ceiling recount at `K_E` (built: `Site::escaping_ceiling`, with `escaping_reaches`), the analogue of `linux_performs_exact`.
   - Seq is then today's proof: lift the rest's ceiling count to the first's by `Between`, bind, recount. So is the branch's (both arms at the same ceiling).
 - **The escape `E`** for routine `f` entered at `i` on `(args, heap, io)` at fuel `n`, cap `p`: `E(r) = exit 139 at r ∧ ¬(stop_rooms(f, p) <= i) ∧ Extends(TOP.past, r.io.past)`.
   - At the top, `Extends(TOP, w)` gives `MeaningPrefix` at fuel `n` (TOP is the outcome's history).
