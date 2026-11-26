@@ -12542,3 +12542,93 @@ theorem Inv::lend_apart(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(tys, cx.st
         },
     }
 }
+
+// P2, `live`: a passed reference's block is live, without holes, and its
+// selections fit there.
+theorem Inv::lend_live(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>}, inv: Inv(tys, strs, s, e, m, h0, lent),
+    none: s.pending() = False, ps: List<Param>, xs: List<Var>, nl: Next, okl: s.lend_all(tys, strs, ps, xs) = Some(nl),
+    vs: List<Value(tys)>, pv: Cell::pass_all(tys, strs, m.heap, ps, xs.map(λ x => REnv::get(tys, m.env, x))) = Some(vs)):
+    (i: Nat) → (r: Ref) → vs.nth(i) = Some(level2::Refer(r)) → Exists<Dyn(tys)>(λ d => (Heap::obj(tys, m.heap, r.b) = Some(Obj(d, Nil))) ∧ (Sel::fit(tys, strs, r.sels, d) = True))
+{
+    let sim = Inv::sim_now(tys, strs, inv, none);
+    λ i r hr => match Inv::pass_arg(tys, strs, ps, xs, nl, okl, vs, pv, i, r, hr) {
+        ⟨x, px⟩ => match px.right {
+            ⟨l, pl⟩ => {
+                let cv = pl.right.right.left;
+                let np: ¬(s.role(l) = KPlain) = λ hp => {
+                    let c0: ((REnv::get(tys, m.env, x)).v = level2::Plain(Env::get(tys, e, x))) = j(hp, λ q _ => Cell::Agrees(tys, strs, m.heap, q, REnv::get(tys, m.env, x), Env::get(tys, e, x)), sim.vars(x, l, pl.left));
+                    absurd(trans(sym(cv), c0))
+                };
+                let rd = Cell::agrees_reads(tys, strs, m.heap, s.role(l), REnv::get(tys, m.env, x), Env::get(tys, e, x), sim.vars(x, l, pl.left), np, pl.right.left);
+                let rr: Value::Reads(tys, strs, m.heap, level2::Refer(r), Env::get(tys, e, x)) = j(cv, λ u _ => Value::Reads(tys, strs, m.heap, u, Env::get(tys, e, x)), rd);
+                let bare = Inv::ref_bare(tys, strs, inv, x, l, pl.left, pl.right.left, r, cv);
+                match Value::refer_inv(tys, strs, m.heap, r, Env::get(tys, e, x), rr) {
+                    ⟨ob, pob⟩ => match Heap::obj_of_val(tys, strs, m.heap, r.b, ob, pob.left) {
+                        ⟨obj, pobj⟩ => (match obj as λ o2 => Heap::obj(tys, m.heap, r.b) = Some(o2) → Exists<Dyn(tys)>(λ d => (Heap::obj(tys, m.heap, r.b) = Some(Obj(d, Nil))) ∧ (Sel::fit(tys, strs, r.sels, d) = True)) {
+                            Obj(v, hs) => λ ho => {
+                                let hn: (hs = Nil) = bare(Obj(v, hs), ho);
+                                let rv: (Heap::val(tys, strs, m.heap, r.b) = Some(v)) = j(sym(ho), λ oo _ => (match oo as λ _ => Option<Dyn(tys)> { Some(o3) => Obj::read(tys, strs, m.heap, m.heap.len(), o3), None => None<Dyn(tys)>() }) = Some(v),
+                                    Obj::read_bare(tys, strs, m.heap, m.heap.len(), Obj(v, hs), hn));
+                                let vb: (v = ob) = Option::some_inj(v, ob, trans(sym(rv), pob.left));
+                                Exists(v, ⟨j(hn, λ z _ => Heap::obj(tys, m.heap, r.b) = Some(Obj(v, z)), ho), j(sym(vb), λ z _ => Sel::fit(tys, strs, r.sels, z) = True, pob.right.left)⟩)
+                            },
+                        })(pobj),
+                    },
+                }
+            },
+        },
+    }
+}
+
+// P2, `plain`: plain data taken is passed by value.
+theorem Inv::lend_plain(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {m: Mach(tys)}, ps: List<Param>, xs: List<Var>, nl: Next, okl: s.lend_all(tys, strs, ps, xs) = Some(nl),
+    vs: List<Value(tys)>, pv: Cell::pass_all(tys, strs, m.heap, ps, xs.map(λ x => REnv::get(tys, m.env, x))) = Some(vs)):
+    (i: Nat) → (p: Param) → ps.nth(i) = Some(p) → p.mode = ByTake → Shape::plain(tys, strs, p.code) = True → (r: Ref) → ¬(vs.nth(i) = Some(level2::Refer(r)))
+{
+    λ i p hp pm pc r hr => match Inv::pass_arg(tys, strs, ps, xs, nl, okl, vs, pv, i, r, hr) {
+        ⟨x, px⟩ => match px.right {
+            ⟨l, pl⟩ => {
+                let tk = j(hp, λ o _ => ((o.unwrap_or(Param(SWord(WNat), ByRead))).mode = ByTake → ((REnv::get(tys, m.env, x)).own = True) ∧ (Shape::plain(tys, strs, (o.unwrap_or(Param(SWord(WNat), ByRead))).code) = False)), pl.right.right.right);
+                absurd(trans(sym(pc), (tk(pm)).right))
+            },
+        },
+    }
+}
+
+// A holder's place against any place of its object is never found apart:
+// the decider finds nothing apart from the whole.
+theorem CSt::apart_whole(self s: CSt, o: Nat, xs: List<Step>, rs: List<Residual>, h: s.apart_pl(Pl(o, Nil), Pl(o, xs)) = Some(rs)): False {
+    let h1: (Steps::apart(Nil, xs).and_then(λ os => s.owed_all(os)) = Some(rs)) = j(o.same_self(), λ c _ => (match c as λ _ => Option<List<Residual>> { False => Some(Nil<Residual>), True => Steps::apart(Nil, xs).and_then(λ os => s.owed_all(os)) }) = Some(rs), h);
+    absurd(h1)
+}
+
+theorem CSt::apart_whole_r(self s: CSt, o: Nat, xs: List<Step>, rs: List<Residual>, h: s.apart_pl(Pl(o, xs), Pl(o, Nil)) = Some(rs)): False {
+    let h1: (Steps::apart(xs, Nil).and_then(λ os => s.owed_all(os)) = Some(rs)) = j(o.same_self(), λ c _ => (match c as λ _ => Option<List<Residual>> { False => Some(Nil<Residual>), True => Steps::apart(xs, Nil).and_then(λ os => s.owed_all(os)) }) = Some(rs), h);
+    (match xs as λ q => (Steps::apart(q, Nil).and_then(λ os => s.owed_all(os)) = Some(rs)) → False { Nil => λ no => absurd(no), Cons(_, _) => λ no => absurd(no) })(h1)
+}
+
+// `apart_lent` of a holder with another argument: every pair of their
+// places checked.
+theorem CSt::apart_lent_hold(self s: CSt, tys: Nat → Type, cx: Ctx(tys), env: Env(tys), la, lb: Nat, cha, chb: Bool, ch: (cha || chb) = True, o: Nat, ac: Acc, hr: s.role(la) = KHold(o, ac),
+    r1: List<Residual>, ok: s.apart_lent(Lent(la, s.places(la, Nil), cha), Lent(lb, s.places(lb, Nil), chb)) = Some(r1)): s.apart_each(s.places(la, Nil), s.places(lb, Nil)) = Some(r1)
+{
+    let va: ((s.role(la)).same(KView) = False) = j(sym(hr), λ q _ => q.same(KView) = False, refl);
+    let y1: ((s.related(la, lb) || !(s.role(la)).same(KView)) = True) = j(sym(va), λ c _ => (s.related(la, lb) || !c) = True, Bool::or_true_right(s.related(la, lb)));
+    let y: ((s.related(la, lb) || !(s.role(la)).same(KView) || !(s.role(lb)).same(KView)) = True) = j(sym(y1), λ c _ => (c || !(s.role(lb)).same(KView)) = True, refl);
+    let cy: (((cha || chb) && (s.related(la, lb) || !(s.role(la)).same(KView) || !(s.role(lb)).same(KView))) = True) =
+        trans(cong_fn(λ (c: Bool) => (cha || chb) && c, y), trans(cong_fn(λ (c: Bool) => c && True, ch), (refl: (True && True) = True)));
+    j(cy,
+        λ c _ => (match c as λ _ => Option<List<Residual>> { False => Some(Nil<Residual>), True => s.apart_each(s.places(la, Nil), s.places(lb, Nil)) }) = Some(r1), ok)
+}
+
+theorem CSt::apart_lent_hold_r(self s: CSt, tys: Nat → Type, cx: Ctx(tys), env: Env(tys), la, lb: Nat, cha, chb: Bool, ch: (cha || chb) = True, o: Nat, ac: Acc, hr: s.role(lb) = KHold(o, ac),
+    r1: List<Residual>, ok: s.apart_lent(Lent(la, s.places(la, Nil), cha), Lent(lb, s.places(lb, Nil), chb)) = Some(r1)): s.apart_each(s.places(la, Nil), s.places(lb, Nil)) = Some(r1)
+{
+    let vb: ((s.role(lb)).same(KView) = False) = j(sym(hr), λ q _ => q.same(KView) = False, refl);
+    let y: ((s.related(la, lb) || !(s.role(la)).same(KView) || !(s.role(lb)).same(KView)) = True) = j(sym(vb), λ c _ => ((s.related(la, lb) || !(s.role(la)).same(KView)) || !c) = True,
+        Bool::or_true_right(s.related(la, lb) || !(s.role(la)).same(KView)));
+    let cy: (((cha || chb) && (s.related(la, lb) || !(s.role(la)).same(KView) || !(s.role(lb)).same(KView))) = True) =
+        trans(cong_fn(λ (c: Bool) => (cha || chb) && c, y), trans(cong_fn(λ (c: Bool) => c && True, ch), (refl: (True && True) = True)));
+    j(cy,
+        λ c _ => (match c as λ _ => Option<List<Residual>> { False => Some(Nil<Residual>), True => s.apart_each(s.places(la, Nil), s.places(lb, Nil)) }) = Some(r1), ok)
+}
