@@ -28,6 +28,7 @@ import shape;
 import sequences;
 import body;
 import level2;
+import run;
 import verdict;
 import checker;
 import linux_world;
@@ -476,7 +477,7 @@ theorem not_param_fresh(): refusal_in([not_param(OFresh)], 0) = None { refl }
 
 // One owned object answered as two fresh results: refused (`CSt::fresh_once`).
 // The caller takes each fresh result as an object alone in its block
-// (`Value::FreshApart`, §23.17); this one would have given it two owned
+// (`Value::OwnedApart`, §23.17); this one would have given it two owned
 // objects in one block, and the death of either frees the other's. Two
 // objects made and answered once each: checked.
 fn fresh_twice() → Func {
@@ -495,15 +496,57 @@ theorem fresh_two_checked(): refusal_in([fresh_two()], 0) = None { refl }
 // A taken parameter answered twice (§23.20): refused at the callee's `Ret`,
 // as a made object answered twice is (`CSt::fresh_once`): a caller binding
 // both results would hold one owned object at two levels, the death of
-// either freeing the other's. The caller's binding refuses it too
-// (`CSt::holds`). Answered once and bound once: checked.
+// either freeing the other's, and a host outside the program calling it
+// would receive two owners of one block. A caller of a table entry with
+// that signature is not refused: the callee's `Value::OwnedApart` says the
+// two results are in different blocks while `Value::ViewIs` says both are
+// the argument, so no safe callee answers so (§23.21). Answered once and
+// bound once: checked.
 fn twice_param() → Func { Func(Sig([Param(nx(), ByTake)], [Result(nx(), OParam(0)), Result(nx(), OParam(0))]), Ret([x(), x()])) }
 
 fn twice_caller() → Func { Func(Sig([Param(nx(), ByTake)], Nil), seq([Call(0, [x()], 2), Death(whole(Loc(0))), Read(el(Loc(1), Lit(0)))], Ret(Nil))) }
 
 theorem twice_param_refused(): refusal_in([twice_param(), twice_caller()], 0) = Some(WOwn) { refl }
 
-theorem twice_param_caller_refused(): refusal_in([twice_param(), twice_caller()], 1) = Some(WOwn) { refl }
+// A signature answering a read parameter as its own (`OParam`), or a view of
+// a written one: refused where it is written (`Sig::ok`, §23.21), since no
+// caller can bind it; the holder answered is then the parameter's owner.
+fn read_param() → Func { Func(Sig([Param(nx(), ByRead)], [Result(nx(), OParam(0))]), Ret([x()])) }
+
+theorem read_param_refused(): refusal_in([read_param()], 0) = Some(WOwn) { refl }
+
+fn view_of_written() → Func {
+    Func(Sig([Param(nx(), ByWrite)], [Result(nx(), OView(0, [SWindow(Lit(0), Lit(1))]))]),
+        seq([View(win(x(), Lit(0), Lit(1)), Reading)], Ret([Loc(0), x()])))
+}
+
+theorem view_of_written_refused(): refusal_in([view_of_written()], 0) = Some(WOwn) { refl }
+
+// A result's code is what its origin gives (`Sig::ok`, §23.21): a parameter
+// answered back has its parameter's code, and a view the code at its steps.
+// A signature that differs is refused where it is written and at the call:
+// the caller binds by the result's code while the run hands back by the
+// parameter's, so it would hold the argument's reference as a plain value,
+// or a plain copy as an object.
+fn recode(sg: Sig, b: Body) → List<Func> { [Func(sg, b), Func(Sig(sg.params, Nil), seq([Call(0, [x()], 1)], Ret(Nil)))] }
+
+fn obj_as_word() → List<Func> { recode(Sig([Param(nx(), ByTake)], [Result(nat_s(), OParam(0))]), Ret([x()])) }
+
+fn word_as_obj() → List<Func> { recode(Sig([Param(nat_s(), ByTake)], [Result(nx(), OParam(0))]), Ret([x()])) }
+
+fn view_as_point() → List<Func> { recode(Sig([Param(nx(), ByRead)], [Result(pt_s(), OView(0, [SWindow(Lit(0), Lit(1))]))]), seq([View(win(x(), Lit(0), Lit(1)), Reading)], Ret([Loc(0)]))) }
+
+theorem obj_as_word_refused(): refusal_in(obj_as_word(), 0) = Some(WOwn) { refl }
+
+theorem obj_as_word_caller_refused(): refusal_in(obj_as_word(), 1) = Some(WOwn) { refl }
+
+theorem word_as_obj_refused(): refusal_in(word_as_obj(), 0) = Some(WOwn) { refl }
+
+theorem word_as_obj_caller_refused(): refusal_in(word_as_obj(), 1) = Some(WOwn) { refl }
+
+theorem view_as_point_refused(): refusal_in(view_as_point(), 0) = Some(WOwn) { refl }
+
+theorem view_as_point_caller_refused(): refusal_in(view_as_point(), 1) = Some(WOwn) { refl }
 
 fn once_param() → Func { Func(Sig([Param(nx(), ByTake)], [Result(nx(), OParam(0))]), Ret([x()])) }
 
@@ -557,33 +600,91 @@ theorem onto_fails(k: Nat): ¬RApart(Var(1), Lit(1), Var(1), Lit(1)).Holds(tys()
 
 // A callee whose view lies at a word it read names that word as a result:
 // a view's steps read the call's words, the arguments' and then the
-// results' (§15.2: a view travels with its slot). `found(xs, k)` answers a
-// view of `xs[j..j+1]` and `j`, its second result (the signature's
-// `Var(3)`, past its two parameters, is result 1).
-fn found_sig() → Sig { Sig([Param(nx(), ByRead), Param(nat_s(), ByTake)], [Result(nx(), OView(0, [SWindow(Var(3), Lit(1))])), Result(nat_s(), OFresh)]) }
+// results' (§15.2: a view travels with its slot). `found(xs, k)` answers `j`
+// and a view of `xs[j..j+1]`: the signature's `Var(2)`, past its two
+// parameters, is result 0. The results are a telescope (§23.21): a view
+// names parameters and earlier results only.
+fn found_sig() → Sig { Sig([Param(nx(), ByRead), Param(nat_s(), ByTake)], [Result(nat_s(), OFresh), Result(nx(), OView(0, [SWindow(Var(2), Lit(1))]))]) }
 
-fn found() → Func { Func(found_sig(), seq([Read(el(x(), Lit(0))), View(win(x(), Var(2), Lit(1)), Reading)], Ret([Loc(0), Loc(1)]))) }
+fn found() → Func { Func(found_sig(), seq([Read(el(x(), Lit(0))), View(win(x(), Var(2), Lit(1)), Reading)], Ret([Loc(1), Loc(0)]))) }
 
 theorem found_checked(): verdict([found()], 0) = Some(ODo([acc_el(x(), Lit(0))], ODo([acc_win(x(), Var(2), Lit(1))], OEnd))) { refl }
 
 // Its caller writes beside the view: the residual reads the answered word,
-// the call's second binding (`Var(3)` at the write: [9, j, t]).
+// the call's first binding (`Var(5)` at the write: [9, t, j]).
 fn beside_found() → Func {
-    Func(wsig(2), seq([Call(0, [x(), Arg(1)], 2), Lit(WNat, 9), Write(el(x(), Var(2)), Loc(0)), Read(el(Loc(2), Lit(0)))], Ret([Loc(0), x()])))
+    Func(wsig(2), seq([Call(0, [x(), Arg(1)], 2), Lit(WNat, 9), Write(el(x(), Var(2)), Loc(0)), Read(el(Loc(1), Lit(0)))], Ret([Loc(0), x()])))
 }
 
 theorem beside_found_checked(): verdict([found(), beside_found()], 1) = Some(
-    ODo([RPre(0, [x(), Arg(1)]), RMeasure(0, [x(), Arg(1)])], ODo(Nil, ODo([RApart(Var(4), Lit(1), Var(2), Lit(1)), acc_el(x(), Var(2))], ODo([acc_el(Loc(2), Lit(0))], OEnd)))))
+    ODo([RPre(0, [x(), Arg(1)]), RMeasure(0, [x(), Arg(1)])], ODo(Nil, ODo([RApart(Var(5), Lit(1), Var(2), Lit(1)), acc_el(x(), Var(2))], ODo([acc_el(Loc(1), Lit(0))], OEnd)))))
 { refl }
 
+// The forward form, a view naming a later result: refused where it is
+// written, and a caller of a table entry with that signature at the call.
+fn found_fwd_sig() → Sig { Sig([Param(nx(), ByRead), Param(nat_s(), ByTake)], [Result(nx(), OView(0, [SWindow(Var(3), Lit(1))])), Result(nat_s(), OFresh)]) }
+
+fn found_fwd() → Func { Func(found_fwd_sig(), seq([Read(el(x(), Lit(0))), View(win(x(), Var(2), Lit(1)), Reading)], Ret([Loc(0), Loc(1)]))) }
+
+fn beside_found_fwd() → Func {
+    Func(wsig(2), seq([Call(0, [x(), Arg(1)], 2), Lit(WNat, 9), Write(el(x(), Var(2)), Loc(0)), Read(el(Loc(2), Lit(0)))], Ret([Loc(0), x()])))
+}
+
+theorem found_fwd_refused(): refusal_in([found_fwd(), beside_found_fwd()], 0) = Some(WOwn) { refl }
+
+theorem found_fwd_caller_refused(): refusal_in([found_fwd(), beside_found_fwd()], 1) = Some(WOwn) { refl }
+
 // The control: a view whose place reads a result that is not a plain word
-// (here the view itself) has no signature.
+// (here an earlier view) has no signature: `Ret` refuses it (`sig_atom`).
 fn found_self() → Func {
-    Func(Sig([Param(nx(), ByRead), Param(nat_s(), ByTake)], [Result(nx(), OView(0, [SWindow(Var(2), Lit(1))])), Result(nat_s(), OFresh)]),
-        seq([Read(el(x(), Lit(0))), View(win(x(), Var(2), Lit(1)), Reading)], Ret([Loc(0), Loc(1)])))
+    Func(Sig([Param(nx(), ByRead), Param(nat_s(), ByTake)], [Result(nx(), OView(0, [SWindow(Lit(0), Lit(1))])), Result(nx(), OView(0, [SWindow(Var(2), Lit(1))]))]),
+        seq([View(win(x(), Lit(0), Lit(1)), Reading), View(win(x(), Lit(0), Lit(1)), Reading)], Ret([Loc(1), Loc(0)])))
 }
 
 theorem found_self_refused(): verdict([found_self()], 0) = None { refl }
+
+// An argument a view result's region names as an atom is a plain level
+// (§23.21): a view of a word passed as `at`'s index is refused at the call,
+// as `View` refuses a non-plain atom (`atoms_ok`); the word copied into a
+// plain local first is checked.
+fn at_by_view0() → Func {
+    Func(Sig([Param(nx(), ByRead), Param(nx(), ByRead)], Nil), seq([View(el(Arg(1), Lit(0)), Reading), Call(0, [x(), Loc(0)], 1), Read(el(Loc(0), Lit(0)))], Ret(Nil)))
+}
+
+theorem at_by_view0_refused(): refusal_in([at(), at_by_view0()], 1) = Some(WOwn) { refl }
+
+fn at_by_copy0() → Func {
+    Func(Sig([Param(nx(), ByRead), Param(nx(), ByRead)], Nil), seq([Read(el(Arg(1), Lit(0))), Call(0, [x(), Loc(0)], 1), Read(el(Loc(0), Lit(0)))], Ret(Nil)))
+}
+
+theorem at_by_copy0_checked(): refusal_in([at(), at_by_copy0()], 1) = None { refl }
+
+// A primitive's answer has its result codes (`Prog::Coded`, §23.21): `g`
+// answers a point, its caller reads a field of it, checked. At a world
+// answering a word the run is stuck there, and that world breaks the law.
+fn pt_g() → Func { Func(Sig(Nil, [Result(pt_s(), OFresh)]), Ret(Nil)) }
+
+fn pt_reader() → Func { Func(Sig(Nil, Nil), seq([Call(0, Nil, 1), Read(Place(Loc(0), [SField(0)]))], Ret(Nil))) }
+
+theorem pt_reader_checked(): verdict_in([pt_g(), pt_reader()], λ g => g.same(0), 1) = Some(ODo([RPre(0, Nil)], ODo(Nil, OEnd))) { refl }
+
+fn pt_prog(w: Callees(tys())) → Prog(tys()) {
+    Prog(strs(), λ g => [pt_g(), pt_reader()].nth(g).unwrap_or(Func(Sig(Nil, Nil), Ret(Nil))), w, λ _ _ => True, λ _ => None, λ g => g.same(0), λ _ _ _ => True)
+}
+
+fn pt_world() → Callees(tys()) { λ _ _ => [Dyn(pt_s(), Point(1, 2))] }
+
+fn word_world() → Callees(tys()) { λ _ _ => [Dyn(nat_s(), 5)] }
+
+theorem prim_record_done(io: Io): (pt_prog(pt_world())).run(tys(), 2, 1, Nil, Nil, io) = Done(Answer(Nil, Nil, io)) { refl }
+
+theorem prim_word_stuck(io: Io): (pt_prog(word_world())).run(tys(), 2, 1, Nil, Nil, io) = Stuck { refl }
+
+theorem pt_world_coded(): Prog::Coded(tys(), pt_prog(pt_world())) {
+    λ g => match g { Zero => λ _ _ _ => refl, Succ(_) => λ no => absurd(no) }
+}
+
+theorem word_world_not_coded(): ¬Prog::Coded(tys(), pt_prog(word_world())) { λ c => absurd(c(0, refl, Nil, refl)) }
 
 // ---------------------------------------------------------------------------
 // 8. A residual about a callee's answer (call_check_tests §8):
