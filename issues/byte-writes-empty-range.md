@@ -1,6 +1,6 @@
 ---
 title: A store of no bytes changes nothing and needs no room, at every address
-status: open
+status: closed
 labels: [stdlib,x86,memory,proofs]
 area: heather-in-heather
 milestone: [hih-memory-model]
@@ -45,3 +45,27 @@ language do not change.
 - No generated certificate changes (`scripts/linked --check`).
 
 ## Log
+
+- 2026-11-26: landed (d90fb2b). The law is `ByteWrites::EmptyRange`
+  (x86_64_store): `writable(m, a, 0) ∧ store(m, a, []) = m` for every `m`,
+  `a`. **`Stack` carries it** (`Stack.empty`), not `Loan`: it is a law of
+  `writes`, which the stack owns, and the generic `Stack::loan_none` could
+  not cite an instance proof for a `Loan` field; on `Stack` the one
+  constructor (`DataRegion::stack`) cites `X86Profile::writes_empty`, and
+  no `Loan` construction (`DataRegion::loan`, `Target::loan`, `loan_none`,
+  `Loan::sub`) changes. Instances: `X86Profile::writes` (`writable_none`:
+  `Allows` below zero is vacuous; `store_none`: `refl`, the empty
+  `put_from` is the cells and record η gives the memory); `linux_writes` is
+  no instance by itself (`LinuxIo` states no laws) — `linux_writes_empty`
+  transports the law to an io built from lawful writes, and
+  `X86Profile::linux_empty` is the profile's. Contract lemmas:
+  `Loan::empty_writable`, `empty_store`, `empty_reads`, `empty_keeps`,
+  `empty_keeps_code`, `empty_injected` (memory side; the heap is unchanged).
+  Probes: `loan_empty_range` (the lowering's hypothesis from a `Loan`),
+  `pair_end_empty` (one past the written span), control
+  `counting_not_empty`. `Spans::Window` lives in x86_64_call_contract,
+  outside this round. The one surprise: the elab fixture's toy store
+  (x86_64_stack_runs_examples) kept the law only pointwise (no funext), so
+  `toy_store` now returns the memory on `[]`. `scripts/linked --check`
+  unchanged; `HEATHER_PR_NATIVE=all scripts/test --pr`:
+  `== suite: 4140 passed, 0 failed, 3 ignored ==`.
