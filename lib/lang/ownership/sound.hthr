@@ -5661,9 +5661,9 @@ theorem Stmt::stage_write_plain(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(ty
     let iv = Inv::set_cell(tys, strs, inv, p.root, wi.l, wi.hl, wf.nrf, f2, c2, s.patched_none(tys, strs, e, m, none), s.patched_none(tys, strs, Env::set(tys, e, p.root, f2), Mach(m.heap, REnv::set(tys, m.env, p.root, c2), m.io), none), agr, code, λ r0 eq => absurd(eq), cong_fn(λ (u: Value(tys)) => Value::refers(tys, u), pc),
         λ en me pq z hz dp dc _ _ => false_elim(s.parent_plain(en, j(sym(pq), λ q _ => s.role(q) = KPlain, hp2), (inv.chain(en, me)).right)),
         λ en me lq y hy dp dc _ _ => absurd(trans(sym((inv.vents(en, me)).right.right), trans(cong_fn(λ (q: Nat) => s.role(q), lq), hp2))));
-    let wt: (s.wrote_to(wi.l) = s) = j(sym(hp2), λ r _ => (match r as λ _ => CSt { KPlain => s, KHold(_, _) => s.written(wi.l).unback(wi.l), KView => s.written(wi.l).unback(wi.l), KGone => s.written(wi.l).unback(wi.l) }) = s, refl);
+    let wt: (s.wrote_to(wi.l) = s.written(wi.l)) = j(sym(hp2), λ r _ => (match r as λ _ => CSt { KPlain => s.written(wi.l), KHold(_, _) => s.written(wi.l).unback(wi.l), KView => s.written(wi.l).unback(wi.l), KGone => s.written(wi.l).unback(wi.l) }) = s.written(wi.l), refl);
     Stepped(Mach(m.heap, REnv::set(tys, m.env, p.root, c2), m.io), λ k => Stmt::write_runs_plain(tys, strs, fns, call, m, p, v, vd, wf.vx, old, pc, nw, put, k),
-        j(sym(trans(wf.nst, wt)), λ q _ => Inv(tys, strs, q, Env::set(tys, e, p.root, f2), Mach(m.heap, REnv::set(tys, m.env, p.root, c2), m.io), h0, lent), iv))
+        j(sym(trans(wf.nst, wt)), λ q _ => Inv(tys, strs, q, Env::set(tys, e, p.root, f2), Mach(m.heap, REnv::set(tys, m.env, p.root, c2), m.io), h0, lent), Inv::touch(tys, strs, iv, Cons(wi.l, s.touched), Cons(wi.l, s.wrote))))
 }
 
 // A write through a holder: into its cell where it holds its object by
@@ -5698,7 +5698,7 @@ theorem Stmt::stage_write_hold(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(tys
     let code: ((f2(old)).code = (s.var(wi.l)).code) = trans(cong_fn(λ (q: Dyn(tys)) => q.code, wsv), trans(wk.left, sim.codes(p.root, wi.l, wi.hl)));
     let nolvl: ((en: VEnt) → Mem(en, s.views) → ¬(en.lvl = wi.l)) = λ en me eq =>
         absurd(trans(sym((inv.vents(en, me)).right.right), trans(cong_fn(λ (q: Nat) => s.role(q), eq), hr2)));
-    let wt: (s.wrote_to(wi.l) = s.written(wi.l).unback(wi.l)) = j(sym(hr2), λ rr _ => (match rr as λ _ => CSt { KPlain => s, KHold(_, _) => s.written(wi.l).unback(wi.l),
+    let wt: (s.wrote_to(wi.l) = s.written(wi.l).unback(wi.l)) = j(sym(hr2), λ rr _ => (match rr as λ _ => CSt { KPlain => s.written(wi.l), KHold(_, _) => s.written(wi.l).unback(wi.l),
         KView => s.written(wi.l).unback(wi.l), KGone => s.written(wi.l).unback(wi.l) }) = s.written(wi.l).unback(wi.l), refl);
     let s2 = CSt(s.args, s.locs, s.na, s.nd, s.views, s.nobj, Cons(wi.l, s.touched), Cons(wi.l, s.wrote));
     let nst: (s2 = n.st) = sym(trans(wf.nst, trans(wt, s.wrote_none(wi.l, nolvl))));
@@ -7007,7 +7007,7 @@ theorem Stmt::stage_write_view(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(tys
     let e2 = Env::set(tys, e, p.root, f2);
     let wsv: (f2(old) = nw) = Steps::write_sels(tys, strs, ws, p.steps, g, old);
     let s1 = s.written(wi.l).unback(wi.l);
-    let wt: (s.wrote_to(wi.l) = s1) = j(sym(hr2), λ rr _ => (match rr as λ _ => CSt { KPlain => s, KHold(_, _) => s.written(wi.l).unback(wi.l),
+    let wt: (s.wrote_to(wi.l) = s1) = j(sym(hr2), λ rr _ => (match rr as λ _ => CSt { KPlain => s.written(wi.l), KHold(_, _) => s.written(wi.l).unback(wi.l),
         KView => s.written(wi.l).unback(wi.l), KGone => s.written(wi.l).unback(wi.l) }) = s.written(wi.l).unback(wi.l), refl);
     let nst: (s1 = n.st) = sym(trans(wf.nst, wt));
     let rd0: Value::Reads(tys, strs, m.heap, (REnv::get(tys, m.env, p.root)).v, old) =
@@ -7201,9 +7201,9 @@ theorem CSt::back_state(self s: CSt, lv, l: Nat, np: ¬(s.role(l) = KPlain)):
     let x = s.backed(lv).written(l).unback(l);
     let wt: (s.backed(lv).wrote_to(l) = x) = (match s.role(l) as λ r => s.role(l) = r → s.backed(lv).wrote_to(l) = x {
         KPlain => λ e => false_elim(np(e)),
-        KHold(o, a) => λ e => j(sym(e), λ r _ => (match r as λ _ => CSt { KPlain => s.backed(lv), KHold(_, _) => x, KView => x, KGone => x }) = x, refl),
-        KView => λ e => j(sym(e), λ r _ => (match r as λ _ => CSt { KPlain => s.backed(lv), KHold(_, _) => x, KView => x, KGone => x }) = x, refl),
-        KGone => λ e => j(sym(e), λ r _ => (match r as λ _ => CSt { KPlain => s.backed(lv), KHold(_, _) => x, KView => x, KGone => x }) = x, refl),
+        KHold(o, a) => λ e => j(sym(e), λ r _ => (match r as λ _ => CSt { KPlain => s.backed(lv).written(l), KHold(_, _) => x, KView => x, KGone => x }) = x, refl),
+        KView => λ e => j(sym(e), λ r _ => (match r as λ _ => CSt { KPlain => s.backed(lv).written(l), KHold(_, _) => x, KView => x, KGone => x }) = x, refl),
+        KGone => λ e => j(sym(e), λ r _ => (match r as λ _ => CSt { KPlain => s.backed(lv).written(l), KHold(_, _) => x, KView => x, KGone => x }) = x, refl),
     })(refl);
     trans(wt, cong_fn(λ (vs: List<VEnt>) => CSt(s.args, s.locs, s.na, s.nd, vs, s.nobj, Cons(l, s.touched), Cons(l, s.wrote)),
         List::map_map(s.views, λ (y: VEnt) => y.backed(lv), λ (y: VEnt) => y.unbacked(l))))

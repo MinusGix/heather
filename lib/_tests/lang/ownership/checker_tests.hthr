@@ -433,6 +433,17 @@ fn at() → Func {
 
 theorem at_checked(): verdict([at()], 0) = Some(ODo([acc_win(x(), Var(1), Lit(1))], OEnd)) { refl }
 
+// The signature reads its atom `Var(1)` as the argument passed: a view
+// opened after the argument was written is not the one it names (the run's
+// view is at `k + 1`), so the return is refused; `at` above, which never
+// writes `k`, is checked.
+fn at_moved() → Func {
+    Func(Sig([Param(nx(), ByRead), Param(nat_s(), ByTake)], [Result(nx(), OView(0, [SWindow(Var(1), Lit(1))]))]),
+        seq([Lit(WNat, 1), Op(PAdd, Arg(1), Loc(0)), Write(whole(Arg(1)), Loc(0)), View(win(x(), Var(1), Lit(1)), Reading)], Ret([Loc(0)])))
+}
+
+theorem at_moved_refused(): refusal_in([at_moved()], 0) = Some(WOwn) { refl }
+
 // The view lies at `Span(k, 1)` in the caller's words, so the write at `j`
 // owes `k + 1 <= j ∨ j + 1 <= k`. Locals at the end: [a, 9, t].
 fn beside() → Func { Func(wsig(2), seq([Call(0, [x(), Arg(1)], 1), Lit(WNat, 9), Write(el(x(), Var(2)), Loc(0)), Read(el(Loc(1), Lit(0)))], Ret([Loc(0), x()]))) }

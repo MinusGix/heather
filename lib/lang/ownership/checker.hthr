@@ -426,8 +426,9 @@ fn CSt::unback(self s: CSt, l: Nat) → CSt { s.with_views(s.views.map(λ e => m
 fn CSt::backed(self s: CSt, l: Nat) → CSt { s.with_views(s.views.map(λ e => match e.lvl.same(l) { True => VEnt(e.lvl, e.obj, e.reg, e.mode, e.par, e.at, True), False => e })) }
 
 // A variable written: its state changed, and a view to write is no longer
-// written back.
-fn CSt::wrote_to(self s: CSt, l: Nat) → CSt { match s.role(l) { KPlain => s, _ => s.written(l).unback(l) } }
+// written back. A plain variable is recorded as written only: a returned
+// view's signature reads an argument as passed (`CSt::sig_atom`).
+fn CSt::wrote_to(self s: CSt, l: Nat) → CSt { match s.role(l) { KPlain => s.written(l), _ => s.written(l).unback(l) } }
 
 // ---------------------------------------------------------------------------
 // Statements
@@ -700,13 +701,14 @@ fn CSt::writes_back(self s: CSt, st: Stmt) → Bool {
 // Leaves: a return, a `Jump`
 
 // A signature's atom at this function's levels: below the parameters'
-// count an argument's level; past it a result the `Ret` lists, which must
+// count an argument's level, never written, since the signature reads the
+// argument as passed; past it a result the `Ret` lists, which must
 // be a plain word, so the view's place cannot move under it.
 fn CSt::sig_atom(self s: CSt, ls: List<Nat>, a: Atom) → Option<Atom> {
     match a {
         Lit(n) => Some(Lit(n)),
         Var(k) => match (k + 1).leb(s.na) {
-            True => Some(Var(k)),
+            True => (!k.member(s.wrote)).then(Some(Var(k))),
             False => ls.nth(k - s.na).and_then(λ l => match s.role(l) { KPlain => Some(Var(l)), _ => None }),
         },
     }
