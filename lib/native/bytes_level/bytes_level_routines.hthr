@@ -861,7 +861,7 @@ theorem plain_close_grows(pass: Emitted, saves: Nat, registers: List<Gpr>, exit:
                 True => match input_file(word_ports(outputs), registers) {
                     None => trivial,
                     Some(out) => {
-                        let closed: pass.prog.Within(plain_done(pass.prog, tested.test, moves.code, names, short)) = Exists(8, refl);
+                        let closed: pass.prog.Within(plain_done(pass.prog, tested.test, moves.code, names, short)) = plain_done_after(pass.prog, tested.test, moves.code, names, short);
                         Prog::within_trans(grown, closed)
                     },
                 },
