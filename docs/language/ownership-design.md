@@ -5458,3 +5458,79 @@ arms.
 13. **Unmeasured functions**: `EndClause` covers measured functions (done
     past the measure); the going clause of `PlacementSound` gives the prefix
     property an unmeasured function's statement would use.
+
+### 25.5 After the ruling: the instance, the proof, the refusals
+
+The coordinating session's ruling on 25.4 (2026-11-26): items 2, 3 and 8 are
+fixed in the run, not in `place` (the run is the machine's reading; `place`
+must not carry a second copy of an ownership rule), and `place`'s three
+tests go when those changes land; item 4 stands; item 5 is the bytes
+level's `Loop` form, filed as `bytes-level-loop-exits`; item 10 goes into
+`sequences.hthr`; item 12 goes to the soundness thread as a statement kind.
+`place`'s two places that go with item 5 are the `TLoop` leaves' flag and
+the pass's closing comparison (`Func::place`'s `test`).
+
+- **The instance** (`sequences.hthr`, additive): `Seq::words` and
+  `Seq::words_win`, a list of words indexed by the index's number
+  (`Ix::num`, as `[A; n]` reads), with windows of itself; their laws
+  (`Seq::words_laws`, `Seq::words_win_laws`) are `Seq::list`'s at the
+  number, by conversion, with nothing new needed of the interface. The
+  probes use it, and their structures are lawful (`strs_lawful`).
+- **`end_to_end` proved** (`placement_seam.hthr`, no axioms), from
+  `PlacementSoundAll`, `CheckSound(check)` and `prog_checked`:
+  `safe_below` gives every function's `SafeAt` at every fuel from each
+  one's `Safety` by strong induction on the fuel; `place_len` that `place`
+  answers one routine per function; then `SafeAt`'s measure and done parts,
+  `PlacementSound` at one fuel more, and `lower_program_tracks`, with the
+  fuel rewritten through the clause's `m = n + 1`. Two choices it forced:
+  the program's functions are the list's by definition (`prog_of_list`),
+  since without function extensionality a pointwise premise cannot move
+  `Run::of`; and `prog_checked` asks every index checked and none a
+  primitive, since `Safety` is relative to every function's `SafeAt` and a
+  primitive's comes from nowhere (`place` places none). `Prog::Coded` is
+  among its premises.
+- **`place`'s refusals, sorted.** The fragment's limits: a code with no
+  layout (`WNat`, an opaque type, a record or sequence not of words); a
+  `Fresh`; a primitive call; a multiply; arithmetic below 64 bits; a copy
+  of a sequence (a read of a whole sequence, a read or take of a sequence
+  part as a value, a write of a sequence that is not a write-back); a call
+  taking an object, or answering one made or given back; `SKey` and
+  `SVariant` steps. The three tests the run's changes delete: a `Ret`
+  answering a written sequence by its own slot and a `Jump` passing it on
+  (2); a store only through a write-lent slot (3); the write-back's
+  provenance (8). The rest, sought by probes (`refusals_sorted`): a narrow
+  index and a taken word answered back were refused and now are placed; a
+  view of a word is refused by the checker's codes, so it is not a
+  finding; **a word variable written** (`n := 1`, `word_write_r`) is
+  checked, in the fragment and refused. It is placed once item 8 lands (the
+  variable's slot rebinds; the provenance it would confuse goes), and until
+  then `PlaceComplete` is false by it. `Func::fragment` states the limits
+  as a test of the text and codes, apart from ownership, and
+  `PlaceComplete` the completeness (`check = Some` and in the fragment for
+  every function, then `place = Some`), not proved.
+
+### 25.6 The stages of `placement_sound` (types)
+
+`StageRel(strs, inj, blocks, e, m, c)` relates level 2's machine to a
+bytes-level configuration at an environment of slots: the heap injected,
+each variable's slots reading its value lowered (`SlotsHold`, the
+arguments then the locals oldest first), the same world, and a store only
+where the bytes level may write (`SlotsWritable`, which item 3's run change
+turns from `place`'s test into a consequence). A statement's level-2 step
+is `Stmt::Steps` (the run hands every continuation one machine), so a stage
+does not mention what follows it. Each stage concludes in the bytes
+level's own claim for the form `place` emits:
+
+| Stage | Form | Conclusion |
+|---|---|---|
+| `StageOp`, `StageLit`, `StageRead`, `StageWrite`, `StageView`, `StageTake`, `StageDeath` (all `LeafStage`) | a leaf | `run_instrs` to a related configuration |
+| `StageCall` | `Body::Call` | `CallRan`, under `CallsLower` (the fuel induction's hypothesis), the injection extended |
+| `StageTest` | the test's leaf, then `Branch` | `run_instrs`, the bit equal to level 2's test (swapped where `<=` swapped the arms) |
+| `StageRet` | a `Ret`'s leaf | the leave's ids reading the returned values lowered, or the loop's next state with the flag one |
+| `StageJump` | a `Jump`'s leaf | the next state the arguments lowered, the flag zero |
+| `StageRoutine` | a routine | `RoutineRan` and `AnswerLowers`, from related entries |
+
+`PlacementSound` is these joined by an induction on the body (a join's
+copied `rest` is the stage of the arm's `Yield` frame) inside one on fuel
+(`CallsLower` at the fuel below). Not proved until the run's three changes
+land and are read.
