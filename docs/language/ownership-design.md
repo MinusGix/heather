@@ -2269,6 +2269,138 @@ terms. The region theorems' claim forms cost what their `Moves` forms did,
 plus the counted step. The going induction mirrors the done induction
 region by region.
 
+**The exit lowered (round `issues/bytes-level-lowering-world.md`, item 1).**
+`Exit(status)` is emitted as the status moved from the register the file
+says holds it into RDI, sixty into RAX, and `SYSCALL` (`emit_exit`); the
+code after it is never reached. `Body::fresh` accepts it (it binds
+nothing). Its claim is not a third induction beside the done and the
+going ones: the going development is generalised over how a run stops
+short (`Stop`: `StopGoing(o)` or `StopExited(status, o)`, read off a run by
+`Ran::stopped`), and going and exited are its two instances.
+
+- The facts (`Body::Stops`, was `Body::Goes`) carry the stop: a loop out
+  of fuel is `x.Zero()` (going: true; exited: false), an exit node with the
+  word at its status is `x.Exits(w)` (going: false; exited: `w` is the
+  status). Read off the run by `Body::stops_of` (was `goes_of`), whose
+  only new case is the exit node.
+- The code theorems (`StopsHeap`, `Body::emit_stops`, the loop, branch and
+  call lemmas) claim the stop's state (`Stop::Reached`: going, any; exited,
+  `LinuxSyscallAt` and `LinuxExits` with the status) with at least
+  `x.least(fuel)` steps (going, the fuel; exited, none). The counting is
+  three lemmas on `Stop::least` (`least_le`, `least_succ`, `least_mono`,
+  and `least_pred` at the routine). The exit node's claim is `exit_stops`:
+  the block, then the `SYSCALL` item fetched (`Site::item_fetched`).
+- The routine and program inductions are `routine_stops`/`program_stops`
+  at a stop `x`; `program_tracks` reads `Tracks` at `StopGoing(o)` for
+  going and at `StopExited(status, o)` for exited. The world is the
+  entry's (`program_stop_quiet`, generalising `program_going_quiet`), as
+  no system call is lowered yet. `program_no_exit` and its lemmas are
+  deleted.
+
+The exited reading is no longer vacuous: the language's `exits` and an exit
+inside a callee are compiled and tracked (`bytes_level_routines_tests`:
+`exits_tracks`, `exits_meets_exited`, `exits_nested_tracks`, with their runs
+exiting at every fuel that enters them); the control is an exit whose status
+no id holds, refused.
+
+**The world beside the heap (same round, item 2).** A region's code is
+proved at the state `Now`: the heap, injected into memory as before
+(`now_in`), and the world, which the machine's must equal (`NowWorld`).
+Every region claim is at Linux (`Site::linux_kernel`), and so are the
+callee contracts (`CalleesReturn` is a `ReturnsClaim` at Linux). A claim
+counts the system calls it makes as the exchanges its world gained
+(`calls_between(before, after)`), so the counts are read off the worlds and
+never carried by hand:
+
+- `Site::linux_performs_exact` (call contract): a Linux claim whose goal
+  pins the world makes exactly as many calls as that world has exchanges
+  past the start, since each resumption records one. `Site::claims_exact`,
+  `emits_now_exact` and `claims_stop_exact` apply it. It is needed because
+  a sequence's two counts are fixed across its middle state, but a loop's
+  count (`loop_iterates_claim`) is existential.
+- A sequence's facts say its middle history lies between the two ends
+  (`Between`), and `emits_now_up` raises a part's count to the whole's.
+  `holds_of` proves `Between` from `HistoryGrows`: a run's history only
+  grows (`Body::run_grows`; a program's, `program_grows`).
+- The done side (`Body::emit_emits`, `routine_body`, `routine_runs`,
+  `program_returns`) is `EmitsClaim` at `Site::linux_kernel`. The quiet
+  lemmas (`program_quiet`, `program_stop_quiet`) are deleted: the
+  inductions carry the world in their facts, and `program_tracks` reads the
+  done side by `performs_weaken` of the routine's `ReturnsClaim`.
+
+**System calls lowered (same round, item 3).** `Sys(call)` is emitted as a
+call's arguments are, then Linux's call: its three words move into RDI, RSI
+and RDX (`File::call_moves`, judged by `outputs_check`), the call's number
+goes into RAX, and `SYSCALL` follows (`emit_sys`). The file after holds the
+result in RAX and forgets RCX and R11 (`sys_after`), which Linux may
+clobber. `Body::fresh` accepts it, binding its result word.
+
+- The facts (`SysCall::Lands`) are the reference's location, the window
+  open (read) or the bytes read (write), the world's answer landed
+  (`ReadLands`: the bytes put, or the window undefined; `WriteLands`), and
+  the exchange recorded. `holds_of` reads them off the run
+  (`SysCall::ran`, `lands_of`).
+- The step is one claim through the kernel (`Site::claims_resumes`, a new
+  generic lemma in `x86_64_stack_runs`). It holds for every answer the world
+  gives and every resumption `LinuxResumes` allows (`sys_write_resumes`,
+  `sys_read_resumes`). The language's words are Linux's (`count_word_linux`,
+  `errno_word_linux`).
+- The read's memory clause is re-established from the loan's window laws.
+  - Inside a written span the code stays resident (`Site::resumes_resident`).
+  - The bytes a read returns are the heap's put (`read_bytes_kept`, by
+    `Loan::store_injected`).
+  - For a failed read (`read_failed_kept`), the window is first stored
+    zero, the heap's own bytes, then called undefined
+    (`injected_undefining`). Whatever junk Linux left is then read instead
+    by `Injected::undefined_change`. No law was added to `ClauseStable`.
+- A read of no bytes at its block's end is allowed by the language, but no
+  loan law reaches it (every law asks `k < size`). It is one named
+  hypothesis, `EmptyEnds(stack.writes, spans)`: a store of no bytes changes
+  nothing and needs no room at each span's end. The memory law that will
+  discharge it is `issues/byte-writes-empty-range.md`. With it,
+  `injected_placed_nothing` keeps the clause.
+- `io.Answerable()` travels in the world relation: `NowWorld` is now the
+  machine's world being the state's, every answer one Linux may give. The
+  same holds for the routine's pre and post (`RoutinePreNow`,
+  `RoutinePostNow`). Every region keeps the world's function, so each claim
+  re-establishes it for free. `Tracks` supplies it at the entry. No fact,
+  `holds_of` or loop-pass lemma carries it.
+
+**Tracks with the world, and `RunsAs` (same round, items 4 and 5).**
+`lower_program_tracks` and `lower_program_meets` cover every program the
+lowering returns, system calls included, under `EmptyEnds`.
+
+The probes found one completeness gap in the emission: the call's
+`MOV RAX, n` and Linux's clobbers lost a value the file still held in RAX,
+RCX or R11, so `echo`'s read count, which is live across its write, made it
+unlowerable. Such values now move to a free R8 to R10 first (`sys_kept`),
+judged by the same `outputs_check`.
+The limit: there are three spares, and a spare counts as free only if
+the file holds nothing in it. When fewer are free than there are values to
+keep, the keep and argument moves no longer pair with their registers.
+`outputs_check` then fails, `emit_sys` answers `None`, and the program is
+refused (`Program::lower` returns nothing; there is no refusal message for
+it yet). A value of a narrow or low kind is not kept either. Any later use
+of it then fails to find a register, and the program is refused the same
+way. Soundness never depends on the keep: only the moves the checks pass
+are emitted.
+
+The language's `echo`, `read_then_load` and `exits`, and a pass that writes
+forever, are compiled and meet the whole contract. Each is read where it
+applies: done, stuck, and going with the history as long as the fuel
+(`bytes_level_routines_tests`).
+
+`bytes_level_whole` reads `Tracks` as the Linux model reads a process.
+- A Linux claim whose goal pins the world is `RunsAs` of the trace of the
+  world's new exchanges (`Site::linux_runs_as`). Silent steps are the
+  claim's machine runs, and each resumption is a `LinuxAnswered` call.
+- So `Tracks` gives `RunsAs` of the meaning's outcome at every fuel
+  (`Site::tracks_runs_as`).
+
+What stands between this and `Sim` for a whole image is in
+`issues/call-contract-whole-program.md`: the image's `_start`, the meaning
+as an itree, and `LinuxValid`.
+
 ## 18. The world, termination, and level 2 fixed (2026-11-25)
 
 Round six of the design review. Where this section and §15.4, §15.5 or §17

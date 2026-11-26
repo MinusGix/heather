@@ -5,6 +5,8 @@
 // that overwrites a reference still needed is refused, and a word node on
 // a reference, a store that cuts a reference and a load of an undefined
 // byte leave the node's facts unprovable, so no run reaches the theorem.
+// A write and a read are lowered with theorems, and a call whose word no
+// register holds is refused.
 import bytes_memory;
 import bytes_level;
 import bytes_level_lower;
@@ -35,11 +37,11 @@ fn into(registers: List<Gpr>) → List<Place> { registers.map(λ (r: Gpr) => Int
 fn lowered(body: Body, placement: List<Place>) → Option<Emitted> { body.emit(0, 0, [], 0, 0, Start, two_in(), placement, 0) }
 
 // A region with no call answers nothing of a callee.
-fn no_answers() → RoutineAnswers() { λ _ _ _ _ => False }
+fn no_answers() → RoutineAnswers() { λ _ _ _ _ _ => False }
 
 theorem no_callees<M>(site: Site<M>, stack: Stack<M>(site.fetch, site.data), spans: Spans, top: Nat):
     CalleesReturn<M>(site, stack, spans, λ (_: Nat) => 0, top, 0, no_answers()) {
-    λ f below args heap a never => false_elim(never)
+    λ f below args heap io a never => false_elim(never)
 }
 
 fn lowers(body: Body, placement: List<Place>) → Bool { lowered(body, placement).is_some() }
@@ -54,11 +56,11 @@ fn cells_body() → Body { Leaf([StoreRef(0, 1), LoadRef(2, 0), Load(1, 3, 2)]) 
 theorem cells_lowers(): lowers(cells_body(), into([Rax, Rax, Rcx])) = True { refl }
 
 theorem cells_code<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data), top: Nat, spans: Spans,
-    loan: Loan<M>(site.fetch, site.data, stack, top, spans), blocks: Blocks, lent: blocks.Lent(spans), values: Valuation(), d: Nat,
-    s0: MachineState<M>, before, after: Heap):
-    MayEmitHeap<M>(0, site, stack, spans, values, d, s0, Start, two_in(), cells_body().Holds(spans, blocks, values, no_answers(), 0, before, after), before, after,
+    loan: Loan<M>(site.fetch, site.data, stack, top, spans), blocks: Blocks, lent: blocks.Lent(spans), ends: EmptyEnds<M>(stack.writes, spans), values: Valuation(), d: Nat,
+    s0: MachineState<M>, before, after: Now):
+    MayEmitNow<M>(0, site, stack, spans, values, d, s0, Start, two_in(), cells_body().Holds(spans, blocks, values, no_answers(), 0, before, after), before, after,
         lowered(cells_body(), into([Rax, Rax, Rcx]))) {
-    cells_body().emit_emits<M>(0, 0, site, laid, stack, top, spans, loan, blocks, lent, λ (_: Nat) => 0, 0, 0, no_answers(),
+    cells_body().emit_emits<M>(0, 0, site, laid, stack, top, spans, loan, blocks, lent, ends, λ (_: Nat) => 0, 0, 0, no_answers(),
         no_callees<M>(site, stack, spans, top), values, 0, d, d, s0, λ c => false_elim(c), [], trivial, Start, two_in(), into([Rax, Rax, Rcx]), 0,
         before, after)
 }
@@ -82,11 +84,11 @@ fn fill_body() → Body {
 theorem fill_lowers(): lowers(fill_body(), into([Rax, Rax, Rcx, Rdx, R8, R8])) = True { refl }
 
 theorem fill_code<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data), top: Nat, spans: Spans,
-    loan: Loan<M>(site.fetch, site.data, stack, top, spans), blocks: Blocks, lent: blocks.Lent(spans), values: Valuation(), d: Nat,
-    s0: MachineState<M>, before, after: Heap):
-    MayEmitHeap<M>(0, site, stack, spans, values, d, s0, Start, two_in(), fill_body().Holds(spans, blocks, values, no_answers(), 0, before, after), before, after,
+    loan: Loan<M>(site.fetch, site.data, stack, top, spans), blocks: Blocks, lent: blocks.Lent(spans), ends: EmptyEnds<M>(stack.writes, spans), values: Valuation(), d: Nat,
+    s0: MachineState<M>, before, after: Now):
+    MayEmitNow<M>(0, site, stack, spans, values, d, s0, Start, two_in(), fill_body().Holds(spans, blocks, values, no_answers(), 0, before, after), before, after,
         lowered(fill_body(), into([Rax, Rax, Rcx, Rdx, R8, R8]))) {
-    fill_body().emit_emits<M>(0, 0, site, laid, stack, top, spans, loan, blocks, lent, λ (_: Nat) => 0, 0, 0, no_answers(),
+    fill_body().emit_emits<M>(0, 0, site, laid, stack, top, spans, loan, blocks, lent, ends, λ (_: Nat) => 0, 0, 0, no_answers(),
         no_callees<M>(site, stack, spans, top), values, 0, d, d, s0, λ c => false_elim(c), [], trivial, Start, two_in(),
         into([Rax, Rax, Rcx, Rdx, R8, R8]), 0, before, after)
 }
@@ -116,11 +118,11 @@ fn larger_body() → Body {
 theorem larger_lowers(): lowers(larger_body(), into([Rax, Rcx, Rdx, Rax, Rax])) = True { refl }
 
 theorem larger_code<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data), top: Nat, spans: Spans,
-    loan: Loan<M>(site.fetch, site.data, stack, top, spans), blocks: Blocks, lent: blocks.Lent(spans), values: Valuation(), d: Nat,
-    s0: MachineState<M>, before, after: Heap):
-    MayEmitHeap<M>(0, site, stack, spans, values, d, s0, Start, two_in(), larger_body().Holds(spans, blocks, values, no_answers(), 0, before, after), before, after,
+    loan: Loan<M>(site.fetch, site.data, stack, top, spans), blocks: Blocks, lent: blocks.Lent(spans), ends: EmptyEnds<M>(stack.writes, spans), values: Valuation(), d: Nat,
+    s0: MachineState<M>, before, after: Now):
+    MayEmitNow<M>(0, site, stack, spans, values, d, s0, Start, two_in(), larger_body().Holds(spans, blocks, values, no_answers(), 0, before, after), before, after,
         lowered(larger_body(), into([Rax, Rcx, Rdx, Rax, Rax]))) {
-    larger_body().emit_emits<M>(0, 0, site, laid, stack, top, spans, loan, blocks, lent, λ (_: Nat) => 0, 0, 0, no_answers(),
+    larger_body().emit_emits<M>(0, 0, site, laid, stack, top, spans, loan, blocks, lent, ends, λ (_: Nat) => 0, 0, 0, no_answers(),
         no_callees<M>(site, stack, spans, top), values, 0, d, d, s0, λ c => false_elim(c), [], ⟨trivial, ⟨trivial, trivial⟩⟩, Start, two_in(),
         into([Rax, Rcx, Rdx, Rax, Rax]), 0, before, after)
 }
@@ -156,3 +158,45 @@ theorem cut_store_unprovable(spans: Spans, values: Valuation(), after: Heap, add
 fn fresh() → Heap { Heap([List::replicate(BitVec::zero(), 16)], [], [List::replicate(True, 16)]) }
 
 theorem undefined_read_none(): fresh().read_bytes(Loc(0, 3), 1) = None { refl }
+
+// ---------------------------------------------------------------------------
+// System calls (docs/language/ownership-design.md §17.7): a write and a read
+// of the reference in RSI by the word in RDI, lowered as their three words
+// moved into RDI, RSI and RDX, the number into RAX and SYSCALL; each with
+// its theorem. After the call RAX holds the result and RCX and R11 nothing
+// the file relies on. The control: a call whose word no register holds is
+// refused.
+
+fn write_body() → Body { Sys(Write(0, 1, 0, 2)) }
+
+fn read_body() → Body { Sys(Read(0, 1, 0, 2)) }
+
+theorem write_lowers(): lowers(write_body(), []) = True { refl }
+
+theorem read_lowers(): lowers(read_body(), []) = True { refl }
+
+fn after_slots(o: Option<Emitted>) → Option<List<Option<Held>>> {
+    match o { None => None, Some(e) => Some([e.file.at(Rax), e.file.at(Rcx), e.file.at(R11)]) }
+}
+
+theorem write_forgets(): after_slots(lowered(write_body(), [])) = Some([Some(Held(2, Word)), None, None]) { refl }
+
+theorem write_code<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data), top: Nat, spans: Spans,
+    loan: Loan<M>(site.fetch, site.data, stack, top, spans), blocks: Blocks, lent: blocks.Lent(spans), ends: EmptyEnds<M>(stack.writes, spans),
+    values: Valuation(), d: Nat, s0: MachineState<M>, before, after: Now):
+    MayEmitNow<M>(0, site, stack, spans, values, d, s0, Start, two_in(), write_body().Holds(spans, blocks, values, no_answers(), 0, before, after), before, after,
+        lowered(write_body(), [])) {
+    write_body().emit_emits<M>(0, 0, site, laid, stack, top, spans, loan, blocks, lent, ends, λ (_: Nat) => 0, 0, 0, no_answers(),
+        no_callees<M>(site, stack, spans, top), values, 0, d, d, s0, λ c => false_elim(c), [], trivial, Start, two_in(), [], 0, before, after)
+}
+
+theorem read_code<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data), top: Nat, spans: Spans,
+    loan: Loan<M>(site.fetch, site.data, stack, top, spans), blocks: Blocks, lent: blocks.Lent(spans), ends: EmptyEnds<M>(stack.writes, spans),
+    values: Valuation(), d: Nat, s0: MachineState<M>, before, after: Now):
+    MayEmitNow<M>(0, site, stack, spans, values, d, s0, Start, two_in(), read_body().Holds(spans, blocks, values, no_answers(), 0, before, after), before, after,
+        lowered(read_body(), [])) {
+    read_body().emit_emits<M>(0, 0, site, laid, stack, top, spans, loan, blocks, lent, ends, λ (_: Nat) => 0, 0, 0, no_answers(),
+        no_callees<M>(site, stack, spans, top), values, 0, d, d, s0, λ c => false_elim(c), [], trivial, Start, two_in(), [], 0, before, after)
+}
+
+theorem unheld_sys_refused(): lowers(Sys(Write(5, 1, 0, 2)), []) = False { refl }
