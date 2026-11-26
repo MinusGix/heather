@@ -60,27 +60,40 @@ Continue on branch `claude/ownership-checker-sound`. Read design §23.20
 - `issues/ownership-sound-consolidate.md` filed (the coordinating
   session's item 3). The roots-as-index step is its first piece.
 
-**Open questions, sent to the coordinating session (wait for the answers
-where they decide P5):**
-1. **A result's code**: `SafeAt` never says a result's meaning has the
-   result's code (`Sim.codes`); a primitive's world answer is arbitrary.
-   Until decided, take "the results are coded" as a hypothesis.
-2. **Forward atoms**: a view result's region may name a later result
-   (`found_sig`'s `Var(3)`; `beside_found_checked`). The results cannot be
-   bound one `Inv` at a time: a view's entries would read an unbound
-   level. P5 needs either a builder pushing all the results' variables
-   before the view entries are owed, or the view results bound after the
-   others in the proof's order (the levels are the checker's, so the
-   former).
-3. **Non-plain atoms**: a view result's region may name the caller's level
-   of a by-value argument that is itself a view of a word (`View(b[0])`
-   passed to `at`'s `ByTake` index: the probe `at_by_view0` was checked
-   and is not committed). `Inv.words` then fails at that level. Either the
-   call refuses it (as `View` does through `atoms_ok`) or the invariant
-   reads such a word from the meaning. This is a checker or invariant
-   decision; ask before changing either.
+**The coordinating session's rulings (after this session's reports):**
+- **Results' codes (accepted).** Add to `SafeAt`'s `Done` part
+  `Dyn::Coded(tys, (w(g, ds)).take(nres), result codes)`.
+  - A body gives it from its `Ret` (in `RetOk`).
+  - A primitive's from a new premise of `CheckSound`, `World::Coded`, in
+    `verdict.hthr` beside the world's type.
+  - Probes: the checked caller `y = g(); z = Read(y.f)`, and the `¬`
+    theorem that without the law the run is stuck at a world answering a
+    word.
+  - Add both to §23.17's list. Ask the same question of everything else
+    a primitive answers.
+- **`twice_param`.** Part 1 is done (e1f701d): the callee's `Ret` refuses
+  answering an owned object twice.
+  - Part 2: `Value::FreshApart` becomes "every owning result, fresh or a
+    moved parameter, in different blocks" (rename it, extend
+    `Inv::ret_fresh_apart`/`fresh_hold` to `OParam` of a taken parameter).
+    Watch for this: an owning holder at `Ret` need not be `AcOwn` by any
+    `Inv` clause. A cell with `own` gives `own`'s "alone in its block",
+    which may be the better route.
+  - Part 3: then drop the caller-side `CSt::holds` test, with `noh` from
+    the interface (two owning results in different blocks, both the
+    argument by `ViewIs`: a contradiction).
+- **P6 by peeling: accepted.**
+- **Suite rule:** `--pr` only on a clean committed tree with nothing else
+  heavy running. Edit in a second worktree with its own
+  `HEATHER_CACHE_DIR`, or wait.
+
+**Still open with the coordinating session:** forward atoms in a view
+result's region (`found_sig`), and a view result whose region names a
+caller level that is a view of a word (`at_by_view0`; §23.20).
 
 **Next, in this order:**
+0. The two interface changes above (codes, owning results apart) and the
+   `Ret` stage's proofs of them; then drop the caller-side `CSt::holds`.
 1. P5's binding over `CSt::results` and `Cell::results` (results first,
    then the slots, the run pushing all `n` cells at once). Carry the facts
    relating each state to the pre-call `s`:
