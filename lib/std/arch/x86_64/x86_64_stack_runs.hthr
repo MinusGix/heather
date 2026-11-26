@@ -1360,6 +1360,86 @@ theorem Site::performs_or_none<M, W>(self site: Site<M>, writes: ByteWrites<M>, 
     })(p)
 }
 
+// The escape carried as a kernel step (docs/language/ownership-design.md
+// §17.10): a kernel that also takes `esc`'s states as calls with nothing
+// owed after them, as an exit is. A claim's regions compose at it with the
+// claim lemmas unchanged; `performs_or_of_escaping` turns it back into the
+// escape, and `escaping_of_performs_or` the other way, at one call more.
+fn Kernel::escaping<M, W>(self kernel: Kernel<M, W>, esc: Running<M, W> → Type) → Kernel<M, W> {
+    Kernel(λ r P => kernel.resumes(r, P) ∨ esc(r), λ r P Q implies called => match called {
+        Inl(resumed) => Inl(kernel.monotone(r, P, Q, implies, resumed)),
+        Inr(escaped) => Inr(escaped),
+    })
+}
+
+// A kernel that resumes wherever another does.
+theorem Site::performs_or_kernel<M, W>(self site: Site<M>, writes: ByteWrites<M>, kernel, wider: Kernel<M, W>, goal, esc: Running<M, W> → Type,
+    within: (r: Running<M, W>) → (P: Running<M, W> → Type) → kernel.resumes(r, P) → wider.resumes(r, P), calls: Nat):
+    (least: Nat) → (from: Running<M, W>) → site.PerformsOr(writes, kernel, goal, esc, calls, least, from) →
+    site.PerformsOr(writes, wider, goal, esc, calls, least, from) {
+    match calls {
+        Zero => λ least from p => p,
+        Succ(more) => λ least from p => Exists(p.witness, Exists(p.proof.witness, ⟨p.proof.proof.left, match p.proof.proof.right {
+            Inl(reach) => Inl(reach),
+            Inr(called) => Inr(within(Running(p.witness, from.io), λ (u: Running<M, W>) => site.PerformsOr(writes, wider, goal, esc, more, least - p.proof.witness, u),
+                kernel.monotone(Running(p.witness, from.io), λ (u: Running<M, W>) => site.PerformsOr(writes, kernel, goal, esc, more, least - p.proof.witness, u),
+                    λ (u: Running<M, W>) => site.PerformsOr(writes, wider, goal, esc, more, least - p.proof.witness, u),
+                    λ u q => site.performs_or_kernel(writes, kernel, wider, goal, esc, within, more, least - p.proof.witness, u, q), called))),
+        }⟩)),
+    }
+}
+
+// The escape out of the kernel: a state the escaping kernel took as a call
+// is the claim's escape, reached under no bound and at no call.
+theorem Site::performs_or_of_escaping<M, W>(self site: Site<M>, writes: ByteWrites<M>, kernel: Kernel<M, W>, goal, esc: Running<M, W> → Type, calls: Nat):
+    (least: Nat) → (from: Running<M, W>) → site.Performs(writes, kernel.escaping(esc), goal, calls, least, from) →
+    site.PerformsOr(writes, kernel, goal, esc, calls, least, from) {
+    match calls {
+        Zero => λ least from p => Exists(p.witness, Exists(p.proof.witness, ⟨p.proof.proof.left, Inl(reach_goal<M, W>(goal, least, p.proof.witness,
+            Running(p.witness, from.io), p.proof.proof.right))⟩)),
+        Succ(more) => λ least from p => Exists(p.witness, Exists(p.proof.witness, ⟨p.proof.proof.left, match p.proof.proof.right {
+            Inl(reach) => Inl(Inl(reach_goal<M, W>(goal, least, p.proof.witness, Running(p.witness, from.io), reach))),
+            Inr(called) => match called {
+                Inl(resumed) => Inr(kernel.monotone(Running(p.witness, from.io),
+                    λ (u: Running<M, W>) => site.Performs(writes, kernel.escaping(esc), goal, more, least - p.proof.witness, u),
+                    λ (u: Running<M, W>) => site.PerformsOr(writes, kernel, goal, esc, more, least - p.proof.witness, u),
+                    λ u q => site.performs_or_of_escaping(writes, kernel, goal, esc, more, least - p.proof.witness, u, q), resumed)),
+                Inr(escaped) => Inl(Inr(escaped)),
+            },
+        }⟩)),
+    }
+}
+
+// A goal reached, or the escape taken as a call answered by nothing.
+theorem escape_as_call<M, W>(kernel: Kernel<M, W>, goal, esc, P: Running<M, W> → Type, least, n: Nat, t: Running<M, W>,
+    reach: ((least <= n) ∧ goal(t)) ∨ esc(t)): (((least <= n) ∧ goal(t)) ∨ False) ∨ kernel.escaping(esc).resumes(t, P) {
+    match reach {
+        Inl(reached) => Inl(Inl(reached)),
+        Inr(escaped) => Inr(Inr(escaped)),
+    }
+}
+
+// And into it, at one call more: the escape becomes a call answered by
+// nothing.
+theorem Site::escaping_of_performs_or<M, W>(self site: Site<M>, writes: ByteWrites<M>, kernel: Kernel<M, W>, goal, esc: Running<M, W> → Type, calls: Nat):
+    (least: Nat) → (from: Running<M, W>) → site.PerformsOr(writes, kernel, goal, esc, calls, least, from) →
+    site.Performs(writes, kernel.escaping(esc), goal, Succ(calls), least, from) {
+    match calls {
+        Zero => λ least from p => Exists(p.witness, Exists(p.proof.witness, ⟨p.proof.proof.left,
+            escape_as_call<M, W>(kernel, goal, esc, λ (u: Running<M, W>) => site.Performs(writes, kernel.escaping(esc), goal, 0, least - p.proof.witness, u), least,
+                p.proof.witness, Running(p.witness, from.io), p.proof.proof.right)⟩)),
+        Succ(more) => λ least from p => Exists(p.witness, Exists(p.proof.witness, ⟨p.proof.proof.left, match p.proof.proof.right {
+            Inl(reach) => escape_as_call<M, W>(kernel, goal, esc,
+                λ (u: Running<M, W>) => site.Performs(writes, kernel.escaping(esc), goal, Succ(more), least - p.proof.witness, u), least, p.proof.witness,
+                Running(p.witness, from.io), reach),
+            Inr(called) => Inr(Inl(kernel.monotone(Running(p.witness, from.io),
+                λ (u: Running<M, W>) => site.PerformsOr(writes, kernel, goal, esc, more, least - p.proof.witness, u),
+                λ (u: Running<M, W>) => site.Performs(writes, kernel.escaping(esc), goal, Succ(more), least - p.proof.witness, u),
+                λ u q => site.escaping_of_performs_or(writes, kernel, goal, esc, more, least - p.proof.witness, u, q), called))),
+        }⟩)),
+    }
+}
+
 // The claim with no escape: each lemma above at `esc = λ _ => False`.
 theorem Site::performs_less<M, W>(self site: Site<M>, writes: ByteWrites<M>, kernel: Kernel<M, W>, goal: Running<M, W> → Type, calls: Nat):
     (least, fewer: Nat) → fewer <= least → (from: Running<M, W>) → site.Performs(writes, kernel, goal, calls, least, from) →
@@ -1439,6 +1519,12 @@ fn Site::ClaimsOr<M, W>(self site: Site<M>, writes: ByteWrites<M>, kernel: Kerne
 
 fn Site::Claims<M, W>(self site: Site<M>, writes: ByteWrites<M>, kernel: Kernel<M, W>, calls, least, from: Nat, pre, goal: Running<M, W> → Type) → Type {
     site.ClaimsOr(writes, kernel, calls, least, from, pre, goal, λ (_: Running<M, W>) => False)
+}
+
+// A claim with an escape, at the escaping kernel.
+theorem Site::claims_escaping<M, W>(self site: Site<M>, writes: ByteWrites<M>, kernel: Kernel<M, W>, calls, least, from: Nat, pre, goal, esc: Running<M, W> → Type,
+    claims: site.ClaimsOr(writes, kernel, calls, least, from, pre, goal, esc)): site.Claims(writes, kernel.escaping(esc), Succ(calls), least, from, pre, goal) {
+    λ r here resident held => site.escaping_of_performs_or(writes, kernel, goal, esc, calls, least, r, claims(r, here, resident, held))
 }
 
 // A machine run is a claim at no system call and bound zero, the world

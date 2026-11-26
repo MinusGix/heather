@@ -1300,6 +1300,32 @@ theorem program_grows(routines: List<Routine>, blocks: Blocks, scoped: Scoped::a
     }
 }
 
+// And only extend, fuel by fuel (of the meaning alone).
+theorem Routine::call_extends(self r: Routine, used: List<Nat>, scope: r.scope() = Some(used), blocks: Blocks, calls: Calls(),
+    extends: HistoryExtends(calls), fuel: Nat, args: List<Value>, heap: Heap, io: Io, a: Answer, ran: r.call(blocks, calls, fuel, args, heap, io) = Done(a)):
+    Extends(a.io.past, io.past) {
+    let run = routine_ran(r, blocks, calls, fuel, args, heap, io, a, ran);
+    let fresh = Option::and_then_some(fresh_ids([], typed_ids(r.parameters)), λ (u: List<Nat>) => r.body.fresh(u), used, scope);
+    extends_trans(a.io.past, run.after.io.past, io.past, io_extends_same(run.after.io, a.io, run.world),
+        r.body.run_extends(blocks, calls, extends, fuel, fresh.witness, used, Config(run.start, heap, io), run.after, fresh.proof.right, run.ran))
+}
+
+theorem program_extends(routines: List<Routine>, blocks: Blocks, scoped: Scoped::all(routines), fuel: Nat): HistoryExtends(program_calls(routines, blocks, fuel)) {
+    match fuel {
+        Zero => λ f args heap io a never => absurd(never),
+        Succ(n) => λ f args heap io a => (match routines.nth(f) as λ o => routines.nth(f) = o →
+            (match o { None => Stuck(io), Some(r) => r.call(blocks, program_calls(routines, blocks, n), n, args, heap, io) }) = Done(a) →
+            Extends(a.io.past, io.past) {
+            None => λ _ never => absurd(never),
+            Some(r) => λ nth ran => {
+                let s = scoped_nth(routines, f, r, nth, scoped);
+                r.call_extends(s.witness, s.proof, blocks, program_calls(routines, blocks, n), program_extends(routines, blocks, scoped, n), n, args, heap, io, a,
+                    ran)
+            },
+        })(refl),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Programs
 

@@ -1516,6 +1516,141 @@ theorem Body::run_grows(self body: Body, blocks: Blocks, calls: Calls(), grows: 
     }
 }
 
+// Calls whose history only extends: a done call's world is its start's
+// with exchanges after it (`Extends`, newest first). Of the meaning alone:
+// `HistoryGrows` is its count.
+fn HistoryExtends(calls: Calls()) → Type {
+    (f: Nat) → (args: List<Value>) → (heap: Heap) → (io: Io) → (a: Answer) → calls(f, args, heap, io) = Done(a) → Extends(a.io.past, io.past)
+}
+
+// One world as another: an extension of it.
+theorem io_extends_same(a, b: Io, e: b = a): Extends(b.past, a.past) { j(sym(e), λ w _ => Extends(w.past, a.past), extends_refl(a.past)) }
+
+theorem loop_pass_extends(blocks: Blocks, calls: Calls(), inner: Body, parameters: List<Typed>, exit: Nat, next: List<Typed>,
+    passes: (rest: Nat) → (state: List<Value>) → (m: Heap) → (io: Io) → (l: Locals) → (after: Config) → pass_locals(parameters, state) = Some(l) →
+        inner.run(blocks, calls, rest, Config(l, m, io)) = Done(after) → Extends(after.io.past, io.past),
+    fuel: Nat, later: List<Value> → Heap → Io → Ran<Ended>,
+    each: (state: List<Value>) → (m: Heap) → (io: Io) → (end: Ended) → later(state, m, io) = Done(end) → Extends(end.io.past, io.past)):
+    (state: List<Value>) → (m: Heap) → (io: Io) → (end: Ended) →
+    bytes_level::loop_pass(λ (n: Nat) (pass: Config) => inner.run(blocks, calls, n, pass), parameters, exit, next, fuel, later, state, m, io) = Done(end) →
+    Extends(end.io.past, io.past) {
+    λ state m io end ran => {
+        let after_pass = λ (after: Config) => Ran::of(read_values(next, after.locals), after.io).then(λ (more: List<Value>) =>
+            match after.locals.words(1, exit).head_bit() {
+                False => later(more, after.memory, after.io),
+                True => Done(Ended(more, after.memory, after.io)),
+            });
+        let one = Ran::then_done<Locals, Ended>(Ran::of(pass_locals(parameters, state), io), λ (l: Locals) =>
+            inner.run(blocks, calls, fuel, Config(l, m, io)).then(after_pass), end, ran);
+        let l = one.witness;
+        let two = Ran::then_done<Config, Ended>(inner.run(blocks, calls, fuel, Config(l, m, io)), after_pass, end, one.proof.right);
+        let after = two.witness;
+        let three = Ran::then_done<List<Value>, Ended>(Ran::of(read_values(next, after.locals), after.io), λ (more: List<Value>) =>
+            match after.locals.words(1, exit).head_bit() {
+                False => later(more, after.memory, after.io),
+                True => Done(Ended(more, after.memory, after.io)),
+            }, end, two.proof.right);
+        let more = three.witness;
+        let pass_extends: Extends(after.io.past, io.past) = passes(fuel, state, m, io, l, after,
+            Ran::of_done<Locals>(pass_locals(parameters, state), io, l, one.proof.left), two.proof.left);
+        extends_trans(end.io.past, after.io.past, io.past, (match after.locals.words(1, exit).head_bit() as λ b => (match b {
+                False => later(more, after.memory, after.io),
+                True => Done(Ended(more, after.memory, after.io)),
+            }) = Done(end) → Extends(end.io.past, after.io.past) {
+            True => λ e => io_extends_same(after.io, end.io, cong_fn<Ended, Io>(λ y => y.io, sym(Ran::done_inj<Ended>(Ended(more, after.memory, after.io), end, e)))),
+            False => λ e => each(more, after.memory, after.io, end, e),
+        })(three.proof.right), pass_extends)
+    }
+}
+
+theorem loop_later_extends(blocks: Blocks, calls: Calls(), inner: Body, parameters: List<Typed>, exit: Nat, next: List<Typed>,
+    passes: (rest: Nat) → (state: List<Value>) → (m: Heap) → (io: Io) → (l: Locals) → (after: Config) → pass_locals(parameters, state) = Some(l) →
+        inner.run(blocks, calls, rest, Config(l, m, io)) = Done(after) → Extends(after.io.past, io.past),
+    fuel: Nat):
+    (state: List<Value>) → (m: Heap) → (io: Io) → (end: Ended) →
+    bytes_level::loop_later(λ (n: Nat) (pass: Config) => inner.run(blocks, calls, n, pass), parameters, exit, next, fuel, state, m, io) = Done(end) →
+    Extends(end.io.past, io.past) {
+    match fuel {
+        Zero => λ state m io end never => absurd(never),
+        Succ(rest) => loop_pass_extends(blocks, calls, inner, parameters, exit, next, passes, rest,
+            bytes_level::loop_later(λ (n: Nat) (pass: Config) => inner.run(blocks, calls, n, pass), parameters, exit, next, rest),
+            loop_later_extends(blocks, calls, inner, parameters, exit, next, passes, rest)),
+    }
+}
+
+theorem loop_run_extends(blocks: Blocks, calls: Calls(), inner: Body, parameters: List<Typed>, exit: Nat, next: List<Typed>,
+    passes: (rest: Nat) → (state: List<Value>) → (m: Heap) → (io: Io) → (l: Locals) → (after: Config) → pass_locals(parameters, state) = Some(l) →
+        inner.run(blocks, calls, rest, Config(l, m, io)) = Done(after) → Extends(after.io.past, io.past),
+    fuel: Nat):
+    (state: List<Value>) → (m: Heap) → (io: Io) → (end: Ended) →
+    bytes_level::loop_run(λ (n: Nat) (pass: Config) => inner.run(blocks, calls, n, pass), parameters, exit, next, fuel, state, m, io) = Done(end) →
+    Extends(end.io.past, io.past) {
+    loop_pass_extends(blocks, calls, inner, parameters, exit, next, passes, fuel,
+        bytes_level::loop_later(λ (n: Nat) (pass: Config) => inner.run(blocks, calls, n, pass), parameters, exit, next, fuel),
+        loop_later_extends(blocks, calls, inner, parameters, exit, next, passes, fuel))
+}
+
+// One exchange recorded extends the history.
+theorem exchanged_extends(io: Io, cmd: LinuxCmd<Nat>, a: cmd.Resp()): Extends(io.exchanged(cmd, a).past, io.past) { Exists([Exchange(cmd, a)], refl) }
+
+// A system call done records one exchange after the start's.
+theorem SysCall::ran_extends(self call: SysCall, blocks: Blocks, c, after: Config, ran: call.run(blocks, c) = Done(after)):
+    Extends(after.io.past, c.io.past) {
+    (match call as λ k => SysRan(k, blocks, c, after) → Extends(after.io.past, c.io.past) {
+        Read(fd, _, len, _) => λ r => {
+            let cmd: LinuxCmd<Nat> = ReadCmd(c.locals.word(fd), c.locals.word(len).toNat());
+            j(sym(r.proof.right.right.proof.right.right), λ w _ => Extends(w.past, c.io.past), exchanged_extends(c.io, cmd, c.io.answer(cmd)))
+        },
+        Write(fd, _, _, _) => λ r => {
+            let cmd: LinuxCmd<Nat> = WriteCmd(c.locals.word(fd), r.proof.right.witness);
+            j(sym(r.proof.right.proof.right.proof.right.right), λ w _ => Extends(w.past, c.io.past), exchanged_extends(c.io, cmd, c.io.answer(cmd)))
+        },
+    })(call.ran(blocks, c, after, ran))
+}
+
+// A run's history only extends: each system call records one exchange
+// after it, and nothing else changes it.
+theorem Body::run_extends(self body: Body, blocks: Blocks, calls: Calls(), extends: HistoryExtends(calls), fuel: Nat): (used, used2: List<Nat>) →
+    (c, after: Config) → body.fresh(used) = Some(used2) → body.run(blocks, calls, fuel, c) = Done(after) → Extends(after.io.past, c.io.past) {
+    match body {
+        Leaf(instrs) => λ used used2 c after fresh ran =>
+            io_extends_same(c.io, after.io, run_instrs_io(blocks, instrs, c, after, Ran::of_done<Config>(run_instrs(blocks, instrs, c), c.io, after, ran))),
+        Seq(first, rest) => λ used used2 c after fresh ran => {
+            let fresh_first = Option::and_then_some(first.fresh(used), λ (u: List<Nat>) => rest.fresh(u), used2, fresh);
+            let ran_first = Ran::then_done<Config, Config>(first.run(blocks, calls, fuel, c), λ (mid: Config) => rest.run(blocks, calls, fuel, mid), after, ran);
+            extends_trans(after.io.past, ran_first.witness.io.past, c.io.past,
+                rest.run_extends(blocks, calls, extends, fuel, fresh_first.witness, used2, ran_first.witness, after, fresh_first.proof.right, ran_first.proof.right),
+                first.run_extends(blocks, calls, extends, fuel, used, fresh_first.witness, c, ran_first.witness, fresh_first.proof.left, ran_first.proof.left))
+        },
+        Branch(condition, yes, no) => λ used used2 c after fresh ran => {
+            let fresh_yes = Option::and_then_some(yes.fresh(used), λ (uy: List<Nat>) => no.fresh(used).and_then(λ (un: List<Nat>) => Some(uy ++ un)),
+                used2, fresh);
+            let fresh_no = Option::and_then_some(no.fresh(used), λ (un: List<Nat>) => Some(fresh_yes.witness ++ un), used2, fresh_yes.proof.right);
+            (match c.locals.words(1, condition).head_bit() as λ bit =>
+                (match bit { True => yes.run(blocks, calls, fuel, c), False => no.run(blocks, calls, fuel, c) }) = Done(after) →
+                Extends(after.io.past, c.io.past) {
+                True => λ r => yes.run_extends(blocks, calls, extends, fuel, used, fresh_yes.witness, c, after, fresh_yes.proof.left, r),
+                False => λ r => no.run_extends(blocks, calls, extends, fuel, used, fresh_no.witness, c, after, fresh_no.proof.left, r),
+            })(ran)
+        },
+        Call(callee, arguments, results) => λ used used2 c after fresh ran => {
+            let r = call_ran(blocks, calls, fuel, callee, arguments, results, c, after, ran);
+            extends_trans(after.io.past, r.answer.io.past, c.io.past, io_extends_same(r.answer.io, after.io, cong_fn<Config, Io>(λ y => y.io, r.lands)),
+                extends(callee, r.args, c.memory, c.io, r.answer, r.answered))
+        },
+        Loop(inputs, parameters, inner, exit, next, outputs) => λ used used2 c after fresh ran => {
+            let r = loop_ran(blocks, calls, fuel, inputs, parameters, inner, exit, next, outputs, c, after, ran);
+            let fr = loop_fresh(used, used2, inputs, parameters, inner, exit, next, outputs, fresh);
+            extends_trans(after.io.past, r.end.io.past, c.io.past, io_extends_same(r.end.io, after.io, cong_fn<Config, Io>(λ y => y.io, r.lands)),
+                loop_run_extends(blocks, calls, inner, parameters, exit, next,
+                    λ rest st m io l aft _ rn => inner.run_extends(blocks, calls, extends, rest, fr.start, fr.inside, Config(l, m, io), aft, fr.body, rn),
+                    fuel, r.state, c.memory, c.io, r.end, r.looped))
+        },
+        Sys(call) => λ used used2 c after fresh ran => call.ran_extends(blocks, c, after, ran),
+        Exit(_) => λ used used2 c after fresh never => absurd(never),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // The bridge: a run is its facts at the valuation
 
