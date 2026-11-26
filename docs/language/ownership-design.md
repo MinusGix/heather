@@ -3921,3 +3921,99 @@ fresh results of one call must be distinct blocks; and three checker defects,
 each a refusal to add (a join over a read-lent holder binding an owned
 output; an arm yielding one holder twice; a returned view's region reading a
 non-plain level in the caller).
+
+### 23.9 The stages proved so far (2026-11-26)
+
+Each stage concludes the whole invariant at the checker's next state and
+the meaning's next environment (`Stepped`): `Lit`, `Op`, `Read`, `Fresh`, a
+`Take` of a part, of a plain variable and of a holder, a `Death` of a part,
+of a plain variable and of a holder (the block killed only when its cell owns
+it: `Inv::kill`), and a `View` of a plain variable, and to read and to write of
+a holder and of a view. Each statement kind's stage is a lemma over neutral
+states; what they share is stated once: a binding of a plain value
+(`Inv::push_plain`), of a holder (`Inv::push_hold`), of a view with its new
+entries (`Inv::push_view`), a level set gone (`Inv::gone`).
+
+**The invariant gained** `young`, `held`, `vents` (objects so far are below
+`nobj`, none past it has a root, every live entry is a view variable's below
+the next level), `bare` (a root's block has no holes, so its read does not
+depend on the rest of the heap), `chain` (a live entry's parent is live, at a
+lower level, and its region extends the parent's by the place it was opened
+at) and `excl` (a live view to write is apart from every live entry of its
+object that is neither its ancestor nor its descendant). `excl` is the fact the
+licence relies on when a view's access meets only its descendants; the view
+stages prove it of every new entry from the licence's residuals.
+
+**The licence's soundness** (`CSt::license_sound`): the decider run on regions
+at levels is the decider on the same regions at indices
+(`CSt::unsteps_apart`, the levels being in range so that the index map is
+injective), so the residuals the checker owes for its obligations, holding at
+the site, give the regions' selections apart (`Steps::apart_sound`). At the
+run's words they are the same selections, the region's levels being plain
+(`Inv::lic_apart`).
+
+**Two checker changes for provability, no verdict changed**: the ancestry
+`CSt::anc_of` takes the level count as fuel (a parent is at a lower level)
+instead of the number of live entries, so it is stable as entries come and go;
+and it follows every entry of a parent, not the first only (a read view chosen
+by a join has entries opened on different parents, and each is an ancestor;
+following the first only made a view derived through a later entry no
+descendant of its real ancestor, which a write through that ancestor would not
+meet). `CSt::set` updates only the list that holds the level, with the other
+fields its own, so a state after it has the same counts and entries by
+conversion.
+
+**`CSt::Changes`** (the invariant's "something live may change this object") is
+a proposition over levels and entries, not a Boolean over the lists: a stage
+reasons about it level by level.
+
+### 23.10 Writes: apartness keeps fits, and the plain write (2026-11-26)
+
+**`Sel::Apart` now says a write keeps the other path's fit** (`verdict.hthr`,
+record `SelApart`: `reads`, the old `ApartAt`, and `fit1`/`fit2`). The run's
+read is stuck at a selection that does not fit, so after a write through one
+reference the invariant must show that every other live reference still
+fits, and reads and commuting writes alone do not say that. It is provable
+for every apartness the proof produces: the step model gained the law
+`fits_over` (a modification at any step keeps whether every step fits; for
+`Dyn` a part's fit reads only the length, `PartOk.fits_len`, and a write
+keeps lengths), and `Steps::apart_fit` derives the fit-keeping from the
+decider's verdict beside `Steps::apart_sound` (`Steps::fit_under` under a
+shared step, `Steps::fit_then` after two apart steps). `Lendable`'s apartness
+asks a caller for the same, which its licence gives.
+
+`fits_over` is unconditional because it speaks of one step on one value:
+`fits(a, over(b, g, d)) = fits(a, d)` compares steps `a` and `b` taken on
+the same `d`, and `over` keeps `d`'s code and its length (`PartOk.len_set`)
+whatever `g` returns. A modification at a field holding a sequence that
+changes the sequence's length does change whether an element step *under*
+that field fits, but that is a step on `at(b, d)`, not on `d`, and the law
+says nothing of it. The deeper fits are carried by `Steps::fit_under`, which
+uses `over_at` and so inherits its `like` condition through
+`Steps::verdict_keeps`, exactly as `ApartAt::under` does for `apart_sound`.
+At two apart steps (`Steps::fit_then`) the other step reads what it read, so
+no condition is needed there.
+
+**The checker's write** is split into `CSt::write` and its tail
+`CSt::write_last` (same meaning): an inversion that re-spelled the tail's
+nested match drove the kernel's conversion past the stack.
+
+**Proved**: `Stmt::stage_write_plain` (a write whose root is a plain variable:
+its cell holds the written value, nothing else changes; the words regions
+read are other levels, as `!in_regions(root)` says), with the path lemmas
+`Sel::write_get` (a write along a fitting path keeps it fitting and reads
+back what was written, given the written value's code and length:
+`WriteInv::val`, from the code condition and the `RFits` residual) and
+`Sel::write_keeps`; the run's write (`Stmt::write_runs_plain`,
+`Stmt::write_runs_ref`); cells and words after one variable is set
+(`Env`/`REnv::get_set_*`, `CSt::env_ix`); a block stored
+(`Heap::val_store_here/other`, `Heap::obj_store_holes`); and what an apart
+path reads after a write (`Sel::get_apart`, and `Sel::get_under` for a view
+of the written object, apart below the holder's own selections).
+
+**What the holder's write still needs**: the state after it is
+`s.written(l).unback(l)`, which differs from `s` in `touched`/`wrote` only
+(no entry is the holder's). The functions the invariant reads that recurse
+with the state fixed (`unsteps`, `anc_of`, `Parent`, `up`) do not convert
+between the two, so `Inv` is rebuilt for it with `refok_keep`, `excl_keep`
+and `parent_keep`, as `Inv::gone` does for `CSt::set`.

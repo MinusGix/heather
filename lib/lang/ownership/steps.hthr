@@ -191,6 +191,15 @@ record StepModelLaws<S>(m: StepModel<S>) {
     // Writing back what was read changes nothing, where the step fits and
     // where it does not.
     put_back: (a: Sel) → (s: S) → m.over(a, λ _ => m.at(a, s), s) = s,
+    // An owner's fit at a step is unchanged by any modification of that
+    // owner at any step, whatever the modification returns: both steps are
+    // taken on the same owner, so this asks the model's `over` to keep
+    // what a fit reads of the owner (for `Dyn`, its code and length; a
+    // model whose `over` could change an owner's length breaks it). A fit
+    // deeper, under the modified step, is not this law's: it is a step on
+    // `at(b, s)`, and `Steps::fit_under` carries it under `over_at`'s
+    // `like` condition (docs/language/ownership-design.md §23.10).
+    fits_over: (a, b: Sel) → (g: S → S) → (s: S) → m.fits(a, m.over(b, g, s)) = m.fits(a, s),
 }
 
 // The steps from the root, the first outermost: read, and modified.
@@ -205,6 +214,16 @@ fn Steps::over<S>(m: StepModel<S>, ws: List<Ix>, xs: List<Step>, g: S → S, s: 
 // Two places apart, as the denotation of their steps.
 fn Steps::Apart<S>(m: StepModel<S>, ws: List<Ix>, xs, ys: List<Step>) → Type {
     ApartAt<S>(λ s => Steps::at(m, ws, xs, s), λ g s => Steps::over(m, ws, xs, g, s), λ s => Steps::at(m, ws, ys, s), λ g s => Steps::over(m, ws, ys, g, s))
+}
+
+// Whether every step of a place fits, read down from the root.
+fn Steps::fit<S>(m: StepModel<S>, ws: List<Ix>, xs: List<Step>, s: S) → Bool {
+    match xs { Nil => True, Cons(a, rest) => m.fits(a.sel(ws), s) && Steps::fit(m, ws, rest, m.at(a.sel(ws), s)) }
+}
+
+// A modification at `xs` keeps whether `ys` fits.
+fn Steps::KeepsFit<S>(m: StepModel<S>, ws: List<Ix>, xs, ys: List<Step>) → Type {
+    (g: S → S) → (s: S) → Steps::fit(m, ws, ys, Steps::over(m, ws, xs, g, s)) = Steps::fit(m, ws, ys, s)
 }
 
 // ---------------------------------------------------------------------------
@@ -429,6 +448,68 @@ theorem Steps::apart_sound<S>(m: StepModel<S>, ml: StepModelLaws<S>(m), ws: List
                 },
                 False => λ e ok hold => ApartAt::then_both(m, a.sel(ws), b.sel(ws), ml.apart(a.sel(ws), b.sel(ws), a.apart_sound(b, ws, rs, ok, hold)),
                     λ s => Steps::at(m, ws, xr, s), λ s => Steps::at(m, ws, yr, s), λ g s => Steps::over(m, ws, xr, g, s), λ g s => Steps::over(m, ws, yr, g, s)),
+            })(refl)
+        },
+    }
+}
+
+// The fits kept: a modification at one of two places apart keeps whether
+// the other fits. Under a step both share, the step's own fit is kept and
+// it reads what the inner modification left; after two steps apart, the
+// other's step reads what it did.
+theorem Steps::fit_under<S>(m: StepModel<S>, ml: StepModelLaws<S>(m), ws: List<Ix>, a: Step, yr: List<Step>, over1: (S → S) → S → S,
+    inner: (g: S → S) → (s: S) → Steps::fit(m, ws, yr, over1(g, s)) = Steps::fit(m, ws, yr, s),
+    k1: (x, s: S) → m.like(a.sel(ws), x, s) = True → (g: S → S) → m.like(a.sel(ws), x, over1(g, s)) = True, g: S → S, s: S):
+    Steps::fit(m, ws, Cons(a, yr), m.over(a.sel(ws), λ x => over1(g, x), s)) = Steps::fit(m, ws, Cons(a, yr), s)
+{
+    (match m.fits(a.sel(ws), s) as λ c => m.fits(a.sel(ws), s) = c →
+            Steps::fit(m, ws, Cons(a, yr), m.over(a.sel(ws), λ x => over1(g, x), s)) = Steps::fit(m, ws, Cons(a, yr), s) {
+        True => λ on => {
+            let ov: (m.at(a.sel(ws), m.over(a.sel(ws), λ x => over1(g, x), s)) = over1(g, m.at(a.sel(ws), s))) =
+                ml.over_at(a.sel(ws), λ x => over1(g, x), s, on, k1(m.at(a.sel(ws), s), m.at(a.sel(ws), s), ml.like_refl(a.sel(ws), m.at(a.sel(ws), s)), g));
+            let e1: (m.fits(a.sel(ws), m.over(a.sel(ws), λ x => over1(g, x), s)) = m.fits(a.sel(ws), s)) = ml.fits_over(a.sel(ws), a.sel(ws), λ x => over1(g, x), s);
+            trans(cong_fn(λ (q: Bool) => q && Steps::fit(m, ws, yr, m.at(a.sel(ws), m.over(a.sel(ws), λ x => over1(g, x), s))), e1),
+                cong_fn(λ (t: Bool) => m.fits(a.sel(ws), s) && t, trans(cong_fn(λ (t: S) => Steps::fit(m, ws, yr, t), ov), inner(g, m.at(a.sel(ws), s)))))
+        },
+        False => λ off => cong_fn(λ (t: S) => Steps::fit(m, ws, Cons(a, yr), t), ml.still(a.sel(ws), λ x => over1(g, x), s, off)),
+    })(refl)
+}
+
+theorem Steps::fit_then<S>(m: StepModel<S>, ml: StepModelLaws<S>(m), ws: List<Ix>, a, b: Step, ap: ApartAt<S>(m.at(a.sel(ws)), m.over(a.sel(ws)), m.at(b.sel(ws)), m.over(b.sel(ws))),
+    yr: List<Step>, f: S → S, s: S): Steps::fit(m, ws, Cons(b, yr), m.over(a.sel(ws), f, s)) = Steps::fit(m, ws, Cons(b, yr), s)
+{
+    let e1: (m.fits(b.sel(ws), m.over(a.sel(ws), f, s)) = m.fits(b.sel(ws), s)) = ml.fits_over(b.sel(ws), a.sel(ws), f, s);
+    let e2: (m.at(b.sel(ws), m.over(a.sel(ws), f, s)) = m.at(b.sel(ws), s)) = ap.right_after_left(f, s);
+    trans(cong_fn(λ (q: Bool) => q && Steps::fit(m, ws, yr, m.at(b.sel(ws), m.over(a.sel(ws), f, s))), e1),
+        cong_fn(λ (t: S) => m.fits(b.sel(ws), s) && Steps::fit(m, ws, yr, t), e2))
+}
+
+theorem Steps::apart_fit<S>(m: StepModel<S>, ml: StepModelLaws<S>(m), ws: List<Ix>, xs: List<Step>):
+    (ys: List<Step>) → (rs: List<Obligation>) → Steps::apart(xs, ys) = Some(rs) → Obligation::All(rs, Ix::nats(ws)) →
+    And<Steps::KeepsFit(m, ws, xs, ys), Steps::KeepsFit(m, ws, ys, xs)>
+{
+    match xs {
+        Nil => λ ys rs no _ => absurd(no),
+        Cons(a, xr) => λ ys => match ys {
+            Nil => λ rs no _ => absurd(no),
+            Cons(b, yr) => λ rs => (match a.same(b) as λ c => a.same(b) = c → (match c { True => Steps::apart(xr, yr), False => a.apart(b) }) = Some(rs) →
+                    Obligation::All(rs, Ix::nats(ws)) → And<Steps::KeepsFit(m, ws, Cons(a, xr), Cons(b, yr)), Steps::KeepsFit(m, ws, Cons(b, yr), Cons(a, xr))> {
+                True => λ e ok hold => {
+                    let same: (a = b) = a.same_sound(b, e);
+                    let fit = Steps::verdict_keeps(m, ml, ws, a.sel(ws), xr, yr, rs, ok);
+                    let ih = Steps::apart_fit(m, ml, ws, xr, yr, rs, ok, hold);
+                    let here: And<Steps::KeepsFit(m, ws, Cons(a, xr), Cons(a, yr)), Steps::KeepsFit(m, ws, Cons(a, yr), Cons(a, xr))> = And(
+                        λ g s => Steps::fit_under(m, ml, ws, a, yr, λ g2 s2 => Steps::over(m, ws, xr, g2, s2), ih.left, fit.left, g, s),
+                        λ g s => Steps::fit_under(m, ml, ws, a, xr, λ g2 s2 => Steps::over(m, ws, yr, g2, s2), ih.right, fit.right, g, s));
+                    j(same, λ c _ => And<Steps::KeepsFit(m, ws, Cons(a, xr), Cons(c, yr)), Steps::KeepsFit(m, ws, Cons(c, yr), Cons(a, xr))>, here)
+                },
+                False => λ e ok hold => {
+                    let ap = ml.apart(a.sel(ws), b.sel(ws), a.apart_sound(b, ws, rs, ok, hold));
+                    let pa: ApartAt<S>(m.at(b.sel(ws)), m.over(b.sel(ws)), m.at(a.sel(ws)), m.over(a.sel(ws))) =
+                        ApartAt(ap.right_after_left, ap.left_after_right, λ f g d => sym(ap.commute(g, f, d)));
+                    And(λ g s => Steps::fit_then(m, ml, ws, a, b, ap, yr, λ x => Steps::over(m, ws, xr, g, x), s),
+                        λ g s => Steps::fit_then(m, ml, ws, b, a, pa, xr, λ x => Steps::over(m, ws, yr, g, x), s))
+                },
             })(refl)
         },
     }

@@ -136,11 +136,11 @@ fn CSt::role(self s: CSt, l: Nat) → Role { (s.var(l)).role }
 
 fn Nat::member(self l: Nat, ls: List<Nat>) → Bool { match ls { Nil => False, Cons(k, rest) => k.same(l) || l.member(rest) } }
 
+// A level's role set: only the list that holds it changes.
 fn CSt::set(self s: CSt, l: Nat, r: Role) → CSt {
-    match (l + 1).leb(s.na) {
-        True => CSt(s.args.update(l, λ c => CVar(c.code, r)), s.locs, s.na, s.nd, s.views, s.nobj, Cons(l, s.touched), s.wrote),
-        False => CSt(s.args, s.locs.update(s.na + s.nd - 1 - l, λ c => CVar(c.code, r)), s.na, s.nd, s.views, s.nobj, Cons(l, s.touched), s.wrote),
-    }
+    CSt(match (l + 1).leb(s.na) { True => s.args.update(l, λ c => CVar(c.code, r)), False => s.args },
+        match (l + 1).leb(s.na) { True => s.locs, False => s.locs.update(s.na + s.nd - 1 - l, λ c => CVar(c.code, r)) },
+        s.na, s.nd, s.views, s.nobj, Cons(l, s.touched), s.wrote)
 }
 
 fn CSt::push(self s: CSt, c: CVar) → CSt { CSt(s.args, Cons(c, s.locs), s.na, s.nd + 1, s.views, s.nobj, s.touched, s.wrote) }
@@ -170,18 +170,20 @@ fn CSt::unsynced(self s: CSt, o: Nat) → Bool { s.views.any_bit(λ e => e.obj.s
 fn CSt::pending(self s: CSt) → Bool { s.views.any_bit(λ e => e.mode.writes() && !e.back) }
 
 // The variables an entry is a view of: its parent, and the parent's, while
-// they are views (a view's first entry names its parent's parent).
+// they are views, through every entry of each (a read view chosen by a join
+// has entries opened on different parents, and each is an ancestor). A
+// parent is at a lower level, so the level count bounds the chain.
 fn CSt::anc_of(self s: CSt, e: VEnt, fuel: Nat) → List<Nat> {
     match fuel {
         Zero => Nil,
         Succ(f) => match e.par.same(e.lvl) {
             True => Nil,
-            False => Cons(e.par, match s.ents(e.par) { Cons(pe, _) => s.anc_of(pe, f), Nil => Nil }),
+            False => Cons(e.par, (s.ents(e.par)).foldr(λ (pe: VEnt) (acc: List<Nat>) => s.anc_of(pe, f) ++ acc, Nil)),
         },
     }
 }
 
-fn CSt::anc(self s: CSt, l: Nat) → List<Nat> { match s.ents(l) { Cons(e, _) => s.anc_of(e, s.views.len()), Nil => Nil } }
+fn CSt::anc(self s: CSt, l: Nat) → List<Nat> { (s.ents(l)).foldr(λ (e: VEnt) (acc: List<Nat>) => s.anc_of(e, s.na + s.nd) ++ acc, Nil) }
 
 // Two variables one of which is a view of the other (or one variable).
 fn CSt::related(self s: CSt, a, b: Nat) → Bool { a.same(b) || a.member(s.anc(b)) || b.member(s.anc(a)) }
@@ -357,7 +359,7 @@ fn CSt::against_all(self s: CSt, e: VEnt, ps: List<Pl>) → Option<List<Residual
 // later of the two was opened (§15.3: a live view to write is apart from
 // every other live view). A read meets only views to write.
 fn CSt::meets(self s: CSt, l: Nat, md: Mode, e: VEnt) → Bool {
-    (md.writes() || e.mode.writes()) && !e.lvl.same(l) && match s.role(l) { KView => l.member(s.anc_of(e, s.views.len())), _ => True }
+    (md.writes() || e.mode.writes()) && !e.lvl.same(l) && match s.role(l) { KView => l.member(s.anc_of(e, s.na + s.nd)), _ => True }
 }
 
 fn CSt::license(self s: CSt, vs: List<VEnt>, md: Mode, l: Nat, ps: List<Pl>) → Option<List<Residual>> {
@@ -438,19 +440,24 @@ fn CSt::is_back(self s: CSt, root: Nat, xs: List<Step>, v: Nat) → Bool {
     match s.ents(v) { Cons(e, Nil) => e.mode.writes() && e.par.same(root) && Steps::same(e.at, xs) && !v.same(root), _ => False }
 }
 
+// The write's outcome, its root, steps, code and the residuals read so far
+// known: a write-back, or a write the licence allows.
+fn CSt::write_last(self s: CSt, tys: Nat → Type, strs: Strs(tys), p: Place, v: Var, gv: Got, lv, l: Nat, xs: List<Step>, c: Shape, ra: List<Residual>) → Option<Next> {
+    (!s.in_regions(l) && !(s.role(l)).same(KGone)).then(
+        match s.is_back(l, xs, lv) {
+            True => Some(Next(s.backed(lv).wrote_to(l), gv.rs ++ ra)),
+            False => s.write_at(l, xs).map(λ rl =>
+                Next(s.wrote_to(l), gv.rs ++ ra ++ rl ++ p.accesses() ++ match Shape::is_seq(tys, strs, c) { True => [RFits(p, v)], False => Nil })),
+        })
+}
+
 fn CSt::write(self s: CSt, tys: Nat → Type, strs: Strs(tys), p: Place, v: Var) → Option<Next> {
     s.read_var(tys, strs, v).and_then(λ gv =>
         s.lvl(v).and_then(λ lv =>
             s.lvl(p.root).and_then(λ l =>
                 s.steps(p.steps).and_then(λ xs =>
                     Shape::steps_ok(tys, strs, p.steps, (s.var(l)).code).and_then(λ c =>
-                        s.atoms_ok(Steps::lvls(xs)).and_then(λ ra =>
-                            (!s.in_regions(l) && !(s.role(l)).same(KGone)).then(
-                                match s.is_back(l, xs, lv) {
-                                    True => Some(Next(s.backed(lv).wrote_to(l), gv.rs ++ ra)),
-                                    False => s.write_at(l, xs).map(λ rl =>
-                                        Next(s.wrote_to(l), gv.rs ++ ra ++ rl ++ p.accesses() ++ match Shape::is_seq(tys, strs, c) { True => [RFits(p, v)], False => Nil })),
-                                })))))))
+                        s.atoms_ok(Steps::lvls(xs)).and_then(λ ra => s.write_last(tys, strs, p, v, gv, lv, l, xs, c, ra)))))))
 }
 
 fn CSt::view(self s: CSt, tys: Nat → Type, strs: Strs(tys), p: Place, md: Mode) → Option<Next> {
@@ -831,7 +838,7 @@ record OutR { cv: CVar, ents: List<VEnt>, fresh: Bool }
 // entry is a view of, so a view to write it descends from still meets it;
 // the output itself where there is none.
 fn CSt::pre_par(self s: CSt, e: VEnt, lo: Nat) → Nat {
-    match (s.anc_of(e, s.views.len())).filter(λ k => (k + 1).leb(lo)) { Cons(k, _) => k, Nil => lo }
+    match (s.anc_of(e, s.na + s.nd)).filter(λ k => (k + 1).leb(lo)) { Cons(k, _) => k, Nil => lo }
 }
 
 fn CSt::out_role(s0: CSt, y, n: Yd, ly, ln, lo: Nat, nobj: Nat) → Option<OutR> {

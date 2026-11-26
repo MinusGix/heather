@@ -191,10 +191,15 @@ fn Value::ReadAll(tys: Nat → Type, strs: Strs(tys), h: Heap(tys), fuel: Nat, v
 fn PMode::changes(self m: PMode) → Bool { match m { ByTake => True, ByRead => False, ByWrite => True } }
 
 // Two selection paths of one value apart: a modification through either
-// leaves the other's read, and the two commute.
-fn Sel::Apart(tys: Nat → Type, strs: Strs(tys), xs, ys: List<Sel>) → Type {
-    ApartAt<Dyn(tys)>(λ d => Sel::read_at(tys, strs, xs, d), λ g d => Sel::write_at(tys, strs, xs, g, d), λ d => Sel::read_at(tys, strs, ys, d), λ g d => Sel::write_at(tys, strs, ys, g, d))
+// leaves the other's read and whether it fits (a run's read is stuck where
+// it does not), and the two commute.
+record SelApart(tys: Nat → Type, strs: Strs(tys), xs, ys: List<Sel>) {
+    reads: ApartAt<Dyn(tys)>(λ d => Sel::read_at(tys, strs, xs, d), λ g d => Sel::write_at(tys, strs, xs, g, d), λ d => Sel::read_at(tys, strs, ys, d), λ g d => Sel::write_at(tys, strs, ys, g, d)),
+    fit1: (g: Dyn(tys) → Dyn(tys)) → (d: Dyn(tys)) → Sel::fit(tys, strs, xs, Sel::write_at(tys, strs, ys, g, d)) = Sel::fit(tys, strs, xs, d),
+    fit2: (g: Dyn(tys) → Dyn(tys)) → (d: Dyn(tys)) → Sel::fit(tys, strs, ys, Sel::write_at(tys, strs, xs, g, d)) = Sel::fit(tys, strs, ys, d),
 }
+
+fn Sel::Apart(tys: Nat → Type, strs: Strs(tys), xs, ys: List<Sel>) → Type { SelApart(tys, strs, xs, ys) }
 
 // Two references apart: in different blocks, or apart in one.
 fn Ref::Apart(tys: Nat → Type, strs: Strs(tys), r, q: Ref) → Type { (r.b = q.b) → Sel::Apart(tys, strs, r.sels, q.sels) }

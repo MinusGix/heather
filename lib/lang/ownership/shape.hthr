@@ -444,6 +444,8 @@ record PartOk(tys: Nat → Type, strs: Strs(tys), sel: Sel, c: Shape, len: El(ty
     laws: PartLaws(tys, c, p),
     same: (r: El(tys, p.t)) → (w: Dyn(tys)) → Dyn::like(tys, strs, sel, Dyn(p.t, r), w) = True → p.same(r, Dyn::back(tys, p.t, w, r)) = True,
     len_set: (v: El(tys, c)) → (x: El(tys, p.t)) → len(p.set(v, x)) = len(v),
+    // Whether the step fits reads only the length, which a write keeps.
+    fits_len: (v, u: El(tys, c)) → len(v) = len(u) → p.fits(v) = p.fits(u),
 }
 
 fn Dyn::OptLaws(tys: Nat → Type, strs: Strs(tys), sel: Sel, {c: Shape}, len: El(tys, c) → Nat, o: Option<Part(tys, c)>) → Type { match o { Some(p) => PartOk(tys, strs, sel, c, len, p), None => True } }
@@ -528,6 +530,15 @@ theorem Dyn::in_len(tys: Nat → Type, strs: Strs(tys), sel: Sel, {c: Shape}, le
     })(ol)
 }
 
+theorem Dyn::in_fits_len(tys: Nat → Type, strs: Strs(tys), sel: Sel, {c: Shape}, len: El(tys, c) → Nat, o: Option<Part(tys, c)>, ol: Dyn::OptLaws(tys, strs, sel, len, o), v, u: El(tys, c),
+    e: len(v) = len(u)): Dyn::fits_in(tys, o, v) = Dyn::fits_in(tys, o, u)
+{
+    (match o as λ o2 => Dyn::OptLaws(tys, strs, sel, len, o2) → Dyn::fits_in(tys, o2, v) = Dyn::fits_in(tys, o2, u) {
+        Some(p) => λ pl => pl.fits_len(v, u, e),
+        None => λ _ => refl,
+    })(ol)
+}
+
 // ---------------------------------------------------------------------------
 // Two parts apart, and two selections apart at `Dyn`
 
@@ -592,13 +603,13 @@ theorem Dyn::in_commute(tys: Nat → Type, {c: Shape}, o1, o2: Option<Part(tys, 
 theorem Field::part_ok(tys: Nat → Type, strs: Strs(tys), k, i: Nat, len: tys(k) → Nat, f: Field(tys, tys(k)), fl: FieldLaws(tys, tys(k), f), keep: (v: tys(k)) → (x: El(tys, f.shape)) → len(f.set(v, x)) = len(v)):
     PartOk(tys, strs, OnField(i), SNamed(k), len, Field::part(tys, f))
 {
-    PartOk(PartLaws(λ v _ x _ => fl.get_set(v, x), λ v x y _ => fl.set_set(v, x, y), λ v no x => absurd(no), λ v => fl.put_back(v)), λ r w _ => refl, keep)
+    PartOk(PartLaws(λ v _ x _ => fl.get_set(v, x), λ v x y _ => fl.set_set(v, x, y), λ v no x => absurd(no), λ v => fl.put_back(v)), λ r w _ => refl, keep, λ _ _ _ => refl)
 }
 
 theorem Seq::elem_ok(tys: Nat → Type, strs: Strs(tys), k: Nat, i: Ix, q: Seq(tys, tys(k)), ql: SeqLaws(tys, tys(k), q)):
     PartOk(tys, strs, OnSeq(SeqOne(i)), SNamed(k), q.len, Seq::elem_part(tys, q, i))
 {
-    PartOk(PartLaws(λ v f x _ => ql.get_set(v, i, f, x), λ v x y _ => ql.set_set(v, i, x, y), λ v f x => ql.still(v, i, f, x), λ v => ql.put_back(v, i)), λ r w _ => refl, λ v x => ql.len_set(v, i, x))
+    PartOk(PartLaws(λ v f x _ => ql.get_set(v, i, f, x), λ v x y _ => ql.set_set(v, i, x, y), λ v f x => ql.still(v, i, f, x), λ v => ql.put_back(v, i)), λ r w _ => refl, λ v x => ql.len_set(v, i, x), λ v u e => ql.inside_len(v, u, i, e))
 }
 
 theorem Seq::win_ok(tys: Nat → Type, strs: Strs(tys), k: Nat, lo, n: Ix, q: Seq(tys, tys(k)), w: Win(tys, tys(k)), wl: WinLaws(tys, tys(k), q, w),
@@ -621,6 +632,7 @@ theorem Seq::win_ok(tys: Nat → Type, strs: Strs(tys), k: Nat, lo, n: Ix, q: Se
                 j(wn(Dyn::back(tys, w.shape, d, r)), λ m _ => m.same(Dyn::len_at(tys, strs, w.shape)(r)) = True, lens))
         },
         λ v ys => wl.len_set(v, lo, n, ys),
+        λ v u e => wl.inside_len(v, u, lo, n, e),
     )
 }
 
@@ -654,6 +666,16 @@ theorem Dyn::kind_ok(tys: Nat → Type, strs: Strs(tys), k: Nat, sel: Sel): (kd:
 
 theorem Dyn::part_ok(tys: Nat → Type, strs: Strs(tys), sl: StrsLaws(tys, strs), sel: Sel): (c: Shape) → Dyn::OptLaws(tys, strs, sel, Dyn::len_at(tys, strs, c), Dyn::part(tys, strs, sel, c)) {
     λ c => match c { SWord(_) => trivial, SNamed(k) => Dyn::kind_ok(tys, strs, k, sel, strs(k).kind, sl(k)) }
+}
+
+// A write at any step keeps every step's fit: a fit reads only the length.
+theorem Dyn::fits_over(tys: Nat → Type, strs: Strs(tys), sl: StrsLaws(tys, strs), a, b: Sel, g: Dyn(tys) → Dyn(tys), d: Dyn(tys)):
+    Dyn::fits(tys, strs, a, Dyn::over(tys, strs, b, g, d)) = Dyn::fits(tys, strs, a, d)
+{
+    let len = Dyn::len_at(tys, strs, d.code);
+    Dyn::in_fits_len(tys, strs, a, len, Dyn::part(tys, strs, a, d.code), Dyn::part_ok(tys, strs, sl, a, d.code),
+        Dyn::over_in(tys, Dyn::part(tys, strs, b, d.code), g, d.val), d.val,
+        Dyn::in_len(tys, strs, b, len, Dyn::part(tys, strs, b, d.code), Dyn::part_ok(tys, strs, sl, b, d.code), g, d.val))
 }
 
 theorem Dyn::span_ne(i, l: Nat, v: Span(i, 1).apart(Span(l, 1)).IsTrue()): ¬(i = l) { λ e => omega(v, e) }
@@ -798,6 +820,7 @@ theorem Dyn::model_laws(tys: Nat → Type, strs: Strs(tys), sl: StrsLaws(tys, st
         ),
         λ a s => cong_fn(λ (u: El(tys, s.code)) => Dyn(s.code, u),
             Dyn::in_put_back(tys, strs, a, Dyn::len_at(tys, strs, s.code), Dyn::part(tys, strs, a, s.code), Dyn::part_ok(tys, strs, sl, a, s.code), s.val)),
+        λ a b g d => Dyn::fits_over(tys, strs, sl, a, b, g, d),
     )
 }
 
