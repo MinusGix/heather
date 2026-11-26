@@ -2571,9 +2571,11 @@ code exits with one reserved status, at a world whose past is a prefix of a
 history the meaning reaches at some fuel (or the meaning is stuck at some
 fuel). That is `MeetsGoing`'s conclusion, word for word: a run that ran out
 of room, like a run that ran out of fuel, did a prefix of what the meaning
-does and nothing else. The tracking clause becomes
+does and nothing else. The tracking clause becomes (as amended in §17.10,
+step 3: the alternative is an escape inside the claim, not a disjunction
+beside it)
 
-    Tracked(…, n, meaning(n, …))  ∨  (¬(room(f, peak(n, …)) <= i) ∧ Spent(…))
+    Tracked(…, n, meaning(n, …), escape: λ r => ¬(room(f, peak(n, …)) <= i) ∧ SpentAt(r))
 
 under a premise that no longer mentions the run: `rooms(f) <= i`, a table by
 routine alone. Where today's premise holds, the second alternative is
@@ -2907,6 +2909,56 @@ ruled, and nothing else moved:
   (`lower_plain_tracks_at`, for every program, `down`'s probe included).
   `lower_program_tracks_at` is its reading at `Program::lower` under the
   interim hypothesis `any_guard(…) = False`, which part 3 drops.
+
+**Step 3, part 3: the contract restated with the escape inside the claim**
+(`x86_64_call_contract`, `bytes_level_whole`), as the coordinating session
+ruled after part 2.
+
+- `Site::LinuxPerformsOr` is the root's `PerformsOr` at Linux.
+  `Site::Tracked(…, n, outcome, esc)` takes the escape: the code performs
+  the state read off `outcome`, its steps counted as `going_least` asks, or
+  reaches `esc`. The old reading is its instance at `λ _ => False`.
+- `Site::SpentAt(meaning, f, args, heap, io)` is a predicate on the exit
+  state: the exit call with the reserved status and `MeaningPrefix` of its
+  world's history, with no `∃ o` outside it. `Site::OutOfRoom(room, peak,
+  …, i, n)` is the escape `Tracks` admits: `¬(room(f, peak(n, …)) <= i) ∧
+  SpentAt`.
+- `Site::Tracks`: under `rooms(f) <= i`, at every fuel and answerable
+  world, `Tracked(…, meaning(n, …), OutOfRoom(…))`. Step 2's `Spent` (an
+  exited claim beside the tracked one) is gone.
+- Why inside, not beside. `shout` writes a byte before its guarded call, so
+  a run that stops has made calls that a tracked claim at the same fuel
+  also makes: the two ends share a prefix, and which end a branch reaches
+  can rest on how Linux resumes it (`Tracked ∨ Spent` beside each other
+  would need the kernel's resumptions to be deterministic). And the
+  conservative table (a guard checks its callee's whole round) means
+  `¬(room <= i)` does not decide which end is reached: there the stop is
+  possible, not certain.
+- `Site::TracksAt` is `Tracked` at no escape under the room by depth;
+  `Site::tracks_at` closes the escape by `performs_or_weaken`, its
+  `¬(room <= i)` against the room.
+- `MeetsDone` and `MeetsExited` read `Tracked` at their outcome with the
+  same escape. `MeetsGoing` is unchanged. `tracked_prefix` takes an escape
+  whose states are exits; its third end is a path at or before an escape
+  state, whose `MeaningPrefix` goes down to the path's world
+  (`meaning_prefix_extends`). The claim's meet with a path
+  (`performs_or_meet`) reads the escape as a goal under bound zero
+  (`Site::Meet`), and no path passes an exit (`exit_not_passed`).
+- `bytes_level_whole`. A trace (`RunsAs`) is one sequence of exchanges for
+  every resumption, and an escape can end one branch while the goal ends
+  another, so the reading with the escape is not `RunsAs` of one trace. It
+  is `Site::LinuxRuns(End, calls)`: the Linux model's reading of a process
+  with the trace read off each branch's world (silent `LinuxStep`s to a
+  state `End` admits, or to a system call `LinuxAnswered` with the world's
+  answer, every resumption running on with the exchange recorded).
+  `RunsAsMeaning` puts the alternative at each branch's end: `End` is the
+  outcome's (`Site::Ends`: done and going, its world; exited, the exit with
+  its status in its world) or `OutOfRoom`. Where every end pins one world,
+  `LinuxRuns` is `RunsAs` of that world's trace (`linux_runs_as`), so with
+  no escape the trace reading is a corollary (`tracked_runs_as`, from
+  `TracksAt`). No determinism lemma is used.
+- Until part 4 the lowering proves `TracksAt` (`Tracked` at no escape);
+  its proof did not move.
 
 ## 18. The world, termination, and level 2 fixed (2026-11-25)
 

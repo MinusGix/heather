@@ -526,9 +526,9 @@ theorem writer_meets<M>(program: Prog, lowered: writer_program().lower(writer_pl
 }
 
 // The whole program (bytes_level_whole): `echo`'s code runs, as the Linux
-// model reads a process, as the trace of its meaning at every fuel; in the
-// piped world, done, that is the read answered with the pipe's two bytes
-// and the write of them.
+// model reads a process, to the end its meaning reads at every fuel, or to
+// the spent stop; in the piped world, done, that is the read answered with
+// the pipe's two bytes and the write of them.
 theorem echo_runs_as<M>(program: Prog, lowered: echo_program(2).lower(echo_places()) = Some(program), fetch: FetchAccess<M>,
     data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64), stack: Stack<M>(fetch, data), top: Nat, spans: Spans,
     blocks: Blocks,

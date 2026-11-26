@@ -1613,7 +1613,8 @@ theorem program_tracks<M>(site: Site<M>, stack: Stack<M>(site.fetch, site.data),
         let peak = run_peak(p, blocks, n, f, args, heap, io);
         let pre: RoutinePre<M>(site, stack, spans, λ (g: Nat) => room(g, peak), top, f, args, heap)(i, s) = ⟨⟨passed, roomy⟩, ⟨high, injected⟩⟩;
         let entry: RoutinePreNow<M>(site, stack, spans, λ (g: Nat) => room(g, peak), top, f, args, heap, io)(i, Running<M, Io>(s, io)) = ⟨pre, ⟨refl, answerable⟩⟩;
-        (match run(p, blocks, n, f, args, heap, io) as λ y => run(p, blocks, n, f, args, heap, io) = y → site.Tracked(stack, spans, s, i, ret, io, n, y) {
+        (match run(p, blocks, n, f, args, heap, io) as λ y => run(p, blocks, n, f, args, heap, io) = y →
+            site.Tracked(stack, spans, s, i, ret, io, n, y, λ (_: Running<M, Io>) => False) {
             Done(a) => λ ran => {
                 let returns = program_returns<M>(site, stack, spans, room, top, blocks, p.routines, valid, scoped, law, all, n, peak, f, below, args, heap, io, a,
                     ⟨ran, (peak + 1).le_refl()⟩);
