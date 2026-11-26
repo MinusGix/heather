@@ -136,7 +136,7 @@ The translation and its theorem pass the library gate; the comparison runs over 
          - a tail branch on the exit bit (`MOV counter, 0; MOV flag, 0` or `ADD counter, -1; MOV flag, 1`), then `CMP counter, 0; JNE`;
          - after the loop, `CMP flag, 1` where the old code tested the flag;
          - a jump to a jump at the tail's join.
-       - Net +8 bytes, +12 where the registers take REX prefixes. Accepted for stage 2. A counted loop at the bytes level (a hidden counter register, as FunctionIR's loop has) would remove it; it goes in the stage-3 list.
+       - Net +8 bytes, +12 where the registers take REX prefixes. Accepted for stage 2, as a temporary cost of translating bounded loops, removed when loops are reflected directly. The coordinator ruled out a counted loop at the bytes level, since the old counter is the old meaning's fuel; the per-pass numbers are item 5's entry 2.
     2. **A reference's copy** (sort routine 2: an `ADD r, 0`). The optimizer leaves a dead `Move` of the span's reference. The bytes level has no reference move, so the translation copies it as an `Offset` of a folded zero. Accepted; a reference `Move` instruction would remove it.
     3. **Four-byte accesses' register kind** (the four sha256 rows and scan_tokens refused). `Program::lower` holds a `Load(4)` result as `Word` and takes a `Store(4)` value only as `Word`, where FunctionIR's wide forms use `Narrow(32)`. So a `ByteSwap(32)` after a dword load is refused, and so is a dword store of a `ByteSwap(32)`. Smallest programs:
        - `Leaf[Offset(t, r, i), Load(4, x, t), Compute(ByteSwap(32, y, x))]`
@@ -185,24 +185,72 @@ The translation and its theorem pass the library gate; the comparison runs over 
     6. **Levels and the `Fixed` span** (recursion, native_program's `LEVELS`, native_recursion). Levels have no counterpart at the bytes level (item 1), so this is a stage-3 language question, not a proof.
     7. **No decider for `ProgramFits`.** It is a `Type` whose premises quantify over the translation's intermediate results. Applying the theorem to a row by `refl` needs a `Bool` check and its soundness. Without that, the coverage above is read off the forms, not checked per row.
   - Verification: the module checks in the library gate; `scripts/linked --check` unchanged.
-- 2026-11-26, item 5: **what stage 3 still needs** (§17.8). Ordered by what blocks the most rows.
-  1. **The four-byte register kind** in `bytes_level_lower`. It blocks sha256_compress, _init, _update, _finish and scan_tokens. `Load(4)` must answer, and `Store(4)` take, the `Narrow(32)` kind FunctionIR's wide forms use; the smallest programs are item 4's cause 3. This is the one change to the lowering the comparison asks for, and it was reported, not made.
-  2. **The theorem's remaining forms** (item 3's list).
-     - Bounded loops and lends cover every memory export.
-     - Wide accesses and guarded loads cover sha256 and scan_token.
-     - `also` and ref results cover the gates.
-     - A `Bool` decider for `ProgramFits`, so that a certificate can cite the theorem for its row by `refl`.
+- 2026-11-26, item 5: **what stage 3 still needs** (§17.8), with the coordinator's rulings.
+  1. **An access names the view it uses** (ruled: the language's definition is too coarse). Today `Program::lower` holds a `Load(4)` result as `Word` and takes a `Store(4)` value only as `Word`. That refuses sha256_compress, _init, _update, _finish and scan_tokens: the hash's buffer rows and the lexer's whole-input row, the rows whose per-pass cost matters most.
+     - The ruled definition: `Store` gains the width of the view it stores from, and `Load` the kind its output is held at.
+     - It was not built in this round; the handoff is the next entry.
+  2. **Bounded loops: a temporary cost of translating them, removed when loops are reflected directly** (ruled: no counted loop at the bytes level; the old counter is the old meaning's fuel). The cost is the same in every loop of every row that lowers, since each has the same shape (the old `TEST; JE` at the head, `MOV flag, 0/1` at the end):
 
-     Stage 3's certificates state the bytes-level program's contract. They reach the source function's meaning only through this theorem.
-  3. **The bounded loop's cost**: +8 bytes per loop routine, +12 with REX prefixes (item 4, cause 1). The choice is between two options:
-     - a counted loop at the bytes level, with a counter the meaning hides, as FunctionIR's has;
-     - accepting the bytes, with `scripts/linked` rewriting the loop routines' assembly in the stage-3 change.
+     | Row | Loops | Bytes added | Per continuing pass |
+     |---|---|---|---|
+     | count_newlines | 1 | +8 | +1 MOV, +1 taken JMP |
+     | raise_span, list_raise_letters | 1 | +8 | +1 MOV, +1 taken JMP |
+     | copy_span, copy_window | 1 | +12 (REX) | +1 MOV, +1 taken JMP |
+     | scan_token (routine 36) | 1 | +8 | +1 MOV, +1 taken JMP |
+     | lower_bound; utf8_valid_up_to | 1; 1 | +12; +8 | +1 MOV, +1 taken JMP |
+     | sort_in_place | 2 | +8, +16 (the +16 includes item 3's `ADD r, 0`) | +1 MOV, +1 taken JMP |
+     | sha256 buffer rows, scan_tokens | 9–10; 2 | not measured: refused (1 above) | the same shape expected |
 
-     The language owns the choice ([[bytes-level-language]]).
-  4. **Levels and the out-of-room exit 139.** The bytes level has no levels (recursion, native_program's `LEVELS`, native_recursion). The gates need either levels translated to recursion with a depth bound the meaning states, or the old meaning's zero-past-the-last-level dropped ([[bytes-level-lowering-recursion]]).
-  5. **The optimizer and the planner on the new layer.** The comparison translates the old planner's placement and lowers the optimizer's FunctionIR output (`translate_placement`). Stage 3 deletes the buffer nodes, so the passes ([[bytes-level-passes]]) and the planner must run on the bytes level, or on FunctionIR's word half before the translation.
-  6. **A refusal report.** `Program::lower` answers `None`. `compile-x86`'s refusal names the node, its place and the registers (`function_ir_refusal`); the bytes level has nothing like it. Every finding of this round needed a hand-made `refused`/`invalid_path` diagnosis (`bytes_level_compare`).
-  7. **Read-only views.** The old `Lend` puts back only a view marked `written`, so a callee's store into an unwritten view is lost. At the bytes level it lands. The translation is exact only where no callee stores through an unwritten view. Stage 3 needs that as a premise the translation checks, or the view lent as the bytes level's unwritten block.
-  8. **A reference `Move`.** The optimizer's dead `Move` of a reference becomes an `Offset` of zero, an `ADD r, 0` (sort). It is small, but it is the only non-loop byte difference.
-  9. **Not needed by any row:** two-byte accesses and the typed copy ([[bytes-level-copy-and-halfwords]]); a past-the-end store (refused by both); `TableRead` (refused by both).
-  10. **Not on this pipeline:** native_cat and native_tools compile through the program compiler, so stage 3 does not move them (stage 7).
+     - Per continuing pass, the old code runs 6 loop-control instructions: `TEST; JE` (not taken), `CMP; JNE`, `ADD counter, -1`, `JMP` head. The new code runs 7: `CMP; JNE`, `ADD`, `MOV flag, 1`, `CMP counter, 0; JNE`, then `JMP` head.
+       - The head's `TEST; JE` becomes the tail's `CMP; JNE`: moved, not added.
+       - The `MOV flag, 1` is the translation's. It records that the pass was a counted one, for the exhausted bit read after the loop.
+       - The extra taken jump is the lowering's: the jump to a jump.
+     - Once per loop: `MOV flag, bound` at entry. After the loop, `CMP flag, 1` replaces the old `MOVABS flag, 0/1` and `TEST flag`. The `MOVABS`es becoming 32-bit `MOV`s is why the net is +8 and not more.
+  3. **The jump to a jump is the lowering's** (`plain_jumped`, bytes_level_lower). It lays a pass's end out as the test, `Jcc C`, the moves, `JMP J`, then `C:` the moves and `JMP H`. Where the moves are empty (every row here), `Jcc C` lands on a bare `JMP H`. A `Jcc H` there would remove one taken jump per pass and leave the per-pass count at the old 6. This is a lowering change, and `plain_done`'s proof is shaped around the layout; not made.
+  4. **The dead reference `Move`** (sort routine 2, `ADD r, 0`). It is dead: nothing reads its output. The old placement gave it the source's register, so the old code has no instruction for it. Two ways out:
+     - The translation could drop it, as it drops a rebound pure node: exact in meaning, with a placement stream that skips it.
+     - A reference move in the language would lower to nothing in the same register.
+
+     The drop is the smaller change, and no row needs a live reference move.
+  5. **Levels and the out-of-room exit 139**: the coordinator's to design (room is a premise of the contract; the stop is defined). The translation refuses a leveled function with that reason (recursion, native_program's `LEVELS`, native_recursion).
+  6. **A refusal report.** `Program::lower` answers `None` with no reason; `compile-x86`'s old refusal names the node, its place and the registers. Every finding here needed a hand diagnosis (`bytes_level_compare`'s `refused`/`invalid_path`).
+  7. **The two scoping normalisations** the translation makes for what the old optimizer emits and the bytes level's scope check refuses (one binding per id per scope):
+     - **The rebound drop**: a pure node whose id a later node of its leaf binds before anything reads it.
+       - Counts: sha256_compress 60, _update 60, _finish 65, _init 3; scan_tokens 3; sort_in_place 2.
+       - None in the other rows. It fires mostly in rows the lowering refuses, so its cost in bytes is unmeasured there; it emits nothing.
+     - **The pass's id offset `d`**: every loop's pass is read at ids past every id so far.
+       - It applies to every loop: 1 in each loop row, 9–10 in the sha256 buffer rows, 2 in scan_tokens and in sort.
+       - It is needed where the optimizer's copies reuse a pass's ids after the loop, which is how it was found (sort). It costs nothing in code: ids are not registers.
+  8. **Stores that reload.** Every byte store's reload in every row is dead (byte stores / dead reloads):
+     - raise_span, list_raise_letters, copy_span, copy_window: 2/2 each;
+     - sha256_compress 11/11, _update 14/14, _finish 13/13, _init 8/8;
+     - scan_tokens 8/8; sort_in_place 4/4;
+     - no byte store elsewhere.
+
+     It costs nothing against the old code: the old lowering emits the same `MOVZX r, BYTE PTR [r]` after each store. A wide store's reload is never made, since the translation reloads only an output it reads (0 of 32). This is what [[bytes-level-passes]] would remove from both.
+  9. **The clipped view at `Lend`** (copy_window): it costs nothing. The lend's routine is instruction for instruction the old one, so the old lowering already emits the clip.
+  10. **The theorem's remaining forms** (item 3's list): the next round's brief.
+  11. **The optimizer and the planner on the new layer.** The comparison translates the old planner's placement and lowers the optimizer's FunctionIR output. Stage 3 deletes the buffer nodes, so both must run on the bytes level, or on FunctionIR's word half before the translation.
+  12. **Read-only views.** The old `Lend` puts back only a view marked `written`, so a callee's store into an unwritten view is lost; at the bytes level it lands. The translation is exact only where no callee stores through an unwritten view. Stage 3 needs that as a checked premise, or the view lent as an unwritten block.
+  13. **Not needed by any row:** two-byte accesses and the typed copy ([[bytes-level-copy-and-halfwords]]); a past-the-end store (refused by both); `TableRead` (refused by both).
+  14. **native_cat and native_tools compile through the program compiler** (`native_compile*`), not FunctionIR. Stage 3 does not move them, and nobody should assume it does (stage 7).
+- 2026-11-26: **handoff, the access view** (item 5's first entry, ruled by the coordinator, not started here). What the change needs, as found:
+  - **The language** (`bytes_level.hthr`):
+    - `Instr::Store(bytes, place, value)` gains `view`, the width it stores from. `step` writes the low `bytes` bytes of the value's view at that width.
+    - `Instr::Load(bytes, output, place)` gains the kind its output is held at. `step` is unchanged: it binds every width, as now.
+    - `Instr::check` (line ~591) refuses a view narrower than `8 · bytes`, and whatever the lowering cannot emit, with a reason.
+  - **The scope and kinds** (`bytes_level_scope.hthr`): `output_of` (~84), the step lemmas (~334, ~1340), and the check-binds lemma (~402).
+  - **The lowering** (`bytes_level_lower.hthr`):
+    - `emit_load_at` and its byte and word variants, which record `Held(output, Word)` at ~341, ~380, ~682–730 and ~853. They record the stated kind instead, so a `Narrow(32)` load is followed by `ByteSwap(32)` with no move.
+    - `emit_store_at` and `emit_store_at_emits` (~998, ~1028) look the value up at the view's kind.
+    - The `Loads`/`Stores` claims (~982) and `load_holds`/`store_holds` (~1250–1424).
+  - **The routines' placement walk** (`bytes_level_routines.hthr` ~746–803); renaming (`bytes_level_renames` ~243); the canonical form (`bytes_level_canonical` ~88).
+  - **The translation**:
+    - `BufferStore` is a store from the 64-bit view; `WideStore(4)` from the 32-bit view.
+    - `BufferLoad` is held as a word; `WideLoad(4)` held narrow.
+    - The placement translation (`bytes_level_compare`) is unchanged: the places are the same.
+  - **Probes**: every existing probe's answer kept at the 64-bit view.
+    - The two smallest programs from item 4's cause 3 become probes with their theorems.
+    - One refused control: a four-byte store from a view the value is not held at.
+  - **Then** re-run `scripts/bytes-level-compare` and `--gates`.
+  - **An open question**, unverified: whether `Typed`'s word kinds should carry a width instead. The per-access statement looks sufficient, since a load binds every width and a store's view is a lookup at a kind. But calls' and answers' kinds were not checked against it.

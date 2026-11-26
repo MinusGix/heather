@@ -2364,13 +2364,26 @@ at any width but four.
   call displacements aside. That covers six export rows and four gate
   programs entirely, and every non-loop routine of the rest (scan_token's 38
   of 39, for one).
-- Bigger: each loop routine grows by 8 bytes, 12 with REX prefixes. The bytes
-  level has only the plain loop, so the counter and the exhausted flag become
-  state, and the head's `TEST; JE` becomes a tail branch and a `CMP; JNE`.
-- One further byte difference: a dead reference `Move` becomes `ADD r, 0`.
-- Refused: five rows by the lowering, because a four-byte access's result and
-  value are held as `Word`, not `Narrow(32)`; and the levels gate by the
-  translation.
+- Bigger: each loop routine grows by 8 bytes, 12 with REX prefixes. Every
+  loop has the same shape. Per pass that continues, the code runs one more
+  instruction (`MOV flag, 1`, the translation's) and one more taken jump (a
+  jump to a jump, the lowering's `plain_jumped`). The head's `TEST; JE`
+  moves to the tail as `CMP; JNE`.
+- One further byte difference: a dead reference `Move`, which the old
+  placement gave no instruction, becomes `ADD r, 0` (sort).
+- Refused: five rows by the lowering. A four-byte access's result and value
+  are held as `Word`, not `Narrow(32)`, so the hash's buffer rows and
+  scan_tokens are refused. The levels gate is refused by the translation.
+- Free in both: every byte store's reload is dead, and the old lowering
+  emits the same `MOVZX` after each store. The clip at copy_window's lend is
+  the old code's too.
+
+**What the old optimizer emits that the bytes level refuses.** The
+translation normalises two things, each exact in meaning:
+- a pure node rebound in its leaf before it is read is dropped: 60–65 times
+  in the sha256 buffer rows, 3 in sha256_init and scan_tokens, 2 in sort;
+- every loop's pass is read at an id offset of its own, because the
+  optimizer's copies reuse a pass's ids after the loop.
 
 **The theorem** (`translated_runs_as_old`). Over programs, every `Done` of
 the translation at any fuel is the old run, with the buffers read back from
@@ -2379,19 +2392,28 @@ calls, which is the word-only rows. Bounded loops, lends, wide accesses,
 guarded loads, `also` and levels remain.
 
 **What stage 3 still needs**, from the comparison and the proof:
-1. the four-byte register kind in the lowering;
-2. the theorem's remaining forms, and a decider for its premise;
-3. a counted loop at the bytes level, or the loop bytes accepted;
-4. levels, or the gates' recursion restated;
-5. the optimizer and the planner on the new layer;
-6. a refusal report from `Program::lower`;
-7. read-only views: the old lend drops a callee's store into an unwritten
-   view, and the bytes level keeps it;
-8. a reference move.
+1. **An access names the view it uses.** A store says which width's view it
+   stores from, and a load what kind its output is held at. This unblocks
+   the five refused rows.
+2. **Bounded loops, a temporary cost** until loops are reflected directly:
+   the numbers above. The new design keeps fuel out of the code, so a
+   counted loop is not a need.
+3. The jump to a jump, the lowering's to remove.
+4. The dead reference move: dropped by the translation, or a reference move
+   in the language.
+5. Levels and the out-of-room exit, designed separately.
+6. A refusal report from `Program::lower`.
+7. The theorem's remaining forms, and a decider for its premise.
+8. The optimizer and the planner on the new layer.
+9. Read-only views: the old lend drops a callee's store into an unwritten
+   view, and the bytes level keeps it.
+
+native_cat and native_tools compile through the program compiler, not
+FunctionIR, so stage 3 does not move them.
 
 So the answer is: not yet in one move. The memory half translates exactly
-where proved, and its code is the same outside loops. The four-byte kind is
-the one finding that blocks rows outright.
+where proved, and its code is the same outside loops. The access view is
+the one change that blocks rows outright.
 
 ## 18. The world, termination, and level 2 fixed (2026-11-25)
 
