@@ -5750,6 +5750,82 @@ leaf stages in `placement_stages.hthr`, in this order: `StageLit`, `StageOp`, `S
 `StageTake`, `StageRead`, `StageView`. The stages that need the
 stuck-on-mismatch run come last. Then `StageRet`/`StageJump`, then the packed join.
 
+### 25.9 Numbered instances, F7, the first stages, and `place` after the run's changes (2026-11-26, the slice's third session)
+
+**`Strs::Laid` from the instances.** An instance is defined at its own type
+(`strs(k).kind`'s `Seq` lives at `tys(k)`), where the code's structure is not
+in sight, so the layout's law is split. What an instance owes beyond its
+laws is that it is *numbered*: an element read at the index's number and
+inside only below the length (`SeqNum`), and windows of itself inside the
+length, as long as they say, their elements the parent's from the start
+(`WinNum`, `WinsNum`), all in `sequences.hthr` beside the instances, with
+`Seq::words_num`, `Seq::words_win_num` and `Seq::vec_num`.
+`placement_laid.hthr`'s `Strs::laid_of` gives `Strs::Laid` from `StrsLaws`
+and each name's `KindNum`, with no case on `strs`. A record of words is asked
+`RecLaid` directly: derivable from `RecordLaws`, owed when the first record
+instance is placed. Probes (`placement_tests.hthr`): `strs_laid`;
+`list_lawful` and `list_not_laid` (F1: `Seq::list` is lawful and not laid
+out); `first_disagrees` (checked and placed over it, 5 against 0);
+`ill_coded` (F2: `x + 255` at the u8 1, 1 against 256, `Dyn::coded` false);
+`mixed_reads_zero` (F4: level 2 answers 1).
+
+**F7: `StageRel` did not survive a death of an owner.** `SlotsHold` asked
+every variable's slot to read its value lowered; a `Death` of an owning cell
+kills its block on level 2 while the variable stays in both environments,
+after which `value_lower` of it is `None`. Probe of the old statement:
+`death_breaks_rel`. No placed program makes an owner today (no `Fresh`, no
+taken object, no object result), but `LeafStage` quantifies over every
+machine. Ruling (b): **a cell referring to a dead block constrains nothing**
+in `SlotHolds` (`value_live`), the sentence `HeapInjects` says of the heap;
+sound since level 2 is stuck at any read through a dead block, and it stays
+so when an allocator reuses the bytes. The kill lemma is stated once, beside
+`injects_kill`: `slot_kill` (every slot still holds after a kill: one over
+the killed block is unconstrained, one over another reads as before, since a
+live block has no holes, `read_no_holes`).
+
+**Stages proved** (`placement_stages.hthr`): `stage_lit`, `stage_death`. What
+the leaves share is `rel_push`: a leaf that binds one slot writes ids at or
+past `next` only (`Locals::Agree`), so the slots bound read as before, and
+the new slot is the environment's last by level as the new cell is the
+locals' first. The others wait for `place`'s inversion lemmas (below).
+
+**`place` after the run's changes** (§23.22, §23.23, merged at 4bf882b):
+- the three ownership tests are gone (a written sequence kept as itself at a
+  `Ret` and a `Jump`, a write-back's provenance, a store through a writable
+  slot), and with them `PSlot`'s provenance and writability: a slot is its
+  code and ids;
+- `Back(p, x)` emits nothing where `x`'s slot is a reference (the run's
+  identity) and is `Write`'s store where it is a word copy; a `Write` of a
+  sequence stays refused (a typed copy);
+- `Len(p, w)` binds the length word the place's slot already carries, at
+  64 bits only: at a narrower width the run's word is the length modulo
+  `2^w`, equal to it only under the checker's `RLen`, which a translation of
+  every program does not see; the length is below `2^64` by `HeapInjects`
+  (F5). `Func::fragment` admits `Len` at 64 bits;
+- a word variable written whole rebinds its slot to the value's
+  (`word_write_r` is placed);
+- a defect on a path no program had reached: a `Yield` into a copied join
+  (`JCopy`) returned the frames with the join's popped, while the join pops
+  it itself, so a join with one arm returning and one yielding was refused
+  (`copy_window`'s early returns). Fixed.
+
+**The seam after them.** `SlotsWritable` is replaced by `ActWrites`: every
+live block the activation may store to (`Act::may`) is one the bytes level
+may write. `StageRel` and the stage types take the `Act`; `StageBack` and
+`StageLen` are added. **What is left of `WritesLent`** is the premise at the
+entry, unchanged in form: every block a parameter lent to change reaches is
+writable. With `Act(Value::lent(ps, vs), h.len())` it gives `ActWrites` at
+the entry (a block made since the entry is not live then), and nothing is
+owed per store: a store the run makes is one `Act::may` allows.
+
+**`copy_window` like for like.** Its body now tests `end` against both
+lengths (read with `Len`) and against `from`, answering 0 with nothing
+stored, as the export does (`cw_past_end`), and writes back with `Back`. Its
+routine is 138 bytes against the old export's 96 (the program 261, with
+`copy_span` unchanged at 123); `count_newlines` is unchanged (171 + 15).
+The difference is in the early returns: each is a constant moved into the
+result id and its own path to the end.
+
 ## 26. The soundness proof restated: local agreement, footprints, shape (2026-11-26, the coordinating session)
 
 Minus, on the state of `check_sound`'s proof (one file of sixteen thousand
