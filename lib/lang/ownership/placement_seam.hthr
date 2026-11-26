@@ -218,11 +218,18 @@ fn PlacementSoundAll(tys: Nat → Type, strs: Strs(tys), w: Callees(tys), prim: 
 // ---------------------------------------------------------------------------
 // The composed statement
 
-// A program of listed functions, pinned, its primitives answering coded,
-// each function checked and owing what it owes: the premises of
-// `CheckSound` for every function at once.
-fn prog_checked(tys: Nat → Type, p: verdict::Prog(tys), fs: List<Func>) → Type {
-    ((g: Nat) → p.fns(g) = funcs_at(fs)(g)) ∧ (Prog::Pinned(tys, p) ∧ Prog::Coded(tys, p) ∧ ((g: Nat) → g < fs.len() → p.prim(g) = False → Exists<Owes>(λ d =>
+// The program whose functions are the list's (each index past it the
+// function with no parameters that answers nothing), its other parts given.
+fn prog_of_list(tys: Nat → Type, strs: Strs(tys), fs: List<Func>, w: Callees(tys), pres: Pres(tys), need: Nat → Option<Need(tys)>, prim: Nat → Bool,
+    reaches: Nat → List<Dyn(tys)> → List<Exchange> → Type) → verdict::Prog(tys) {
+    verdict::Prog(strs, funcs_at(fs), w, pres, need, prim, reaches)
+}
+
+// The premises of `CheckSound` for every function at once: the program
+// pinned, its primitives answering coded, and every index a function with a
+// body (no primitive: `place` places none), checked, owing what it owes.
+fn prog_checked(tys: Nat → Type, p: verdict::Prog(tys)) → Type {
+    Prog::Pinned(tys, p) ∧ (Prog::Coded(tys, p) ∧ ((g: Nat) → (p.prim(g) = False) ∧ Exists<Owes>(λ d =>
         (check(tys)(p.strs, λ g2 => (p.fns(g2)).sig, p.prim, λ g2 => p.measured(tys, g2), g, p.fns(g)) = Some(d)) ∧
         ((args: List<Dyn(tys)>) → Dyn::Coded(tys, args, (p.fns(g)).sig.params) → p.pres(g, args) → d.Due(tys, Prog::ctx(tys, p, g, args), p.fns(g))))))
 }
@@ -256,10 +263,98 @@ fn EndToEnd<M>(tys: Nat → Type, p: verdict::Prog(tys), placed: Program, site: 
 // measured functions that `place` answers and `Program::lower` lowers, the
 // code meets `EndToEnd` at every site, stack, lending and writable blocks.
 fn EndToEndAll(tys: Nat → Type) → Type<1> {
-    (p: verdict::Prog(tys)) → PlacementSoundAll(tys, p.strs, p.w, p.prim) → CheckSound(tys, check(tys)) →
-    (fs: List<Func>) → prog_checked(tys, p, fs) → (placed: Program) → place(tys, p.strs, p.prim, fs) = Some(placed) →
+    (strs: Strs(tys)) → (w: Callees(tys)) → (pres: Pres(tys)) → (need: Nat → Option<Need(tys)>) → (prim: Nat → Bool) →
+    (reaches: Nat → List<Dyn(tys)> → List<Exchange> → Type) → (fs: List<Func>) →
+    PlacementSoundAll(tys, strs, w, prim) → CheckSound(tys, check(tys)) → prog_checked(tys, prog_of_list(tys, strs, fs, w, pres, need, prim, reaches)) →
+    (placed: Program) → place(tys, strs, prim, fs) = Some(placed) →
     (placement: List<function_ir_lower::Place>) → (program: x86_64_asm::Prog) → placed.lower(placement) = Some(program) →
     (M: Type) → (fetch: FetchAccess<M>) → (data: ByteReadAccess<M>) → (last: List<BitVec(8)>) → (origin: BitVec(64)) → (stack: Stack<M>(fetch, data)) →
     (top: Nat) → (spans: Spans) → (blocks: Blocks) →
-    EndToEnd<M>(tys, p, placed, Site<M>(fetch, data, program, last, origin), stack, top, spans, blocks)
+    EndToEnd<M>(tys, prog_of_list(tys, strs, fs, w, pres, need, prim, reaches), placed, Site<M>(fetch, data, program, last, origin), stack, top, spans, blocks)
+}
+
+// ---------------------------------------------------------------------------
+// The composed theorem
+
+// Every function safe at every fuel below `n`, from each one's safety
+// relative to less fuel: strong induction on the fuel.
+theorem safe_below(tys: Nat → Type, p: verdict::Prog(tys), all: (g: Nat) → Safety(tys, p, g), n: Nat): (g, k: Nat) → k < n → SafeAt(tys, p, g, k) {
+    match n {
+        Zero => λ g k lt => false_elim({ omega }),
+        Succ(m) => λ g k lt => match Nat::dec(k, m) {
+            Inl(e) => all(g, k, λ g2 k2 lt2 => safe_below(tys, p, all, m, g2, k2, { omega })),
+            Inr(ne) => safe_below(tys, p, all, m, g, k, { omega }),
+        },
+    }
+}
+
+theorem safe_at(tys: Nat → Type, p: verdict::Prog(tys), all: (g: Nat) → Safety(tys, p, g), n, g: Nat): SafeAt(tys, p, g, n) {
+    safe_below(tys, p, all, n + 1, g, n, { omega })
+}
+
+// `place` answers one routine per function.
+theorem place_all_len(tys: Nat → Type, cx: PCx(tys), fs: List<Func>): (rs: List<Routine>) → place_all(tys, cx, fs) = Some(rs) → rs.len() = fs.len() {
+    match fs {
+        Nil => λ rs e => cong_fn(λ (l: List<Routine>) => l.len(), sym(Option::some_inj(Nil, rs, e))),
+        Cons(f, rest) => λ rs => (match f.place(tys, cx) as λ o => o.and_then(λ r => place_all(tys, cx, rest).map(λ rs2 => Cons(r, rs2))) = Some(rs) → rs.len() = Succ(rest.len()) {
+            None => λ never => absurd(never),
+            Some(r) => (match ea: place_all(tys, cx, rest) as λ o2 => o2.map(λ rs2 => Cons(r, rs2)) = Some(rs) → rs.len() = Succ(rest.len()) {
+                None => λ never => absurd(never),
+                Some(rs2) => λ e3 => trans(cong_fn(λ (l: List<Routine>) => l.len(), sym(Option::some_inj(Cons(r, rs2), rs, e3))),
+                    cong_fn(λ (k: Nat) => Succ(k), place_all_len(tys, cx, rest, rs2, ea))),
+            }),
+        }),
+    }
+}
+
+theorem place_len(tys: Nat → Type, strs: Strs(tys), prim: Nat → Bool, fs: List<Func>, placed: Program, e: place(tys, strs, prim, fs) = Some(placed)): placed.routines.len() = fs.len() {
+    (match ea: place_all(tys, PCx(strs, λ g => (fs.nth(g).unwrap_or(Func(Sig(Nil, Nil), Ret(Nil)))).sig, prim), fs) as λ o => o.map(λ rs => Program(rs)) = Some(placed) → placed.routines.len() = fs.len() {
+        None => λ never => absurd(never),
+        Some(rs) => λ e2 => trans(cong_fn(λ (q: Program) => q.routines.len(), sym(Option::some_inj(Program(rs), placed, e2))),
+            place_all_len(tys, PCx(strs, λ g => (fs.nth(g).unwrap_or(Func(Sig(Nil, Nil), Ret(Nil)))).sig, prim), fs, rs, ea)),
+    })(e)
+}
+
+// The composed theorem at one site, stack, lending and writable blocks.
+theorem end_to_end_at<M>(tys: Nat → Type, strs: Strs(tys), w: Callees(tys), pres: Pres(tys), need: Nat → Option<Need(tys)>, prim: Nat → Bool,
+    reaches: Nat → List<Dyn(tys)> → List<Exchange> → Type, fs: List<Func>,
+    psa: PlacementSoundAll(tys, strs, w, prim), cs: CheckSound(tys, check(tys)), pc: prog_checked(tys, prog_of_list(tys, strs, fs, w, pres, need, prim, reaches)),
+    placed: Program, hplace: place(tys, strs, prim, fs) = Some(placed),
+    placement: List<function_ir_lower::Place>, program: x86_64_asm::Prog, lowered: placed.lower(placement) = Some(program),
+    fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64), stack: Stack<M>(fetch, data), top: Nat, spans: Spans, blocks: Blocks):
+    EndToEnd<M>(tys, prog_of_list(tys, strs, fs, w, pres, need, prim, reaches), placed, Site<M>(fetch, data, program, last, origin), stack, top, spans, blocks)
+{
+    let p = prog_of_list(tys, strs, fs, w, pres, need, prim, reaches);
+    let all: ((g: Nat) → Safety(tys, p, g)) = λ g => {
+        let c = pc.right.right(g);
+        cs(p, pc.left, pc.right.left, g, c.right.witness, c.right.proof.left, c.right.proof.right)
+    };
+    let tracks = lower_program_tracks<M>(placed, placement, program, lowered, fetch, data, last, origin, stack, top, spans, blocks, depth_rooms(placed.routines),
+        depth_rooms_lawful(placed.routines));
+    let site = Site<M>(fetch, data, program, last, origin);
+    λ loan lent f below args heap io s here resident i rsp inside passed high injected ret saved m roomy answerable n em vs h ds inj ra cod pre lend injh low wr nd hn le => {
+        let t = tracks(loan, lent, f, below, args, heap, io, s, here, resident, i, rsp, inside, passed, high, injected, ret, saved, m, roomy, answerable);
+        let sa = safe_at(tys, p, all, n, f, vs, h, io, ds, ra, cod, pre, lend);
+        let needs = j(hn, λ o _ => match o as λ _ => Type {
+            Some(k) => k(f, ds) <= n → Exists<level2::Answer(tys)>(λ a => p.run(tys, n, f, vs, h, io) = level2::Done(a)),
+            None => True,
+        }, sa.right.left);
+        let ex = needs(le);
+        let a = ex.witness;
+        let done = sa.right.right.left(a, ex.proof);
+        let lens = place_len(tys, strs, prim, fs, placed, hplace);
+        let glt: (f < fs.len()) = { omega };
+        let ps = psa(fs, placed, hplace, n, f, glt, vs, h, io, inj, heap, args, blocks, injh, low, wr);
+        let ps2 = j(ex.proof, λ r _ => ran_lowers(tys, strs, (funcs_at(fs)(f)).sig, inj, h, r, bytes_level::run(placed, blocks, n + 1, f, args, heap, io)), ps);
+        let a2 = ps2.witness;
+        let t1 = j(em, λ x _ => site.Tracked(stack, spans, s, i, ret, io, x, bytes_level::run(placed, blocks, x, f, args, heap, io)), t);
+        let t2 = j(ps2.proof.left, λ r _ => site.Tracked(stack, spans, s, i, ret, io, n + 1, r), t1);
+        let t3 = j(sym(em), λ x _ => site.Tracked(stack, spans, s, i, ret, io, x, x86_64_call_contract::Done(a2)), t2);
+        Exists(a, Exists(a2, ⟨done.left, ⟨ps2.proof.right, t3⟩⟩))
+    }
+}
+
+theorem end_to_end(tys: Nat → Type): EndToEndAll(tys) {
+    λ strs w pres need prim reaches fs psa cs pc placed hplace placement program lowered M fetch data last origin stack top spans blocks =>
+        end_to_end_at(tys, strs, w, pres, need, prim, reaches, fs, psa, cs, pc, placed, hplace, placement, program, lowered, fetch, data, last, origin, stack, top, spans, blocks)
 }
