@@ -1,6 +1,6 @@
 ---
 title: Derive every P3109 format's layout from the report's constraints
-status: open
+status: closed
 labels: [mathematics,floating-point]
 area: mathematics
 milestone: [math-float]
@@ -24,3 +24,7 @@ The arithmetic: signed, `2^(P-1) <= 2^(K-2) <= 2^(K-1) - 2`; unsigned,
 
 - **[[float-p3109-encoding]]** (closed) owns the layout. Assumed here: only the
   shape of `p3109_layout`'s hypotheses.
+
+## Log
+
+- 2026-11-26: LANDED: Format::P3109Params, p3109_valid and p3109_layout_of in p3109_codes.hthr; tests every_format_codes/every_format_data on open parameters.
