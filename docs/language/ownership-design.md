@@ -4562,3 +4562,134 @@ the patch keeps the plain variables, `CSt::pfold_agree`), `uni`, `wpar` and
   patch before, set there.
 - The view's death and `Inv::rekin` lost their `pone` premise. Nothing else
   changed.
+
+### 23.16 `Like` on the pending chains, and its steps (2026-11-26, seventh session)
+
+**`Like.pend` covers every view to write on a pending chain**, not only the
+pending ones (`CSt::on_chain`: a pending entry's level, or an ancestor's by
+`anc_of`, without the machine `pend_in` reads). A write-back whose parent
+was already pending keeps `Like.pend` as designed: the parent's new meaning
+is `over` at the child's place with a value `Like.pend` says is like what is
+there, so the parent stays like itself (`Dyn::write_like`). The gap was the
+other parent. A write-back of a pending child into a backed parent makes the
+parent pending, and `Like.pend` then asks that the parent's meaning be like
+its place in the grandparent's. `Like` held nothing of a backed view, and
+`Inv` speaks of the meaning only through the patch, which has already
+written the pending chain over exactly that place, so `Inv` cannot give it
+either. The smallest program is `back_under` (`checker_tests`): views
+`A = x[0]` and `B = A.0` to write, `B` written, then written back into `A`.
+The fact is recorded when the chain forms, where nothing is pending and
+`Inv` gives it, and carried while it stands.
+
+**`Inv::back_like`**: where nothing is pending, a live view to write that is
+its level's one entry is like what its place reads in its parent's meaning.
+Where the chain refers, its reference is the parent's narrowed by the place
+(`Inv::ref_child`), so it reads exactly that (`Value::read_narrow`); where
+it is a copy, `cfit` says so.
+
+**The steps**, at the states the stages leave:
+- With nothing pending before and after: `Like::plain` (`Lit`, `Op`, `Read`,
+  a `Take` of a part or of a plain variable, a `View` of a plain variable),
+  `Like::fresh` (the new object is past the arguments, `Inv.nbase`),
+  `Like::take_hold`, `Like::take_view`, `Like::view`, `Like::death`. All are
+  `Like::push` and `Like::gone`, whose chain premise is vacuous
+  (`CSt::on_chain_none`).
+- `Like::death_view`, with chains pending elsewhere: a view with no children
+  is no entry's ancestor, so every level on a chain after was on one before
+  (`CSt::on_chain_drop`).
+- `Like::stage_write`, an ordinary write. What is written is like what is at
+  the place (`WriteInv::facts`), so the root stays like itself. The written
+  view and its ancestors join the chain, each its level's one entry
+  (`CSt::anc_ent`, `wpar` up the chain), each like its place by
+  `Inv::back_like`. No child of the written view is on a chain.
+- `Like::stage_back`, a write-back. What is written is like what is at the
+  place: by `Like.pend` where the view is pending, by `Inv::back_like` where
+  nothing is. If something was pending, every level on a chain after was on
+  one before: the parent's entry's ancestors are the pending view's
+  (`CSt::anc_up`). If nothing was, the chain after is the parent and its
+  ancestors, like their places by `Inv::back_like`. The view written back is
+  on no chain after (`CSt::anc_child` and `Stmt::back_nk`). A sibling on a
+  chain reads at its place what it read (`sib`).
+- Both writes are `Like::rekin_write`, the entries' flags changed, over
+  `Like::pp_write` (the meaning after a write, entry by entry).
+
+The call's step is the call's own part (P8), since `CallFits` is what the
+callee's safety gives; a `Jump` is a leaf, and its like-ness belongs to the
+induction on fuel (item 4).
+
+### 23.17 The call's interface: `SafeAt` clause by clause (2026-11-26, seventh session)
+
+`SafeAt` is the whole of what a caller knows of a callee, and what the body
+induction will rest on. Most of its clauses were added or corrected by the
+proof; each is listed with the program that forced it.
+
+**What the callee may assume of its inputs** (premises):
+- The arguments read as the meaning's (`Value::ReadAll`, at the heap's
+  length as fill fuel).
+- They have the parameters' codes (`Dyn::Coded`). Forced by `get_x`
+  (§23.7): a field read of a word owes nothing and is stuck.
+- The callee's precondition holds of them (`p.pres`).
+- They are lendable (`Lendable`):
+  - `arity`: as many arguments as parameters (the checker's levels assume it).
+  - `live`: a referring argument's block is live with no holes, its
+    selections fitting.
+  - `plain`: plain data taken is passed by value.
+  - `apart`: an argument the callee may change is apart from every other,
+    `Sel::Apart` including that a write through one keeps the other's fit
+    (§23.10).
+  - `whole`: an object taken is a whole block no other argument reaches.
+    Forced by `f(a: Buf take, b: Buf read) { Death(a); Read(b) }` (§23.8).
+
+**What its run owes** (conclusions):
+- It is never stuck.
+- A measured function's run is done from its `need` on. The measure is owed
+  only by measured callers (§23.13: an unmeasured caller owed `0 < 0`).
+- Where an unmeasured run is going, its history is one the meaning reaches.
+- Where it is done (`Done(a)`):
+  - **Results and written values read the meaning's** (`ReadAll` of the
+    answer against `w(g, ds)`).
+  - **`Value::Written`, per written parameter:**
+    - A referring argument's slot is the argument itself (§23.13, so the
+      caller's view of what it lent stays its own reference).
+    - One passed by value comes back plain (this session;
+      `lend_plain_back_checked`: the caller's slot is a view to write of a
+      copy, and a reference coming back could not be placed by any
+      invariant).
+    - The meaning's value after fits its value before: the same code and
+      length. Forced by `f(p: Bytes write) { Call(g, [p], 1); Write(p, Loc 0); Ret([p]) }`
+      (§23.13): only the callee's safety says what its world answers fits.
+  - **`Heap::Frame`, at the blocks that existed.** First by block (too coarse:
+    `lends_one`, §23.14). Then "every path apart from every reference lent to
+    change reads as before" (§23.14). That is strictly weaker than the
+    design's sentence without an extensionality law the model must not have:
+    a record kind's fields need not cover its type. `lend_under_checked` is
+    the program: `x[0]` is lent, written back, and `Ret` reads the whole of
+    `x`. Now (being built) it is §18.3's lens equation: a block's value after
+    is its value before with each reference lent to change into it
+    overwritten by what that reference reads after. The reads at apart paths
+    follow from it as a lemma, and a block lent to nothing is equal before
+    and after. A block lent whole is unconstrained; what is known of it
+    comes from `ReadAll` and `Written`. Only references lent to change count
+    (`Value::lent`): a block lent only to read is unchanged (§23.8).
+  - **`Heap::Kept`:**
+    - The heap is no shorter (growth). Without it, a moved argument's block
+      past the new length breaks `inheap`, and the caller's next `Fresh` may
+      take that block.
+    - A block that existed is live after only where it was, with no holes
+      where it had none (`Heap::Stays`). Without it a caller cannot lend its
+      object a second time (`Lendable.live`).
+
+    **This fragment's clause**: the round with holes replaces the no-holes
+    part with the equation reading holes too (a hole apart from what was lent
+    is kept, one under it is the callee's).
+  - **`Value::Views`, per result by its origin:**
+    - `OFresh`: plain, or a block made by the call (past the heap's length,
+      no selections). Two fresh results are in different blocks (being
+      added: the caller's `own` needs each new owned root alone in its
+      block).
+    - `OParam`: the argument itself where it refers, plain where it was
+      passed by value (`keep_by_value`, §23.13).
+    - `OView`: the argument's reference narrowed by the signature's steps at
+      the call's words, the arguments' then the results' (`found_checked`,
+      §23.4); a copy where the argument was plain (`at_by_value`, §23.14).
+      The words are the arguments as passed (`at_moved_refused`, §23.13).

@@ -29,76 +29,120 @@ Items 1 and 2 are definitions and evaluation; item 3 waits for the coordinating 
 
 `CheckSound` has an inhabitant for the fragment, the experiments' programs are probes or theorems of the real modules, and the experiment modules are gone.
 
-## Handoff (2026-11-26, end of the sixth session: D2 done, then Like and the call)
+## Handoff (2026-11-26, end of the seventh session: item 1 done, the call P1–P3 done, the frame to restate)
 
 Continue on branch `claude/ownership-checker-sound`. Everything is in
-`lib/lang/ownership/sound.hthr`. Read design §23.15 (this session) first,
-then §23.13 and §23.14. The coordinating session's order: item 2 (`Inv::back_like`
-and `Like`'s step per statement kind), item 3 (the call, P1 to P9 below),
-item 4 (`SafeAt` for a body with no join and no `Jump`), then report.
+`lib/lang/ownership/sound.hthr` (the call's parts at its end) and
+`verdict.hthr` (the interface). Read design §23.16 and §23.17 (this session)
+first: §23.17 is `SafeAt` clause by clause with the program that forced each
+clause; the coordinating session reviews it before the body induction.
 
-**Done this session** (D2, item 1 of the coordinator's list):
-- **The patch is a fold over levels** (`CSt::patched` = `CSt::pfold`, the
-  highest level first; `CSt::pend_in` marks a level on a pending chain whose
-  cells refer, through `anc_of`; `CSt::wstep` writes the level's entry to
-  write into its parent). With one chain it is the walk
-  (`CSt::pfold_walk`, over `Walkable`), so every lemma over `CSt::up`
-  stands. The designed disjointness was false (`nested_two_checked`), and a
-  fold of walks needed like-ness of every link; both are explained in §23.15.
-- **The commuting lemma** is `CSt::patched_back` (record `BackAt`, built by
-  `Stmt::back_at`): a write-back with other chains pending keeps the patch.
-  It uses `sib`, `uni`, `Walkable`, `words`, and `Stmt::back_nk` (a view
-  written back has no live child to write, from the write's read licence;
-  `nested_two_late_refused`).
-- **The write-back stages** are restated for several chains: `ref_pend` over
-  `patched_back`; `ref_none` unchanged (nothing pending); the copy write-back
-  over `CSt::patched_copy_set` and `CSt::patched_reback_copy`, with
-  `Inv::set_cell` now over the patched meaning (`px`, `pn2`). `Inv.pone` and
-  its lemmas are gone. Tools for the call's slots (P6): `CSt::pfold_set` (the
-  patch commutes with setting a variable on no referring chain),
-  `CSt::pfold_plain`, `CSt::pend_refers`, `CSt::pfold_agree` (the patch
-  keeps plain variables) and `Inv::at_sels`.
+**Done this session:**
+- Item 1. `Inv::back_like`; `Like.pend` over every view to write on a pending
+  chain (`CSt::on_chain`; probe `back_under_checked`); `Like`'s step per
+  statement kind but the call (`Like::plain`, `fresh`, `take_hold`,
+  `take_view`, `view`, `death`, `death_view`, `Like::stage_write`,
+  `Like::stage_back`, over `Like::rekin_write` and `Like::pp_write`).
+- P1: `Sim::pass_all` (pass_all succeeds; `ReadAll` and `get_all` of the
+  passed values; the state after the lends still agrees), `Sim::coded_args`,
+  `CSt::lend_all_live`.
+- P2: `Inv::lendable`, one lemma per clause (`lend_live`, `lend_plain`,
+  `lend_apart`, `lend_whole`). Tools: `Sel::apart_under` (apart under a common
+  prefix, the degenerate empty path included), `ArgAt` (a referring variable
+  anchored at its object's root and region), `Inv::arg_changes`, `Thin`/
+  `CSt::lend_all_at` (the state a lend at index i ran in), the `apart_args`
+  pair lemmas. `Inv::lend_apart` is the dearest declaration (2.6 s, 1.3M
+  steps): split it if it grows.
+- P3: `Run::calls_body` (a callee with a body runs at the fuel below:
+  `SafeAt(g, f)` applies as it is), `Run::calls_prim` (a primitive's answer is
+  `w(g, ds)` plain, the heap as it was; its `get_all` from `Sim::pass_all`).
+- Interface, agreed: (A) `Value::Written`: a written parameter passed by
+  value comes back plain (probe `lend_plain_back_checked`); (B, C)
+  `Heap::Kept` (no shorter; `Heap::Stays`: an old block live only where it
+  was, no holes where none) in `SafeAt`'s answer, marked as this fragment's
+  clause, with `Inv.stays` and its maintenance.
 
-**Next: item 2**, `Like`'s steps. `Like.pend` (a pending view is like its
-place in its parent) is what a write-back's like-ness needs where the child
-is pending; `Inv::back_like` is for the rest. With several chains now
-pending, check that `Like.pend` is kept by a write-back whose parent was
-already pending: the parent's new meaning has the child at its place, and
-its own place in its parent is unchanged.
-
-**Then the call**, in this order:
-- **P1** `Inv::pass`: `pass_all` succeeds and `ReadAll` holds of the passed
-  values; `Coded` from the code check; `pres` from `RPre`.
-- **P2** `Inv::lendable`, one lemma per clause. `apart` for one object comes
-  through `apart_args` and the licence chain generalised from
-  `Inv::lic_apart`.
-- **P3** `Call::callee`: the callee's `SafeAt` at the fuel below. A primitive
-  is `Call::prim`.
-- **P4** `Inv::call_frame`: from the callee's place frame.
-- **P5** `Inv::bind_results`: fresh results in distinct blocks;
-  `returns_all` refusing one object twice is already decided.
-- **P6** `Inv::bind_slots`: several pending slots. Before the call nothing
-  is pending (the checker allows only write-backs while anything is), so the
-  patch after is the fold over the slots' chains alone. Each slot is a view
-  at `Nil` of its argument. A slot whose argument is a copy is on no
-  referring chain (`pfold_plain`). Where arguments meet under one view, the
-  places are apart by `apart_args`, which is `sib` for the slots' parents.
-- **P7**: the moved arguments.
-- **P8** `Like::call`.
-- **P9** `Stmt::stage_call`, split into run, invariant and `Like`.
+**Next, in this order (all agreed by the coordinating session):**
+1. **The frame as §18.3's lens equation, restating `Heap::Frame`** (not
+   beside it). Probe `lend_under_checked` is the program the frame by place
+   could not carry (`x[0]` lent, written back, `Ret` reads all of `x`); keep
+   it, and make it a theorem once the call is proved. Design:
+   - `Sel::put_lent(rs, b, after_v, d)`: fold over `rs` in list order; at a
+     reference into block `b`, `Sel::write_at(r.sels, λ _ => Sel::read_at(r.sels, after_v), ·)`.
+     The coordinating session asks to say which form was chosen: the fold in
+     list order, with the commuting of apart puts proved once beside it.
+   - `Heap::Frame(before, after, rs)`: at every block `b < before.len()` with
+     no reference lent whole into it (as now), live before ⇒ live after with
+     `ob2.val = put_lent(rs, b, ob2.val, ob.val)`. A block lent whole is
+     unconstrained.
+   - Derived lemmas: the reads at apart paths (today's statement:
+     `Sel::get_apart` per put), and the whole block lent to nothing
+     (`Heap::frame_whole`).
+   - `Inv` needs one more clause: the lent references into one block are
+     pairwise apart by position (from `Lendable.apart` at entry; constant).
+   - `Inv.frame` restated the same way from `h0`. `Inv::start`:
+     `put_back_path` per put (it needs `StrsLaws`, so `Inv::start` takes `sl`).
+     Same-heap builders: unchanged. `Inv::fresh`: the new block is past
+     `h0.len()`. `Inv::kill`: the killed root is lent whole or made here.
+     `Inv::store_rest`: the hard one. It needs `nw` to be `old` with
+     `r.sels`'s part replaced by something like what was there:
+     `nw = Sel::write_at(r.sels, F, old)`, with `F(x)` like `x`. Both callers
+     store `Sel::write_at(r.sels ++ ss, g, old)` (`write_append`); like-ness is
+     `ml.keeps` where the rest of the path is non-empty, and `WriteVal`
+     (`RFits`, the code check, `Dyn::len_non_seq`) where it is empty. Then
+     `put_lent` with the `r` entry's read changed is the old fold
+     with `r` overwritten (commute apart puts, `over_over` with like-ness).
+     If some statement kind lacks the like-ness, that is a finding for the
+     coordinating session with the smallest program.
+   - `Body::stage_ret`'s `frame` follows as now (`inv.frame`).
+2. **D, distinct fresh results** (agreed in principle: §23.17 lists it as
+   being added): in `Value::Views` or beside it, two referring `OFresh`
+   results are in different blocks. Callee side: `own` puts each owned root
+   alone in its block.
+3. **P4–P9 over the equation.** The call's invariant is assembled like this.
+   The binding is a sequence of pushes. First, an `Inv` with nothing pending
+   at `(nl.st, e_upd, Mach(a.heap, m.env, a.io))`. Here `nl.st` is the state
+   after the lends (moved arguments gone), and `e_upd` is the meaning with each
+   lent argument's chain written up with its slot's value, i.e. the patch of
+   the final state restricted to the old levels. P4 shows it: for a variable
+   not on a lent chain, the frame's apart reads; for a lent argument,
+   `Written` (slot = argument) and `ReadAll`; for its ancestors, the
+   equation. Then P5 pushes the results with the existing builders, plus a
+   builder for a fresh result whose block the callee made (generalise
+   `Inv::fresh` to a given block past every root rather than copy it).
+   Then P6 pushes the slots as written-back views (back = True), with
+   `push_view` (a slot is a view at `Nil` of its argument, its cell the
+   argument's reference by `Written`). Then `Inv::rekin` marks them pending.
+   Its `Sim` premise is `patched(final) = push_all(e_upd, values)`, which is
+   the fold's definition (slots at `Nil` write their whole value; `sib` for
+   two slots under one view is `apart_args`). P7 is the moved argument: its
+   holder is gone in `nl.st`, its root stays; `Kept` keeps `inheap` and
+   `bare`. P8 is `Like` at the call (the slot's like-ness is `Written`'s
+   `Fits`; the chain's is `Inv::back_like` before the call). P9 joins them.
+   The call's run is `Going` at fuel 0 and the callee's `SafeAt` at `f` for
+   fuel `Succ(f)`; the stage exposes the callee's `need` and going clauses for
+   item 4.
 
 **Traps found this session:**
-- A recursive theorem's recursive call must be at the predecessor the match
-  bound (`j1`), not at an equal variable (`c` with `j1 = c`); rewrite the
-  other way.
-- `Nil` in a type position needs its argument: `Nil<Step>()`.
-- A `let` bound to a lambda whose binder is used in `Dyn::write` needs its
-  binder typed (`λ (d: Dyn(tys)) => …`).
-- Declarations must come before use: the write-back block now sits after
-  `CSt::patched_back`, and `ent_mem`, `ent_only`, `anc_not` and
-  `member_foldr_false` were moved up.
-- `scripts/test --pr` reads the working tree. Editing `lib/` while it runs
-  fails its fmt test spuriously.
+- `j(proof, motive, base)` rewrites `a` to `b` given `a = b` and `P(a)`; with
+  a record-valued step (`Option::map_some_inv`'s `f(a) = b`) use the equation
+  as it comes, not `sym`.
+- A `let` bound to a lambda whose result is a proposition needs its type
+  written (`let P: (Next → Type) = λ q => …`). The annotation must be
+  parenthesised when it ends in `= …`.
+- `Next` is ambiguous with `list`'s; write `checker::Next(...)` in values.
+- A name `Heap::Live` collides with the block constructor `Live` inside
+  `Heap` members (hence `Heap::Stays`).
+- `prest.drop(0)` is not `prest` by conversion (`List::drop_zero`), and
+  `ps.drop(1).nth(k)` is `List::nth_drop_add`.
+- Recursion must be on the matched variable itself; generalise the motive
+  over it (`Sel::fit_write_self`) rather than rebuild `Cons(b, rr)`.
+- `heather check --cache` keeps the declarations of a failed run, so the next
+  run's "kernel-checked" count is small. Use `--only <item> --timings` to see
+  a declaration's cost.
+- `scripts/test --pr` reads the working tree: run it in one worktree and edit
+  in a second (`git worktree add`, its own `HEATHER_CACHE_DIR`, the same
+  `target/release/heather` binary), then `merge --ff-only`.
 
 ## Log
 
@@ -122,3 +166,5 @@ its own place in its parent is unchanged.
 - 2026-11-26 (fifth session): the `sig_atom` and `returns` checker fixes; the measure for measured functions only (`WMeasure`); `ViewIs` plain where the argument was, `Written` the slot as the argument, `Heap::Frame` by place; `Inv` gains `args`, `href`, `made`, `nbase`; `Stepped.kept`; `Like` with its start and steps; the `Ret` stage (`Body::stage_ret`). Design §23.13, §23.14. Handoff rewritten at D2.
 - 2026-11-26: `scripts/test --pr` at `1dcfe82` (the last code commit of the fifth session; `906374b` after it is docs and this issue only): `== suite: 4140 passed, 0 failed, 3 ignored ==`.
 - 2026-11-26 (sixth session): D2, several pending chains. `patched` is a fold over levels (`106cfce`); `CSt::patched_back`, the write-back keeping the patch with other chains pending, and the probes `nested_two_checked` and `nested_two_late_refused` (`d40e77b`); the write-back stages restated, `Inv.pone` dropped, and `Stmt::back_nk` (`947121b`). Design §23.15. `scripts/test --pr` at `947121b`: `== suite: 4140 passed, 0 failed, 3 ignored ==`. Handoff rewritten at item 2.
+- 2026-11-26 (seventh session): item 1 of the coordinating session's list: `Inv::back_like`; `Like.pend` over every view to write on a pending chain (`CSt::on_chain`; the gap and its probe `back_under_checked`, design §23.16); `Like`'s steps for every statement kind but the call (`Like::plain`, `fresh`, `take_hold`, `take_view`, `view`, `death`, `death_view`, `Like::stage_write`, `Like::stage_back`). `scripts/test --pr` at `54e6502`: `== suite: 4140 passed, 0 failed, 3 ignored ==`.
+- 2026-11-26 (seventh session): the call's P1–P3 (`Sim::pass_all`, `Inv::lendable` with a lemma per clause, `Run::calls_body`, `Run::calls_prim`) and the agreed interface additions (A) a plain written parameter comes back plain, (B, C) `Heap::Kept` (`1adccde`). `scripts/test --pr` at `1adccde`: `== suite: 4140 passed, 0 failed, 3 ignored ==`. Then probes `lend_plain_back_checked`, `lend_under_checked`, design §23.17 (`SafeAt` clause by clause), handoff at the lens-equation frame.

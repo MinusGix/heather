@@ -1161,3 +1161,41 @@ theorem nested_two_checked(): verdict([two_nat_w(), nested_two(False)], 1).is_so
 // reads `A`, which meets its live child `a`, a view to write. So a view
 // written back has no pending descendant, which `CSt::patched_back` uses.
 theorem nested_two_late_refused(): verdict([two_nat_w(), nested_two(True)], 1) = None { refl }
+
+// A backed view whose child is pending (§23.16): `B`, a view of `A.x` of
+// `x[0]`, is written, so `B` is pending and `A` is not; writing `B` back
+// makes `A` pending. The meaning's `A` must then be like `x[0]`, which the
+// invariant cannot say (the patch has written that place over), so `Like`
+// carries it for every view to write on a pending chain.
+fn back_under() → Func {
+    Func(Sig([Param(pts_s(), ByWrite)], Nil), seq([View(el(Arg(0), Lit(0)), Writing), View(Place(Loc(0), [SField(0)]), Writing), Lit(WNat, 7), Write(whole(Loc(1)), Loc(0)),
+        Write(Place(Loc(2), [SField(0)]), Loc(1)), Death(whole(Loc(1))), Write(el(Arg(0), Lit(0)), Loc(2)), Death(whole(Loc(2)))], Ret([Arg(0)])))
+}
+
+theorem back_under_checked(): verdict([back_under()], 0).is_some() = True { refl }
+
+// ---------------------------------------------------------------------------
+// The call's interface (§23.17): programs whose callers' safety needed more
+// of `SafeAt` than it said.
+
+// A point lent to write, by value or by reference.
+fn pt_w() → Func { Func(Sig([Param(pt_s(), ByWrite)], Nil), Ret([Arg(0)])) }
+
+// A written parameter passed by value comes back plain (`Value::Written`):
+// `p`'s slot is a view to write of a copy, and a reference coming back would
+// be one no invariant could place.
+fn lend_plain_back() → Func {
+    Func(Sig([Param(pt_s(), ByWrite)], Nil), seq([Call(0, [Arg(0)], 1), Write(whole(Arg(0)), Loc(0)), Death(whole(Loc(0)))], Ret([Arg(0)])))
+}
+
+theorem lend_plain_back_checked(): verdict([pt_w(), lend_plain_back()], 1).is_some() = True { refl }
+
+// The frame is the lens equation (§18.3): after `x[0]` is lent and written
+// back, `Ret` reads the whole of `x`, which reads only the apart paths and the
+// lent one as before (the frame by place) do not determine.
+fn lend_under() → Func {
+    Func(Sig([Param(pts_s(), ByWrite)], Nil), seq([View(el(Arg(0), Lit(0)), Writing), Call(0, [Loc(0)], 1), Write(whole(Loc(1)), Loc(0)), Death(whole(Loc(0))),
+        Write(el(Arg(0), Lit(0)), Loc(1)), Death(whole(Loc(1)))], Ret([Arg(0)])))
+}
+
+theorem lend_under_checked(): verdict([pt_w(), lend_under()], 1).is_some() = True { refl }
