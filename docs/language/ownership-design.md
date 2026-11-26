@@ -2264,6 +2264,44 @@ never carried by hand:
   inductions carry the world in their facts, and `program_tracks` reads the
   done side by `performs_weaken` of the routine's `ReturnsClaim`.
 
+**System calls lowered (same round, item 3).** `Sys(call)` is emitted as a
+call's arguments are, then Linux's call: its three words move into RDI, RSI
+and RDX (`File::call_moves`, judged by `outputs_check`), the call's number
+goes into RAX, and `SYSCALL` follows (`emit_sys`). The file after holds the
+result in RAX and forgets RCX and R11 (`sys_after`), which Linux may
+clobber. `Body::fresh` accepts it, binding its result word.
+
+- The facts (`SysCall::Lands`) are the reference's location, the window
+  open (read) or the bytes read (write), the world's answer landed
+  (`ReadLands`: the bytes put, or the window undefined; `WriteLands`), and
+  the exchange recorded. `holds_of` reads them off the run
+  (`SysCall::ran`, `lands_of`).
+- The step is one claim through the kernel (`Site::claims_resumes`, a new
+  generic lemma in `x86_64_stack_runs`). It holds for every answer the world
+  gives and every resumption `LinuxResumes` allows (`sys_write_resumes`,
+  `sys_read_resumes`). The language's words are Linux's (`count_word_linux`,
+  `errno_word_linux`).
+- The read's memory clause is re-established from the loan's window laws.
+  - Inside a written span the code stays resident (`Site::resumes_resident`).
+  - The bytes a read returns are the heap's put (`read_bytes_kept`, by
+    `Loan::store_injected`).
+  - For a failed read (`read_failed_kept`), the window is first stored
+    zero, the heap's own bytes, then called undefined
+    (`injected_undefining`). Whatever junk Linux left is then read instead
+    by `Injected::undefined_change`. No law was added to `ClauseStable`.
+- A read of no bytes at its block's end is allowed by the language, but no
+  loan law reaches it (every law asks `k < size`). It is one named
+  hypothesis, `EmptyEnds(stack.writes, spans)`: a store of no bytes changes
+  nothing and needs no room at each span's end. The memory law that will
+  discharge it is `issues/byte-writes-empty-range.md`. With it,
+  `injected_placed_nothing` keeps the clause.
+- `io.Answerable()` travels in the world relation: `NowWorld` is now the
+  machine's world being the state's, every answer one Linux may give. The
+  same holds for the routine's pre and post (`RoutinePreNow`,
+  `RoutinePostNow`). Every region keeps the world's function, so each claim
+  re-establishes it for free. `Tracks` supplies it at the entry. No fact,
+  `holds_of` or loop-pass lemma carries it.
+
 ## 18. The world, termination, and level 2 fixed (2026-11-25)
 
 Round six of the design review. Where this section and §15.4, §15.5 or §17

@@ -33,6 +33,7 @@ import function_ir_lower_structured;
 import function_ir_lower_reads;
 import function_ir_lower_calls;
 import linux_world;
+import linux_calls;
 import linux_x86_64_io;
 import x86_64;
 import x86_64_block;
@@ -119,7 +120,7 @@ theorem now_in_stable<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, sta
     λ now => loan.stable_injected(top, top.le_refl(), now.heap)
 }
 
-fn NowWorld() → Now → Io → Type { λ (now: Now) (w: Io) => w = now.io }
+fn NowWorld() → Now → Io → Type { λ (now: Now) (w: Io) => (w = now.io) ∧ w.Answerable() }
 
 fn calls_between(before, after: Now) → Nat { after.io.past.len() - before.io.past.len() }
 
@@ -186,7 +187,7 @@ theorem emits_now_exact<M>(saves: Nat, site: Site<M>, stack: Stack<M>(site.fetch
     ⟨emits.left, λ within => site.claims_exact(stack, calls, 0, prog_len(prog),
         NowPre<M>(saves, site, stack, spans, values, d, s0, file, facts, before),
         NowPost<M>(saves, site, stack, spans, values, d, s0, prog_len(out.prog), out.file, after), before, after,
-        λ r held => held.right, λ t arrived => arrived.right.right, emits.right(within))⟩
+        λ r held => held.right.left, λ t arrived => arrived.right.right.left, emits.right(within))⟩
 }
 
 // A count raised to `k`, where the facts bound the region's by it.
@@ -220,7 +221,7 @@ theorem emits_now_of_heap<M>(saves: Nat, site: Site<M>, stack: Stack<M>(site.fet
         j(sym(zero), λ k _ => site.Performs(stack.writes, site.linux_kernel(stack),
                 NowPost<M>(saves, site, stack, spans, values, d, s0, prog_len(out.prog), out.file, after), k, 0, r),
             site.performs_steps(stack.writes, site.linux_kernel(stack), NowPost<M>(saves, site, stack, spans, values, d, s0, prog_len(out.prog), out.file, after),
-                r, m.witness, m.proof.left, ⟨⟨m.proof.right.left, m.proof.right.right.left⟩, ⟨m.proof.right.right.right, trans(held.right, sym(same))⟩⟩))
+                r, m.witness, m.proof.left, ⟨⟨m.proof.right.left, m.proof.right.right.left⟩, ⟨m.proof.right.right.right, ⟨trans(held.right.left, sym(same)), held.right.right⟩⟩⟩))
     }⟩
 }
 
@@ -1513,11 +1514,11 @@ fn RoutinePost<M>(site: Site<M>, stack: Stack<M>(site.fetch, site.data), spans: 
 // The same with the world: entered in `io`, returned in the answer's.
 fn RoutinePreNow<M>(site: Site<M>, stack: Stack<M>(site.fetch, site.data), spans: Spans, rooms: Nat → Nat, top, f: Nat, args: List<Value>,
     heap: Heap, io: Io) → Nat → Running<M, Io> → Type {
-    λ (i: Nat) (s: Running<M, Io>) => RoutinePre<M>(site, stack, spans, rooms, top, f, args, heap)(i, s.state) ∧ (s.io = io)
+    λ (i: Nat) (s: Running<M, Io>) => RoutinePre<M>(site, stack, spans, rooms, top, f, args, heap)(i, s.state) ∧ ((s.io = io) ∧ s.io.Answerable())
 }
 
 fn RoutinePostNow<M>(site: Site<M>, stack: Stack<M>(site.fetch, site.data), spans: Spans, a: Answer) → Nat → Running<M, Io> → Running<M, Io> → Type {
-    λ (i: Nat) (s: Running<M, Io>) (t: Running<M, Io>) => RoutinePost<M>(site, stack, spans, a)(i, s.state, t.state) ∧ (t.io = a.io)
+    λ (i: Nat) (s: Running<M, Io>) (t: Running<M, Io>) => RoutinePost<M>(site, stack, spans, a)(i, s.state, t.state) ∧ ((t.io = a.io) ∧ t.io.Answerable())
 }
 
 // Every routine below `bound`, wherever it answers, returns so at its label,
@@ -1606,7 +1607,7 @@ theorem call_now_step<M>(saved: List<Gpr>, slots: Nat, eight: saved.len() <= 8, 
         λ u t inj world post => ⟨⟨⟨trans(post.left.left.left, lands.right.left.left),
             j(lands.right.left.right, λ ws _ => ArgsIn(ws, answer_registers(), t.state.gprs), post.left.left.right)⟩,
             ⟨post.left.right.left, ⟨post.left.right.right.left, j(lands.right.right, λ h _ => Injected<M>(site.data, spans, h, t.state.memory),
-                post.left.right.right.right)⟩⟩⟩, trans(post.right, landed)⟩,
+                post.left.right.right.right)⟩⟩⟩, ⟨trans(post.right.left, landed), post.right.right⟩⟩,
         g0, k, at);
     site.claims_recount(stack.writes, kernel, callee_calls + 0, calls_between(before, after), 0, prog_len(prog), pre, goal, λ r _ => same,
         site.claims_loosen(stack.writes, kernel, callee_calls, 1 + 0, 0, 0, prog_len(prog), pre, goal, trivial, stepped))
@@ -1723,6 +1724,386 @@ theorem may_emit_now_of_heap<M>(saves: Nat, site: Site<M>, stack: Stack<M>(site.
     })(emits)
 }
 
+// ---------------------------------------------------------------------------
+// System calls (docs/language/ownership-design.md §17.7)
+//
+// A `Sys` lowers to the Linux call: its three words moved into RDI, RSI and
+// RDX as a call's arguments are (`File::call_moves`, judged by
+// `outputs_check`), the call's number into RAX, and SYSCALL. The step is
+// the kernel's (`Site::linux_resumes`): for every answer the world gives and
+// every way Linux resumes, the answer is in RAX and RCX and R11 hold what
+// Linux left, so the file after forgets both. A read's window lies in a
+// written span (`Spans::Window`); the code stays resident through the
+// kernel's store (`Site::resumes_resident`), and the clause is
+// re-established here from the loan's laws: the bytes a read returns are the
+// heap's put (`Loan::store_injected`), and junk a failed read leaves lies
+// under bytes the heap now calls undefined (`Injected::undefined_change`).
+
+fn SysCall::number(self call: SysCall) → Nat { match call { Read(_, _, _, _) => 0, Write(_, _, _, _) => 1 } }
+
+fn SysCall::words(self call: SysCall) → List<Nat> { match call { Read(fd, buf, len, _) => [fd, buf, len], Write(fd, buf, len, _) => [fd, buf, len] } }
+
+fn SysCall::result(self call: SysCall) → Nat { match call { Read(_, _, _, result) => result, Write(_, _, _, result) => result } }
+
+fn sys_registers() → List<Gpr> { [Rdi, Rsi, Rdx] }
+
+fn sys_number_code(call: SysCall) → List<Instruction> { [MovRI(Rax, BitVec::ofNat(call.number()))] }
+
+// The file once Linux has answered: the result in RAX, RCX and R11 unknown.
+fn sys_after(file: File, result: Nat) → File { file.write(Rax, Some(Held(result, Word))).write(Rcx, None).write(R11, None) }
+
+fn sys_prog(prog: Prog, moves: List<Instruction>, call: SysCall) → Prog {
+    At(At(At(prog, 0, Block(moves)), 0, Block(sys_number_code(call))), 0, Syscall)
+}
+
+// RAX, RCX and R11 are none the body keeps.
+fn sys_clear(saves: Nat) → Bool { Rax.apart(body_kept(saves)) && (Rcx.apart(body_kept(saves)) && R11.apart(body_kept(saves))) }
+
+fn emit_sys(saves: Nat, prog: Prog, file: File, call: SysCall, placement: List<Place>, names: Nat) → Option<Emitted> {
+    match file.move_outputs(ArgumentMove::ports(file.call_moves(call.words())), ArgumentMove::registers(file.call_moves(call.words()))) {
+        None => None,
+        Some(moves) => match moves.file.outputs_check(word_ports(call.words()), sys_registers()) &&
+            (leaves_all(moves.code, body_kept(saves)) && sys_clear(saves)) {
+            False => None,
+            True => Some(Emitted(sys_prog(prog, moves.code, call), sys_after(moves.file.write(Rax, None), call.result()), placement, names)),
+        },
+    }
+}
+
+// What a read's answer leaves: the bytes put at the window's start, or the
+// window undefined; and the result's word.
+fn ReadLands(blocks: Blocks, before, after: Heap, loc: Loc, n: Nat, word: BitVec(64), answer: ReadResult) → Type {
+    match answer {
+        ReadBytes(bytes) => (before.put(blocks.written, loc, Piece::plain(bytes.take(n))) = Some(after)) ∧ (word = count_word(bytes.take(n).len())),
+        ReadFailed(errno) => (before.put(blocks.written, loc, Piece::undefined(n)) = Some(after)) ∧ (word = bytes_level::errno_word(errno)),
+    }
+}
+
+fn WriteLands(word: BitVec(64), answer: WriteResult) → Type {
+    match answer { Wrote(count) => word = count_word(count), WriteFailed(errno) => word = bytes_level::errno_word(errno) }
+}
+
+// A system call's meaning at the valuation: the reference's location, the
+// window open or the bytes read, the world's answer landed, and the
+// exchange recorded. That the answer is one Linux may give is the world's
+// (`NowWorld`).
+fn SysCall::Lands(self call: SysCall, spans: Spans, blocks: Blocks, values: Valuation(), before, after: Now) → Type {
+    match call {
+        Read(fd, buf, len, result) => Exists<Loc>(λ loc => (values(64, buf) = loc.address(spans)) ∧
+            ((before.heap.open(blocks, loc, values(64, len).toNat()) = True) ∧
+                (ReadLands(blocks, before.heap, after.heap, loc, values(64, len).toNat(), values(64, result),
+                    before.io.answer(ReadCmd(values(64, fd), values(64, len).toNat()))) ∧
+                 (after.io = before.io.exchanged(ReadCmd(values(64, fd), values(64, len).toNat()),
+                    before.io.answer(ReadCmd(values(64, fd), values(64, len).toNat()))))))),
+        Write(fd, buf, len, result) => Exists<Loc>(λ loc => (values(64, buf) = loc.address(spans)) ∧ Exists<List<BitVec(8)>>(λ bytes =>
+            (before.heap.read_bytes(loc, values(64, len).toNat()) = Some(bytes)) ∧
+                ((WriteLands(values(64, result), before.io.answer(WriteCmd(values(64, fd), bytes))) ∧ (after.heap = before.heap)) ∧
+                 (after.io = before.io.exchanged(WriteCmd(values(64, fd), bytes), before.io.answer(WriteCmd(values(64, fd), bytes))))))),
+    }
+}
+
+// The language's words for an answer are Linux's.
+theorem count_word_linux(n: Nat): count_word(n) = bitvec_nat::word_of_nat(64, n) { sym(bitvec_nat::word_of_nat_eq_ofNat(64, n)) }
+
+theorem errno_word_linux(e: Nat, error: Errno(e)): bytes_level::errno_word(e) = linux_x86_64_io::errno_word(e) {
+    let high: (e <= 4095) = error.right;
+    let wide: (4096 < Nat::pow(2, 64)) = Nat::leb_sound(4097, Nat::pow(2, 64), trivial);
+    trans(BitVec::neg_eq_ofNat(64, BitVec::ofNat(e)),
+        cong_fn<Nat, BitVec(64)>(λ x => BitVec::ofNat(Nat::pow(2, 64) - x), BitVec::toNat_ofNat(64, e, { omega })))
+}
+
+// An address a byte on, as Linux counts addresses.
+theorem rip_word(a: BitVec(64), t: Nat): next_rip(a, t) = bitvec_nat::word_of_nat(64, a.toNat() + t) {
+    trans(cong_fn<BitVec(64), BitVec(64)>(λ x => next_rip(x, t), sym(bitvec_nat::word_of_nat_toNat(64, a))),
+        rip_compose(BitVec::zero(n := 64), a.toNat(), t))
+}
+
+// What Linux leaves in the registers: the answer in RAX, RCX and R11 as it
+// pleases. The file after holds the result in RAX, and the body's registers
+// are kept.
+theorem sys_answered_regs<M>(saves: Nat, values: Valuation(), file: File, result: Nat, s0: MachineState<M>, clear: sys_clear(saves).IsTrue(),
+    g: Gprs, word, rcx, r11: BitVec(64), rep: file.Represents(values, g), named: values(64, result) = word, kept: Kept(body_kept(saves), s0.gprs, g)):
+    sys_after(file, result).Represents(values, write_gpr(R11, r11, write_gpr(Rcx, rcx, write_gpr(Rax, word, g)))) ∧
+        Kept(body_kept(saves), s0.gprs, write_gpr(R11, r11, write_gpr(Rcx, rcx, write_gpr(Rax, word, g)))) {
+    let parts = Bool::is_true_and(Rax.apart(body_kept(saves)), Rcx.apart(body_kept(saves)) && R11.apart(body_kept(saves)), clear);
+    let rest = Bool::is_true_and(Rcx.apart(body_kept(saves)), R11.apart(body_kept(saves)), parts.right);
+    let g1 = write_gpr(Rax, word, g);
+    let g2 = write_gpr(Rcx, rcx, g1);
+    let f1 = file.write(Rax, Some(Held(result, Word)));
+    let f2 = f1.write(Rcx, None);
+    ⟨f2.represents_write(values, g2, R11, None, r11, f1.represents_write(values, g1, Rcx, None, rcx,
+            file.represents_write(values, g, Rax, Some(Held(result, Word)), word, rep, named), trivial), trivial),
+     kept_trans(body_kept(saves), s0.gprs, g, write_gpr(R11, r11, g2), kept,
+        kept_trans(body_kept(saves), g, g1, write_gpr(R11, r11, g2), kept_write(body_kept(saves), Rax, word, g, parts.left),
+            kept_trans(body_kept(saves), g1, g2, write_gpr(R11, r11, g2), kept_write(body_kept(saves), Rcx, rcx, g1, rest.left),
+                kept_write(body_kept(saves), R11, r11, g2, rest.right))))⟩
+}
+
+// Linux's answer to a write, and to a read: the word in RAX and, for a
+// read, the bytes stored at RSI.
+fn write_rax(a: WriteResult) → BitVec(64) {
+    match a { Wrote(count) => bitvec_nat::word_of_nat(64, count), WriteFailed(errno) => linux_x86_64_io::errno_word(errno) }
+}
+
+fn read_rax(a: ReadResult) → BitVec(64) {
+    match a { ReadBytes(bytes) => bitvec_nat::word_of_nat(64, bytes.len()), ReadFailed(errno) => linux_x86_64_io::errno_word(errno) }
+}
+
+fn read_stored(a: ReadResult, junk: List<BitVec(8)>) → List<BitVec(8)> { match a { ReadBytes(bytes) => bytes, ReadFailed(_) => junk } }
+
+theorem write_answered<M>(io: LinuxIo<M>, at: MachineState<M>, fd: BitVec(64), bytes: List<BitVec(8)>, a: WriteResult, junk: List<BitVec(8)>,
+    rcx, r11: BitVec(64)): linux_answered(io, at, WriteCmd(fd, bytes), a, junk, rcx, r11) = linux_write_return(at, write_rax(a), rcx, r11) {
+    match a { Wrote(_) => refl, WriteFailed(_) => refl }
+}
+
+theorem read_answered<M>(io: LinuxIo<M>, at: MachineState<M>, fd: BitVec(64), max: Nat, a: ReadResult, junk: List<BitVec(8)>, rcx, r11: BitVec(64)):
+    linux_answered(io, at, ReadCmd(fd, max), a, junk, rcx, r11) =
+        MachineState(gprs := write_gpr(R11, r11, write_gpr(Rcx, rcx, write_gpr(Rax, read_rax(a), at.gprs))), flags := syscall_flags(),
+            rip := next_rip(at.rip, 2), memory := io.store(at.memory, read_gpr(Rsi, at.gprs), read_stored(a, junk))) {
+    match a { ReadBytes(_) => refl, ReadFailed(_) => refl }
+}
+
+// The result's word, as the language has it, is the one Linux leaves.
+theorem write_word_lands(word: BitVec(64), fd: BitVec(64), bytes: List<BitVec(8)>, a: WriteResult, answers: LinuxCmd::Answers(WriteCmd(fd, bytes), a),
+    lands: WriteLands(word, a)): word = write_rax(a) {
+    (match a as λ b => LinuxCmd::Answers(WriteCmd(fd, bytes), b) → WriteLands(word, b) → word = write_rax(b) {
+        Wrote(count) => λ _ named => trans(named, count_word_linux(count)),
+        WriteFailed(errno) => λ error named => trans(named, errno_word_linux(errno, error)),
+    })(answers, lands)
+}
+
+theorem read_word_lands(blocks: Blocks, before, after: Heap, loc: Loc, n: Nat, word: BitVec(64), fd: BitVec(64), a: ReadResult,
+    answers: LinuxCmd::Answers(ReadCmd(fd, n), a), lands: ReadLands(blocks, before, after, loc, n, word, a)): word = read_rax(a) {
+    (match a as λ b => LinuxCmd::Answers(ReadCmd(fd, n), b) → ReadLands(blocks, before, after, loc, n, word, b) → word = read_rax(b) {
+        ReadBytes(bytes) => λ few landed => trans(landed.right, trans(cong_fn<List<BitVec(8)>, BitVec(64)>(λ xs => count_word(xs.len()), bytes.take_all(n, few)),
+            count_word_linux(bytes.len()))),
+        ReadFailed(errno) => λ error landed => trans(landed.right, errno_word_linux(errno, error)),
+    })(answers, lands)
+}
+
+// The bytes a write sends are the heap's at the reference's location.
+theorem write_sends<M>(io: LinuxIo<M>, spans: Spans, heap: Heap, memory: M, inj: Injected<M>(io.data, spans, heap, memory), loc: Loc, n: Nat,
+    bytes: List<BitVec(8)>, read: heap.read_bytes(loc, n) = Some(bytes)): LinuxWritesFrom(io, memory, loc.address(spans), bytes) {
+    λ i byte got => {
+        let reads = inj.reads(loc, n, bytes, read);
+        let len: (bytes.len() = n) = heap.read_bytes_len(loc, n, bytes, read);
+        let below: (i < bytes.len()) = bytes.nth_some_below(i, byte, got);
+        trans(cong_fn<BitVec(64), Option<BitVec(8)>>(λ y => io.data.read(memory, y), sym(rip_word(loc.address(spans), i))),
+            trans(reads.right(i, { omega }), got))
+    }
+}
+
+// Every flag of an undefined piece is set.
+theorem undefined_at_all(n: Nat): (t: Nat) → t < n → undefined_at(List::replicate(True, n), t) = True {
+    match n {
+        Zero => λ t short => false_elim({ omega }),
+        Succ(m) => λ t => match t { Zero => λ _ => refl, Succ(u) => λ short => undefined_at_all(m, u, { omega }) },
+    }
+}
+
+// An injection holds of a heap with more bytes undefined.
+theorem injected_undefining<M>(data: ByteReadAccess<M>, spans: Spans, heap: Heap, memory: M, inj: Injected<M>(data, spans, heap, memory),
+    other: Heap, same: (b: Nat) → other.bytes(b) = heap.bytes(b), shadow: other.shadow = heap.shadow,
+    defined: (b, k: Nat) → other.undefined(b, k) = False → heap.undefined(b, k) = False): Injected<M>(data, spans, other, memory) {
+    Injected(
+        sizes := λ b => trans(cong_fn<List<BitVec(8)>, Nat>(λ l => l.len(), same(b)), inj.sizes(b)),
+        bytes := λ b k inside none undefined => trans(inj.bytes(b, k, inside, trans(cong_fn<List<Pointer>, Bool>(λ sh => covered(sh, b, k), sym(shadow)), none),
+                defined(b, k, undefined)),
+            cong_fn<List<BitVec(8)>, Option<BitVec(8)>>(λ l => l.nth(k), sym(same(b)))),
+        refs := j(sym(shadow), λ sh _ => Every(sh, λ (e: Pointer) => e.Held(data, spans, memory)), inj.refs),
+    )
+}
+
+// The bytes a read returns, stored into its window from a byte inside a
+// written span: a store the lending allows, and the heap with them put is
+// injected.
+theorem read_bytes_kept<M>(site: Site<M>, stack: Stack<M>(site.fetch, site.data), top: Nat, spans: Spans,
+    loan: Loan<M>(site.fetch, site.data, stack, top, spans), blocks: Blocks, lent: blocks.Lent(spans), d: Nat, heap, after: Heap, memory: M,
+    inj: Injected<M>(site.data, spans, heap, memory), loc: Loc, inside: loc.offset < spans.size(loc.block), n: Nat, bytes: List<BitVec(8)>,
+    few: bytes.len() <= n, put: heap.put(blocks.written, loc, Piece::plain(bytes.take(n))) = Some(after)):
+    stack.WroteIn(d, spans, memory, stack.writes.store(memory, loc.address(spans), bytes)) ∧
+        Injected<M>(site.data, spans, after, stack.writes.store(memory, loc.address(spans), bytes)) {
+    let taken = bytes.take(n);
+    let facts = heap.put_lent(blocks, spans, lent, inj.sizes, loc, Piece::plain(taken), after, put);
+    let ok = heap.put_some(blocks.written, loc, Piece::plain(taken), after, put).right.left;
+    let all: (taken = bytes) = bytes.take_all(n, few);
+    j(all, λ xs _ => stack.WroteIn(d, spans, memory, stack.writes.store(memory, loc.address(spans), xs)) ∧
+            Injected<M>(site.data, spans, after, stack.writes.store(memory, loc.address(spans), xs)),
+        ⟨stack.wrote_in_store(d, spans, memory, loc.block, loc.offset, facts.left, inside, taken, facts.right.left),
+         j(facts.right.right, λ h _ => Injected<M>(site.data, spans, h, stack.writes.store(memory, loc.address(spans), taken)),
+            loan.store_injected(heap, memory, inj, loc, facts.left, inside, taken, ok))⟩)
+}
+
+// Junk a failed read left in its window, no longer than it: a store the
+// lending allows, and the heap with the window undefined is injected. The
+// window is first stored zero, the heap's own bytes there
+// (`Loan::store_injected`), called undefined, and then whatever Linux left
+// read instead (`Injected::undefined_change`): outside the window memory is
+// as it was, and inside it no byte is defined or covered.
+theorem read_failed_kept<M>(site: Site<M>, stack: Stack<M>(site.fetch, site.data), top: Nat, spans: Spans,
+    loan: Loan<M>(site.fetch, site.data, stack, top, spans), blocks: Blocks, lent: blocks.Lent(spans), d: Nat, heap, after: Heap, memory: M,
+    inj: Injected<M>(site.data, spans, heap, memory), loc: Loc, inside: loc.offset < spans.size(loc.block), n: Nat, junk: List<BitVec(8)>,
+    few: junk.len() <= n, put: heap.put(blocks.written, loc, Piece::undefined(n)) = Some(after)):
+    stack.WroteIn(d, spans, memory, stack.writes.store(memory, loc.address(spans), junk)) ∧
+        Injected<M>(site.data, spans, after, stack.writes.store(memory, loc.address(spans), junk)) {
+    let b = loc.block;
+    let k = loc.offset;
+    let zeros = List::replicate(BitVec::zero(n := 8), n);
+    let piece = Piece::undefined(n);
+    let facts = heap.put_lent(blocks, spans, lent, inj.sizes, loc, piece, after, put);
+    let ok = heap.put_some(blocks.written, loc, piece, after, put).right.left;
+    let zlen: (zeros.len() = n) = List::len_replicate(BitVec::zero(n := 8), n);
+    let zfits: (k + zeros.len() <= spans.size(b)) = facts.right.left;
+    let jfits: (k + junk.len() <= spans.size(b)) = { omega };
+    let zeroed = stack.writes.store(memory, loc.address(spans), zeros);
+    let other = stack.writes.store(memory, loc.address(spans), junk);
+    let placed = heap.placed(loc, piece);
+    let inj1 = loan.store_injected(heap, memory, inj, loc, facts.left, inside, zeros, ok);
+    let inj2 = injected_undefining<M>(site.data, spans, heap.store(loc, zeros), zeroed, inj1, placed, λ c => refl, refl, λ c i und =>
+        trans(heap.placed_undefined_at(loc, Piece::plain(zeros), c, i),
+            (match within(b, k, zeros.len(), c, i) as λ v =>
+                (match v { True => undefined_at(List::replicate(True, n), i - k), False => heap.undefined(c, i) }) = False →
+                (match v { True => undefined_at(Nil, i - k), False => heap.undefined(c, i) }) = False {
+                True => λ _ => refl,
+                False => λ h => h,
+            })(trans(sym(heap.placed_undefined_at(loc, piece, c, i)), und))));
+    let uncovered = λ (t: Nat) (short: t < zeros.len()) =>
+        unheld_uncovered(b, k, zeros.len(), t, short, cleared(heap.shadow, b, k, zeros.len()), every_cleared_apart(b, k, zeros.len(), heap.shadow));
+    let inj3 = inj2.undefined_change(other, λ c i short either => {
+        let outside = λ (side: (b ≠ c) ∨ ((i < k) ∨ (k + n <= i))) =>
+            trans(loan.apart(memory, b, k, facts.left, inside, junk, jfits, c, i, short, match side {
+                    Inl(differs) => Inl(differs),
+                    Inr(order) => Inr(match order { Inl(below) => Inl(below), Inr(above) => Inr({ omega }) }),
+                }),
+                sym(loan.apart(memory, b, k, facts.left, inside, zeros, zfits, c, i, short, match side {
+                    Inl(differs) => Inl(differs),
+                    Inr(order) => Inr(match order { Inl(below) => Inl(below), Inr(above) => Inr({ omega }) }),
+                })));
+        match b.eq_dec(c) {
+            Inr(differs) => outside(Inl(differs)),
+            Inl(same) => match i.lt_or_ge(k) {
+                Inl(below) => outside(Inr(Inl(below))),
+                Inr(from) => match i.lt_or_ge(k + n) {
+                    Inr(past) => outside(Inr(Inr(past))),
+                    Inl(within_window) => {
+                        let t = i - k;
+                        let at: (k + t = i) = { omega };
+                        let tz: (t < zeros.len()) = { omega };
+                        let tn: (t < n) = { omega };
+                        let moved = j(sym(same), λ x _ => (covered(placed.shadow, x, i) = True) ∨ (placed.undefined(x, i) = False), either);
+                        let moved2 = j(sym(at), λ y _ => (covered(placed.shadow, b, y) = True) ∨ (placed.undefined(b, y) = False), moved);
+                        let flag: (placed.undefined(b, k + t) = True) = trans(heap.placed_undefined_inside(loc, piece, t, tz), undefined_at_all(n, t, tn));
+                        match moved2 {
+                            Inl(cov) => absurd(trans(sym(cov), uncovered(t, tz))),
+                            Inr(def) => absurd(trans(sym(flag), def)),
+                        }
+                    },
+                },
+            },
+        }
+    });
+    ⟨stack.wrote_in_store(d, spans, memory, b, k, facts.left, inside, junk, jfits),
+     j(facts.right.right, λ h _ => Injected<M>(site.data, spans, h, other), inj3)⟩
+}
+
+// A read of no bytes into a window at its block's end, which the language
+// allows as an empty slice at a list's end is allowed. The loan's laws are
+// all for a byte inside a span, so this one case is a named hypothesis: a
+// store of no bytes changes nothing and needs no room, at every span's end
+// (issues/byte-writes-empty-range.md, the law of `ByteWrites` that will
+// discharge it).
+fn EmptyAt<M>(writes: ByteWrites<M>, address: BitVec(64)) → Type {
+    (memory: M) → writes.writable(memory, address, 0) ∧ (writes.store(memory, address, Nil) = memory)
+}
+
+fn EmptyEnds<M>(writes: ByteWrites<M>, spans: Spans) → Type { (b: Nat) → EmptyAt<M>(writes, spans.byte(b, spans.size(b))) }
+
+theorem nil_of_short<A>(xs: List<A>): xs.len() <= 0 → xs = Nil {
+    match xs { Nil => λ _ => refl, Cons(_, _) => λ short => false_elim(short) }
+}
+
+// A piece of no bytes placed anywhere the heap fits it: the same memory
+// injects the heap after.
+theorem injected_placed_nothing<M>(data: ByteReadAccess<M>, spans: Spans, heap: Heap, memory: M, inj: Injected<M>(data, spans, heap, memory),
+    loc: Loc, piece: Piece, empty: piece.bytes.len() = 0, none: pointers_of(piece.slots, loc.block, loc.offset) = Nil,
+    fits: heap.fits(loc, piece.bytes.len()) = True): Injected<M>(data, spans, heap.placed(loc, piece), memory) {
+    let b = loc.block;
+    let k = loc.offset;
+    let n = piece.bytes.len();
+    let parts = heap.fits_parts(loc, n, fits);
+    let outside = λ (c: Nat) (i: Nat) => match i.lt_or_ge(k) as λ _ => (b ≠ c) ∨ ((i < k) ∨ (k + n <= i)) {
+        Inl(below) => Inr(Inl(below)),
+        Inr(from) => Inr(Inr({ omega })),
+    };
+    Injected(
+        sizes := λ c => trans(heap.placed_len(loc, piece, parts.left, c), inj.sizes(c)),
+        bytes := λ c i short uncovered defined => {
+            let side = outside(c, i);
+            let cleared_none: (covered(cleared(heap.shadow, b, k, n), c, i) = False) =
+                j(none, λ ps _ => covered(ps ++ cleared(heap.shadow, b, k, n), c, i) = False, uncovered);
+            let old: (covered(heap.shadow, c, i) = False) = match uncovered_after_clearing(b, k, n, c, i, heap.shadow, parts.right, cleared_none) {
+                Inl(stored) => false_elim({ let lo = stored.right.left; let hi = stored.right.right; omega }),
+                Inr(was) => was,
+            };
+            trans(inj.bytes(c, i, short, old, trans(sym(heap.placed_undefined_outside(loc, piece, c, i, side)), defined)),
+                sym(heap.placed_outside(loc, piece, parts.left, c, i, side)))
+        },
+        refs := j(sym(none), λ ps _ => Every(ps ++ cleared(heap.shadow, b, k, n), λ (e: Pointer) => e.Held(data, spans, memory)),
+            every_cleared(λ (e: Pointer) => e.Held(data, spans, memory), b, k, n, heap.shadow, inj.refs)),
+    )
+}
+
+// A read of no bytes: Linux stores nothing, whatever it answers.
+theorem read_stored_empty(fd: BitVec(64), n: Nat, zero: n = 0, a: ReadResult, junk: List<BitVec(8)>, answers: LinuxCmd::Answers(ReadCmd(fd, n), a),
+    leaves: LinuxLeaves(ReadCmd(fd, n), a, junk)): read_stored(a, junk) = Nil {
+    (match a as λ r => LinuxCmd::Answers(ReadCmd(fd, n), r) → LinuxLeaves(ReadCmd(fd, n), r, junk) → read_stored(r, junk) = Nil {
+        ReadBytes(bytes) => λ few _ => nil_of_short(bytes, { omega }),
+        ReadFailed(_) => λ _ few => nil_of_short(junk, { omega }),
+    })(answers, leaves)
+}
+
+// And the heap it puts is injected by the same memory.
+theorem read_empty_injected<M>(data: ByteReadAccess<M>, spans: Spans, blocks: Blocks, heap, after: Heap, memory: M,
+    inj: Injected<M>(data, spans, heap, memory), loc: Loc, fd: BitVec(64), n: Nat, zero: n = 0, word: BitVec(64), a: ReadResult,
+    answers: LinuxCmd::Answers(ReadCmd(fd, n), a), lands: ReadLands(blocks, heap, after, loc, n, word, a)): Injected<M>(data, spans, after, memory) {
+    (match a as λ r => LinuxCmd::Answers(ReadCmd(fd, n), r) → ReadLands(blocks, heap, after, loc, n, word, r) → Injected<M>(data, spans, after, memory) {
+        ReadBytes(bytes) => λ few landed => {
+            let piece = Piece::plain(bytes.take(n));
+            let put = heap.put_some(blocks.written, loc, piece, after, landed.left);
+            let all: (bytes.take(n) = bytes) = bytes.take_all(n, few);
+            let len: (bytes.take(n).len() = bytes.len()) = cong_fn<List<BitVec(8)>, Nat>(λ xs => xs.len(), all);
+            j(put.right.right, λ h _ => Injected<M>(data, spans, h, memory),
+                injected_placed_nothing<M>(data, spans, heap, memory, inj, loc, piece, { omega }, refl, put.right.left))
+        },
+        ReadFailed(_) => λ _ landed => {
+            let piece = Piece::undefined(n);
+            let put = heap.put_some(blocks.written, loc, piece, after, landed.left);
+            let len: (List::replicate(BitVec::zero(n := 8), n).len() = n) = List::len_replicate(BitVec::zero(n := 8), n);
+            j(put.right.right, λ h _ => Injected<M>(data, spans, h, memory),
+                injected_placed_nothing<M>(data, spans, heap, memory, inj, loc, piece, { omega }, refl, put.right.left))
+        },
+    })(answers, lands)
+}
+
+// Inside its span, either answer's store, as `read_bytes_kept` and
+// `read_failed_kept` have it.
+theorem read_kept<M>(site: Site<M>, stack: Stack<M>(site.fetch, site.data), top: Nat, spans: Spans,
+    loan: Loan<M>(site.fetch, site.data, stack, top, spans), blocks: Blocks, lent: blocks.Lent(spans), d: Nat, heap, after: Heap, memory: M,
+    inj: Injected<M>(site.data, spans, heap, memory), loc: Loc, inside: loc.offset < spans.size(loc.block), fd: BitVec(64), n: Nat, word: BitVec(64),
+    a: ReadResult, answers: LinuxCmd::Answers(ReadCmd(fd, n), a), lands: ReadLands(blocks, heap, after, loc, n, word, a), junk: List<BitVec(8)>,
+    leaves: LinuxLeaves(ReadCmd(fd, n), a, junk)):
+    stack.WroteIn(d, spans, memory, stack.writes.store(memory, loc.address(spans), read_stored(a, junk))) ∧
+        Injected<M>(site.data, spans, after, stack.writes.store(memory, loc.address(spans), read_stored(a, junk))) {
+    (match a as λ r => LinuxCmd::Answers(ReadCmd(fd, n), r) → ReadLands(blocks, heap, after, loc, n, word, r) → LinuxLeaves(ReadCmd(fd, n), r, junk) →
+        stack.WroteIn(d, spans, memory, stack.writes.store(memory, loc.address(spans), read_stored(r, junk))) ∧
+            Injected<M>(site.data, spans, after, stack.writes.store(memory, loc.address(spans), read_stored(r, junk))) {
+        ReadBytes(bytes) => λ few landed _ =>
+            read_bytes_kept<M>(site, stack, top, spans, loan, blocks, lent, d, heap, after, memory, inj, loc, inside, n, bytes, few, landed.left),
+        ReadFailed(_) => λ _ landed few =>
+            read_failed_kept<M>(site, stack, top, spans, loan, blocks, lent, d, heap, after, memory, inj, loc, inside, n, junk, few, landed.left),
+    })(answers, lands, leaves)
+}
+
 // A region's meaning at the valuation, from the heap and world `before` to
 // `after`: a leaf's nodes, the world kept; a sequence through a state
 // between, whose history lies between the two; the arm the condition's bit
@@ -1731,8 +2112,8 @@ theorem may_emit_now_of_heap<M>(saves: Nat, site: Site<M>, stack: Stack<M>(site.
 // what the program's routines answer at the fuel the call is made with), and
 // its answer's words, lowered, are the words at its results (`CallLands`),
 // its world the one after; a plain loop's passes at some fuel
-// (`PassesHold`). A system call is not lowered yet, and an exit is never
-// done: they mean nothing here.
+// (`PassesHold`); a system call's answer landed (`SysCall::Lands`). An
+// exit is never done: it means nothing here.
 fn Body::Holds(self body: Body, spans: Spans, blocks: Blocks, values: Valuation(), answers: RoutineAnswers(), spare: Nat, before, after: Now) → Type {
     match body {
         Leaf(instrs) => InstrsHold(spans, blocks, values, instrs, before.heap, after.heap) ∧ (after.io = before.io),
@@ -1747,9 +2128,296 @@ fn Body::Holds(self body: Body, spans: Spans, blocks: Blocks, values: Valuation(
         Loop(inputs, parameters, inner, exit, next, outputs) => Exists<Nat>(λ n => PassesHold(λ (v: Valuation()) (from: Now) (to: Now) =>
             inner.Holds(spans, blocks, v, answers, spare, from, to), parameters, exit, next, n, words_of(values, typed_ids(inputs)), before,
             words_of(values, typed_ids(outputs)), after)),
-        Sys(_) => False,
+        Sys(call) => call.Lands(spans, blocks, values, before, after),
         Exit(_) => False,
     }
+}
+
+// At the SYSCALL: the file after the moves, the words in RDI, RSI and RDX,
+// the call's number in RAX, the call's facts and the trail.
+fn SysAt<M>(saves: Nat, site: Site<M>, stack: Stack<M>(site.fetch, site.data), spans: Spans, values: Valuation(), d: Nat, s0: MachineState<M>,
+    file: File, call: SysCall, facts: Type, now: Now) → MachineState<M> → Type {
+    λ (s: MachineState<M>) => ((file.Represents(values, s.gprs) ∧ (ArgsIn(words_of(values, call.words()), sys_registers(), s.gprs) ∧
+        (read_gpr(Rax, s.gprs) = BitVec::ofNat(call.number())))) ∧ facts) ∧ stack.TrailedBy(saves, spans, now_in<M>(site.data, spans), d, s0, now, s)
+}
+
+// A write: Linux reads the request off the registers and the bytes off the
+// heap's place in memory; every way it resumes leaves the result in RAX,
+// the memory as it was, and the world with the exchange recorded.
+theorem sys_write_resumes<M>(saves: Nat, site: Site<M>, stack: Stack<M>(site.fetch, site.data), spans: Spans, blocks: Blocks, values: Valuation(),
+    d: Nat, s0: MachineState<M>, file: File, fd, buf, len, result: Nat, before, after: Now, clear: sys_clear(saves).IsTrue(), to: Nat,
+    s: MachineState<M>, fetched: LinuxSyscallAt(site.linux(stack), s), resident: site.Resident(s.memory),
+    arrive: next_rip(s.rip, 2) = next_rip(site.origin, to), answerable: before.io.Answerable(),
+    held: SysAt<M>(saves, site, stack, spans, values, d, s0, file, Write(fd, buf, len, result),
+        SysCall::Write(fd, buf, len, result).Lands(spans, blocks, values, before, after), before)(s)):
+    site.linux_resumes(stack, Running(s, before.io), NowPost<M>(saves, site, stack, spans, values, d, s0, to, sys_after(file, result), after)) {
+    let lands = held.left.right;
+    let loc = lands.witness;
+    let got = lands.proof.right;
+    let bytes = got.witness;
+    let read = got.proof.left;
+    let fdv = values(64, fd);
+    let n = values(64, len).toNat();
+    let c: LinuxCmd<Nat> = WriteCmd(fdv, bytes);
+    let a = before.io.answer(c);
+    let args = held.left.left.right.left;
+    let trailed = held.right;
+    let inj: Injected<M>(site.data, spans, before.heap, s.memory) = trailed.right.right;
+    let len_is: (bytes.len() = n) = before.heap.read_bytes_len(loc, n, bytes, read);
+    let rsi: (read_gpr(Rsi, s.gprs) = loc.address(spans)) = trans(args.right.left, lands.proof.left);
+    let sends = j(sym(rsi), λ x _ => LinuxWritesFrom(site.linux(stack), s.memory, x, bytes),
+        write_sends<M>(site.linux(stack), spans, before.heap, s.memory, inj, loc, n, bytes, read));
+    let answers: LinuxCmd::Answers(c, a) = answerable(before.io.past, c);
+    let word = write_word_lands(values(64, result), fdv, bytes, a, answers, got.proof.right.left.left);
+    let rdx: (read_gpr(Rdx, s.gprs).toNat() = bytes.len()) = trans(cong_fn<BitVec(64), Nat>(λ x => x.toNat(), args.right.right.left), sym(len_is));
+    Exists(c, ⟨⟨fetched, ⟨⟨⟨held.left.left.right.right, ⟨args.left, ⟨rdx, sends⟩⟩⟩, trivial⟩, answers⟩⟩, λ junk leaves rcx r11 => {
+        let regs = sys_answered_regs<M>(saves, values, file, result, s0, clear, s.gprs, write_rax(a), rcx, r11, held.left.left.left, word, trailed.left);
+        j(sym(write_answered(site.linux(stack), s, fdv, bytes, a, junk, rcx, r11)),
+            λ u _ => NowPost<M>(saves, site, stack, spans, values, d, s0, to, sys_after(file, result), after)(Running(u, before.io.exchanged(c, a))),
+            ⟨⟨arrive, resident⟩, ⟨⟨regs.left, ⟨regs.right, ⟨trailed.right.left,
+                j(sym(got.proof.right.left.right), λ h _ => Injected<M>(site.data, spans, h, s.memory), inj)⟩⟩⟩, ⟨sym(got.proof.right.right), answerable⟩⟩⟩)
+    }⟩)
+}
+
+// Where a call resumes with the result in RAX and the clause kept: the
+// region's end.
+theorem sys_post<M>(saves: Nat, site: Site<M>, stack: Stack<M>(site.fetch, site.data), spans: Spans, values: Valuation(), d: Nat,
+    s0: MachineState<M>, file: File, result: Nat, after: Now, clear: sys_clear(saves).IsTrue(), to: Nat, s: MachineState<M>, word, rcx, r11: BitVec(64),
+    memory: M, io: Io, rep: file.Represents(values, s.gprs), named: values(64, result) = word, kept: Kept(body_kept(saves), s0.gprs, s.gprs),
+    wrote: stack.WroteIn(d, spans, s0.memory, memory), inj: Injected<M>(site.data, spans, after.heap, memory),
+    arrive: next_rip(s.rip, 2) = next_rip(site.origin, to), resident: site.Resident(memory), world: io = after.io, answers: io.Answerable()):
+    NowPost<M>(saves, site, stack, spans, values, d, s0, to, sys_after(file, result), after)(Running(MachineState(
+        gprs := write_gpr(R11, r11, write_gpr(Rcx, rcx, write_gpr(Rax, word, s.gprs))), flags := syscall_flags(), rip := next_rip(s.rip, 2),
+        memory := memory), io)) {
+    let regs = sys_answered_regs<M>(saves, values, file, result, s0, clear, s.gprs, word, rcx, r11, rep, named, kept);
+    ⟨⟨arrive, resident⟩, ⟨⟨regs.left, ⟨regs.right, ⟨wrote, inj⟩⟩⟩, ⟨world, answers⟩⟩⟩
+}
+
+// A read: Linux reads the request off the registers, its window writable
+// in a written span; every way it resumes leaves the count or the errno in
+// RAX, the window holding what the heap now says (the bytes, or undefined),
+// the code resident and the world with the exchange recorded. A read of no
+// bytes at its block's end is the named case (`EmptyEnds`).
+theorem sys_read_resumes<M>(saves: Nat, site: Site<M>, stack: Stack<M>(site.fetch, site.data), top: Nat, spans: Spans,
+    loan: Loan<M>(site.fetch, site.data, stack, top, spans), blocks: Blocks, lent: blocks.Lent(spans), ends: EmptyEnds<M>(stack.writes, spans),
+    values: Valuation(), d: Nat, s0: MachineState<M>, file: File, fd, buf, len, result: Nat, before, after: Now, clear: sys_clear(saves).IsTrue(),
+    to: Nat, s: MachineState<M>, fetched: LinuxSyscallAt(site.linux(stack), s), resident: site.Resident(s.memory),
+    arrive: next_rip(s.rip, 2) = next_rip(site.origin, to), answerable: before.io.Answerable(),
+    held: SysAt<M>(saves, site, stack, spans, values, d, s0, file, Read(fd, buf, len, result),
+        SysCall::Read(fd, buf, len, result).Lands(spans, blocks, values, before, after), before)(s)):
+    site.linux_resumes(stack, Running(s, before.io), NowPost<M>(saves, site, stack, spans, values, d, s0, to, sys_after(file, result), after)) {
+    let lands = held.left.right;
+    let loc = lands.witness;
+    let b = loc.block;
+    let k = loc.offset;
+    let landed = lands.proof.right.right.left;
+    let world = lands.proof.right.right.right;
+    let fdv = values(64, fd);
+    let n = values(64, len).toNat();
+    let c: LinuxCmd<Nat> = ReadCmd(fdv, n);
+    let a = before.io.answer(c);
+    let args = held.left.left.right.left;
+    let trailed = held.right;
+    let inj: Injected<M>(site.data, spans, before.heap, s.memory) = trailed.right.right;
+    let rsi: (read_gpr(Rsi, s.gprs) = loc.address(spans)) = trans(args.right.left, lands.proof.left);
+    let answers: LinuxCmd::Answers(c, a) = answerable(before.io.past, c);
+    let word = read_word_lands(blocks, before.heap, after.heap, loc, n, values(64, result), fdv, a, answers, landed);
+    let rdx: (read_gpr(Rdx, s.gprs).toNat() = n) = cong_fn<BitVec(64), Nat>(λ x => x.toNat(), args.right.right.left);
+    let asks: LinuxAsks(site.linux(stack), s, c) = ⟨held.left.left.right.right, ⟨args.left, rdx⟩⟩;
+    let open_parts = Bool::and_true_parts(blocks.written(b), before.heap.fits(loc, n) && no_slots(slots_within(before.heap.shadow, b, k, n)),
+        lands.proof.right.left);
+    let fit_parts = Bool::and_true_parts(before.heap.fits(loc, n), no_slots(slots_within(before.heap.shadow, b, k, n)), open_parts.right);
+    let written: (spans.written(b) = True) = lent(b, open_parts.left);
+    let fits: (k + n <= before.heap.bytes(b).len()) = before.heap.fits_parts(loc, n, fit_parts.left).left;
+    let size: (before.heap.bytes(b).len() = spans.size(b)) = inj.sizes(b);
+    let span_fits: (k + n <= spans.size(b)) = { omega };
+    let post = λ (junk: List<BitVec(8)>) (rcx: BitVec(64)) (r11: BitVec(64)) (wrote: stack.WroteIn(d, spans, s0.memory,
+            stack.writes.store(s.memory, read_gpr(Rsi, s.gprs), read_stored(a, junk))))
+        (injected: Injected<M>(site.data, spans, after.heap, stack.writes.store(s.memory, read_gpr(Rsi, s.gprs), read_stored(a, junk))))
+        (stays: site.Resident(stack.writes.store(s.memory, read_gpr(Rsi, s.gprs), read_stored(a, junk)))) =>
+        j(sym(read_answered(site.linux(stack), s, fdv, n, a, junk, rcx, r11)),
+            λ u _ => NowPost<M>(saves, site, stack, spans, values, d, s0, to, sys_after(file, result), after)(Running(u, before.io.exchanged(c, a))),
+            sys_post<M>(saves, site, stack, spans, values, d, s0, file, result, after, clear, to, s, read_rax(a), rcx, r11,
+                stack.writes.store(s.memory, read_gpr(Rsi, s.gprs), read_stored(a, junk)), before.io.exchanged(c, a), held.left.left.left, word,
+                trailed.left, wrote, injected, arrive, stays, sym(world), answerable));
+    match k.lt_or_ge(spans.size(b)) {
+        Inl(inside) => {
+            let window: spans.Window(s, c) = Exists(b, Exists(k, ⟨written, ⟨inside, ⟨span_fits, rsi⟩⟩⟩));
+            let zeros = List::replicate(BitVec::zero(n := 8), n);
+            let zlen: (zeros.len() = n) = List::len_replicate(BitVec::zero(n := 8), n);
+            let open: stack.writes.writable(s.memory, read_gpr(Rsi, s.gprs), n) = j(sym(rsi), λ x _ => stack.writes.writable(s.memory, x, n),
+                j(zlen, λ q _ => stack.writes.writable(s.memory, loc.address(spans), q), loan.writable(s.memory, b, k, written, inside, zeros, { omega })));
+            let kept = site.resumes_resident(stack, top, spans, loan, s, c, a, answers, window, resident);
+            Exists(c, ⟨⟨fetched, ⟨⟨asks, open⟩, answers⟩⟩, λ junk leaves rcx r11 => {
+                let stays = j(cong_fn<MachineState<M>, M>(λ u => u.memory, read_answered(site.linux(stack), s, fdv, n, a, junk, rcx, r11)),
+                    λ m _ => site.Resident(m), kept(junk, leaves, rcx, r11).right);
+                let mem = j(sym(rsi), λ x _ => stack.WroteIn(d, spans, s.memory, stack.writes.store(s.memory, x, read_stored(a, junk))) ∧
+                        Injected<M>(site.data, spans, after.heap, stack.writes.store(s.memory, x, read_stored(a, junk))),
+                    read_kept<M>(site, stack, top, spans, loan, blocks, lent, d, before.heap, after.heap, s.memory, inj, loc, inside, fdv, n,
+                        values(64, result), a, answers, landed, junk, leaves));
+                post(junk, rcx, r11, stack.wrote_in_trans(d, spans, s0.memory, s.memory, stack.writes.store(s.memory, read_gpr(Rsi, s.gprs), read_stored(a, junk)),
+                    trailed.right.left, mem.left), mem.right, stays)
+            }⟩)
+        },
+        Inr(past) => {
+            let zero: (n = 0) = { omega };
+            let at_end: (k = spans.size(b)) = { omega };
+            let rsi_end: (read_gpr(Rsi, s.gprs) = spans.byte(b, spans.size(b))) = trans(rsi, cong_fn<Nat, BitVec(64)>(λ q => spans.byte(b, q), at_end));
+            let empty = j(sym(rsi_end), λ x _ => EmptyAt<M>(stack.writes, x), ends(b));
+            let open: stack.writes.writable(s.memory, read_gpr(Rsi, s.gprs), n) =
+                j(sym(zero), λ q _ => stack.writes.writable(s.memory, read_gpr(Rsi, s.gprs), q), empty(s.memory).left);
+            Exists(c, ⟨⟨fetched, ⟨⟨asks, open⟩, answers⟩⟩, λ junk leaves rcx r11 => {
+                let nothing: (read_stored(a, junk) = Nil) = read_stored_empty(fdv, n, zero, a, junk, answers, leaves);
+                let same: (stack.writes.store(s.memory, read_gpr(Rsi, s.gprs), read_stored(a, junk)) = s.memory) =
+                    trans(cong_fn<List<BitVec(8)>, M>(λ xs => stack.writes.store(s.memory, read_gpr(Rsi, s.gprs), xs), nothing), empty(s.memory).right);
+                post(junk, rcx, r11,
+                    j(sym(same), λ m _ => stack.WroteIn(d, spans, s0.memory, m), trailed.right.left),
+                    j(sym(same), λ m _ => Injected<M>(site.data, spans, after.heap, m),
+                        read_empty_injected<M>(site.data, spans, blocks, before.heap, after.heap, s.memory, inj, loc, fdv, n, zero, values(64, result), a,
+                            answers, landed)),
+                    j(sym(same), λ m _ => site.Resident(m), resident))
+            }⟩)
+        },
+    }
+}
+
+// Writing RAX keeps what RDI, RSI and RDX hold.
+theorem sys_args_kept(words: List<BitVec(64)>, g: Gprs, x: BitVec(64)): ArgsIn(words, sys_registers(), g) → ArgsIn(words, sys_registers(), write_gpr(Rax, x, g)) {
+    match words {
+        Nil => λ h => h,
+        Cons(_, r1) => match r1 {
+            Nil => λ h => ⟨h.left, trivial⟩,
+            Cons(_, r2) => match r2 {
+                Nil => λ h => ⟨h.left, ⟨h.right.left, trivial⟩⟩,
+                Cons(_, r3) => match r3 {
+                    Nil => λ h => ⟨h.left, ⟨h.right.left, ⟨h.right.right.left, trivial⟩⟩⟩,
+                    Cons(_, _) => λ h => false_elim(h.right.right.right),
+                },
+            },
+        },
+    }
+}
+
+// The call's code: the moves, the number, then the kernel's step from the
+// SYSCALL (`core`, each call's lemma above). One system call, which the
+// world's one new exchange counts.
+theorem sys_emits_by<M>(saves: Nat, site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data), spans: Spans,
+    values: Valuation(), d: Nat, s0: MachineState<M>, prog: Prog, file: File, call: SysCall, facts: Type, placement: List<Place>, names: Nat,
+    before, after: Now, moves: Lowered, keeps: Keeps<M>(values, file, True, moves),
+    placed: moves.file.outputs_check(word_ports(call.words()), sys_registers()).IsTrue(), leaves: leaves_all(moves.code, body_kept(saves)).IsTrue(),
+    clear: sys_clear(saves).IsTrue(),
+    core: (s: MachineState<M>) → LinuxSyscallAt(site.linux(stack), s) → site.Resident(s.memory) →
+        next_rip(s.rip, 2) = next_rip(site.origin, prog_len(sys_prog(prog, moves.code, call))) → before.io.Answerable() →
+        SysAt<M>(saves, site, stack, spans, values, d, s0, moves.file.write(Rax, None), call, facts, before)(s) →
+        site.linux_resumes(stack, Running(s, before.io),
+            NowPost<M>(saves, site, stack, spans, values, d, s0, prog_len(sys_prog(prog, moves.code, call)),
+                sys_after(moves.file.write(Rax, None), call.result()), after))):
+    EmitsNow<M>(saves, site, stack, spans, values, d, s0, prog, file, facts, before, after,
+        Emitted(sys_prog(prog, moves.code, call), sys_after(moves.file.write(Rax, None), call.result()), placement, names)) {
+    let first = At(prog, 0, Block(moves.code));
+    let second = At(first, 0, Block(sys_number_code(call)));
+    let out = sys_prog(prog, moves.code, call);
+    let out_file = sys_after(moves.file.write(Rax, None), call.result());
+    let fits = site.program.laid_out_fits(laid);
+    let linux = site.linux_kernel(stack);
+    let ids = call.words();
+    let k: BitVec(64) = BitVec::ofNat(call.number());
+    let apart = Bool::is_true_and(Rax.apart(body_kept(saves)), Rcx.apart(body_kept(saves)) && R11.apart(body_kept(saves)), clear).left;
+    let into = moves_into<M>(saves, values, file, ids, sys_registers(), moves, keeps, placed, leaves);
+    let pre = λ (g: Gprs) (m: M) => (file.Represents(values, g) ∧ facts) ∧
+        (Kept(body_kept(saves), s0.gprs, g) ∧ stack.TrailBy(spans, now_in<M>(site.data, spans), d, s0.memory, before, m));
+    let middle = λ (g: Gprs) (m: M) => ((moves.file.Represents(values, g) ∧ ArgsIn(words_of(values, ids), sys_registers(), g)) ∧ facts) ∧
+        (Kept(body_kept(saves), s0.gprs, g) ∧ stack.TrailBy(spans, now_in<M>(site.data, spans), d, s0.memory, before, m));
+    let ready = λ (g: Gprs) (m: M) => ((moves.file.write(Rax, None).Represents(values, g) ∧ (ArgsIn(words_of(values, ids), sys_registers(), g) ∧
+        (read_gpr(Rax, g) = k))) ∧ facts) ∧
+        (Kept(body_kept(saves), s0.gprs, g) ∧ stack.TrailBy(spans, now_in<M>(site.data, spans), d, s0.memory, before, m));
+    let goal = NowPost<M>(saves, site, stack, spans, values, d, s0, prog_len(out), out_file, after);
+    let world = NowWorld()(before);
+    let counted = λ (within: out.Within(site.program)) => {
+        let first_in: first.Within(site.program) = Prog::within_trans(Exists(2, refl), within);
+        let second_in: second.Within(site.program) = Prog::within_trans(Exists(1, refl), within);
+        let moved = site.moves_block(stack.writes, fits, first_in.witness, prog, 0, moves.code, first_in.proof,
+            site.program.block_reads_at(laid, first_in.witness, prog, 0, moves.code, first_in.proof), pre, middle,
+            λ s m held => {
+                let landed = into(s, held.left.left);
+                ⟨⟨⟨keeps(s, held.left.left, trivial), landed.left⟩, held.left.right⟩,
+                 ⟨kept_trans(body_kept(saves), s0.gprs, s.gprs, execute_block_normal(moves.code, s).gprs, held.right.left, landed.right), held.right.right⟩⟩
+            });
+        let numbered = site.moves_block(stack.writes, fits, second_in.witness, first, 0, sys_number_code(call), second_in.proof,
+            site.program.block_reads_at(laid, second_in.witness, first, 0, sys_number_code(call), second_in.proof), middle, ready,
+            λ s m held => ⟨⟨⟨moves.file.represents_write(values, s.gprs, Rax, None, k, held.left.left.left, trivial),
+                    ⟨sys_args_kept(words_of(values, ids), s.gprs, k, held.left.left.right), refl⟩⟩, held.left.right⟩,
+                ⟨kept_trans(body_kept(saves), s0.gprs, s.gprs, write_gpr(Rax, k, s.gprs), held.right.left, kept_write(body_kept(saves), Rax, k, s.gprs, apart)),
+                 held.right.right⟩⟩);
+        let called = site.claims_resumes(stack.writes, linux, prog_len(second),
+            λ (r: Running<M, Io>) => ready(r.state.gprs, r.state.memory) ∧ world(r.io), goal,
+            λ s w here resident held => j(sym(held.right.left), λ x _ => site.linux_resumes(stack, Running(s, x), goal),
+                core(s, site.item_fetched(fits, s, resident, within.witness, second, 0, Syscall, within.proof, here), resident,
+                    trans(cong_fn<BitVec(64), BitVec(64)>(λ x => next_rip(x, 2), here), rip_compose(site.origin, prog_len(second), 2)),
+                    j(held.right.left, λ x _ => x.Answerable(), held.right.right), held.left)));
+        site.claims_after_moves(stack.writes, linux, 1, 0, prog_len(prog), prog_len(first), λ (s: MachineState<M>) => pre(s.gprs, s.memory),
+            λ (s: MachineState<M>) => middle(s.gprs, s.memory), world, goal, moved,
+            site.claims_after_moves(stack.writes, linux, 1, 0, prog_len(first), prog_len(second), λ (s: MachineState<M>) => middle(s.gprs, s.memory),
+                λ (s: MachineState<M>) => ready(s.gprs, s.memory), world, goal, numbered, called))
+    };
+    emits_now_exact<M>(saves, site, stack, spans, values, d, s0, prog, file, facts, before, after, Emitted(out, out_file, placement, names), 1,
+        ⟨Exists(3, refl), counted⟩)
+}
+
+// The kernel's step for either call.
+theorem sys_core<M>(saves: Nat, site: Site<M>, stack: Stack<M>(site.fetch, site.data), top: Nat, spans: Spans,
+    loan: Loan<M>(site.fetch, site.data, stack, top, spans), blocks: Blocks, lent: blocks.Lent(spans), ends: EmptyEnds<M>(stack.writes, spans),
+    values: Valuation(), d: Nat, s0: MachineState<M>, file: File, before, after: Now, clear: sys_clear(saves).IsTrue(), to: Nat):
+    (call: SysCall) → (s: MachineState<M>) → LinuxSyscallAt(site.linux(stack), s) → site.Resident(s.memory) → next_rip(s.rip, 2) = next_rip(site.origin, to) →
+        before.io.Answerable() → SysAt<M>(saves, site, stack, spans, values, d, s0, file, call, call.Lands(spans, blocks, values, before, after), before)(s) →
+        site.linux_resumes(stack, Running(s, before.io), NowPost<M>(saves, site, stack, spans, values, d, s0, to, sys_after(file, call.result()), after)) {
+    λ call => match call {
+        Read(fd, buf, len, result) => λ s fetched resident arrive answerable held => sys_read_resumes<M>(saves, site, stack, top, spans, loan, blocks, lent,
+            ends, values, d, s0, file, fd, buf, len, result, before, after, clear, to, s, fetched, resident, arrive, answerable, held),
+        Write(fd, buf, len, result) => λ s fetched resident arrive answerable held => sys_write_resumes<M>(saves, site, stack, spans, blocks, values, d, s0,
+            file, fd, buf, len, result, before, after, clear, to, s, fetched, resident, arrive, answerable, held),
+    }
+}
+
+// A system call's code meets its meaning.
+theorem sys_emits<M>(saves: Nat, site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data), top: Nat, spans: Spans,
+    loan: Loan<M>(site.fetch, site.data, stack, top, spans), blocks: Blocks, lent: blocks.Lent(spans), ends: EmptyEnds<M>(stack.writes, spans),
+    values: Valuation(), d: Nat, s0: MachineState<M>, prog: Prog, file: File, call: SysCall, placement: List<Place>, names: Nat, before, after: Now):
+    MayEmitNow<M>(saves, site, stack, spans, values, d, s0, prog, file, call.Lands(spans, blocks, values, before, after), before, after,
+        emit_sys(saves, prog, file, call, placement, names)) {
+    let facts = call.Lands(spans, blocks, values, before, after);
+    let entries = ArgumentMove::ports(file.call_moves(call.words()));
+    let registers = ArgumentMove::registers(file.call_moves(call.words()));
+    (match file.move_outputs(entries, registers) as λ o => MayKeep<M>(values, file, True, o) →
+        MayEmitNow<M>(saves, site, stack, spans, values, d, s0, prog, file, facts, before, after, match o {
+            None => None,
+            Some(moves) => match moves.file.outputs_check(word_ports(call.words()), sys_registers()) &&
+                (leaves_all(moves.code, body_kept(saves)) && sys_clear(saves)) {
+                False => None,
+                True => Some(Emitted(sys_prog(prog, moves.code, call), sys_after(moves.file.write(Rax, None), call.result()), placement, names)),
+            },
+        }) {
+        None => λ _ => trivial,
+        Some(moves) => λ keeps => {
+            let placed = moves.file.outputs_check(word_ports(call.words()), sys_registers());
+            let leaves = leaves_all(moves.code, body_kept(saves));
+            (match placed && (leaves && sys_clear(saves)) as λ v => (placed && (leaves && sys_clear(saves))) = v →
+                MayEmitNow<M>(saves, site, stack, spans, values, d, s0, prog, file, facts, before, after, match v {
+                    False => None,
+                    True => Some(Emitted(sys_prog(prog, moves.code, call), sys_after(moves.file.write(Rax, None), call.result()), placement, names)),
+                }) {
+                False => λ _ => trivial,
+                True => λ ok => {
+                    let parts = Bool::is_true_and(placed, leaves && sys_clear(saves), Bool::is_true_of_eq(ok));
+                    let rest = Bool::is_true_and(leaves, sys_clear(saves), parts.right);
+                    sys_emits_by<M>(saves, site, laid, stack, spans, values, d, s0, prog, file, call, facts, placement, names, before, after, moves, keeps,
+                        parts.left, rest.left, rest.right,
+                        sys_core<M>(saves, site, stack, top, spans, loan, blocks, lent, ends, values, d, s0, moves.file.write(Rax, None), before, after,
+                            rest.right, prog_len(sys_prog(prog, moves.code, call)), call))
+                },
+            })(refl)
+        },
+    })(move_outputs_keeps<M>(values, entries, file, registers))
 }
 
 // How a run stops short of done at a fuel (docs/language/ownership-design.md
@@ -1986,7 +2654,7 @@ fn Body::emit(self body: Body, saves, slots: Nat, short: List<Nat>, bound, spare
                 },
             },
         },
-        Sys(_) => None,
+        Sys(call) => emit_sys(saves, prog, file, call, placement, names),
         Exit(status) => emit_exit(prog, file, status, placement, names),
     }
 }
@@ -2155,7 +2823,7 @@ theorem plain_step<M>(saves: Nat, site: Site<M>, laid: site.program.laid_out().I
     let mem = now_in<M>(site.data, spans);
     let keep_mid = λ (x: M) => stack.TrailBy(spans, mem, w, s0.memory, mid, x);
     let passed_at = λ (t: MachineState<M>) => stack.LoopPassed(saves, keep_mid, s0, pass.file, v)(t.gprs, t.memory);
-    let at_mid = λ (w2: Io) => w2 = mid.io;
+    let at_mid = λ (w2: Io) => NowWorld()(mid, w2);
     let ran = loop_body_runs_claim<M, Now, Io>(saves, site, stack, spans, mem, NowWorld(), kernel, calls_between(now, mid), 0, Pass, w, s0,
         plain_head(prog, code, names), head, registers, typed_ids(parameters), head_ok, v, now, mid, pass, pass_emits(v, now, mid), pass_in, passed);
     let start = j(eq, λ x _ => site.Claims(stack.writes, kernel, calls_between(now, mid), 0, h_at, PlainAtNow<M>(saves, site, stack, spans, w, s0, registers,
@@ -2277,16 +2945,16 @@ theorem plain_loop_emits<M>(saves: Nat, site: Site<M>, laid: site.program.laid_o
             held.left.left.right.witness, words_of(values, typed_ids(inputs)), before, held.left.left.right.proof);
         let whole = site.claims_after_moves(stack.writes, kernel, passes.witness, 0, prog_len(prog), prog_len(At(prog, 0, Block(code))),
             λ (x: MachineState<M>) => pre(x.gprs, x.memory), PlainAt<M>(saves, site, stack, spans, w, s0, registers, words_of(values, typed_ids(inputs)), before),
-            λ (w2: Io) => w2 = before.io,
+            λ (w2: Io) => NowWorld()(before, w2),
             site.Arrived(prog_len(plain_again(pass.prog, test, moves, names, short)),
                 PlainAtNow<M>(saves, site, stack, spans, w, s0, registers, words_of(values, typed_ids(outputs)), after)), entry_run, passes.proof);
         let ended = site.claims_weaken(stack.writes, kernel, passes.witness, 0, prog_len(prog),
-            λ (x: Running<M, Io>) => pre(x.state.gprs, x.state.memory) ∧ (x.io = before.io),
+            λ (x: Running<M, Io>) => pre(x.state.gprs, x.state.memory) ∧ NowWorld()(before, x.io),
             site.Arrived(prog_len(plain_again(pass.prog, test, moves, names, short)),
                 PlainAtNow<M>(saves, site, stack, spans, w, s0, registers, words_of(values, typed_ids(outputs)), after)),
             start_pre, goal, whole, λ x h => ⟨⟨h.left.left, h.left.right⟩, h.right⟩,
             λ t at => ⟨at.left, ⟨⟨out_ok(t.state.gprs, at.right.left.left), at.right.left.right⟩, at.right.right⟩⟩);
-        site.claims_exact(stack, passes.witness, 0, prog_len(prog), start_pre, goal, before, after, λ x h => h.right, λ t at => at.right.right, ended)(r, here,
+        site.claims_exact(stack, passes.witness, 0, prog_len(prog), start_pre, goal, before, after, λ x h => h.right.left, λ t at => at.right.right.left, ended)(r, here,
             resident, held)
      }⟩
 }
@@ -2526,7 +3194,7 @@ theorem may_emit_now_seq<M>(saves: Nat, site: Site<M>, stack: Stack<M>(site.fetc
 // body's own offset `w`.
 theorem Body::emit_emits<M>(self body: Body, saves, slots: Nat, site: Site<M>, laid: site.program.laid_out().IsTrue(),
     stack: Stack<M>(site.fetch, site.data), top: Nat, spans: Spans, loan: Loan<M>(site.fetch, site.data, stack, top, spans), blocks: Blocks,
-    lent: blocks.Lent(spans), rooms: Nat → Nat, bound, avail: Nat, answers: RoutineAnswers(),
+    lent: blocks.Lent(spans), ends: EmptyEnds<M>(stack.writes, spans), rooms: Nat → Nat, bound, avail: Nat, answers: RoutineAnswers(),
     callees: CalleesReturn<M>(site, stack, spans, rooms, top, bound, answers), values: Valuation(), spare: Nat, d, w: Nat, s0: MachineState<M>,
     framing: body.calls().IsTrue() → stack.CallFrame(top, avail, d, slots, w, s0), short: List<Nat>):
     body.Fits(rooms, bound, avail) → (prog: Prog) → (file: File) → (placement: List<Place>) → (names: Nat) → (before, after: Now) →
@@ -2550,10 +3218,10 @@ theorem Body::emit_emits<M>(self body: Body, saves, slots: Nat, site: Site<M>, l
                     λ (mid: Now) => first.Holds(spans, blocks, values, answers, spare, before, mid),
                     λ (mid: Now) => rest.Holds(spans, blocks, values, answers, spare, mid, after),
                     before, after, done, first_emits, rest.emit(saves, slots, short, bound, spare, done.prog, done.file, done.placement, done.names),
-                    λ mid => Body::emit_emits<M>(rest, saves, slots, site, laid, stack, top, spans, loan, blocks, lent, rooms, bound, avail, answers, callees,
+                    λ mid => Body::emit_emits<M>(rest, saves, slots, site, laid, stack, top, spans, loan, blocks, lent, ends, rooms, bound, avail, answers, callees,
                         values, spare, d, w, s0, λ c => framing(Bool::is_true_or_r(first.calls(), rest.calls(), c)), short, shallow.right, done.prog,
                         done.file, done.placement, done.names, mid, after)),
-            })(λ mid => Body::emit_emits<M>(first, saves, slots, site, laid, stack, top, spans, loan, blocks, lent, rooms, bound, avail, answers, callees,
+            })(λ mid => Body::emit_emits<M>(first, saves, slots, site, laid, stack, top, spans, loan, blocks, lent, ends, rooms, bound, avail, answers, callees,
                 values, spare, d, w, s0, λ c => framing(Bool::is_true_or_l(first.calls(), rest.calls(), c)), short, shallow.left, prog, file, placement,
                 names, before, mid)),
         Branch(condition, yes, no) => λ shallow prog file placement names before after =>
@@ -2604,11 +3272,11 @@ theorem Body::emit_emits<M>(self body: Body, saves, slots: Nat, site: Site<M>, l
                                 None => λ _ => trivial,
                                 Some(right) => λ no_emits => branch_heap_emits<M>(saves, site, laid, stack, spans, blocks, values, answers, spare, w, s0, prog,
                                     file, condition, yes, no, before, after, tested, names, short, left, right, yes_emits, no_emits),
-                            })(Body::emit_emits<M>(no, saves, slots, site, laid, stack, top, spans, loan, blocks, lent, rooms, bound, avail, answers, callees,
+                            })(Body::emit_emits<M>(no, saves, slots, site, laid, stack, top, spans, loan, blocks, lent, ends, rooms, bound, avail, answers, callees,
                                 values, spare, d, w, s0, λ c => framing(Bool::is_true_or_r(yes.calls(), no.calls(), c)), short, shallow.right, no_prog,
                                 file.know(Falsity(condition)), left.placement, left.names, before, after))
                         },
-                    })(Body::emit_emits<M>(yes, saves, slots, site, laid, stack, top, spans, loan, blocks, lent, rooms, bound, avail, answers, callees,
+                    })(Body::emit_emits<M>(yes, saves, slots, site, laid, stack, top, spans, loan, blocks, lent, ends, rooms, bound, avail, answers, callees,
                         values, spare, d, w, s0, λ c => framing(Bool::is_true_or_l(yes.calls(), no.calls(), c)), short, shallow.left, yes_prog,
                         file.know(Truth(condition)), placement, names + 2, before, after))
                 },
@@ -2625,9 +3293,10 @@ theorem Body::emit_emits<M>(self body: Body, saves, slots: Nat, site: Site<M>, l
         Loop(inputs, parameters, inner, exit, next, outputs) => λ shallow prog file placement names before after =>
             loop_heap_emits<M>(saves, slots, site, laid, stack, spans, blocks, answers, values, spare, w, s0, short, bound, inputs, parameters, inner, exit,
                 next, outputs, prog, file, placement, names, before, after,
-                λ start head rest v from to => Body::emit_emits<M>(inner, saves, slots, site, laid, stack, top, spans, loan, blocks, lent, rooms, bound, avail,
+                λ start head rest v from to => Body::emit_emits<M>(inner, saves, slots, site, laid, stack, top, spans, loan, blocks, lent, ends, rooms, bound, avail,
                     answers, callees, v, spare, d, w, s0, framing, short, shallow, start, head, rest, names + 4, from, to)),
-        Sys(_) => λ shallow prog file placement names before after => trivial,
+        Sys(call) => λ shallow prog file placement names before after =>
+            sys_emits<M>(saves, site, laid, stack, top, spans, loan, blocks, lent, ends, values, w, s0, prog, file, call, placement, names, before, after),
         Exit(status) => λ shallow prog file placement names before after =>
             emit_exit_emits<M>(saves, site, stack, spans, values, w, s0, prog, file, status, placement, names, before, after),
     }
@@ -2715,7 +3384,7 @@ theorem call_heap_stops<M>(x: Stop, saves, slots: Nat, site: Site<M>, laid: site
     let Facts: Type = Exists<List<Value>>(λ (args: List<Value>) => (lower_values(spans, args) = words_of(values, typed_ids(arguments))) ∧
         goes(callee, args, before.heap, before.io));
     let mem = now_left<M>(site.data, spans);
-    let World = λ (o: Option<Now>) (w: Io) => (o = Some(before)) ∧ (w = before.io);
+    let World = λ (o: Option<Now>) (w: Io) => (o = Some(before)) ∧ NowWorld()(before, w);
     let count = x.calls_from(before);
     let kernel = into_callee<M>(x, site, stack, count, 1 + least);
     let linux = site.linux_kernel(stack);
@@ -2790,7 +3459,7 @@ theorem branch_heap_stops<M>(x: Stop, saves: Nat, site: Site<M>, laid: site.prog
         prog.within_step(left.prog, 0, jmp_item(short_jmp, join_name), Prog::within_trans(to_branch, left_within)));
     let picked = λ (b: Bool) => match b { True => Yes, False => No };
     let pre = λ (g: Gprs) (m: M) (w: Io) => ((file.Represents(values, g) ∧ picked(values(1, condition).head_bit())) ∧
-        (Kept(body_kept(saves), s0.gprs, g) ∧ stack.TrailBy(spans, now_in<M>(site.data, spans), d, s0.memory, before, m))) ∧ (w = before.io);
+        (Kept(body_kept(saves), s0.gprs, g) ∧ stack.TrailBy(spans, now_in<M>(site.data, spans), d, s0.memory, before, m))) ∧ NowWorld()(before, w);
     ⟨prog.within_step(right.prog, join_name, Block([]), Prog::within_trans(to_second, right_within)),
      λ within => {
         let program = site.program;
@@ -2812,7 +3481,7 @@ theorem branch_heap_stops<M>(x: Stop, saves: Nat, site: Site<M>, laid: site.prog
             pre, x.Reached(site, stack),
             site.claims_weaken(stack.writes, site.linux_kernel(stack), x.calls_from(before), least, prog_len(branched),
                 λ (r: Running<M, Io>) => ((file.know(Truth(condition)).Represents(values, r.state.gprs) ∧ Yes) ∧
-                    stack.TrailedBy(saves, spans, now_in<M>(site.data, spans), d, s0, before, r.state)) ∧ (r.io = before.io),
+                    stack.TrailedBy(saves, spans, now_in<M>(site.data, spans), d, s0, before, r.state)) ∧ NowWorld()(before, r.io),
                 x.Reached(site, stack),
                 λ (r: Running<M, Io>) => pre(r.state.gprs, r.state.memory, r.io) ∧ test.taken(r.state.gprs) = False,
                 x.Reached(site, stack),
@@ -2826,7 +3495,7 @@ theorem branch_heap_stops<M>(x: Stop, saves: Nat, site: Site<M>, laid: site.prog
                 λ t done => done),
             site.claims_weaken(stack.writes, site.linux_kernel(stack), x.calls_from(before), least, prog_len(second),
                 λ (r: Running<M, Io>) => ((file.know(Falsity(condition)).Represents(values, r.state.gprs) ∧ No) ∧
-                    stack.TrailedBy(saves, spans, now_in<M>(site.data, spans), d, s0, before, r.state)) ∧ (r.io = before.io),
+                    stack.TrailedBy(saves, spans, now_in<M>(site.data, spans), d, s0, before, r.state)) ∧ NowWorld()(before, r.io),
                 x.Reached(site, stack),
                 λ (r: Running<M, Io>) => pre(r.state.gprs, r.state.memory, r.io) ∧ test.taken(r.state.gprs) = True,
                 x.Reached(site, stack),
@@ -2910,13 +3579,13 @@ theorem plain_pass_stops<M>(x: Stop, saves: Nat, site: Site<M>, laid: site.progr
             let mid = done.witness;
             let mem = now_in<M>(site.data, spans);
             let keep_mid = λ (m: M) => stack.TrailBy(spans, mem, w, s0.memory, mid, m);
-            let passed_at = λ (t: Running<M, Io>) => stack.LoopPassed(saves, keep_mid, s0, pass.file, v)(t.state.gprs, t.state.memory) ∧ (t.io = mid.io);
+            let passed_at = λ (t: Running<M, Io>) => stack.LoopPassed(saves, keep_mid, s0, pass.file, v)(t.state.gprs, t.state.memory) ∧ NowWorld()(mid, t.io);
             let ran_body = loop_body_runs_claim<M, Now, Io>(saves, site, stack, spans, mem, NowWorld(), linux, calls_between(now, mid), 0, Pass, w, s0,
                 plain_head(prog, code, names), head, registers, typed_ids(parameters), head_ok, v, now, mid, pass, pass_emits(v, now, mid), pass_in,
                 done.proof.left);
             let start = j(eq, λ ws _ => site.Claims(stack.writes, linux, calls_between(now, mid), 0, h_at,
                 PlainAtNow<M>(saves, site, stack, spans, w, s0, registers, ws, now), site.Arrived(prog_len(pass.prog), passed_at)), ran_body);
-            let turn = plain_turns_claim<M, Io>(saves, site, laid, stack, linux, λ (io: Io) => io = mid.io, keep_mid, s0, pass.prog, pass.file, test, exit,
+            let turn = plain_turns_claim<M, Io>(saves, site, laid, stack, linux, λ (io: Io) => NowWorld()(mid, io), keep_mid, s0, pass.prog, pass.file, test, exit,
                 moves, typed_ids(next), registers, names, short, labels.again_in, labels.c_lands, h_at, labels.h_lands, v, selects(v), into(v),
                 done.proof.right.left);
             let onward = site.claims_trans(stack.writes, linux, 0, 1, x.calls_from(mid), least, prog_len(pass.prog), h_at, passed_at,
@@ -2925,7 +3594,7 @@ theorem plain_pass_stops<M>(x: Stop, saves: Nat, site: Site<M>, laid: site.progr
             let whole = site.claims_trans(stack.writes, linux, calls_between(now, mid), 0, x.calls_from(mid) + 0, 1 + least, h_at, prog_len(pass.prog),
                 PlainAtNow<M>(saves, site, stack, spans, w, s0, registers, state, now), passed_at, x.Reached(site, stack), start, onward);
             site.claims_stop_exact(stack, x, (x.calls_from(mid) + 0) + calls_between(now, mid), x.least(fuel), h_at,
-                PlainAtNow<M>(saves, site, stack, spans, w, s0, registers, state, now), now, λ r held => held.right,
+                PlainAtNow<M>(saves, site, stack, spans, w, s0, registers, state, now), now, λ r held => held.right.left,
                 site.claims_loosen(stack.writes, linux, (x.calls_from(mid) + 0) + calls_between(now, mid), 0 + (1 + least), 0, x.least(fuel), h_at,
                     PlainAtNow<M>(saves, site, stack, spans, w, s0, registers, state, now), x.Reached(site, stack), { let e = enough; omega }, whole))
         },
@@ -2953,9 +3622,9 @@ theorem plain_passes_stops<M>(x: Stop, saves: Nat, site: Site<M>, laid: site.pro
             next, names, short, pass, test, moves, labels, head_ok, pass_emits, cap, pass_stops, pass_in, selects, into, 0,
             LaterStop(Pass, PassStops, parameters, exit, next, x.ZeroAt(), 0), 0,
             λ st at zero => site.claims_stop_exact(stack, x, 0, 0, prog_len(At(prog, 0, Block(code))),
-                PlainAtNow<M>(saves, site, stack, spans, w, s0, registers, st, at), at, λ r held => held.right,
+                PlainAtNow<M>(saves, site, stack, spans, w, s0, registers, st, at), at, λ r held => held.right.left,
                 λ r here resident held => Exists(r.state, Exists(0, ⟨refl, ⟨trivial,
-                    x.reached_zero(site, stack, Running<M, Io>(r.state, r.io), j(sym(held.right), λ io _ => x.Zero(io), zero))⟩⟩))),
+                    x.reached_zero(site, stack, Running<M, Io>(r.state, r.io), j(sym(held.right.left), λ io _ => x.Zero(io), zero))⟩⟩))),
             { let low = x.least_le(0); omega }, capped, state, now, ran),
         Succ(rest) => λ capped state now ran => plain_pass_stops<M>(x, saves, site, laid, stack, spans, Pass, PassStops, w, s0, prog, code, head, registers, parameters,
             exit, next, names, short, pass, test, moves, labels, head_ok, pass_emits, cap, pass_stops, pass_in, selects, into, Succ(rest),
@@ -3010,7 +3679,7 @@ theorem plain_loop_stops<M>(x: Stop, saves: Nat, site: Site<M>, laid: site.progr
             words_of(values, typed_ids(inputs)), before, held.left.left.right);
         site.claims_after_moves(stack.writes, site.linux_kernel(stack), x.calls_from(before), x.least(fuel), prog_len(prog),
             prog_len(At(prog, 0, Block(code))), λ (u: MachineState<M>) => pre(u.gprs, u.memory),
-            PlainAt<M>(saves, site, stack, spans, w, s0, registers, words_of(values, typed_ids(inputs)), before), λ (io: Io) => io = before.io,
+            PlainAt<M>(saves, site, stack, spans, w, s0, registers, words_of(values, typed_ids(inputs)), before), λ (io: Io) => NowWorld()(before, io),
             x.Reached(site, stack), entry_run, passes)(r, here, resident, ⟨held.left, held.right⟩)
      }⟩
 }
@@ -3191,7 +3860,7 @@ theorem may_stop_seq<M>(x: Stop, saves: Nat, site: Site<M>, stack: Stack<M>(site
                                 λ t arrived => ⟨arrived.left, ⟨⟨⟨arrived.right.left.left, ex.proof.right⟩, arrived.right.left.right⟩, arrived.right.right⟩⟩),
                             rest(mid).right(within));
                         site.claims_stop_exact(stack, x, (x.calls_from(mid) + calls_between(before, mid)) + 0, least, prog_len(prog), pre, before,
-                            λ u h => h.right, site.claims_loosen(stack.writes, linux, x.calls_from(mid) + calls_between(before, mid), 0 + least, 0, least,
+                            λ u h => h.right.left, site.claims_loosen(stack.writes, linux, x.calls_from(mid) + calls_between(before, mid), 0 + least, 0, least,
                                 prog_len(prog), pre, x.Reached(site, stack), { omega }, both))(r, here, resident,
                             ⟨⟨⟨held.left.left.left, ex.proof.left⟩, held.left.right⟩, held.right⟩)
                     },
@@ -3233,7 +3902,7 @@ theorem exit_stops<M>(x: Stop, saves: Nat, site: Site<M>, laid: site.program.lai
             let fits = site.program.laid_out_fits(laid);
             let linux = site.linux_kernel(stack);
             ⟨Exists(2, refl), λ within => site.claims_stop_exact(stack, x, 0, x.least(fuel), prog_len(prog),
-                NowPre<M>(saves, site, stack, spans, values, d, s0, file, x.Exits(values(64, status), before.io), before), before, λ r held => held.right,
+                NowPre<M>(saves, site, stack, spans, values, d, s0, file, x.Exits(values(64, status), before.io), before), before, λ r held => held.right.left,
                 (match x as λ y => site.Claims(stack.writes, linux, 0, y.least(fuel), prog_len(prog),
                         NowPre<M>(saves, site, stack, spans, values, d, s0, file, y.Exits(values(64, status), before.io), before), y.Reached(site, stack)) {
                     StopGoing(_) => λ r here resident held => false_elim(held.left.left.right),
@@ -3248,9 +3917,35 @@ theorem exit_stops<M>(x: Stop, saves: Nat, site: Site<M>, laid: site.program.lai
                         let t = got.witness;
                         site.performs_steps(stack.writes, linux, StopExited(st, o).Reached(site, stack), r, t, got.proof.left,
                             ⟨⟨site.item_fetched(fits, t, got.proof.right.right.left, within.witness, block, 0, Syscall, within.proof, got.proof.right.left),
-                             got.proof.right.right.right⟩, trans(held.right, held.left.left.right.right)⟩)
+                             got.proof.right.right.right⟩, trans(held.right.left, held.left.left.right.right)⟩)
                     },
                 }))⟩
+        },
+    }
+}
+
+// A system call never stops a run short: there are no facts to claim from.
+theorem sys_stops<M>(x: Stop, saves: Nat, site: Site<M>, stack: Stack<M>(site.fetch, site.data), spans: Spans, values: Valuation(), d: Nat,
+    s0: MachineState<M>, prog: Prog, file: File, call: SysCall, placement: List<Place>, names: Nat, before: Now, least: Nat):
+    MayStopHeap<M>(x, saves, site, stack, spans, values, d, s0, prog, file, False, before, least, emit_sys(saves, prog, file, call, placement, names)) {
+    match file.move_outputs(ArgumentMove::ports(file.call_moves(call.words())), ArgumentMove::registers(file.call_moves(call.words()))) as λ o =>
+        MayStopHeap<M>(x, saves, site, stack, spans, values, d, s0, prog, file, False, before, least, match o {
+            None => None,
+            Some(moves) => match moves.file.outputs_check(word_ports(call.words()), sys_registers()) &&
+                (leaves_all(moves.code, body_kept(saves)) && sys_clear(saves)) {
+                False => None,
+                True => Some(Emitted(sys_prog(prog, moves.code, call), sys_after(moves.file.write(Rax, None), call.result()), placement, names)),
+            },
+        }) {
+        None => trivial,
+        Some(moves) => match moves.file.outputs_check(word_ports(call.words()), sys_registers()) &&
+            (leaves_all(moves.code, body_kept(saves)) && sys_clear(saves)) as λ v =>
+            MayStopHeap<M>(x, saves, site, stack, spans, values, d, s0, prog, file, False, before, least, match v {
+                False => None,
+                True => Some(Emitted(sys_prog(prog, moves.code, call), sys_after(moves.file.write(Rax, None), call.result()), placement, names)),
+            }) {
+            False => trivial,
+            True => ⟨Exists(3, refl), λ within r here resident held => false_elim(held.left.left.right)⟩,
         },
     }
 }
@@ -3261,7 +3956,7 @@ theorem exit_stops<M>(x: Stop, saves: Nat, site: Site<M>, laid: site.program.lai
 // entries, a CALL being one step more; an exit by `exit_stops`.
 theorem Body::emit_stops<M>(self body: Body, x: Stop, saves, slots: Nat, site: Site<M>, laid: site.program.laid_out().IsTrue(),
     stack: Stack<M>(site.fetch, site.data), top: Nat, spans: Spans, loan: Loan<M>(site.fetch, site.data, stack, top, spans), blocks: Blocks,
-    lent: blocks.Lent(spans), rooms: Nat → Nat, bound, avail: Nat, answers: RoutineAnswers(),
+    lent: blocks.Lent(spans), ends: EmptyEnds<M>(stack.writes, spans), rooms: Nat → Nat, bound, avail: Nat, answers: RoutineAnswers(),
     callees: CalleesReturn<M>(site, stack, spans, rooms, top, bound, answers), goes: RoutineStops(), callee_least: Nat,
     callees_stop: CalleesStop<M>(x, site, stack, spans, rooms, top, bound, goes, callee_least), cap: Nat, covered: x.least(cap) <= 1 + callee_least,
     values: Valuation(), spare: Nat, d, w: Nat, s0: MachineState<M>, framing: body.calls().IsTrue() → stack.CallFrame(top, avail, d, slots, w, s0),
@@ -3295,13 +3990,13 @@ theorem Body::emit_stops<M>(self body: Body, x: Stop, saves, slots: Nat, site: S
                     λ (mid: Now) => first.Holds(spans, blocks, values, answers, spare, before, mid),
                     λ (mid: Now) => rest.Stops(spans, blocks, values, answers, goes, x, spare, fuel, mid), before, x.least(fuel), done, first_emits, first_goes,
                     rest.emit(saves, slots, short, bound, spare, done.prog, done.file, done.placement, done.names),
-                    λ mid => Body::emit_stops<M>(rest, x, saves, slots, site, laid, stack, top, spans, loan, blocks, lent, rooms, bound, avail, answers, callees,
+                    λ mid => Body::emit_stops<M>(rest, x, saves, slots, site, laid, stack, top, spans, loan, blocks, lent, ends, rooms, bound, avail, answers, callees,
                         goes, callee_least, callees_stop, cap, covered, values, spare, d, w, s0,
                         λ c => framing(Bool::is_true_or_r(first.calls(), rest.calls(), c)), short, shallow.right, done.prog, done.file, done.placement,
                         done.names, fuel, capped, mid)),
-            })(λ mid => Body::emit_emits<M>(first, saves, slots, site, laid, stack, top, spans, loan, blocks, lent, rooms, bound, avail, answers, callees,
+            })(λ mid => Body::emit_emits<M>(first, saves, slots, site, laid, stack, top, spans, loan, blocks, lent, ends, rooms, bound, avail, answers, callees,
                     values, spare, d, w, s0, first_framing, short, shallow.left, prog, file, placement, names, before, mid),
-                Body::emit_stops<M>(first, x, saves, slots, site, laid, stack, top, spans, loan, blocks, lent, rooms, bound, avail, answers, callees, goes,
+                Body::emit_stops<M>(first, x, saves, slots, site, laid, stack, top, spans, loan, blocks, lent, ends, rooms, bound, avail, answers, callees, goes,
                     callee_least, callees_stop, cap, covered, values, spare, d, w, s0, first_framing, short, shallow.left, prog, file, placement, names, fuel,
                     capped, before))
         },
@@ -3355,12 +4050,12 @@ theorem Body::emit_stops<M>(self body: Body, x: Stop, saves, slots: Nat, site: S
                                     yes.Stops(spans, blocks, values, answers, goes, x, spare, fuel, before),
                                     no.Stops(spans, blocks, values, answers, goes, x, spare, fuel, before), before, x.least(fuel), tested, names, short, left, right,
                                     yes_goes, no_goes, yes_goes.left, no_goes.left),
-                            })(Body::emit_stops<M>(no, x, saves, slots, site, laid, stack, top, spans, loan, blocks, lent, rooms, bound, avail, answers, callees,
+                            })(Body::emit_stops<M>(no, x, saves, slots, site, laid, stack, top, spans, loan, blocks, lent, ends, rooms, bound, avail, answers, callees,
                                 goes, callee_least, callees_stop, cap, covered, values, spare, d, w, s0,
                                 λ c => framing(Bool::is_true_or_r(yes.calls(), no.calls(), c)), short, shallow.right, no_prog, file.know(Falsity(condition)),
                                 left.placement, left.names, fuel, capped, before))
                         },
-                    })(Body::emit_stops<M>(yes, x, saves, slots, site, laid, stack, top, spans, loan, blocks, lent, rooms, bound, avail, answers, callees, goes,
+                    })(Body::emit_stops<M>(yes, x, saves, slots, site, laid, stack, top, spans, loan, blocks, lent, ends, rooms, bound, avail, answers, callees, goes,
                         callee_least, callees_stop, cap, covered, values, spare, d, w, s0, λ c => framing(Bool::is_true_or_l(yes.calls(), no.calls(), c)),
                         short, shallow.left, yes_prog, file.know(Truth(condition)), placement, names + 2, fuel, capped, before))
                 },
@@ -3380,12 +4075,13 @@ theorem Body::emit_stops<M>(self body: Body, x: Stop, saves, slots: Nat, site: S
         Loop(inputs, parameters, inner, exit, next, outputs) => λ shallow prog file placement names fuel capped before =>
             loop_heap_stops<M>(x, saves, slots, site, laid, stack, spans, blocks, answers, goes, values, spare, w, s0, short, bound, inputs, parameters, inner,
                 exit, next, outputs, prog, file, placement, names, before, cap, fuel, capped,
-                λ start head rest v from to => Body::emit_emits<M>(inner, saves, slots, site, laid, stack, top, spans, loan, blocks, lent, rooms, bound, avail,
+                λ start head rest v from to => Body::emit_emits<M>(inner, saves, slots, site, laid, stack, top, spans, loan, blocks, lent, ends, rooms, bound, avail,
                     answers, callees, v, spare, d, w, s0, framing, short, shallow, start, head, rest, names + 4, from, to),
-                λ start head rest v k le from => Body::emit_stops<M>(inner, x, saves, slots, site, laid, stack, top, spans, loan, blocks, lent, rooms, bound,
+                λ start head rest v k le from => Body::emit_stops<M>(inner, x, saves, slots, site, laid, stack, top, spans, loan, blocks, lent, ends, rooms, bound,
                     avail, answers, callees, goes, callee_least, callees_stop, cap, covered, v, spare, d, w, s0, framing, short, shallow, start, head, rest,
                     names + 4, k, le, from)),
-        Sys(_) => λ shallow prog file placement names fuel capped before => trivial,
+        Sys(call) => λ shallow prog file placement names fuel capped before =>
+            sys_stops<M>(x, saves, site, stack, spans, values, w, s0, prog, file, call, placement, names, before, x.least(fuel)),
         Exit(status) => λ shallow prog file placement names fuel capped before =>
             exit_stops<M>(x, saves, site, laid, stack, spans, values, w, s0, prog, file, status, placement, names, before, fuel),
     }

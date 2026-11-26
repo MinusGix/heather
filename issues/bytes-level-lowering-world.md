@@ -56,3 +56,32 @@ Item 7 of [[bytes-level-lowering]]: the world. The `Sys` node's step lemma for `
   - Deleted: `program_quiet`, `program_stop_quiet` and the quiet machinery. Nothing cites them; the inductions track the world in their facts.
   - Claim forms cited as stated: `EmitsClaim`, `MayEmitClaim`, `may_emit_claim_seq`, `branch_emits_claim`, `call_step_claim`, `emit_call_steps_claim`, `loop_iterates_claim`, `function_runs_claim`, `function_enters_claim`, `returns_by_claim`, `claims_trans`/`claims_weaken`/`claims_loosen`, `performs_weaken`. None needed more than its statement gives. The one addition is the counting lemma above, because the generic forms carry counts as given.
   - Verified (tree at the item 2 commit 44751d8): `scripts/linked --check` exit 0, every export unchanged; `HEATHER_PR_NATIVE=all scripts/test --pr`: `== suite: 4139 passed, 0 failed, 3 ignored ==`.
+- 2026-11-26: **Item 3 landed: `Sys`.**
+
+  - Emission (`emit_sys`):
+    - The three words go into RDI, RSI, RDX through `File::call_moves`, judged by `outputs_check` and `leaves_all`.
+    - Then `MOV RAX, <0 or 1>` and `SYSCALL`.
+    - The file after is `sys_after`: RAX holds the result; RCX and R11 are forgotten, as are any of the three that are not results. Probe `write_forgets`.
+    - The emission is refused unless RAX, RCX and R11 are none of the body's kept registers (`sys_clear`).
+    - `Body::fresh` binds the result word.
+  - Facts: `SysCall::Lands` (`ReadLands`, `WriteLands`) form `Body::Holds(Sys)`. `bytes_level_scope` reads them off the run with `SysRan`/`SysCall::ran`, `SysCall::checked`, `ran_binds`, `ran_io` and `lands_of`. `SysCall::stopped_none` says a `Sys` never stops a run short, and `sys_stops` covers the stop side.
+  - Step:
+    - `Site::claims_resumes` (`x86_64_stack_runs`, new and generic: one call, no step).
+    - `sys_write_resumes` and `sys_read_resumes`, which cover every answer and resumption through `write_answered`/`read_answered`.
+    - The registers after the call: `sys_answered_regs`, `sys_post`.
+    - The language's words agree with Linux's: `count_word_linux`, `errno_word_linux`.
+    - The bytes a write sends are `write_sends` (`Injected::reads`, `rip_word`).
+    - The region: `sys_emits_by`/`sys_emits`, with one call counted by `emits_now_exact`.
+  - The read's clause comes from the loan's window facts. Residency is `Spans::Window` and `Site::resumes_resident`. The bytes are `read_bytes_kept` (`Loan::store_injected`). The failed read is `read_failed_kept`, through `injected_undefining` and `Injected::undefined_change`. No law was added to `ClauseStable`.
+  - **The empty read at a block's end** (found here; the coordinator's ruling):
+    - The language allows a read of 0 bytes at offset = size, but every `Loan` law asks `k < size`, and `ByteWrites` is abstract.
+    - It is one named hypothesis, `EmptyEnds(stack.writes, spans)`: for every span b, `EmptyAt` at `spans.byte(b, spans.size(b))`, i.e. `writable(m, a, 0)` and `store(m, a, Nil) = m`. It is used only in `sys_read_resumes`' end case, where `injected_placed_nothing` keeps the clause.
+    - It is a premise of `Body::emit_emits`/`emit_stops`, the routine theorems, `program_tracks` and `lower_program_*`.
+    - The law that discharges it is filed as [[byte-writes-empty-range]], with the smallest program as its probe.
+  - **`Answerable` is carried by the world relation, not the facts.** `NowWorld(now, w)` is `w = now.io ∧ w.Answerable()`; `RoutinePreNow`/`RoutinePostNow` carry it too.
+    - Every region keeps the world's function, so each claim re-establishes it for free.
+    - `Tracks`' `io.Answerable()` is the entry's.
+    - This replaces the plan reported earlier (a fact of `Holds(Sys)` proved in `holds_of`, with `HistoryGrows` extended). That plan would have threaded a premise through every loop-pass lemma on both the done and the stop side. `HistoryGrows` is unchanged.
+  - Probes (`bytes_level_lower_tests`): `write_lowers`, `read_lowers`, `write_forgets`, `write_code`, `read_code` (the region theorem at each), and the control `unheld_sys_refused`.
+  - Claim forms cited as stated: `claims_after_moves`, `moves_block`, `item_fetched`, `emits_now_exact`, `Site::resumes_resident`, `Spans::Window`, `Loan::store_injected`/`writable`/`apart`, `Stack::wrote_in_store`/`wrote_in_trans`, `Injected::undefined_change`/`reads`, `moves_into`, `move_outputs_keeps`. None needed more than its statement gives, except the `k < size` of every loan law (above).
+  - Verified (tree at the item 3 commit): `scripts/linked --check` exit 0, every export unchanged; `HEATHER_PR_NATIVE=all scripts/test --pr`: `== suite: 4139 passed, 0 failed, 3 ignored ==`.

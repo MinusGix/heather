@@ -26,6 +26,7 @@ import x86_64_call_contract;
 import function_ir;
 import function_ir_eval;
 import linux_world;
+import linux_calls;
 import bitvec;
 import bool;
 import list;
@@ -109,8 +110,7 @@ fn fresh_instrs(instrs: List<Instr>, used: List<Nat>) → Option<List<Nat>> {
 // Both arms of a branch are checked from what was bound before it, and
 // what follows it from what either bound. A loop's pass is a scope of its
 // own, from its parameters; the ids it binds are counted bound in the scope
-// the loop is in too, so that no later id is one a pass bound. System calls
-// and exits are not lowered yet, and refused here.
+// the loop is in too, so that no later id is one a pass bound.
 fn Body::fresh(self body: Body, used: List<Nat>) → Option<List<Nat>> {
     match body {
         Leaf(instrs) => fresh_instrs(instrs, used),
@@ -124,7 +124,8 @@ fn Body::fresh(self body: Body, used: List<Nat>) → Option<List<Nat>> {
             None => None,
             Some(start) => match inner.fresh(start) { None => None, Some(inside) => fresh_ids(used ++ inside, typed_ids(outputs)) },
         },
-        Sys(_) => None,
+        // A system call binds its result word.
+        Sys(call) => fresh_id(used, call.result()),
         // An exit binds nothing.
         Exit(_) => Some(used),
     }
@@ -977,6 +978,287 @@ theorem spare_zero(start, end: Locals, spans: Spans, u0, used: List<Nat>, spare:
     j(same.right, λ o _ => (match o { Some(loc) => word_value(loc.address(spans), 64), None => end.words(64, spare) }) = BitVec::zero(), sym(same.left(64)))
 }
 
+// ---------------------------------------------------------------------------
+// System calls: what a run done through one says (§17.7)
+
+// A system call done: the reference's location, the window open or the
+// bytes read, the result word bound, the answer landed and the exchange
+// recorded, at the locals' words.
+fn SysRan(call: SysCall, blocks: Blocks, c, after: Config) → Type {
+    match call {
+        Read(fd, buf, len, result) => Exists<Loc>(λ loc => (c.locals.refs(buf) = Some(loc)) ∧
+            ((c.memory.open(blocks, loc, c.locals.word(len).toNat()) = True) ∧ Exists<BitVec(64)>(λ w =>
+                (after.locals = c.locals.set_word(result, word_value(w))) ∧
+                (ReadLands(blocks, c.memory, after.memory, loc, c.locals.word(len).toNat(), w,
+                    c.io.answer(ReadCmd(c.locals.word(fd), c.locals.word(len).toNat()))) ∧
+                 (after.io = c.io.exchanged(ReadCmd(c.locals.word(fd), c.locals.word(len).toNat()),
+                    c.io.answer(ReadCmd(c.locals.word(fd), c.locals.word(len).toNat())))))))),
+        Write(fd, buf, len, result) => Exists<Loc>(λ loc => (c.locals.refs(buf) = Some(loc)) ∧ Exists<List<BitVec(8)>>(λ bytes =>
+            (c.memory.read_bytes(loc, c.locals.word(len).toNat()) = Some(bytes)) ∧ Exists<BitVec(64)>(λ w =>
+                (after.locals = c.locals.set_word(result, word_value(w))) ∧
+                ((WriteLands(w, c.io.answer(WriteCmd(c.locals.word(fd), bytes))) ∧ (after.memory = c.memory)) ∧
+                 (after.io = c.io.exchanged(WriteCmd(c.locals.word(fd), bytes), c.io.answer(WriteCmd(c.locals.word(fd), bytes)))))))),
+    }
+}
+
+theorem read_landed_done(blocks: Blocks, c: Config, fd: BitVec(64), loc: Loc, n, result: Nat, after: Config): (a: ReadResult) →
+    read_landed(blocks, c, fd, loc, n, result, a) = Done(after) →
+    Exists<BitVec(64)>(λ w => (after.locals = c.locals.set_word(result, word_value(w))) ∧
+        (ReadLands(blocks, c.memory, after.memory, loc, n, w, a) ∧ (after.io = c.io.exchanged(ReadCmd(fd, n), a)))) {
+    λ a => match a {
+        ReadBytes(bytes) => λ e => {
+            let w = count_word(bytes.take(n).len());
+            let io = c.io.exchanged(ReadCmd(fd, n), ReadBytes(bytes));
+            let s = Ran::then_done<Heap, Config>(Ran::of(c.memory.put(blocks.written, loc, Piece::plain(bytes.take(n))), c.io), λ (m: Heap) =>
+                Done(Config(c.locals.set_word(result, word_value(w)), m, io)), after, e);
+            let put = Ran::of_done<Heap>(c.memory.put(blocks.written, loc, Piece::plain(bytes.take(n))), c.io, s.witness, s.proof.left);
+            let fin = Ran::done_inj<Config>(Config(c.locals.set_word(result, word_value(w)), s.witness, io), after, s.proof.right);
+            Exists(w, ⟨sym(cong_fn<Config, Locals>(λ y => y.locals, fin)),
+                ⟨⟨trans(put, cong_fn<Config, Option<Heap>>(λ y => Some(y.memory), fin)), refl⟩, sym(cong_fn<Config, Io>(λ y => y.io, fin))⟩⟩)
+        },
+        ReadFailed(errno) => λ e => {
+            let w = bytes_level::errno_word(errno);
+            let io = c.io.exchanged(ReadCmd(fd, n), ReadFailed(errno));
+            let s = Ran::then_done<Heap, Config>(Ran::of(c.memory.put(blocks.written, loc, Piece::undefined(n)), c.io), λ (m: Heap) =>
+                Done(Config(c.locals.set_word(result, word_value(w)), m, io)), after, e);
+            let put = Ran::of_done<Heap>(c.memory.put(blocks.written, loc, Piece::undefined(n)), c.io, s.witness, s.proof.left);
+            let fin = Ran::done_inj<Config>(Config(c.locals.set_word(result, word_value(w)), s.witness, io), after, s.proof.right);
+            Exists(w, ⟨sym(cong_fn<Config, Locals>(λ y => y.locals, fin)),
+                ⟨⟨trans(put, cong_fn<Config, Option<Heap>>(λ y => Some(y.memory), fin)), refl⟩, sym(cong_fn<Config, Io>(λ y => y.io, fin))⟩⟩)
+        },
+    }
+}
+
+theorem write_landed_done(c: Config, fd: BitVec(64), bytes: List<BitVec(8)>, result: Nat, after: Config): (a: WriteResult) →
+    write_landed(c, fd, bytes, result, a) = Done(after) →
+    Exists<BitVec(64)>(λ w => (after.locals = c.locals.set_word(result, word_value(w))) ∧
+        ((WriteLands(w, a) ∧ (after.memory = c.memory)) ∧ (after.io = c.io.exchanged(WriteCmd(fd, bytes), a)))) {
+    λ a => match a {
+        Wrote(count) => λ e => {
+            let fin = Ran::done_inj<Config>(Config(c.locals.set_word(result, word_value(count_word(count))), c.memory,
+                c.io.exchanged(WriteCmd(fd, bytes), Wrote(count))), after, e);
+            Exists(count_word(count), ⟨sym(cong_fn<Config, Locals>(λ y => y.locals, fin)),
+                ⟨⟨refl, sym(cong_fn<Config, Heap>(λ y => y.memory, fin))⟩, sym(cong_fn<Config, Io>(λ y => y.io, fin))⟩⟩)
+        },
+        WriteFailed(errno) => λ e => {
+            let fin = Ran::done_inj<Config>(Config(c.locals.set_word(result, word_value(bytes_level::errno_word(errno))), c.memory,
+                c.io.exchanged(WriteCmd(fd, bytes), WriteFailed(errno))), after, e);
+            Exists(bytes_level::errno_word(errno), ⟨sym(cong_fn<Config, Locals>(λ y => y.locals, fin)),
+                ⟨⟨refl, sym(cong_fn<Config, Heap>(λ y => y.memory, fin))⟩, sym(cong_fn<Config, Io>(λ y => y.io, fin))⟩⟩)
+        },
+    }
+}
+
+theorem SysCall::ran(self call: SysCall, blocks: Blocks, c, after: Config): call.run(blocks, c) = Done(after) → SysRan(call, blocks, c, after) {
+    match call {
+        Read(fd, buf, len, result) => λ ran => {
+            let n = c.locals.word(len).toNat();
+            let fdw = c.locals.word(fd);
+            let one = Ran::then_done<Loc, Config>(Ran::of(c.locals.refs(buf), c.io), λ (loc: Loc) => read_into(blocks, c, fdw, loc, n, result), after, ran);
+            let loc = one.witness;
+            let refs = Ran::of_done<Loc>(c.locals.refs(buf), c.io, loc, one.proof.left);
+            (match c.memory.open(blocks, loc, n) as λ v => c.memory.open(blocks, loc, n) = v →
+                (match v { False => Stuck(c.io), True => read_landed(blocks, c, fdw, loc, n, result, c.io.world(c.io.past, ReadCmd(fdw, n))) }) = Done(after) →
+                SysRan(Read(fd, buf, len, result), blocks, c, after) {
+                False => λ _ never => absurd(never),
+                True => λ opened landed => Exists(loc, ⟨refs, ⟨opened,
+                    read_landed_done(blocks, c, fdw, loc, n, result, after, c.io.world(c.io.past, ReadCmd(fdw, n)), landed)⟩⟩),
+            })(refl, one.proof.right)
+        },
+        Write(fd, buf, len, result) => λ ran => {
+            let n = c.locals.word(len).toNat();
+            let fdw = c.locals.word(fd);
+            let one = Ran::then_done<Loc, Config>(Ran::of(c.locals.refs(buf), c.io), λ (loc: Loc) =>
+                Ran::of(c.memory.read_bytes(loc, n), c.io).then(λ (bytes: List<BitVec(8)>) =>
+                    write_landed(c, fdw, bytes, result, c.io.world(c.io.past, WriteCmd(fdw, bytes)))), after, ran);
+            let loc = one.witness;
+            let refs = Ran::of_done<Loc>(c.locals.refs(buf), c.io, loc, one.proof.left);
+            let two = Ran::then_done<List<BitVec(8)>, Config>(Ran::of(c.memory.read_bytes(loc, n), c.io), λ (bytes: List<BitVec(8)>) =>
+                write_landed(c, fdw, bytes, result, c.io.world(c.io.past, WriteCmd(fdw, bytes))), after, one.proof.right);
+            let bytes = two.witness;
+            Exists(loc, ⟨refs, Exists(bytes, ⟨Ran::of_done<List<BitVec(8)>>(c.memory.read_bytes(loc, n), c.io, bytes, two.proof.left),
+                write_landed_done(c, fdw, bytes, result, after, c.io.world(c.io.past, WriteCmd(fdw, bytes)), two.proof.right)⟩)⟩)
+        },
+    }
+}
+
+// What a system call checks: its words and reference are bound at their
+// kinds, and it binds its result word.
+fn SysChecked(call: SysCall, kinds, bound: List<Typed>) → Type {
+    match call {
+        Read(fd, buf, len, result) => ((has_kind(kinds, fd, WordKind) = True) ∧ ((has_kind(kinds, buf, RefKind) = True) ∧ (has_kind(kinds, len, WordKind) = True))) ∧
+            (bind_kind(kinds, word_id(result)) = Some(bound)),
+        Write(fd, buf, len, result) => ((has_kind(kinds, fd, WordKind) = True) ∧ ((has_kind(kinds, buf, RefKind) = True) ∧ (has_kind(kinds, len, WordKind) = True))) ∧
+            (bind_kind(kinds, word_id(result)) = Some(bound)),
+    }
+}
+
+theorem SysCall::checked(self call: SysCall, kinds, bound: List<Typed>): call.check(kinds) = Some(bound) → SysChecked(call, kinds, bound) {
+    match call {
+        Read(fd, buf, len, result) => λ checked => {
+            let ok = true_of_some<List<Typed>>(has_kind(kinds, fd, WordKind) && (has_kind(kinds, buf, RefKind) && has_kind(kinds, len, WordKind)),
+                bind_kind(kinds, word_id(result)), bound, checked);
+            let first = Bool::and_true_parts(has_kind(kinds, fd, WordKind), has_kind(kinds, buf, RefKind) && has_kind(kinds, len, WordKind), ok);
+            let second = Bool::and_true_parts(has_kind(kinds, buf, RefKind), has_kind(kinds, len, WordKind), first.right);
+            ⟨⟨first.left, second⟩, true_some<List<Typed>>(has_kind(kinds, fd, WordKind) && (has_kind(kinds, buf, RefKind) && has_kind(kinds, len, WordKind)),
+                bind_kind(kinds, word_id(result)), bound, checked)⟩
+        },
+        Write(fd, buf, len, result) => λ checked => {
+            let ok = true_of_some<List<Typed>>(has_kind(kinds, fd, WordKind) && (has_kind(kinds, buf, RefKind) && has_kind(kinds, len, WordKind)),
+                bind_kind(kinds, word_id(result)), bound, checked);
+            let first = Bool::and_true_parts(has_kind(kinds, fd, WordKind), has_kind(kinds, buf, RefKind) && has_kind(kinds, len, WordKind), ok);
+            let second = Bool::and_true_parts(has_kind(kinds, buf, RefKind), has_kind(kinds, len, WordKind), first.right);
+            ⟨⟨first.left, second⟩, true_some<List<Typed>>(has_kind(kinds, fd, WordKind) && (has_kind(kinds, buf, RefKind) && has_kind(kinds, len, WordKind)),
+                bind_kind(kinds, word_id(result)), bound, checked)⟩
+        },
+    }
+}
+
+theorem SysCall::checked_bind(self call: SysCall, kinds, bound: List<Typed>, checked: call.check(kinds) = Some(bound)):
+    bind_kind(kinds, word_id(call.result())) = Some(bound) {
+    (match call as λ k => SysChecked(k, kinds, bound) → bind_kind(kinds, word_id(k.result())) = Some(bound) {
+        Read(_, _, _, _) => λ ok => ok.right,
+        Write(_, _, _, _) => λ ok => ok.right,
+    })(call.checked(kinds, bound, checked))
+}
+
+// A system call binds its result word and nothing else.
+theorem SysCall::ran_binds(self call: SysCall, blocks: Blocks, c, after: Config, ran: call.run(blocks, c) = Done(after)):
+    Binds(call.result(), WordKind, c.locals, after.locals) {
+    (match call as λ k => SysRan(k, blocks, c, after) → Binds(k.result(), WordKind, c.locals, after.locals) {
+        Read(_, _, _, result) => λ r => Exists(word_value(r.proof.right.right.witness), r.proof.right.right.proof.left),
+        Write(_, _, _, result) => λ r => Exists(word_value(r.proof.right.proof.right.witness), r.proof.right.proof.right.proof.left),
+    })(call.ran(blocks, c, after, ran))
+}
+
+// Its world after: one exchange more, the world's function the same.
+theorem SysCall::ran_io(self call: SysCall, blocks: Blocks, c, after: Config, ran: call.run(blocks, c) = Done(after)):
+    (c.io.past.len() + 1 = after.io.past.len()) ∧ (after.io.world = c.io.world) {
+    (match call as λ k => SysRan(k, blocks, c, after) → (c.io.past.len() + 1 = after.io.past.len()) ∧ (after.io.world = c.io.world) {
+        Read(fd, _, len, _) => λ r => {
+            let e = r.proof.right.right.proof.right.right;
+            ⟨sym(cong_fn<Io, Nat>(λ w => w.past.len(), e)), cong_fn<Io, World()>(λ w => w.world, e)⟩
+        },
+        Write(fd, _, _, _) => λ r => {
+            let e = r.proof.right.proof.right.proof.right.right;
+            ⟨sym(cong_fn<Io, Nat>(λ w => w.past.len(), e)), cong_fn<Io, World()>(λ w => w.world, e)⟩
+        },
+    })(call.ran(blocks, c, after, ran))
+}
+
+// A system call's meaning with its descriptor word `x` and length word `y`
+// as given: `SysCall::Lands` where they are the valuation's.
+fn ReadLandsWith(spans: Spans, blocks: Blocks, values: Valuation(), buf, result: Nat, before, after: Now, x, y: BitVec(64)) → Type {
+    Exists<Loc>(λ (l: Loc) => (values(64, buf) = l.address(spans)) ∧
+        ((before.heap.open(blocks, l, y.toNat()) = True) ∧
+            (ReadLands(blocks, before.heap, after.heap, l, y.toNat(), values(64, result), before.io.answer(ReadCmd(x, y.toNat()))) ∧
+             (after.io = before.io.exchanged(ReadCmd(x, y.toNat()), before.io.answer(ReadCmd(x, y.toNat())))))))
+}
+
+fn WriteLandsWith(spans: Spans, blocks: Blocks, values: Valuation(), buf, result: Nat, before, after: Now, x, y: BitVec(64)) → Type {
+    Exists<Loc>(λ (l: Loc) => (values(64, buf) = l.address(spans)) ∧ Exists<List<BitVec(8)>>(λ (bs: List<BitVec(8)>) =>
+        (before.heap.read_bytes(l, y.toNat()) = Some(bs)) ∧
+            ((WriteLands(values(64, result), before.io.answer(WriteCmd(x, bs))) ∧ (after.heap = before.heap)) ∧
+             (after.io = before.io.exchanged(WriteCmd(x, bs), before.io.answer(WriteCmd(x, bs)))))))
+}
+
+// A system call done, at a valuation that agrees with the locals before it
+// and after: its meaning (`SysCall::Lands`), the words read off the
+// valuation.
+theorem SysCall::lands_of(self call: SysCall, blocks: Blocks, spans: Spans, values: Valuation(), kinds, bound: List<Typed>, c, after: Config,
+    checked: call.check(kinds) = Some(bound), ran: call.run(blocks, c) = Done(after),
+    agrees: c.locals.Agrees(spans, values, kinds), later: after.locals.Agrees(spans, values, bound)):
+    call.Lands(spans, blocks, values, Now(c.memory, c.io), Now(after.memory, after.io)) {
+    let result_word = λ (result: Nat) (w: BitVec(64)) (bound_result: bind_kind(kinds, word_id(result)) = Some(bound))
+        (set: after.locals = c.locals.set_word(result, word_value(w))) =>
+        trans(after.locals.agrees_word(spans, values, bound, result, bind_kind_has(word_id(result), kinds, bound, bound_result), later, 64),
+            trans(cong_fn<Locals, BitVec(64)>(λ l => l.words(64, result), set),
+                Valuation::set_here(c.locals.words, result, word_value(w), 64)));
+    (match call as λ k => k.check(kinds) = Some(bound) → SysRan(k, blocks, c, after) → k.Lands(spans, blocks, values, Now(c.memory, c.io), Now(after.memory, after.io)) {
+        Read(fd, buf, len, result) => λ checked2 r => {
+            let ok = SysCall::Read(fd, buf, len, result).checked(kinds, bound, checked2);
+            let fdq: (values(64, fd) = c.locals.word(fd)) = c.locals.agrees_word(spans, values, kinds, fd, ok.left.left, agrees, 64);
+            let lenq: (values(64, len) = c.locals.word(len)) = c.locals.agrees_word(spans, values, kinds, len, ok.left.right.right, agrees, 64);
+            let shown = c.locals.agrees_ref(spans, values, kinds, buf, ok.left.right.left, agrees);
+            let loc = r.witness;
+            let same: (shown.witness = loc) = Option::some_inj(shown.witness, loc, trans(sym(shown.proof.left), r.proof.left));
+            let addressed: (values(64, buf) = loc.address(spans)) = trans(shown.proof.right, cong_fn<Loc, BitVec(64)>(λ l => l.address(spans), same));
+            let got = r.proof.right.right;
+            let named = result_word(result, got.witness, ok.right, got.proof.left);
+            let P = λ (x: BitVec(64)) (y: BitVec(64)) => ReadLandsWith(spans, blocks, values, buf, result, Now(c.memory, c.io), Now(after.memory, after.io), x, y);
+            let here: P(c.locals.word(fd), c.locals.word(len)) = Exists(loc, ⟨addressed, ⟨r.proof.right.left,
+                ⟨j(sym(named), λ w _ => ReadLands(blocks, c.memory, after.memory, loc, c.locals.word(len).toNat(), w,
+                        c.io.answer(ReadCmd(c.locals.word(fd), c.locals.word(len).toNat()))), got.proof.right.left),
+                 got.proof.right.right⟩⟩⟩);
+            j(sym(lenq), λ y _ => P(values(64, fd), y), j(sym(fdq), λ x _ => P(x, c.locals.word(len)), here))
+        },
+        Write(fd, buf, len, result) => λ checked2 r => {
+            let ok = SysCall::Write(fd, buf, len, result).checked(kinds, bound, checked2);
+            let fdq: (values(64, fd) = c.locals.word(fd)) = c.locals.agrees_word(spans, values, kinds, fd, ok.left.left, agrees, 64);
+            let lenq: (values(64, len) = c.locals.word(len)) = c.locals.agrees_word(spans, values, kinds, len, ok.left.right.right, agrees, 64);
+            let shown = c.locals.agrees_ref(spans, values, kinds, buf, ok.left.right.left, agrees);
+            let loc = r.witness;
+            let same: (shown.witness = loc) = Option::some_inj(shown.witness, loc, trans(sym(shown.proof.left), r.proof.left));
+            let addressed: (values(64, buf) = loc.address(spans)) = trans(shown.proof.right, cong_fn<Loc, BitVec(64)>(λ l => l.address(spans), same));
+            let bytes = r.proof.right.witness;
+            let got = r.proof.right.proof.right;
+            let named = result_word(result, got.witness, ok.right, got.proof.left);
+            let P = λ (x: BitVec(64)) (y: BitVec(64)) => WriteLandsWith(spans, blocks, values, buf, result, Now(c.memory, c.io), Now(after.memory, after.io), x, y);
+            let here: P(c.locals.word(fd), c.locals.word(len)) = Exists(loc, ⟨addressed, Exists(bytes, ⟨r.proof.right.proof.left,
+                ⟨⟨j(sym(named), λ w _ => WriteLands(w, c.io.answer(WriteCmd(c.locals.word(fd), bytes))), got.proof.right.left.left),
+                    got.proof.right.left.right⟩, got.proof.right.right⟩⟩)⟩);
+            j(sym(lenq), λ y _ => P(values(64, fd), y), j(sym(fdq), λ x _ => P(x, c.locals.word(len)), here))
+        },
+    })(checked, call.ran(blocks, c, after, ran))
+}
+
+// A system call never stops a run short: it is done or stuck.
+theorem SysCall::stopped_none(self call: SysCall, blocks: Blocks, c: Config): call.run(blocks, c).stopped() = None {
+    match call {
+        Read(fd, buf, len, result) => {
+            let n = c.locals.word(len).toNat();
+            let fdw = c.locals.word(fd);
+            match c.locals.refs(buf) as λ o => Ran::of(o, c.io).then(λ (loc: Loc) => read_into(blocks, c, fdw, loc, n, result)).stopped() = None {
+                None => refl,
+                Some(loc) => match c.memory.open(blocks, loc, n) as λ v =>
+                    (match v { False => Stuck(c.io), True => read_landed(blocks, c, fdw, loc, n, result, c.io.world(c.io.past, ReadCmd(fdw, n))) }).stopped() = None {
+                    False => refl,
+                    True => match c.io.world(c.io.past, ReadCmd(fdw, n)) as λ a => read_landed(blocks, c, fdw, loc, n, result, a).stopped() = None {
+                        ReadBytes(bytes) => match c.memory.put(blocks.written, loc, Piece::plain(bytes.take(n))) as λ o2 =>
+                            Ran::of(o2, c.io).then(λ (m: Heap) => Done(Config(c.locals.set_word(result, word_value(count_word(bytes.take(n).len()))), m,
+                                c.io.exchanged(ReadCmd(fdw, n), ReadBytes(bytes))))).stopped() = None {
+                            None => refl,
+                            Some(_) => refl,
+                        },
+                        ReadFailed(errno) => match c.memory.put(blocks.written, loc, Piece::undefined(n)) as λ o2 =>
+                            Ran::of(o2, c.io).then(λ (m: Heap) => Done(Config(c.locals.set_word(result, word_value(bytes_level::errno_word(errno))), m,
+                                c.io.exchanged(ReadCmd(fdw, n), ReadFailed(errno))))).stopped() = None {
+                            None => refl,
+                            Some(_) => refl,
+                        },
+                    },
+                },
+            }
+        },
+        Write(fd, buf, len, result) => {
+            let n = c.locals.word(len).toNat();
+            let fdw = c.locals.word(fd);
+            match c.locals.refs(buf) as λ o => Ran::of(o, c.io).then(λ (loc: Loc) => Ran::of(c.memory.read_bytes(loc, n), c.io).then(λ (bytes: List<BitVec(8)>) =>
+                write_landed(c, fdw, bytes, result, c.io.world(c.io.past, WriteCmd(fdw, bytes))))).stopped() = None {
+                None => refl,
+                Some(loc) => match c.memory.read_bytes(loc, n) as λ o2 => Ran::of(o2, c.io).then(λ (bytes: List<BitVec(8)>) =>
+                    write_landed(c, fdw, bytes, result, c.io.world(c.io.past, WriteCmd(fdw, bytes)))).stopped() = None {
+                    None => refl,
+                    Some(bytes) => match c.io.world(c.io.past, WriteCmd(fdw, bytes)) as λ a => write_landed(c, fdw, bytes, result, a).stopped() = None {
+                        Wrote(_) => refl,
+                        WriteFailed(_) => refl,
+                    },
+                },
+            }
+        },
+    }
+}
+
 // A checked region's run keeps the scope's invariant and frames the rest.
 theorem Body::scopes(self body: Body, blocks: Blocks, calls: Calls(), fuel: Nat, sigs: Nat → Option<Signature>): (kinds, bound: List<Typed>) →
     (used, used2: List<Nat>) → (c, after: Config) → body.check(sigs, kinds) = Some(bound) → body.fresh(used) = Some(used2) →
@@ -1038,7 +1320,9 @@ theorem Body::scopes(self body: Body, blocks: Blocks, calls: Calls(), fuel: Nat,
             (loop_scopes(c, after, used, used2, kinds, bound, outputs, fr.inside, r.end.state, r.locals, r.bound, fr.outs, ck.outs, scoped,
                 cong_fn<Config, Locals>(λ y => y.locals, r.lands))).left.left
         },
-        Sys(_) => λ kinds bound used used2 c after checked never => absurd(never),
+        Sys(call) => λ kinds bound used used2 c after checked fresh ran scoped =>
+            bind_scopes(Some(word_id(call.result())), c.locals, after.locals, used, used2, kinds, bound, scoped, fresh,
+                call.ran_binds(blocks, c, after, ran), call.checked_bind(kinds, bound, checked)),
         Exit(_) => λ kinds bound used used2 c after checked fresh never => absurd(never),
     }
 }
@@ -1227,7 +1511,7 @@ theorem Body::run_grows(self body: Body, blocks: Blocks, calls: Calls(), grows: 
                     fuel, r.state, c.memory, c.io, r.end, r.looped),
                 io_len_same(r.end.io, after.io, cong_fn<Config, Io>(λ y => y.io, r.lands)))
         },
-        Sys(_) => λ used used2 c after never => absurd(never),
+        Sys(call) => λ used used2 c after fresh ran => { let e = call.ran_io(blocks, c, after, ran).left; { omega } },
         Exit(_) => λ used used2 c after fresh never => absurd(never),
     }
 }
@@ -1524,7 +1808,12 @@ theorem Body::holds_of(self body: Body, blocks: Blocks, calls: Calls(), fuel: Na
                         read_next)
                 })
         },
-        Sys(_) => λ kinds bound used used2 c after checked never => absurd(never),
+        Sys(call) => λ kinds bound used used2 c after checked fresh ran peaked scoped shows absent => {
+            let whole = Body::Sys(call).scopes(blocks, calls, fuel, sigs, kinds, bound, used, used2, c, after, checked, fresh, ran, scoped);
+            call.lands_of(blocks, spans, values, kinds, bound, c, after, checked, ran,
+                c.locals.agrees_of(spans, values, used, shows_back(c.locals, after.locals, spans, values, used, used2, whole.right, shows), kinds, scoped.left),
+                after.locals.agrees_of(spans, values, used2, shows, bound, whole.left.left))
+        },
         Exit(_) => λ kinds bound used used2 c after checked fresh never => absurd(never),
     }
 }
@@ -1616,7 +1905,7 @@ theorem Body::fresh_grows(self body: Body): (used, used2: List<Nat>) → body.fr
                 start.proof.right);
             fresh_ids_grows(typed_ids(outputs), used ++ inside.witness, used2, inside.proof.right, x, used.mem_append_l(inside.witness, x, m))
         },
-        Sys(_) => λ used used2 never => absurd(never),
+        Sys(call) => λ used used2 e => fresh_id_grows(used, call.result(), used2, e),
         Exit(_) => λ used used2 e x m => j(Option::some_inj(used, used2, e), λ l _ => Mem(x, l), m),
     }
 }
@@ -1952,7 +2241,7 @@ theorem Body::stops_of(self body: Body, blocks: Blocks, calls: Calls(), fuel: Na
                 },
             }
         },
-        Sys(_) => λ kinds bound used used2 c x checked never => absurd(never),
+        Sys(call) => λ kinds bound used used2 c x checked fresh stopped => absurd(trans(sym(call.stopped_none(blocks, c)), stopped)),
         Exit(status) => λ kinds bound used used2 c x checked fresh ran peaked scoped blank absent => {
             let here = here_valuation(c, spans, used, used2, spare, blank, Body::Exit(status).fresh_grows(used, used2, fresh), absent);
             let v = c.locals.lower(spans);

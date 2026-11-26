@@ -1586,6 +1586,18 @@ theorem Site::claims_after_moves<M, W>(self site: Site<M>, writes: ByteWrites<M>
     }
 }
 
+// A system call at `from`: the kernel resumes every state there into
+// `goal`. One call, no step counted.
+theorem Site::claims_resumes<M, W>(self site: Site<M>, writes: ByteWrites<M>, kernel: Kernel<M, W>, from: Nat, pre, goal: Running<M, W> → Type,
+    resumes: (s: MachineState<M>) → (w: W) → s.rip = next_rip(site.origin, from) → site.Resident(s.memory) → pre(Running(s, w)) →
+        kernel.resumes(Running(s, w), goal)):
+    site.Claims(writes, kernel, 1, 0, from, pre, goal) {
+    λ r here resident held => Exists(r.state, Exists(0, ⟨refl, Inr(kernel.monotone(Running(r.state, r.io), goal,
+        λ (u: Running<M, W>) => site.Performs(writes, kernel, goal, 0, 0, u),
+        λ u reached => Exists(u.state, Exists(0, ⟨refl, ⟨trivial, reached⟩⟩)),
+        resumes(r.state, r.io, here, resident, held)))⟩))
+}
+
 // A test and its JCC, each way a claim: falling through where the JCC is
 // not taken, from the jump's target where it is.
 theorem Site::claims_test_by<M, W>(self site: Site<M>, writes: ByteWrites<M>, kernel: Kernel<M, W>, fits: FillsFit(site.program, no_fills()),
