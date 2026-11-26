@@ -11824,33 +11824,6 @@ theorem Sim::coded_args(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(ty
     }
 }
 
-// Every argument a lend reads has a level.
-theorem CSt::lend_all_lvls(tys: Nat → Type, strs: Strs(tys), xs: List<Var>): (s: CSt) → (ps: List<Param>) → (n: Next) → s.lend_all(tys, strs, ps, xs) = Some(n) →
-    (x: Var) → Mem(x, xs) → Exists<Nat>(λ l => s.lvl(x) = Some(l))
-{
-    match xs {
-        Nil => λ s ps n _ x no => false_elim(no),
-        Cons(y, rest) => λ s ps => match ps {
-            Nil => λ n no => absurd(no),
-            Cons(p, prest) => λ n ok x mx => {
-                let a1 = Option::and_then_some(s.lend(tys, strs, p, y), λ n1 => n1.st.lend_all(tys, strs, prest, rest).map(λ n2 => checker::Next(n2.st, n1.rs ++ n2.rs)), n, ok);
-                let n1 = a1.witness;
-                let a2 = Option::map_some_inv(n1.st.lend_all(tys, strs, prest, rest), λ n2 => checker::Next(n2.st, n1.rs ++ n2.rs), n, a1.proof.right);
-                let ls = s.lend_st(tys, strs, p, y, n1, a1.proof.left);
-                match mx {
-                    Inl(eq) => match ls.left { ⟨g, pg⟩ => j(sym(eq), λ q _ => Exists<Nat>(λ l => s.lvl(q) = Some(l)), Exists(g.root, (s.read_inv(tys, strs, Place(y, Nil), g, pg)).lvl)) },
-                    Inr(mr) => match CSt::lend_all_lvls(tys, strs, rest, n1.st, prest, a2.witness, a2.proof.left, x, mr) {
-                        ⟨l, hl⟩ => match ls.right {
-                            Inl(e1) => Exists(l, j(e1, λ q _ => q.lvl(x) = Some(l), hl)),
-                            Inr(⟨k, pk⟩) => Exists(l, j(pk.right, λ q _ => q.lvl(x) = Some(l), hl)),
-                        },
-                    },
-                }
-            },
-        },
-    }
-}
-
 theorem List::app_nil_r<A>(self xs: List<A>, ys: List<A>): xs ++ ys = Nil → ys = Nil {
     match xs { Nil => λ e => e, Cons(_, _) => λ no => absurd(no) }
 }
@@ -11975,4 +11948,118 @@ theorem Sel::apart_under(tys: Nat → Type, strs: Strs(tys), sl: StrsLaws(tys, s
             Cons(b, yr) => λ h1 => Sel::apart_pre(tys, strs, sl, Cons(a, xr), Cons(b, yr), λ no => absurd(no), λ no => absurd(no), h1, p),
         })(h0),
     })(h)
+}
+
+// Every argument a lend reads is live, in the state before the lends (a
+// lend only makes a level gone).
+theorem CSt::lend_all_live(tys: Nat → Type, strs: Strs(tys), xs: List<Var>): (s: CSt) → (ps: List<Param>) → (n: Next) → s.lend_all(tys, strs, ps, xs) = Some(n) →
+    (x: Var) → Mem(x, xs) → Exists<Nat>(λ l => (s.lvl(x) = Some(l)) ∧ ¬(s.role(l) = KGone))
+{
+    match xs {
+        Nil => λ s ps n _ x no => false_elim(no),
+        Cons(y, rest) => λ s ps => match ps {
+            Nil => λ n no => absurd(no),
+            Cons(p, prest) => λ n ok x mx => {
+                let a1 = Option::and_then_some(s.lend(tys, strs, p, y), λ n1 => n1.st.lend_all(tys, strs, prest, rest).map(λ n2 => checker::Next(n2.st, n1.rs ++ n2.rs)), n, ok);
+                let n1 = a1.witness;
+                let a2 = Option::map_some_inv(n1.st.lend_all(tys, strs, prest, rest), λ n2 => checker::Next(n2.st, n1.rs ++ n2.rs), n, a1.proof.right);
+                let ls = s.lend_st(tys, strs, p, y, n1, a1.proof.left);
+                match mx {
+                    Inl(eq) => match ls.left { ⟨g, pg⟩ => {
+                        let ri = s.read_inv(tys, strs, Place(y, Nil), g, pg);
+                        j(sym(eq), λ q _ => Exists<Nat>(λ l => (s.lvl(q) = Some(l)) ∧ ¬(s.role(l) = KGone)),
+                            Exists(g.root, ⟨ri.lvl, λ hg => ri.live(j(sym(hg), λ q _ => q.same(KGone) = True, refl))⟩))
+                    } },
+                    Inr(mr) => match CSt::lend_all_live(tys, strs, rest, n1.st, prest, a2.witness, a2.proof.left, x, mr) {
+                        ⟨l, hl⟩ => match ls.right {
+                            Inl(e1) => Exists(l, j(e1, λ q _ => (q.lvl(x) = Some(l)) ∧ ¬(q.role(l) = KGone), hl)),
+                            Inr(⟨k, pk⟩) => {
+                                let h2 = j(pk.right, λ q _ => (q.lvl(x) = Some(l)) ∧ ¬(q.role(l) = KGone), hl);
+                                let lb: (l < s.na + s.nd) = s.lvl_below(x, l, h2.left);
+                                Exists(l, ⟨h2.left, λ hg => match Nat::eq_or_ne(l, k) {
+                                    Inl(lk) => h2.right(j(sym(lk), λ q _ => (s.set(k, KGone)).role(q) = KGone, s.set_gone_role(k))),
+                                    Inr(nk) => h2.right(trans(s.role_set_other(k, l, KGone, nk, pk.left, lb), hg)),
+                                }⟩)
+                            },
+                        },
+                    },
+                }
+            },
+        },
+    }
+}
+
+// P2: what each passed value is, index by index.
+theorem Cell::pass_all_nth(tys: Nat → Type, strs: Strs(tys), h: Heap(tys), cs: List<Cell(tys)>): (ps: List<Param>) → (vs: List<Value(tys)>) →
+    Cell::pass_all(tys, strs, h, ps, cs) = Some(vs) → (vs.len() = cs.len()) ∧
+        ((i: Nat) → (v: Value(tys)) → vs.nth(i) = Some(v) → Exists<Cell(tys)>(λ c => (cs.nth(i) = Some(c)) ∧ (Cell::pass(tys, strs, h, ps.nth(i).unwrap_or(Param(SWord(WNat), ByRead)), c) = Some(v))))
+{
+    match cs {
+        Nil => λ ps vs ok => {
+            let e: (Nil<Value(tys)>() = vs) = Option::some_inj(Nil, vs, ok);
+            j(e, λ q _ => (q.len() = 0) ∧ ((i: Nat) → (v: Value(tys)) → q.nth(i) = Some(v) → Exists<Cell(tys)>(λ c => (Nil<Cell(tys)>().nth(i) = Some(c)) ∧ (Cell::pass(tys, strs, h, ps.nth(i).unwrap_or(Param(SWord(WNat), ByRead)), c) = Some(v)))),
+                ⟨refl, λ i v no => absurd(no)⟩)
+        },
+        Cons(c0, cr) => λ ps vs ok => (match Cell::pass(tys, strs, h, ps.nth(0).unwrap_or(Param(SWord(WNat), ByRead)), c0) as λ o =>
+                Cell::pass(tys, strs, h, ps.nth(0).unwrap_or(Param(SWord(WNat), ByRead)), c0) = o →
+                (match o as λ _ => Option<List<Value(tys)>> { Some(v0) => Cell::pass_all(tys, strs, h, ps.drop(1), cr).map(λ q => Cons(v0, q)), None => None }) = Some(vs) →
+                (vs.len() = Succ(cr.len())) ∧ ((i: Nat) → (v: Value(tys)) → vs.nth(i) = Some(v) → Exists<Cell(tys)>(λ c => ((Cons(c0, cr)).nth(i) = Some(c)) ∧ (Cell::pass(tys, strs, h, ps.nth(i).unwrap_or(Param(SWord(WNat), ByRead)), c) = Some(v)))) {
+            None => λ _ no => absurd(no),
+            Some(v0) => λ p0 h1 => match Option::map_some_inv(Cell::pass_all(tys, strs, h, ps.drop(1), cr), λ q => Cons(v0, q), vs, h1) {
+                ⟨vr, pvr⟩ => {
+                    let ih = Cell::pass_all_nth(tys, strs, h, cr, ps.drop(1), vr, pvr.left);
+                    j(pvr.right, λ q _ => (q.len() = Succ(cr.len())) ∧ ((i: Nat) → (v: Value(tys)) → q.nth(i) = Some(v) → Exists<Cell(tys)>(λ c => ((Cons(c0, cr)).nth(i) = Some(c)) ∧ (Cell::pass(tys, strs, h, ps.nth(i).unwrap_or(Param(SWord(WNat), ByRead)), c) = Some(v)))),
+                        ⟨Nat::cong_succ(ih.left), λ i => match i {
+                            Zero => λ v hv => Exists(c0, ⟨refl, trans(p0, cong_fn(λ (q: Value(tys)) => Some(q), Option::some_inj(v0, v, hv)))⟩),
+                            Succ(k) => λ v hv => match ih.right(k, v, hv) {
+                                ⟨c, pc⟩ => Exists(c, ⟨pc.left, j(trans(ps.nth_drop_add(1, k), cong_fn(λ (q: Nat) => ps.nth(q), (omega(): k + 1 = Succ(k)))), λ q _ => Cell::pass(tys, strs, h, q.unwrap_or(Param(SWord(WNat), ByRead)), c) = Some(v), pc.right)⟩),
+                            },
+                        }⟩)
+                },
+            },
+        })(refl, ok),
+    }
+}
+
+// A passed reference is the cell's own, and a taken one is an owned object
+// that moves.
+theorem Cell::pass_refer(tys: Nat → Type, strs: Strs(tys), h: Heap(tys), p: Param, c: Cell(tys), r: Ref, ok: Cell::pass(tys, strs, h, p, c) = Some(level2::Refer(r))):
+    (c.v = level2::Refer(r)) ∧ (p.mode = ByTake → (c.own = True) ∧ (Shape::plain(tys, strs, p.code) = False))
+{
+    let tk = λ (b: Bool) => match b as λ _ => Option<Value(tys)> { True => Some(c.v), False => Value::get(tys, strs, h, c.v, Nil).map(λ q => level2::Plain(q)) };
+    let mine = λ (h2: Some(c.v) = Some(level2::Refer(r))) => Option::some_inj(c.v, level2::Refer(r), h2);
+    (match p.mode as λ md => (match md as λ _ => Option<Value(tys)> { ByTake => tk(c.own && !Shape::plain(tys, strs, p.code)), ByRead => Some(c.v), ByWrite => Some(c.v) }) = Some(level2::Refer(r)) →
+            (c.v = level2::Refer(r)) ∧ (md = ByTake → (c.own = True) ∧ (Shape::plain(tys, strs, p.code) = False)) {
+        ByRead => λ h2 => ⟨mine(h2), λ no => absurd(no)⟩,
+        ByWrite => λ h2 => ⟨mine(h2), λ no => absurd(no)⟩,
+        ByTake => λ h2 => (match c.own as λ o => tk(o && !Shape::plain(tys, strs, p.code)) = Some(level2::Refer(r)) → (c.v = level2::Refer(r)) ∧ (ByTake = ByTake → (o = True) ∧ (Shape::plain(tys, strs, p.code) = False)) {
+            False => λ h3 => match Option::map_some_inv(Value::get(tys, strs, h, c.v, Nil), λ q => level2::Plain(q), level2::Refer(r), h3) { ⟨d, pd⟩ => absurd(pd.right) },
+            True => λ h3 => (match Shape::plain(tys, strs, p.code) as λ b => tk(!b) = Some(level2::Refer(r)) → (c.v = level2::Refer(r)) ∧ (ByTake = ByTake → (True = True) ∧ (b = False)) {
+                False => λ h4 => ⟨mine(h4), λ _ => ⟨refl, refl⟩⟩,
+                True => λ h4 => match Option::map_some_inv(Value::get(tys, strs, h, c.v, Nil), λ q => level2::Plain(q), level2::Refer(r), h4) { ⟨d, pd⟩ => absurd(pd.right) },
+            })(h3),
+        })(h2),
+    })(ok)
+}
+
+// What `lent` records of an argument at an index.
+theorem CSt::lent_nth(self s: CSt, xs: List<Var>): (ps: List<Param>) → (i: Nat) → (x: Var) → xs.nth(i) = Some(x) → (l: Nat) → s.lvl(x) = Some(l) →
+    (s.lent(ps, xs)).nth(i) = Some(Lent(l, s.places(l, Nil), match (ps.nth(i).unwrap_or(Param(SWord(WNat), ByRead))).mode { ByRead => False, ByWrite => True, ByTake => True }))
+{
+    match xs {
+        Nil => λ ps i x no => absurd(no),
+        Cons(y, rest) => λ ps i => match i {
+            Zero => λ x hx l hl => {
+                let yx: (y = x) = Option::some_inj(y, x, hx);
+                let hy: (s.lvl(y) = Some(l)) = j(sym(yx), λ q _ => s.lvl(q) = Some(l), hl);
+                cong_fn(λ (q: Lent) => Some(q), j(sym(hy), λ o _ => (match o as λ _ => Lent { Some(l2) => Lent(l2, s.places(l2, Nil), match (ps.nth(0).unwrap_or(Param(SWord(WNat), ByRead))).mode { ByRead => False, ByWrite => True, ByTake => True }), None => Lent(0, Nil, False) }) =
+                    Lent(l, s.places(l, Nil), match (ps.nth(0).unwrap_or(Param(SWord(WNat), ByRead))).mode { ByRead => False, ByWrite => True, ByTake => True }), refl))
+            },
+            Succ(k) => λ x hx l hl => {
+                let ih = s.lent_nth(rest, ps.drop(1), k, x, hx, l, hl);
+                let pd: ((ps.drop(1)).nth(k) = ps.nth(Succ(k))) = trans(ps.nth_drop_add(1, k), cong_fn(λ (q: Nat) => ps.nth(q), (omega(): k + 1 = Succ(k))));
+                j(pd, λ q _ => (s.lent(ps.drop(1), rest)).nth(k) = Some(Lent(l, s.places(l, Nil), match (q.unwrap_or(Param(SWord(WNat), ByRead))).mode { ByRead => False, ByWrite => True, ByTake => True })), ih)
+            },
+        },
+    }
 }
