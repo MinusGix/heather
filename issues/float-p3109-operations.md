@@ -1,6 +1,6 @@
 ---
 title: P3109 operations: mixed-format arithmetic through the projection
-status: open
+status: closed
 labels: [mathematics,floating-point]
 area: mathematics
 milestone: [math-float]
@@ -39,3 +39,4 @@ operations; `arith.hthr` is single-format and IEEE-shaped.
 ## Log
 
 - 2026-11-26: Landed the core (design §8): `lib/std/num/float/p3109_ops.hthr` with `XReal` and the report's ω tables, `Rnd` (IEEE modes, round to odd, stochastic) with `project_rnd_faithful`, `project_x` with infinite inputs (closing [[float-project-infinite-inputs]]), `op_convert/add/sub/mul/div/fma/neg/abs` over operands in any formats, `op_*_correct` (IEEE-mode results project the exact value) and `project_x_datum`. Remaining in scope: `sqrt` and the elementary functions (§4.10.8–16), whose exact values are not rational; the report's operation examples as tests beyond the tables exercised here.
+- 2026-11-26: Closing: the residue (sqrt and the elementary functions) is [[float-p3109-sqrt-elementary]].
