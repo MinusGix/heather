@@ -3719,3 +3719,87 @@ walk's independence of the written-back flags and of fuel past its level
 copy is recorded by an invariant clause (`cfit`), not avoided by forbidding
 copies to be written through, since a value written back from a copy is the
 design's ordinary case for small plain data (§15.2).
+
+### 23.12 The copy chain, the write-back, and a view's death and take (2026-11-26)
+
+**`cfit` is fit *and* like-ness.** The coordinating session decided on a
+clause `cfit`: a live entry whose parent's cell is a copy `Plain(dp)` has its
+place fitting `dp` at the run's words. As built, it also says that the
+entry's own copy `dc` has the code and the length of what the place reads in
+`dp` (`CSt::CFitAt`). Fit alone is not kept by the child's own write-back at
+a place of several steps. The model's `over_at` needs `like` at the last
+step, so `Sel::write_get` keeps a path fitting only where what is written has
+the code and length that were read there. Every write keeps both: `RFits`
+for a sequence, `Dyn::len_non_seq` otherwise, and top-level code and length
+under a non-empty path (`Sel::write_keeps`). So like-ness holds throughout,
+including while the child is pending.
+
+**`sib`: siblings are apart at their places.** `excl` says that two live
+entries of one object, one to write and neither the other's ancestor, are
+apart at their whole regions. Under a parent that is a view, both regions
+start with the parent's region `R`, and `Sel::Apart(R ++ a, R ++ b)` does not
+give `Sel::Apart(a, b)`: the prefix does not cancel at the `Sel` level.
+A write-back into a copy changes the copy at one child's place and must keep
+a sibling's place fitting. The smallest case is
+`View(v1, p.a, W); View(v2, v1.x, W); View(v3, v1.y, W)` with `p` held by
+value, then writes to `v2` and `v3`, each written back into `v1`.
+
+So the invariant gained `sib`: two live entries opened on one parent, one of
+them to write, are apart at their places. It is proved where each view is
+opened, from the licence. The decider does cancel a common prefix
+(`Steps::apart_prefix`), so the licence's soundness chain
+(`CSt::against_sound`, `against_all_sound`, `license_sound`,
+`Inv::lic_suffix`) takes a prefix that the entry's region and the place share,
+and concludes apartness of what follows it. `Inv::lic_apart` is the instance
+with an empty prefix, and `Inv::sib_lic` is the use per entry.
+
+**The write-back** (`Stmt::stage_back`) has three stages:
+- **The chain refers, nothing pending** (`stage_back_ref_none`). The child's
+  reference is the parent's narrowed by the child's place
+  (`Inv::ref_child`), so the run stores into the block exactly what it holds
+  there: `Sel::put_back_path`, then `Heap::store_val`, and the machine is
+  unchanged. The meaning is unchanged too, by the same law (`Env::set_fix`).
+  A parent that is a view becomes pending, and `CSt::up_sim`, given a store of
+  what is already there, shows the heap holds its walk.
+- **The chain refers, the child pending** (`stage_back_ref_pend`). The patch
+  before is the walk from the child (`CSt::patched_pend`). The write-back's
+  meaning is that walk's first step (`CSt::up_step`); the patch after is the
+  rest of it (`up_rekin`, `up_more`), or nothing if the parent is a holder
+  (`up_nil`).
+- **The chain is copies** (`stage_back_copy`). `cfit` gives the fit, so the
+  run's `Sel::put` succeeds. `Inv::set_cell` sets the parent's cell: the child
+  keeps `cfit` (`Sel::write_get`), a sibling keeps it by `sib`
+  (`CSt::cfit_apart`), and the parent keeps its own like-ness in its parent
+  (`CSt::cfit_like`). Neither the state before nor the state after patches
+  anything (`CSt::patched_copy`).
+
+In each stage the parent is a holder or a view (`CSt::back_patched_hold`,
+`back_patched_view`). The state after, `s.backed(lv).wrote_to(l)`, is a single
+`rekin` (`CSt::back_state`, `VEnt::reback`): every entry pending before it is
+at the child's level, and every entry pending after it at the parent's
+(`CSt::pend_back`). `Inv::set_cell` now takes `s.patched(e, m) = e` before
+and after in place of `s.pending() = False`.
+
+**A view's death while another is pending** (`Stmt::stage_death_view`). The
+checker allows the death of a view written back while another view is
+pending. A dying view has no children, so it is on no pending chain, and the
+patch is unchanged: the same entry is pending first (`List::find_drop`), and
+the walk never reaches the dropped level (`CSt::up_drop`). `Inv::drop_view`
+is the builder.
+
+**A view's take** (`Stmt::stage_take_view`, `Inv::take_view`). Its entries
+move to the new level (`VEnt::rn`, which keeps every field but the level:
+`Alike`). The old level is gone, and ancestry is unchanged, since the taken
+view has no children (`CSt::anc_moved`, `anc_par_eq`, `anc_not`). A
+composition of `push_view` and `drop_view` does not work. Pushing first,
+the new entries would have to be apart from their own originals. Dropping
+first, `Changes` loses the object when the dropped entry was its only
+writer.
+
+**For `Ret`, not yet built.** `SafeAt`'s `Written` asks two things of each
+written parameter. The argument's block must read the final meaning, which
+needs the argument's reference to be its object's root. That is cheap: a
+referring cell is never set. The final meaning must also `Fits` the argument
+as passed, keeping its code and length. Every write keeps the root's code
+and length, but `Inv` holds no original value of a plain argument. Where
+that fact lives is put to the coordinating session.
