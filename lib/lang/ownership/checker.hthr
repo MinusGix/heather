@@ -776,16 +776,18 @@ fn CSt::lvls(self s: CSt, xs: List<Var>) → Option<List<Nat>> {
     match xs { Nil => Some(Nil), Cons(x, rest) => s.lvl(x).and_then(λ l => s.lvls(rest).map(λ ls => Cons(l, ls))) }
 }
 
-// A fresh object answered once (§23.17): a holder answered as a fresh result
-// is not answered again, so no two of a call's fresh results share a block
-// (the caller takes each as an object alone in its block). Without it
-// `Ret([x, x])` answered one owned object as two.
+// An owned object answered once (§23.17, §23.20): a holder answered as a
+// fresh or a parameter result is not answered again, so no two of a call's
+// owning results share a block (the caller takes each as an object alone in
+// its block). Without it `Ret([x, x])` answered one owned object as two, a
+// made one (`fresh_twice_refused`) or a taken parameter
+// (`twice_param_refused`).
 fn CSt::fresh_once(self s: CSt, ls: List<Nat>, rs: List<Result>) → Bool {
     match rs {
         Nil => True,
         Cons(r, rest) => match ls {
             Nil => True,
-            Cons(l, lr) => (match r.origin { OFresh => match s.role(l) { KHold(_, _) => !l.member(lr), KPlain => True, KView => True, KGone => True }, OParam(_) => True, OView(_, _) => True }) && s.fresh_once(lr, rest),
+            Cons(l, lr) => (match r.origin { OFresh => match s.role(l) { KHold(_, _) => !l.member(lr), KPlain => True, KView => True, KGone => True }, OParam(_) => match s.role(l) { KHold(_, _) => !l.member(lr), KPlain => True, KView => True, KGone => True }, OView(_, _) => True }) && s.fresh_once(lr, rest),
         },
     }
 }
