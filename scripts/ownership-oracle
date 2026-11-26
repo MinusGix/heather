@@ -40,20 +40,66 @@ WORK = ROOT / "target" / "ownership-oracle"
 # parameter lists of at most `np` is 1 + P + P^2 + ...
 N_PARAMS = 11
 
+# The sizes calibration tries, cheapest first: (parameters, items, flags).
+SIZES = [(1, 0, 0), (1, 1, 0), (1, 1, 15), (2, 1, 0), (1, 2, 0), (2, 1, 15), (1, 2, 15)]
+
 # Each mutant: the defect it restores, where the design note or the
 # checker's log records it, and the replacements (file, old, new) made in
 # the copy. `old` must occur exactly once.
 MUTANTS = {
-    "fresh_twice": (
-        "Ret([x, x]) of one made object as two fresh results (§23.17, fresh_twice_refused)",
-        [("checker.hthr", "s.returns_all(tys, strs, ls, ls, sig.results) && s.fresh_once(ls, sig.results)",
-          "s.returns_all(tys, strs, ls, ls, sig.results) && True")],
-    ),
-    "fresh_is_param": (
-        "an argument's object answered as a fresh result (§23.4: OFresh only for an object made in the call)",
-        [("checker.hthr", "!Shape::plain(tys, strs, r.code) && s.na.leb(o) && (match a",
-          "!Shape::plain(tys, strs, r.code) && (match a")],
-    ),
+    "fresh_twice": ("Ret([x, x]) of one made object as two fresh results (§23.17, fresh_twice_refused)",
+        [("checker.hthr", "s.returns_all(tys, strs, ls, ls, sig.results) && s.fresh_once(ls, sig.results)", "s.returns_all(tys, strs, ls, ls, sig.results) && True")]),
+    "fresh_is_param": ("an argument's object answered as a fresh result (§23.4: OFresh only for an object made in the call)",
+        [("checker.hthr", "!Shape::plain(tys, strs, r.code) && s.na.leb(o) && (match a", "!Shape::plain(tys, strs, r.code) && (match a")]),
+    "param_names_other": ("an OParam(i) result naming another object than parameter i's (§23.14, not_param_refused)",
+        [("checker.hthr", "OParam(i) => match s.role(l) { KHold(o, _) => o.same(i), _ => False },", "OParam(i) => match s.role(l) { KHold(o, _) => True, _ => False },")]),
+    "view_result_writes": ("a view to write answered as a read view result",
+        [("checker.hthr", "e.obj.same(i) && Steps::same(e.reg, ys) && !e.mode.writes()", "e.obj.same(i) && Steps::same(e.reg, ys)")]),
+    "at_moved": ("a returned view's place reading an argument written before (§23.13, at_moved_refused)",
+        [("checker.hthr", "True => (!k.member(s.wrote)).then(Some(Var(k))),", "True => Some(Var(k)),")]),
+    "ret_pending": ("a Ret while a view to write is pending (§23.7, between_refused)",
+        [("checker.hthr", "Nil => match s.lvls(xs) { Some(ls) => !s.pending() && s.returns_all", "Nil => match s.lvls(xs) { Some(ls) => s.returns_all")]),
+    "give_back_unsynced": ("a written parameter given back while its object's view is not written back",
+        [("checker.hthr", "KHold(o, _) => o.same(i) && !s.unsynced(o)", "KHold(o, _) => o.same(i)")]),
+    "between": ("statements other than write-backs while a view to write is pending (§23.7, between_refused)",
+        [("checker.hthr", "False => match (!s.pending() || s.writes_back(st)).then(st.verdict(", "False => match (True).then(st.verdict("),
+         ("oracle_search.hthr", "False => ((!s.pending() || s.writes_back(st)).then(", "False => ((True).then(")]),
+    "yield_pending": ("a Yield while a view to write is pending (§23.7)",
+        [("checker.hthr", "Yield(xs) => Vd::own((!s.pending()).then(", "Yield(xs) => Vd::own((True).then(")]),
+    "atoms_plain": ("an atom reading a variable that is not plain (§23.7, atoms_ok)",
+        [("checker.hthr", "Cons(l, rest) => (s.role(l)).plain().then(s.atoms_ok(rest))", "Cons(l, rest) => s.atoms_ok(rest)")]),
+    "write_in_region": ("a word a live region reads written (§23.3)",
+        [("checker.hthr", "(!s.in_regions(l) && !(s.role(l)).same(KGone)).then(", "(!(s.role(l)).same(KGone)).then(")]),
+    "write_read_lent": ("a holder lent only to read written through",
+        [("checker.hthr", "KHold(o, a) => a.writes().then(s.license(s.views, Writing, l, [Pl(o, xs)])),", "KHold(o, a) => True.then(s.license(s.views, Writing, l, [Pl(o, xs)])),")]),
+    "death_word_in_region": ("a plain variable a live region reads dies (§23.8)",
+        [("checker.hthr", "KPlain => (!s.in_regions(l)).then(Some(Next(s.set(l, KGone), Nil))),", "KPlain => Some(Next(s.set(l, KGone), Nil)),")]),
+    "death_with_views": ("an owner dies while a view of its object is live (§23.3)",
+        [("checker.hthr", "KHold(o, _) => (!s.has_obj_views(o)).then(Some(Next(s.set(l, KGone), Nil))),", "KHold(o, _) => Some(Next(s.set(l, KGone), Nil)),")]),
+    "death_view_children": ("a view dies before the views opened through it (§23.3)",
+        [("checker.hthr", "KView => (!s.has_children(l) && (s.ents(l)).all_bit(", "KView => ((s.ents(l)).all_bit(")]),
+    "death_view_unbacked": ("a view to write dies not written back (§23.3)",
+        [("checker.hthr", "KView => (!s.has_children(l) && (s.ents(l)).all_bit(λ e => !e.mode.writes() || e.back)).then(", "KView => (!s.has_children(l)).then(")]),
+    "take_with_views": ("an owner taken while a view of its object is live (§23.3)",
+        [("checker.hthr", "KHold(o, a) => (!s.has_obj_views(o)).then(Some(Next(s.set(g.root, KGone).push(", "KHold(o, a) => (True).then(Some(Next(s.set(g.root, KGone).push(")]),
+    "take_view_children": ("a view taken while views opened through it are live (§23.12)",
+        [("checker.hthr", "KView => (!s.has_children(g.root)).then(Some(Next(s.rename(", "KView => (True).then(Some(Next(s.rename(")]),
+    "lend_move_views": ("an owned object moved into a call while a view of it is live",
+        [("checker.hthr", "True => match a { AcOwn => (!s.has_obj_views(o)).then(Some(Next(s.set(g.root, KGone), g.rs)))", "True => match a { AcOwn => (True).then(Some(Next(s.set(g.root, KGone), g.rs)))")]),
+    "call_apart": ("arguments lent where one may change, not found apart (§23.3)",
+        [("checker.hthr", "s.apart_args(s.lent(sig.params, xs)).and_then(λ ra =>", "Some(Nil).and_then(λ ra =>")]),
+    "join_plain_hold": ("a join whose no arm yields an owner with live views where the yes arm yields a word",
+        [("checker.hthr", "KHold(o2, _) => (!n.st.has_obj_views(o2)).then(Some(OutR(", "KHold(o2, _) => (True).then(Some(OutR(")]),
+    "join_hold_plain": ("a join whose yes arm yields an owner with live views where the no arm yields a word",
+        [("checker.hthr", "KPlain => (!y.st.has_obj_views(o1)).then(Some(OutR(", "KPlain => (True).then(Some(OutR(")]),
+    "join_two_objects": ("a join choosing between two objects with live views",
+        [("checker.hthr", "False => (!y.st.has_obj_views(o1) && !n.st.has_obj_views(o2)).then(", "False => (True).then(")]),
+    "join_owned_output": ("a join over a read-lent holder binding an owned output (§23.8)",
+        [("checker.hthr", "KHold(nobj, a1.min(a2))), Nil, True)", "KHold(nobj, AcOwn)), Nil, True)")]),
+    "join_write_view": ("a view to write surviving a join at two places (§23.4, two_windows_refused)",
+        [("checker.hthr", "(e.mode.writes() && f.mode.writes() && e.obj.same(f.obj) && Steps::same(e.reg, f.reg) && e.par.same(f.par) && Steps::same(e.at, f.at)", "(e.mode.writes() && f.mode.writes()")]),
+    "join_drops": ("a join dropping a view to write not written back (§23.3)",
+        [("checker.hthr", "(CSt::drops_ok(y.st.views, views) && CSt::drops_ok(n.st.views, views)).then(", "(True).then(")]),
 }
 
 
@@ -171,7 +217,7 @@ def stmt(r):
     if t == 7:
         g = r.n()
         args = r.many(lambda: var(r))
-        return f"call f{g}({', '.join(args)}) binding {r.n()}"
+        return f"call {CALLEES.get(g, f'f{g}')}({', '.join(args)}) binding {r.n()}"
     return f"death {place(r)}"
 
 
@@ -251,21 +297,27 @@ def value(r):
 
 def finding(r):
     c = r.n()
+    fuel = r.n()
     f = func(r)
     vs = r.many(lambda: value(r))
-    return c, f, vs
+    return c, fuel, f, vs
 
+
+# oracle_search.hthr's `cat()`, at indices 1 to 8 (8 the primitive).
+CALLEES = {0: "self", 1: "elem_view(L read, N take → N view of 0[a1])", 2: "front_view(L read → L view of 0[0..+1])",
+           3: "set_elem(L write, N take)", 4: "set_x(Pt write, N take)", 5: "keep(L take → L param 0)",
+           6: "make(N take, N take → L fresh)", 7: "get_y(Pt read → N fresh)", 8: "len(L read → N fresh, primitive)"}
 
 HEAP = "b0 = Pt(1, 2), b1 = Pt(3, 4), b2 = L[1, 2], b3 = L[7], b4 = QPt(8, 9)"
 
 
-def run_search(path, np, k, jobs, cap, label=""):
+def run_search(path, np, k, jobs, cap, fl=0, ka=0, kb=0):
     total = sum(N_PARAMS ** i for i in range(np + 1))
     chunk = max(1, total // (jobs * 3))
     parts = [(lo, min(chunk, total - lo)) for lo in range(0, total, chunk)]
     t0 = time.time()
     with ThreadPoolExecutor(jobs) as ex:
-        res = list(ex.map(lambda p: heather_eval(path, f"search_stream({np}, {k}, {p[0]}, {p[1]})"), parts))
+        res = list(ex.map(lambda p: heather_eval(path, f"search_stream({fl}, {np}, {k}, {ka}, {kb}, {p[0]}, {p[1]})"), parts))
     dt = time.time() - t0
     counts = [0] * 5
     found = []
@@ -285,12 +337,12 @@ def show(counts, found, dt, cap):
     progs, tried, owed, due, nfound = counts
     print(f"checked programs {progs}, inputs tried {tried}, owed {owed}, verdict held {due}, findings {nfound} ({dt:.1f}s, {progs / dt:.0f} programs/s)")
     seen = set()
-    for c, f, vs in found:
+    for c, fuel, f, vs in found:
         key = "\n".join(f)
         if key in seen:
             continue
         seen.add(key)
-        print(f"\n-- breaks {CLAUSES.get(c, c)} at ({', '.join(vs)}) over {HEAP}")
+        print(f"\n-- breaks {CLAUSES.get(c, c)} at fuel {fuel}, arguments ({', '.join(vs)}) over {HEAP}")
         print("\n".join(f))
         if len(seen) >= cap:
             break
@@ -305,6 +357,9 @@ def main():
     s.add_argument("--mutant")
     s.add_argument("--jobs", type=int, default=os.cpu_count() or 4)
     s.add_argument("--cap", type=int, default=3)
+    s.add_argument("--flags", type=int, default=0, help="bits: 1 calls, 2 joins, 4 Jump, 8 signatures fixed first (arms may return)")
+    s.add_argument("--ka", type=int, default=1, help="a join's yes arm: at most this many statements")
+    s.add_argument("--kb", type=int, default=0, help="a join's no arm")
     c = sub.add_parser("calibrate")
     c.add_argument("--only")
     c.add_argument("--jobs", type=int, default=os.cpu_count() or 4)
@@ -319,28 +374,26 @@ def main():
         return
     if a.cmd == "search":
         path = mutant_dir(a.mutant) if a.mutant else SEARCH
-        counts, found, dt = run_search(path, a.np, a.k, a.jobs, a.cap)
+        counts, found, dt = run_search(path, a.np, a.k, a.jobs, a.cap, a.flags, a.ka, a.kb)
         show(counts, found, dt, a.cap)
         sys.exit(1 if counts[4] and not a.mutant else 0)
     if a.cmd == "calibrate":
         names = [a.only] if a.only else list(MUTANTS)
         missed = []
-        print("| mutant | found at (np, k) | programs checked at that size | findings |")
-        print("|---|---|---|---|")
+        print("| mutant | found at (params, items, flags) | programs checked at that size | findings | first |")
+        print("|---|---|---|---|---|")
         for n in names:
             path = mutant_dir(n)
             hit = None
-            for np in (1, 2):
-                for k in range(0, a.max_k + 1):
-                    counts, found, dt = run_search(path, np, k, a.jobs, 1)
-                    if counts[4]:
-                        hit = (np, k, counts, found)
-                        break
-                if hit:
+            for np, k, fl in SIZES:
+                counts, found, dt = run_search(path, np, k, a.jobs, 1, fl, 1, 0)
+                if counts[4]:
+                    hit = (np, k, fl, counts, found)
                     break
             if hit:
-                np, k, counts, found = hit
-                print(f"| {n} | ({np}, {k}) | {counts[0]} | {counts[4]} |", flush=True)
+                np, k, fl, counts, found = hit
+                c, fuel, f, vs = found[0]
+                print(f"| {n} | ({np}, {k}, flags {fl}) | {counts[0]} | {counts[4]} | {CLAUSES.get(c, c)}: `{' ; '.join(x.strip() for x in f)}` at ({', '.join(vs)}) |", flush=True)
             else:
                 print(f"| {n} | missed | | |", flush=True)
                 missed.append(n)
