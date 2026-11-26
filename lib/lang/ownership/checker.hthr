@@ -631,13 +631,10 @@ fn CSt::result(self s: CSt, tys: Nat → Type, strs: Strs(tys), s0: CSt, sig: Si
     match r.origin {
         OFresh => match Shape::plain(tys, strs, r.code) { True => Some(s.push(CVar(r.code, KPlain))), False => Some(s.push(CVar(r.code, KHold(s.nobj, AcOwn))).fresh_obj()) },
         OParam(i) => match (sig.params.nth(i).unwrap_or(Param(SWord(WNat), ByRead))).mode {
-            ByTake => match Shape::moves(tys, strs, (sig.params.nth(i).unwrap_or(Param(SWord(WNat), ByRead))).code) {
-                False => Some(s.push(CVar(r.code, KPlain))),
-                True => xs.nth(i).and_then(λ x => s0.lvl(x)).and_then(λ l => match s0.role(l) {
-                    KHold(o, a) => match a { AcOwn => Some(s.push(CVar(r.code, KHold(o, AcOwn)))), AcRead => None, AcWrite => None },
-                    _ => None,
-                }),
-            },
+            ByTake => xs.nth(i).and_then(λ x => s0.lvl(x)).and_then(λ l => match s0.role(l) {
+                KHold(o, a) => match a { AcOwn => Some(s.push(CVar(r.code, KHold(o, AcOwn)))), AcRead => None, AcWrite => None },
+                _ => None,
+            }),
             ByRead => None,
             ByWrite => None,
         },
@@ -692,7 +689,7 @@ fn CSt::slots(self s: CSt, s0: CSt, sig: Sig, xs: List<Var>, ws: List<Nat>) → 
 fn Result::ok(tys: Nat → Type, strs: Strs(tys), ps: List<Param>, r: Result, k: Nat) → Bool {
     match r.origin {
         OFresh => True,
-        OParam(i) => match ps.nth(i) { Some(p) => (match p.mode { ByTake => True, ByRead => False, ByWrite => False }) && r.code.same(p.code), None => False },
+        OParam(i) => match ps.nth(i) { Some(p) => (match p.mode { ByTake => Shape::moves(tys, strs, p.code), ByRead => False, ByWrite => False }) && r.code.same(p.code), None => False },
         OView(i, xs) => (match ps.nth(i) {
             Some(p) => (match p.mode { ByRead => True, ByTake => False, ByWrite => False }) && (match Shape::steps_ok(tys, strs, xs, p.code) { Some(c) => r.code.same(c), None => False }),
             None => False,
@@ -704,15 +701,15 @@ fn Sig::ok_from(tys: Nat → Type, strs: Strs(tys), ps: List<Param>, rs: List<Re
     match rs { Nil => True, Cons(r, rest) => Result::ok(tys, strs, ps, r, k) && Sig::ok_from(tys, strs, ps, rest, k + 1) }
 }
 
-// No parameter whose code moves is answered twice (§23.23): two holders of
-// one object would be bound where it was passed plain, which `OwnedApart`
-// cannot exclude (it speaks of results that refer). A plain one answered
-// twice is two copies.
+// No parameter is answered twice (§23.23): two holders of one object would
+// be bound where it was passed plain, which `OwnedApart` cannot exclude (it
+// speaks of results that refer). `OParam` names a parameter whose code moves
+// (`Result::ok`); a plain value handed back is `OFresh`.
 fn Sig::once(tys: Nat → Type, strs: Strs(tys), ps: List<Param>, rs: List<Result>) → Bool {
     match rs {
         Nil => True,
         Cons(r, rest) => (match r.origin {
-            OParam(i) => !Shape::moves(tys, strs, (ps.nth(i).unwrap_or(Param(SWord(WNat), ByRead))).code) || rest.all_bit(λ (q: Result) => match q.origin { OParam(j) => !j.same(i), OFresh => True, OView(_, _) => True }),
+            OParam(i) => rest.all_bit(λ (q: Result) => match q.origin { OParam(j) => !j.same(i), OFresh => True, OView(_, _) => True }),
             OFresh => True,
             OView(_, _) => True,
         }) && Sig::once(tys, strs, ps, rest),

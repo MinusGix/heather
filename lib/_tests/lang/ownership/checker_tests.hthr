@@ -500,9 +500,9 @@ theorem fresh_two_checked(): refusal_in([fresh_two()], 0) = None { refl }
 // would receive two owners of one block. A caller of a table entry with
 // that signature is refused too (`Sig::once`, §23.23): where the argument is
 // passed plain, `OwnedApart` cannot exclude a callee answering two copies,
-// and the caller would bind two holders of one object. A plain parameter
-// answered twice is two copies: checked. Answered once and bound once:
-// checked.
+// and the caller would bind two holders of one object. A parameter of a
+// plain code cannot be answered back at all (`Result::ok`): a plain value
+// handed back is `OFresh`. Answered once and bound once: checked.
 fn twice_param() → Func { Func(Sig([Param(nx(), ByTake)], [Result(nx(), OParam(0)), Result(nx(), OParam(0))]), Ret([x(), x()])) }
 
 fn twice_caller() → Func { Func(Sig([Param(nx(), ByTake)], Nil), seq([Call(0, [x()], 2), Death(whole(Loc(0))), Read(el(Loc(1), Lit(0)))], Ret(Nil))) }
@@ -515,17 +515,26 @@ fn twice_plain() → Func { Func(Sig([Param(nat_s(), ByTake)], [Result(nat_s(), 
 
 fn twice_plain_caller() → Func { Func(Sig([Param(nat_s(), ByTake)], Nil), seq([Call(0, [x()], 2)], Ret(Nil))) }
 
-// The callee itself is refused at its `Ret` whether it answers its plain
-// parameter once or twice (`CSt::returns` asks a parameter answered back to
-// be held as an owner, and a plain one is held plain); the table is
-// arbitrary, so its caller is what this checks.
+// Refused where the signature is written, once or twice; the neighbour
+// answering the value `OFresh` is checked, and so is its caller.
 theorem twice_plain_callee_refused(): refusal_in([twice_plain(), twice_plain_caller()], 0) = Some(WOwn) { refl }
 
 fn once_plain() → Func { Func(Sig([Param(nat_s(), ByTake)], [Result(nat_s(), OParam(0))]), Ret([x()])) }
 
 theorem once_plain_callee_refused(): refusal_in([once_plain()], 0) = Some(WOwn) { refl }
 
-theorem twice_plain_caller_checked(): verdict([twice_plain(), twice_plain_caller()], 1).is_some() = True { refl }
+
+fn once_fresh() → Func { Func(Sig([Param(nat_s(), ByTake)], [Result(nat_s(), OFresh)]), Ret([x()])) }
+
+fn once_fresh_caller() → Func { Func(Sig([Param(nat_s(), ByTake)], Nil), seq([Call(0, [x()], 1)], Ret(Nil))) }
+
+theorem once_fresh_checked(): verdict([once_fresh(), once_fresh_caller()], 0).is_some() = True { refl }
+
+theorem once_fresh_caller_checked(): verdict([once_fresh(), once_fresh_caller()], 1).is_some() = True { refl }
+
+theorem once_plain_caller_refused(): refusal_in([once_plain(), once_fresh_caller()], 1) = Some(WOwn) { refl }
+
+theorem twice_plain_caller_refused(): refusal_in([twice_plain(), twice_plain_caller()], 1) = Some(WOwn) { refl }
 
 // A signature answering a read parameter as its own (`OParam`), or a view of
 // a written one: refused where it is written (`Sig::ok`, §23.21), since no

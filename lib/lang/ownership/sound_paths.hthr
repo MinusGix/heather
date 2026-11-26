@@ -1180,23 +1180,23 @@ theorem Nat::member_cons_false(l, h: Nat, t: List<Nat>, e: l.member(Cons(h, t)) 
     ⟨λ eq => Nat::ne_of_same(h, l, p.left)(sym(eq)), p.right⟩
 }
 
-// What `Sig::ok` says of a parameter answered back: a taken one, of the
-// result's code.
+// What `Sig::ok` says of a parameter answered back: a taken one (whose code
+// moves), of the result's code.
 theorem Result::ok_param(tys: Nat → Type, strs: Strs(tys), ps: List<Param>, r: Result, k: Nat, ok: Result::ok(tys, strs, ps, r, k) = True, i: Nat, og: r.origin = OParam(i)):
     Exists<Param>(λ p => (ps.nth(i) = Some(p)) ∧ ((p.mode = ByTake) ∧ (r.code.same(p.code) = True)))
 {
-    let ok2: ((match ps.nth(i) { Some(p) => (match p.mode { ByTake => True, ByRead => False, ByWrite => False }) && r.code.same(p.code), None => False }) = True) =
-        j(og, λ o _ => (match o { OFresh => True, OParam(i2) => match ps.nth(i2) { Some(p) => (match p.mode { ByTake => True, ByRead => False, ByWrite => False }) && r.code.same(p.code), None => False },
+    let ok2: ((match ps.nth(i) { Some(p) => (match p.mode { ByTake => Shape::moves(tys, strs, p.code), ByRead => False, ByWrite => False }) && r.code.same(p.code), None => False }) = True) =
+        j(og, λ o _ => (match o { OFresh => True, OParam(i2) => match ps.nth(i2) { Some(p) => (match p.mode { ByTake => Shape::moves(tys, strs, p.code), ByRead => False, ByWrite => False }) && r.code.same(p.code), None => False },
             OView(i2, xs) => (match ps.nth(i2) {
                 Some(p) => (match p.mode { ByRead => True, ByTake => False, ByWrite => False }) && (match Shape::steps_ok(tys, strs, xs, p.code) { Some(c) => r.code.same(c), None => False }),
                 None => False,
             }) && Steps::lvls(xs).all_bit(λ a => (a + 1).leb(ps.len() + k)) }) = True, ok);
-    (match ps.nth(i) as λ o => ps.nth(i) = o → (match o { Some(p) => (match p.mode { ByTake => True, ByRead => False, ByWrite => False }) && r.code.same(p.code), None => False }) = True →
+    (match ps.nth(i) as λ o => ps.nth(i) = o → (match o { Some(p) => (match p.mode { ByTake => Shape::moves(tys, strs, p.code), ByRead => False, ByWrite => False }) && r.code.same(p.code), None => False }) = True →
             Exists<Param>(λ p => (ps.nth(i) = Some(p)) ∧ ((p.mode = ByTake) ∧ (r.code.same(p.code) = True))) {
         None => λ _ no => absurd(no),
         Some(p) => λ hp c => {
-            let q = Bool::and_true_parts(match p.mode { ByTake => True, ByRead => False, ByWrite => False }, r.code.same(p.code), c);
-            Exists(p, ⟨hp, ⟨(match p.mode as λ md => (match md { ByTake => True, ByRead => False, ByWrite => False }) = True → md = ByTake {
+            let q = Bool::and_true_parts(match p.mode { ByTake => Shape::moves(tys, strs, p.code), ByRead => False, ByWrite => False }, r.code.same(p.code), c);
+            Exists(p, ⟨hp, ⟨(match p.mode as λ md => (match md { ByTake => Shape::moves(tys, strs, p.code), ByRead => False, ByWrite => False }) = True → md = ByTake {
                 ByTake => λ _ => refl, ByRead => λ no => absurd(no), ByWrite => λ no => absurd(no),
             })(q.left), q.right⟩⟩)
         },
