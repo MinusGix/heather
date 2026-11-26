@@ -2239,6 +2239,31 @@ inside a callee are compiled and tracked (`bytes_level_routines_tests`:
 exiting at every fuel that enters them); the control is an exit whose status
 no id holds, refused.
 
+**The world beside the heap (same round, item 2).** A region's code is
+proved at the state `Now`: the heap, injected into memory as before
+(`now_in`), and the world, which the machine's must equal (`NowWorld`).
+Every region claim is at Linux (`Site::linux_kernel`), and so are the
+callee contracts (`CalleesReturn` is a `ReturnsClaim` at Linux). A claim
+counts the system calls it makes as the exchanges its world gained
+(`calls_between(before, after)`), so the counts are read off the worlds and
+never carried by hand:
+
+- `Site::linux_performs_exact` (call contract): a Linux claim whose goal
+  pins the world makes exactly as many calls as that world has exchanges
+  past the start, since each resumption records one. `Site::claims_exact`,
+  `emits_now_exact` and `claims_stop_exact` apply it. It is needed because
+  a sequence's two counts are fixed across its middle state, but a loop's
+  count (`loop_iterates_claim`) is existential.
+- A sequence's facts say its middle history lies between the two ends
+  (`Between`), and `emits_now_up` raises a part's count to the whole's.
+  `holds_of` proves `Between` from `HistoryGrows`: a run's history only
+  grows (`Body::run_grows`; a program's, `program_grows`).
+- The done side (`Body::emit_emits`, `routine_body`, `routine_runs`,
+  `program_returns`) is `EmitsClaim` at `Site::linux_kernel`. The quiet
+  lemmas (`program_quiet`, `program_stop_quiet`) are deleted: the
+  inductions carry the world in their facts, and `program_tracks` reads the
+  done side by `performs_weaken` of the routine's `ReturnsClaim`.
+
 ## 18. The world, termination, and level 2 fixed (2026-11-25)
 
 Round six of the design review. Where this section and §15.4, §15.5 or §17
