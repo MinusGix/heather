@@ -69,13 +69,19 @@ fn strs() → Strs(tys()) {
 // A program's functions; its signatures; the verdict of its function `g`.
 fn sigs_of(fs: List<Func>) → Nat → Sig { λ g => (fs.nth(g).unwrap_or(Func(Sig(Nil, Nil), Ret(Nil)))).sig }
 
-fn verdict_in(fs: List<Func>, prim: Nat → Bool, g: Nat) → Option<Owes> { check(tys(), strs(), sigs_of(fs), prim, g, fs.nth(g).unwrap_or(Func(Sig(Nil, Nil), Ret(Nil)))) }
+// Which functions are primitives, and which are measured (have a `need`).
+fn verdict_m(fs: List<Func>, prim, meas: Nat → Bool, g: Nat) → Option<Owes> { check(tys(), strs(), sigs_of(fs), prim, meas, g, fs.nth(g).unwrap_or(Func(Sig(Nil, Nil), Ret(Nil)))) }
+
+// A program whose functions are all measured, so each call owes its measure.
+fn verdict_in(fs: List<Func>, prim: Nat → Bool, g: Nat) → Option<Owes> { verdict_m(fs, prim, λ _ => True, g) }
 
 // A program none of whose callees is a primitive.
 fn verdict(fs: List<Func>, g: Nat) → Option<Owes> { verdict_in(fs, λ _ => False, g) }
 
 // Why the pass refused a function, if it did.
-fn refusal_in(fs: List<Func>, g: Nat) → Option<Why> { (fs.nth(g).unwrap_or(Func(Sig(Nil, Nil), Ret(Nil)))).refusal(tys(), strs(), sigs_of(fs), λ _ => False, g) }
+fn refusal_m(fs: List<Func>, meas: Nat → Bool, g: Nat) → Option<Why> { (fs.nth(g).unwrap_or(Func(Sig(Nil, Nil), Ret(Nil)))).refusal(tys(), strs(), sigs_of(fs), λ _ => False, meas, g) }
+
+fn refusal_in(fs: List<Func>, g: Nat) → Option<Why> { refusal_m(fs, λ _ => True, g) }
 
 // The words a function takes by value, after its object.
 fn words(n: Nat) → List<Param> { List::replicate(Param(nat_s(), ByTake), n) }
@@ -443,6 +449,18 @@ fn at_moved() → Func {
 }
 
 theorem at_moved_refused(): refusal_in([at_moved()], 0) = Some(WOwn) { refl }
+
+// A taken parameter returned, written in between: checked. Passed by value,
+// it comes back a plain value that is not the argument (`[1]` became
+// `[9]`); `Value::ViewIs` asks identity only of a referring argument, and
+// before it asked it of the copy, so this checked function was not safe.
+fn keep() → Func { Func(Sig([Param(nx(), ByTake)], [Result(nx(), OParam(0))]), seq([Lit(WNat, 9), Write(el(x(), Lit(0)), Loc(0))], Ret([x()]))) }
+
+theorem keep_checked(): verdict([keep()], 0) = Some(ODo(Nil, ODo([acc_el(x(), Lit(0))], OEnd))) { refl }
+
+fn plain_list(xs: List<Nat>) → Value(tys()) { Plain(Dyn(nx(), xs)) }
+
+theorem keep_by_value(): Value::ViewIs(tys(), strs(), 0, [plain_list([1])], Nil, nx(), OParam(0), plain_list([9])) { refl }
 
 // The view lies at `Span(k, 1)` in the caller's words, so the write at `j`
 // owes `k + 1 <= j ∨ j + 1 <= k`. Locals at the end: [a, 9, t].
@@ -1022,7 +1040,9 @@ fn prim0() → Nat → Bool { λ g => g.same(0) }
 
 theorem len_prim_checked(): verdict_in([len_fn(), guarded()], prim0(), 0) = Some(OEnd) { refl }
 
-theorem guarded_prim_checked(): verdict_in([len_fn(), guarded()], prim0(), 1) = verdict([len_fn(), guarded()], 1) { refl }
+// A call of a primitive owes no measure (its run is the world's, done at
+// once): as if the caller were unmeasured.
+theorem guarded_prim_checked(): verdict_in([len_fn(), guarded()], prim0(), 1) = verdict_m([len_fn(), guarded()], λ _ => False, λ _ => False, 1) { refl }
 
 // A primitive that writes its parameter, or answers a view: refused, and
 // so is a call of one.
@@ -1050,6 +1070,17 @@ fn both_ctx(xs: List<Nat>, i, j: Nat) → Ctx(tys()) {
 }
 
 fn both_owes() → Owes { ODo([RPre(0, [x(), Arg(1)]), RMeasure(0, [x(), Arg(1)])], ODo([RPre(0, [x(), Arg(2)]), RMeasure(0, [x(), Arg(2)])], OEnd)) }
+
+// An unmeasured function owes no measure (nothing claims it terminates),
+// at a call and at its `Jump`; a measured one calling an unmeasured one is
+// refused, there being no measure to compare (`WMeasure`).
+theorem both_unmeasured(): verdict_m([pick(), both()], λ _ => False, λ _ => False, 1) = Some(ODo([RPre(0, [x(), Arg(1)])], ODo([RPre(0, [x(), Arg(2)])], OEnd))) { refl }
+
+theorem drain_unmeasured(): verdict_m([drain()], λ _ => False, λ _ => False, 0) = Some(ODo(Nil, OJoin(ODo(Nil, OJump([RPre(0, [Loc(0)])])), OEnd, OEnd))) { refl }
+
+theorem both_of_unmeasured_refused(): refusal_m([pick(), both()], λ g => g.same(1), 1) = Some(WMeasure) { refl }
+
+theorem both_of_measured_checked(): refusal_m([pick(), both()], λ _ => True, 1) = None { refl }
 
 // Each call's precondition is the source's own hypothesis, by conversion;
 // each measure is `1 < 2`.

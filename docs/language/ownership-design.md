@@ -3803,3 +3803,71 @@ referring cell is never set. The final meaning must also `Fits` the argument
 as passed, keeping its code and length. Every write keeps the root's code
 and length, but `Inv` holds no original value of a plain argument. Where
 that fact lives is put to the coordinating session.
+
+### 23.13 `Ret`: what it needs, and four corrections (2026-11-26, fifth session)
+
+**The measure.** `RMeasure` was owed at every call and every `Jump`, and
+`Prog::ctx` reads an absent `need` as zero, so an unmeasured function that
+called or jumped owed `0 < 0`: its `Due` was `False` and `CheckSound`
+vacuous for it. The uniform rule "at every call" was right for measured
+callers and silently wrong at `None`. The design (§21.3, §21.4) has two
+kinds of function, a measured one whose run is `Done` from its `need` and an
+unmeasured one of whose termination nothing is claimed; so now the checker
+is told which functions are measured (`Checker` takes `Nat → Bool`,
+`CheckSound` passes `Prog::measured`). A measured function owes `RMeasure`
+at each call of a callee with a body and at its `Jump`, and is refused a call
+of an unmeasured one (`WMeasure`: there is no measure to compare); an
+unmeasured one owes none; a primitive's call owes none (its run is the
+world's, done at once). `SafeAt` already asked "`Done` from `need`" only where
+`need` is `Some`. Probes `both_unmeasured`, `drain_unmeasured`,
+`both_of_unmeasured_refused`, `guarded_prim_checked`. No probe had passed by a
+`0 < 0` under an unsuppliable hypothesis: the only discharged `Due` with a
+measure is `both_due` (`1 < 2`).
+
+**A returned view's words are the arguments as passed.** `Value::Views`
+reads a signature's place at the call's words, the arguments as passed then
+the results, so a function may not move an argument before using it in a
+returned view's place. `CSt::sig_atom` mapped an argument atom to the
+argument's level as it is at `Ret`, and a plain argument may be written
+before the view is opened (the write is refused only while a region reads
+it). Now an argument level ever written is refused as a signature atom; a
+plain write is recorded in `wrote` for it (`CSt::wrote_to`). Probe
+`at_moved_refused`. This is the second accepted program found whose run did
+not match its signature; the first was at a join. The meaning's side of the
+same fact is `Like`'s clause that an unwritten argument has its entry value.
+
+**`Value::ViewIs` at `OParam`**: the result is the argument itself where the
+argument refers, and a plain value where it was plain. It asked identity of
+a copy: `keep` (a taken list written and returned) is checked, and at a
+plain argument the run answers the changed value. Probe `keep_by_value`.
+
+**`Value::Written`** says a referring written argument's slot in the answer
+is the argument itself (decided for the call: the caller's view of what it
+lent stays its own reference). What the slot reads is `ReadAll`'s, so the
+read is no longer stated there.
+
+**What `Ret` needs of the start**, added to `Inv`: `args` (an argument
+object's root is what its argument's cell refers to), `href` (a live holder
+of an object with a root refers to it), `made` (an object past the
+arguments has its root at a block past `h0`, with no selections: `ViewIs`'s
+`OFresh`) and `nbase` (`na ≤ nobj`, so a fresh object is never an
+argument's). Linking the root at `Ret` to the values passed is a fact about
+two states, so it is a field of `Stepped`, not of `Inv`: `kept`, a stage
+keeps every argument cell's reference (a referring cell is never set).
+
+**A written parameter's fit is not a fact of the meaning alone.** The
+decision was a lemma over the meaning: every write keeps what it writes
+into like itself, so a written parameter's value at `Ret` fits its value at
+entry. A call's written slot is written back owing nothing, and is the
+callee's meaning, which the world leaves arbitrary. So
+`f(p: Bytes write) { Call(g, [p], 1); Write(Place(Arg 0, Nil), Loc 0); Ret([Arg 0]) }`
+is checked with its residuals holding, and with `w(g, [d]) = [d']` of another
+length its written parameter does not fit. Only g's own safety says it fits
+(`SafeAt`'s `Written` at less fuel). So the fact is `Like`, a record over the
+checker's state, the meaning's environment and the entry arguments (no
+machine), with one meaning step per statement kind. Its `Write` step takes
+"what is written is like what is at the place"; the verdict gives that at an
+ordinary write (`RFits`, or the code check and `Dyn::len_non_seq`),
+`Inv::back_like` at a write-back (where the licence's apartness lives), and
+`CallFits` at a call and a `Jump`, from the callee's safety. It is carried
+beside `Inv` in the body's induction, not inside it.

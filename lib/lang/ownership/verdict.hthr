@@ -258,14 +258,15 @@ fn Value::Written(tys: Nat → Type, strs: Strs(tys), vs: List<Value(tys)>, ds: 
 
 // Each result, after, as its origin says: a fresh one is plain or a block
 // this call made (none below the heap's length before it, so no argument
-// reaches it); a parameter's is the argument itself; a view is the
+// reaches it); a parameter's is the argument itself where it refers (one
+// passed by value comes back a plain value, changed or not); a view is the
 // argument's reference narrowed by the steps the signature names, read at
 // the call's words: the arguments', then the results'.
 fn Value::ViewIs(tys: Nat → Type, strs: Strs(tys), n: Nat, vs: List<Value(tys)>, ws: List<Ix>, code: Shape, org: Origin, o: Value(tys)) → Type {
     match org {
         OView(i, xs) => match vs.nth(i) { Some(v) => match v { Refer(r) => o = Refer(r.narrow(ws, xs)), Plain(_) => False }, None => False },
         OFresh => match o { Plain(_) => True, Refer(r) => (Shape::plain(tys, strs, code) = False) ∧ (n <= r.b) ∧ (r.sels = Nil) },
-        OParam(i) => vs.nth(i) = Some(o),
+        OParam(i) => match vs.nth(i) { Some(v) => match v { Refer(r) => o = Refer(r), Plain(_) => Value::refers(tys, o) = False }, None => False },
     }
 }
 
@@ -323,9 +324,11 @@ fn Sig::reads_only(tys: Nat → Type, strs: Strs(tys), sg: Sig) → Bool {
 }
 
 // A checker: from the environment's structures, the program's signatures,
-// which callees are primitives and a function's index, its verdict, or a
-// refusal.
-fn Checker(tys: Nat → Type) → Type<1> { Strs(tys) → (Nat → Sig) → (Nat → Bool) → Nat → Func → Option<Owes> }
+// which callees are primitives, which functions are measured (have a
+// `need`) and a function's index, its verdict, or a refusal.
+fn Checker(tys: Nat → Type) → Type<1> { Strs(tys) → (Nat → Sig) → (Nat → Bool) → (Nat → Bool) → Nat → Func → Option<Owes> }
+
+fn Prog::measured(tys: Nat → Type, self p: Prog(tys), g: Nat) → Bool { match p.need(g) { Some(_) => True, None => False } }
 
 // Each function's pin: its meaning in the world is its body's, pointwise.
 fn Prog::Pinned(tys: Nat → Type, p: Prog(tys)) → Type {
@@ -336,6 +339,6 @@ fn Prog::Pinned(tys: Nat → Type, p: Prog(tys)) → Type {
 // what it owes holding at every argument list meeting the function's
 // precondition, give the function's safety.
 fn CheckSound(tys: Nat → Type, check: Checker(tys)) → Type<1> {
-    (p: Prog(tys)) → Prog::Pinned(tys, p) → (g: Nat) → (d: Owes) → check(p.strs, λ g2 => (p.fns(g2)).sig, p.prim, g, p.fns(g)) = Some(d) →
+    (p: Prog(tys)) → Prog::Pinned(tys, p) → (g: Nat) → (d: Owes) → check(p.strs, λ g2 => (p.fns(g2)).sig, p.prim, λ g2 => p.measured(tys, g2), g, p.fns(g)) = Some(d) →
         ((args: List<Dyn(tys)>) → Dyn::Coded(tys, args, (p.fns(g)).sig.params) → p.pres(g, args) → d.Due(tys, Prog::ctx(tys, p, g, args), p.fns(g))) → Safety(tys, p, g)
 }

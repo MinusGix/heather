@@ -153,7 +153,7 @@ theorem words_not_coded(): ¬Dyn::Coded(tys(), [nat(5), nat(1)], pick_r().sig.pa
 
 fn sigs() → Nat → Sig { λ g => match g { Zero => Sig([Param(SNamed(0), ByRead), Param(SWord(WNat), ByTake)], [Result(SWord(WNat), OFresh)]), Succ(_) => Sig(Nil, Nil) } }
 
-fn refused(f: Func, sg: Nat → Sig) → Option<Why> { f.refusal(tys(), strs(), sg, λ _ => False, 0) }
+fn refused(f: Func, sg: Nat → Sig) → Option<Why> { f.refusal(tys(), strs(), sg, λ _ => False, λ _ => True, 0) }
 
 theorem pick_coded(): refused(pick_r(), sigs()) = None { refl }
 
