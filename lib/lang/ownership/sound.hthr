@@ -1033,6 +1033,15 @@ theorem CSt::wpar_keep(s, s2: CSt, en: VEnt, role: s2.role(en.par) = s.role(en.p
     λ rv => match w(trans(sym(role), rv)) { ⟨pe, pp⟩ => Exists(pe, ⟨trans(ents, pp.left), pp.right⟩) }
 }
 
+fn Value::refers(tys: Nat → Type, v: Value(tys)) → Bool { match v { Plain(_) => False, Refer(_) => True } }
+
+// A live entry's cell and its parent's both refer or are both copies: a
+// view's cell is its parent's narrowed, or a copy of a copy.
+fn CSt::Uni(tys: Nat → Type, s: CSt, env: REnv(tys)) → Type {
+    (en: VEnt) → Mem(en, s.views) → (x, y: Var) → s.lvl(x) = Some(en.lvl) → s.lvl(y) = Some(en.par) →
+        Value::refers(tys, (REnv::get(tys, env, x)).v) = Value::refers(tys, (REnv::get(tys, env, y)).v)
+}
+
 record Inv(tys: Nat → Type, strs: Strs(tys), s: CSt, e: Env(tys), m: Mach(tys), h0: Heap(tys), lent: Nat → Bool) {
     sim: Sim(tys, strs, s, s.patched(tys, strs, e, m), m),
     root: Nat → Option<Ref>,
@@ -1055,6 +1064,7 @@ record Inv(tys: Nat → Type, strs: Strs(tys), s: CSt, e: Env(tys), m: Mach(tys)
         e1.lvl.member(s.anc_of(e2, s.na + s.nd)) = False → e2.lvl.member(s.anc_of(e1, s.na + s.nd)) = False →
         Sel::Apart(tys, strs, Steps::sels(s.unsteps(e1.reg), Mach::ixs(tys, strs, m)), Steps::sels(s.unsteps(e2.reg), Mach::ixs(tys, strs, m))),
     wpar: (en: VEnt) → Mem(en, s.views) → en.mode.writes() = True → s.WPar(en),
+    uni: CSt::Uni(tys, s, m.env),
 }
 
 // Where nothing is pending, the invariant's first part is `Sim` itself.
@@ -1555,6 +1565,7 @@ theorem Inv::start(tys: Nat → Type, strs: Strs(tys), sig: Sig, vs: List<Value(
         },
         λ en no => false_elim(no),
         λ e1 e2 no => false_elim(no),
+        λ en no => false_elim(no),
         λ en no => false_elim(no))
 }
 
@@ -1815,6 +1826,35 @@ theorem CSt::push_lvl(self s: CSt, c: CVar, x: Var, l: Nat, h: (s.push(c)).lvl(x
     })(h)
 }
 
+// `Uni` after a push: an old entry's variables moved up one, a new entry's
+// variable the pushed one.
+theorem CSt::uni_push(tys: Nat → Type, s: CSt, cv: CVar, env: REnv(tys), c: Cell(tys), u: CSt::Uni(tys, s, env),
+    lt: (en: VEnt) → Mem(en, s.views) → en.par < s.na + s.nd,
+    new: (en: VEnt) → Mem(en, s.views) → en.lvl = s.na + s.nd → (y0: Var) → s.lvl(y0) = Some(en.par) → Value::refers(tys, c.v) = Value::refers(tys, (REnv::get(tys, env, y0)).v)):
+    CSt::Uni(tys, s.push(cv), REnv::push(tys, env, c))
+{
+    let env2 = REnv::push(tys, env, c);
+    λ en mem x y hx hy => match s.push_lvl(cv, y, en.par, hy) {
+        Inl(py) => false_elim(Nat::lt_irrefl(en.par, omega(lt(en, mem), py.right))),
+        Inr(ey) => match ey {
+            ⟨y0, py⟩ => {
+                let gy: (Value::refers(tys, (REnv::get(tys, env2, y)).v) = Value::refers(tys, (REnv::get(tys, env, y0)).v)) =
+                    j(sym(py.left), λ z _ => Value::refers(tys, (REnv::get(tys, env2, z)).v) = Value::refers(tys, (REnv::get(tys, env, y0)).v),
+                        cong_fn(λ (q: Cell(tys)) => Value::refers(tys, q.v), REnv::get_push_up(tys, env, c, y0)));
+                match s.push_lvl(cv, x, en.lvl, hx) {
+                    Inl(px) => trans(j(sym(px.left), λ z _ => Value::refers(tys, (REnv::get(tys, env2, z)).v) = Value::refers(tys, c.v), refl),
+                        trans(new(en, mem, px.right, y0, py.right), sym(gy))),
+                    Inr(ex) => match ex {
+                        ⟨x0, px⟩ => trans(j(sym(px.left), λ z _ => Value::refers(tys, (REnv::get(tys, env2, z)).v) = Value::refers(tys, (REnv::get(tys, env, x0)).v),
+                                cong_fn(λ (q: Cell(tys)) => Value::refers(tys, q.v), REnv::get_push_up(tys, env, c, x0))),
+                            trans(u(en, mem, x0, y0, px.right, py.right), sym(gy))),
+                    },
+                }
+            },
+        },
+    }
+}
+
 theorem List::nth_map_insert<A, B>(self xs: List<A>, c: A, ys: List<A>, f: A → B, k: Nat): ((xs ++ Cons(c, ys)).map(f)).nth(k + 1 + xs.len()) = ((xs ++ ys).map(f)).nth(k + xs.len()) {
     match xs { Nil => refl, Cons(_, rest) => rest.nth_map_insert(c, ys, f, k) }
 }
@@ -1942,7 +1982,9 @@ theorem Inv::push_plain(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(ty
             ⟨cc.left, CSt::parent_keep(s, s2, en, s.role_push(cv, en.par, omega(cc.left, (inv.vents(en, mem)).right.left)), refl, cc.right)⟩
         },
         CSt::excl_keep(tys, strs, s, s2, ws, ws2, refl, omega(), λ en mem => (inv.chain(en, mem)).left, λ en mem => (inv.vents(en, mem)).right.left, regs, inv.excl),
-        λ en mem w => CSt::wpar_keep(s, s2, en, s.role_push(cv, en.par, omega((inv.chain(en, mem)).left, (inv.vents(en, mem)).right.left)), refl, inv.wpar(en, mem, w)))
+        λ en mem w => CSt::wpar_keep(s, s2, en, s.role_push(cv, en.par, omega((inv.chain(en, mem)).left, (inv.vents(en, mem)).right.left)), refl, inv.wpar(en, mem, w)),
+        CSt::uni_push(tys, s, cv, m.env, c, inv.uni, λ en mem => omega((inv.chain(en, mem)).left, (inv.vents(en, mem)).right.left),
+            λ en mem at => false_elim(Nat::lt_irrefl(en.lvl, omega((inv.vents(en, mem)).right.left, at)))))
 }
 
 // ---------------------------------------------------------------------------
@@ -2308,7 +2350,9 @@ theorem Inv::fresh(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, 
             ⟨cc.left, CSt::parent_keep(s, s2, en, s.role_push(cv, en.par, omega(cc.left, (inv.vents(en, mem)).right.left)), refl, cc.right)⟩
         },
         CSt::excl_keep(tys, strs, s, s2, ws, ws2, refl, omega(), λ en mem => (inv.chain(en, mem)).left, λ en mem => (inv.vents(en, mem)).right.left, regs, inv.excl),
-        λ en mem w => CSt::wpar_keep(s, s2, en, s.role_push(cv, en.par, omega((inv.chain(en, mem)).left, (inv.vents(en, mem)).right.left)), refl, inv.wpar(en, mem, w)))
+        λ en mem w => CSt::wpar_keep(s, s2, en, s.role_push(cv, en.par, omega((inv.chain(en, mem)).left, (inv.vents(en, mem)).right.left)), refl, inv.wpar(en, mem, w)),
+        CSt::uni_push(tys, s, cv, m.env, cn, inv.uni, λ en mem => omega((inv.chain(en, mem)).left, (inv.vents(en, mem)).right.left),
+            λ en mem at => false_elim(Nat::lt_irrefl(en.lvl, omega((inv.vents(en, mem)).right.left, at)))))
 }
 
 // A value read at its own code is there.
@@ -2506,7 +2550,7 @@ theorem Inv::gone(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {
             ⟨cc.left, CSt::parent_keep(s, s2, en, other(en.par, pb, nopar(en, mem)), refl, cc.right)⟩
         },
         inv.excl,
-        λ en mem w => CSt::wpar_keep(s, s2, en, other(en.par, omega((inv.chain(en, mem)).left, (inv.vents(en, mem)).right.left), nopar(en, mem)), refl, inv.wpar(en, mem, w)))
+        λ en mem w => CSt::wpar_keep(s, s2, en, other(en.par, omega((inv.chain(en, mem)).left, (inv.vents(en, mem)).right.left), nopar(en, mem)), refl, inv.wpar(en, mem, w)), inv.uni)
 }
 
 // ---------------------------------------------------------------------------
@@ -2695,7 +2739,7 @@ theorem Inv::kill(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {
             Inr(ne) => inv.bare(o2, r2, h1, ob, trans(sym(killed(r2.b, ne)), hob)),
         },
         ig.chain,
-        CSt::excl_keep(tys, strs, s2, s2, ws, ws2, refl, omega(), λ en mem => (ig.chain(en, mem)).left, λ en mem => (ig.vents(en, mem)).right.left, regs, ig.excl), ig.wpar)
+        CSt::excl_keep(tys, strs, s2, s2, ws, ws2, refl, omega(), λ en mem => (ig.chain(en, mem)).left, λ en mem => (ig.vents(en, mem)).right.left, regs, ig.excl), ig.wpar, ig.uni)
 }
 
 // ---------------------------------------------------------------------------
@@ -2918,7 +2962,9 @@ theorem Inv::push_hold(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys
             ⟨cc.left, CSt::parent_keep(s, s2, en, s.role_push(cv, en.par, omega(cc.left, (inv.vents(en, mem)).right.left)), refl, cc.right)⟩
         },
         CSt::excl_keep(tys, strs, s, s2, ws, ws2, refl, omega(), λ en mem => (inv.chain(en, mem)).left, λ en mem => (inv.vents(en, mem)).right.left, regs, inv.excl),
-        λ en mem w => CSt::wpar_keep(s, s2, en, s.role_push(cv, en.par, omega((inv.chain(en, mem)).left, (inv.vents(en, mem)).right.left)), refl, inv.wpar(en, mem, w)))
+        λ en mem w => CSt::wpar_keep(s, s2, en, s.role_push(cv, en.par, omega((inv.chain(en, mem)).left, (inv.vents(en, mem)).right.left)), refl, inv.wpar(en, mem, w)),
+        CSt::uni_push(tys, s, cv, m.env, c, inv.uni, λ en mem => omega((inv.chain(en, mem)).left, (inv.vents(en, mem)).right.left),
+            λ en mem at => false_elim(Nat::lt_irrefl(en.lvl, omega((inv.vents(en, mem)).right.left, at)))))
 }
 
 // ---------------------------------------------------------------------------
@@ -3461,6 +3507,7 @@ theorem Inv::push_view(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys
     nback: (en: VEnt) → Mem(en, ne) → (en.mode.writes() && !en.back) = False,
     nchg: (en: VEnt) → Mem(en, ne) → en.mode.writes() = True → s.Changes(en.obj),
     nwpar: (en: VEnt) → Mem(en, ne) → en.mode.writes() = True → s.WPar(en),
+    nuni: (en: VEnt) → Mem(en, ne) → (y0: Var) → s.lvl(y0) = Some(en.par) → Value::refers(tys, c.v) = Value::refers(tys, (REnv::get(tys, m.env, y0)).v),
     nref: (r: Ref) → c.v = Refer(r) → VEnt::Any(ne, λ en => (inv.root(en.obj)).map(λ r0 => r0.narrow(Mach::ixs(tys, strs, m), s.unsteps(en.reg))) = Some(r)),
     nx1: (e1, e2: VEnt) → Mem(e1, ne) → Mem(e2, s.views) → e1.mode.writes() = True → e1.obj = e2.obj → e2.lvl.member(s.anc_of(e1, s.na + s.nd)) = False →
         Sel::Apart(tys, strs, Steps::sels(s.unsteps(e1.reg), Mach::ixs(tys, strs, m)), Steps::sels(s.unsteps(e2.reg), Mach::ixs(tys, strs, m))),
@@ -3611,7 +3658,17 @@ theorem Inv::push_view(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys
         λ en mem w => match ne.mem_append(s.views, en, mem) {
             Inl(mn) => CSt::wpar_keep(s, s2, en, rolep(en.par, (nchain(en, mn)).left), eold(en.par, (nchain(en, mn)).left), nwpar(en, mn, w)),
             Inr(mo) => CSt::wpar_keep(s, s2, en, rolep(en.par, pall(en, mem)), eold(en.par, pall(en, mem)), inv.wpar(en, mo, w)),
-        })
+        },
+        CSt::uni_push(tys, sv, cv, m.env, c,
+            λ en mem x y hx hy => match ne.mem_append(s.views, en, mem) {
+                Inl(mn) => false_elim(Nat::lt_irrefl(nl, j(nlvl(en, mn), λ q _ => q < nl, s.lvl_below(x, en.lvl, hx)))),
+                Inr(mo) => inv.uni(en, mo, x, y, hx, hy),
+            },
+            pall,
+            λ en mem at y0 hy => match ne.mem_append(s.views, en, mem) {
+                Inl(mn) => nuni(en, mn, y0, hy),
+                Inr(mo) => false_elim(Nat::lt_irrefl(en.lvl, omega(lv(en, mo), at))),
+            }))
 }
 
 // ---------------------------------------------------------------------------
@@ -3844,6 +3901,10 @@ theorem CSt::meets_view(self s: CSt, l: Nat, md: Mode, en: VEnt, hr: s.role(l) =
 
 fn Cell::view_of(tys: Nat → Type, v: Value(tys), d: Dyn(tys), ws: List<Ix>, xs: List<Step>) → Cell(tys) { match v { Plain(_) => Cell::plain(tys, d), Refer(r) => Cell(Refer(r.narrow(ws, xs)), False) } }
 
+theorem Value::refers_view(tys: Nat → Type, v: Value(tys), d: Dyn(tys), ws: List<Ix>, xs: List<Step>): Value::refers(tys, (Cell::view_of(tys, v, d, ws, xs)).v) = Value::refers(tys, v) {
+    match v { Plain(_) => refl, Refer(_) => refl }
+}
+
 theorem Stmt::view_runs(tys: Nat → Type, strs: Strs(tys), fns: Nat → Func, call: Caller(tys), m: Mach(tys), p: Place, md: Mode, d: Dyn(tys),
     at: Mach::place(tys, strs, m, p) = Some(d), k: Mach(tys) → Ran(tys)):
     (View(p, md)).run(tys, strs, fns, call, m, k) = k(Mach::push(tys, m, Cell::view_of(tys, (REnv::get(tys, m.env, p.root)).v, d, Mach::ixs(tys, strs, m), p.steps)))
@@ -3870,6 +3931,7 @@ theorem Stmt::view_reads(tys: Nat → Type, strs: Strs(tys), h: Heap(tys), v: Va
 theorem Stmt::stage_view_core(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(tys, cx.strs), fns: Nat → Func, call: Caller(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: Nat → Bool},
     inv: Inv(tys, cx.strs, s, e, m, h0, lent), none: s.pending() = False, p: Place, md: Mode, g: Got, ok: s.read(tys, cx.strs, p) = Some(g), tail: Type, res: Residual::All(g.rs, tys, cx, e, tail),
     ne: List<VEnt>,
+    npar: (en: VEnt) → Mem(en, ne) → en.par = g.root,
     nlvl: (en: VEnt) → Mem(en, ne) → en.lvl = s.na + s.nd,
     nobj: (en: VEnt) → Mem(en, ne) → en.obj < s.nobj,
     nchain: (en: VEnt) → Mem(en, ne) → (en.par < s.na + s.nd) ∧ s.Parent(en),
@@ -3902,8 +3964,13 @@ theorem Stmt::stage_view_core(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(tys,
                 j(re, λ q _ => VEnt::Any(ne, λ en => (inv.root(en.obj)).map(λ r1 => r1.narrow(ws, s.unsteps(en.reg))) = Some(q)), nref(r0, ev))
             },
         })(refl);
+    let hroot: (s.lvl(p.root) = Some(g.root)) = (s.read_inv(tys, strs, p, g, ok)).lvl;
+    let nuni: ((en: VEnt) → Mem(en, ne) → (y0: Var) → s.lvl(y0) = Some(en.par) → Value::refers(tys, c.v) = Value::refers(tys, (REnv::get(tys, m.env, y0)).v)) = λ en mem y0 hy => {
+        let yr: (y0 = p.root) = trans(sym(s.lvl_var(y0, en.par, hy)), trans(cong_fn(λ (q: Nat) => s.var_at(q), npar(en, mem)), s.lvl_var(p.root, g.root, hroot)));
+        j(sym(yr), λ z _ => Value::refers(tys, c.v) = Value::refers(tys, (REnv::get(tys, m.env, z)).v), Value::refers_view(tys, (REnv::get(tys, m.env, p.root)).v, d, ws, p.steps))
+    };
     Stepped(Mach::push(tys, m, c), λ k => Stmt::view_runs(tys, strs, fns, call, m, p, md, d, at, k),
-        Inv::push_view(tys, strs, inv, none, g.code, ne, c, d, rd, Sim::place_code(tys, strs, sim, p, g, ok), nown, nlvl, nobj, nchain, nwords, nback, nchg, nwpar, nref2, nx1, nx2))
+        Inv::push_view(tys, strs, inv, none, g.code, ne, c, d, rd, Sim::place_code(tys, strs, sim, p, g, ok), nown, nlvl, nobj, nchain, nwords, nback, nchg, nwpar, nuni, nref2, nx1, nx2))
 }
 
 theorem List::mem_map_inv<A, B>(self xs: List<A>, f: A → B, b: B): Mem(b, xs.map(f)) → Exists<A>(λ a => Mem(a, xs) ∧ (b = f(a))) {
@@ -4023,6 +4090,7 @@ theorem Stmt::stage_view_hold_read(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws
         KPlain => False, KGone => False }, ⟨refl, refl⟩);
     let unst: (s.unsteps(g.at) = p.steps) = CSt::unsteps_steps(p.steps, s, g.at, ri.steps);
     Stmt::stage_view_core(tys, cx, sl, fns, call, inv, none, p, Reading, g, ok, tail, res, [en0],
+        λ en mem => j(sym(VEnt::mem_one(en, en0, mem)), λ q _ => q.par = g.root, refl),
         λ en mem => j(sym(VEnt::mem_one(en, en0, mem)), λ q _ => q.lvl = nl, refl),
         λ en mem => j(sym(VEnt::mem_one(en, en0, mem)), λ q _ => q.obj < s.nobj, inv.held(l, o, a, below, hr)),
         λ en mem => j(sym(VEnt::mem_one(en, en0, mem)), λ q _ => (q.par < nl) ∧ s.Parent(q), ⟨below, parent⟩),
@@ -4076,6 +4144,7 @@ theorem Stmt::stage_view_view_read(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws
     let regw = λ (pe: VEnt) (mp: Mem(pe, s.ents(l))) => s.lvls_app(pe.reg, g.at, λ l2 => (l2 < nl) ∧ ((s.role(l2)).plain() = True), λ l2 ml => pew(pe, mp, l2, ml), λ l2 ml => ⟨rlv.left(l2, ml), rlv.right(l2, ml)⟩);
     let selapp = λ (pe: VEnt) => trans(cong_fn(λ (xs: List<Step>) => Steps::sels(xs, ws), s.unsteps_app(pe.reg, g.at)), List::map_append(s.unsteps(pe.reg), s.unsteps(g.at), λ (a: Step) => a.sel(ws)));
     Stmt::stage_view_core(tys, cx, sl, fns, call, inv, none, p, Reading, g, ok, tail, res, ne,
+        λ en mem => match inv_of(en, mem) { ⟨pe, pp⟩ => j(sym(pp.right), λ q _ => q.par = g.root, refl) },
         λ en mem => match inv_of(en, mem) { ⟨pe, pp⟩ => j(sym(pp.right), λ q _ => q.lvl = nl, refl) },
         λ en mem => match inv_of(en, mem) { ⟨pe, pp⟩ => j(sym(pp.right), λ q _ => q.obj < s.nobj, (inv.vents(pe, mv(pe, pp.left))).left) },
         λ en mem => match inv_of(en, mem) {
@@ -4182,6 +4251,7 @@ theorem Stmt::stage_view_hold_write(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaw
     let unst: (s.unsteps(g.at) = p.steps) = CSt::unsteps_steps(p.steps, s, g.at, ri.steps);
     let ne_view: ((e1: VEnt) → Mem(e1, s.views) → ¬(e1.lvl = l)) = λ e1 m1 eq => absurd(trans(sym((inv.vents(e1, m1)).right.right), trans(cong_fn(λ (q: Nat) => s.role(q), eq), hr)));
     Stmt::stage_view_core(tys, cx, sl, fns, call, inv, none, p, Writing, g, ok, True, sp.left, [en0],
+        λ en mem => j(sym(VEnt::mem_one(en, en0, mem)), λ q _ => q.par = g.root, refl),
         λ en mem => j(sym(VEnt::mem_one(en, en0, mem)), λ q _ => q.lvl = nl, refl),
         λ en mem => j(sym(VEnt::mem_one(en, en0, mem)), λ q _ => q.obj < s.nobj, inv.held(l, o, a, below, hr)),
         λ en mem => j(sym(VEnt::mem_one(en, en0, mem)), λ q _ => (q.par < nl) ∧ s.Parent(q), ⟨below, parent⟩),
@@ -4250,6 +4320,7 @@ theorem Stmt::stage_view_view_write(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaw
                 trans(cong_fn(λ (xs: List<Step>) => Steps::sels(xs, ws), s.unsteps_app(pe1.reg, g.at)), List::map_append(s.unsteps(pe1.reg), s.unsteps(g.at), λ (a: Step) => a.sel(ws)));
             let ne_l: ((e1: VEnt) → Mem(e1, s.views) → e1.lvl.member(s.anc_of(en0, nl)) = False → ¬(e1.lvl = l)) = λ e1 m1 a1 => (s.anc_new(lt, en0, l, refl, refl, below, e1.lvl, a1)).left;
             Stmt::stage_view_core(tys, cx, sl, fns, call, inv, none, p, Writing, g, ok, True, sp.left, [en0],
+                λ en mem => j(sym(VEnt::mem_one(en, en0, mem)), λ q _ => q.par = g.root, refl),
                 λ en mem => j(sym(VEnt::mem_one(en, en0, mem)), λ q _ => q.lvl = nl, refl),
                 λ en mem => j(sym(VEnt::mem_one(en, en0, mem)), λ q _ => q.obj < s.nobj, (inv.vents(pe1, mv1)).left),
                 λ en mem => j(sym(VEnt::mem_one(en, en0, mem)), λ q _ => (q.par < nl) ∧ s.Parent(q), ⟨below,
@@ -4938,7 +5009,8 @@ theorem Inv::words_after(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(t
 // new meaning; no region reads it, and the heap is as it was.
 theorem Inv::set_cell(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: Nat → Bool}, inv: Inv(tys, strs, s, e, m, h0, lent),
     none: s.pending() = False, x: Var, l: Nat, hl: s.lvl(x) = Some(l), nrf: s.in_regions(l) = False, f: Dyn(tys) → Dyn(tys), c: Cell(tys),
-    agr: Cell::Agrees(tys, strs, m.heap, s.role(l), c, f(Env::get(tys, e, x))), code: (f(Env::get(tys, e, x))).code = (s.var(l)).code, nref: (r: Ref) → c.v = Refer(r) → False):
+    agr: Cell::Agrees(tys, strs, m.heap, s.role(l), c, f(Env::get(tys, e, x))), code: (f(Env::get(tys, e, x))).code = (s.var(l)).code, nref: (r: Ref) → c.v = Refer(r) → False,
+    cref: Value::refers(tys, (REnv::get(tys, m.env, x)).v) = False):
     Inv(tys, strs, s, Env::set(tys, e, x, f), Mach(m.heap, REnv::set(tys, m.env, x, c), m.io), h0, lent)
 {
     let sim = Inv::sim_now(tys, strs, inv, none);
@@ -4995,7 +5067,20 @@ theorem Inv::set_cell(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)
     let le0: (s.na + s.nd <= s.na + s.nd) = omega();
     Inv(j(sym(s.patched_none(tys, strs, e2, m2, none)), λ q _ => Sim(tys, strs, s, q, m2), sim2), inv.root,
         refs2, inv.apart, inv.inheap, inv.owned, own2, inv.one, inv.words, inv.frame, inv.grows, inv.young, inv.held, inv.vents, inv.bare, inv.chain,
-        CSt::excl_keep(tys, strs, s, s, Mach::ixs(tys, strs, m), Mach::ixs(tys, strs, m2), refl, le0, λ en me => (inv.chain(en, me)).left, λ en me => (inv.vents(en, me)).right.left, regs, inv.excl), inv.wpar)
+        CSt::excl_keep(tys, strs, s, s, Mach::ixs(tys, strs, m), Mach::ixs(tys, strs, m2), refl, le0, λ en me => (inv.chain(en, me)).left, λ en me => (inv.vents(en, me)).right.left, regs, inv.excl), inv.wpar,
+        λ en me y z hy hz => {
+            let rk = λ (w: Var) (k: Nat) (hw: s.lvl(w) = Some(k)) => match Nat::eq_or_ne(k, l) {
+                Inl(eq) => {
+                    let wx: (w = x) = isroot(w, k, hw, eq);
+                    let cf: (Value::refers(tys, c.v) = False) = match c.v as λ u => ((r: Ref) → u = Refer(r) → False) → Value::refers(tys, u) = False {
+                        Plain(_) => λ _ => refl, Refer(r) => λ no => false_elim(no(r, refl)) }(nref);
+                    j(sym(wx), λ q _ => Value::refers(tys, (REnv::get(tys, m2.env, q)).v) = Value::refers(tys, (REnv::get(tys, m.env, q)).v),
+                        trans(cong_fn(λ (cc: Cell(tys)) => Value::refers(tys, cc.v), m2root), trans(cf, sym(cref))))
+                },
+                Inr(ne) => cong_fn(λ (cc: Cell(tys)) => Value::refers(tys, cc.v), mcell(w, other(w, k, hw, ne))),
+            };
+            trans(rk(y, en.lvl, hy), trans(inv.uni(en, me, y, z, hy, hz), sym(rk(z, en.par, hz))))
+        })
 }
 
 // A holder's block stored: the holder reads its new meaning; every other
@@ -5114,7 +5199,7 @@ theorem Inv::store(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, 
         inv.young, inv.held, inv.vents,
         λ o3 r3 h3 ob ho => match Heap::obj_store_holes(tys, m.heap, r.b, r3.b, nw, ob, ho) { ⟨o0, po⟩ => trans(po.right, inv.bare(o3, r3, h3, o0, po.left)) },
         inv.chain,
-        CSt::excl_keep(tys, strs, s, s, ws, ws2, refl, le0, λ en me => (inv.chain(en, me)).left, λ en me => (inv.vents(en, me)).right.left, regs, inv.excl), inv.wpar)
+        CSt::excl_keep(tys, strs, s, s, ws, ws2, refl, le0, λ en me => (inv.chain(en, me)).left, λ en me => (inv.vents(en, me)).right.left, regs, inv.excl), inv.wpar, inv.uni)
 }
 
 // ---------------------------------------------------------------------------
@@ -5190,7 +5275,7 @@ theorem Stmt::stage_write_plain(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(ty
     let agr: Cell::Agrees(tys, strs, m.heap, s.role(wi.l), c2, f2(old)) =
         j(sym(hp2), λ rr _ => Cell::Agrees(tys, strs, m.heap, rr, c2, f2(old)), cong_fn(λ (q: Dyn(tys)) => level2::Plain(q), sym(wsv)));
     let code: ((f2(old)).code = (s.var(wi.l)).code) = trans(cong_fn(λ (q: Dyn(tys)) => q.code, wsv), trans(wk.left, sim.codes(p.root, wi.l, wi.hl)));
-    let iv = Inv::set_cell(tys, strs, inv, none, p.root, wi.l, wi.hl, wf.nrf, f2, c2, agr, code, λ r0 eq => absurd(eq));
+    let iv = Inv::set_cell(tys, strs, inv, none, p.root, wi.l, wi.hl, wf.nrf, f2, c2, agr, code, λ r0 eq => absurd(eq), cong_fn(λ (u: Value(tys)) => Value::refers(tys, u), pc));
     let wt: (s.wrote_to(wi.l) = s) = j(sym(hp2), λ r _ => (match r as λ _ => CSt { KPlain => s, KHold(_, _) => s.written(wi.l).unback(wi.l), KView => s.written(wi.l).unback(wi.l), KGone => s.written(wi.l).unback(wi.l) }) = s, refl);
     Stepped(Mach(m.heap, REnv::set(tys, m.env, p.root, c2), m.io), λ k => Stmt::write_runs_plain(tys, strs, fns, call, m, p, v, vd, wf.vx, old, pc, nw, put, k),
         j(sym(trans(wf.nst, wt)), λ q _ => Inv(tys, strs, q, Env::set(tys, e, p.root, f2), Mach(m.heap, REnv::set(tys, m.env, p.root, c2), m.io), h0, lent), iv))
@@ -5244,7 +5329,7 @@ theorem Stmt::stage_write_hold(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(tys
             let m2: Mach(tys) = Mach(m.heap, REnv::set(tys, m.env, p.root, c2), m.io);
             let agr: Cell::Agrees(tys, strs, m.heap, s.role(wi.l), c2, f2(old)) =
                 j(sym(hr2), λ rr _ => Cell::Agrees(tys, strs, m.heap, rr, c2, f2(old)), cong_fn(λ (q: Dyn(tys)) => Some(q), sym(wsv)));
-            let iv = Inv::set_cell(tys, strs, inv, none, p.root, wi.l, wi.hl, wf.nrf, f2, c2, agr, code, λ r0 eq => absurd(eq));
+            let iv = Inv::set_cell(tys, strs, inv, none, p.root, wi.l, wi.hl, wf.nrf, f2, c2, agr, code, λ r0 eq => absurd(eq), cong_fn(λ (u: Value(tys)) => Value::refers(tys, u), pc));
             Stepped(m2, λ k => Stmt::write_runs_plain(tys, strs, fns, call, m, p, v, vd, wf.vx, old, pc, nw, put, k),
                 j(nst, λ q _ => Inv(tys, strs, q, e2, m2, h0, lent), Inv::touch(tys, strs, iv, Cons(wi.l, s.touched), Cons(wi.l, s.wrote))))
         },
@@ -5490,5 +5575,85 @@ theorem Inv::unback(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {ex: Env(tys)}
                         trans(cong_fn(λ (md: Mode) => md.writes(), (pw.unbacked_kin(l)).mode), pp.right)⟩),
                 }
             },
+        },
+        λ x mx y z hy hz => match s.pre_unback(l, x, mx) {
+            ⟨en, pe⟩ => inv.uni(en, pe.left, y, z, trans(hy, cong_fn(λ (n: Nat) => Some(n), pe.right.lvl)), trans(hz, cong_fn(λ (n: Nat) => Some(n), pe.right.par))),
         })
+}
+
+theorem VEnt::mem_filter_lvl(self es: List<VEnt>, l: Nat, a: VEnt, h: a.lvl.same(l) = True): Mem(a, es) → Mem(a, es.filter(λ e => e.lvl.same(l))) {
+    match es {
+        Nil => λ m => m,
+        Cons(e0, rest) => λ m => (match e0.lvl.same(l) as λ c => e0.lvl.same(l) = c →
+                Mem(a, match c as λ _ => List<VEnt> { True => Cons(e0, rest.filter(λ e => e.lvl.same(l))), False => rest.filter(λ e => e.lvl.same(l)) }) {
+            True => λ _ => match m { Inl(eq) => Inl(eq), Inr(m2) => Inr(VEnt::mem_filter_lvl(rest, l, a, h, m2)) },
+            False => λ ec => match m { Inl(eq) => absurd(trans(sym(ec), j(eq, λ q _ => q.lvl.same(l) = True, h))), Inr(m2) => VEnt::mem_filter_lvl(rest, l, a, h, m2) },
+        })(refl),
+    }
+}
+
+// Nothing pending before a write through the view at `l`, its one entry to
+// write: after it, the first entry pending is that view's.
+theorem CSt::find_unback(self xs: List<VEnt>, l: Nat, pe: VEnt, pl: pe.lvl = l, pw: pe.mode.writes() = True,
+    only: (x: VEnt) → Mem(x, xs) → x.lvl.same(l) = True → x = pe, fls: xs.any_bit(λ en => en.mode.writes() && !en.back) = False, mp: Mem(pe, xs)):
+    Exists<VEnt>(λ y => ((xs.map(λ (e: VEnt) => e.unbacked(l))).find(λ en => en.mode.writes() && !en.back) = Some(y)) ∧ (y.lvl = l))
+{
+    match xs {
+        Nil => false_elim(mp),
+        Cons(x, rest) => {
+            let u = λ (e: VEnt) => e.unbacked(l);
+            let fp = Bool::or_false_parts(x.mode.writes() && !x.back, rest.any_bit(λ en => en.mode.writes() && !en.back), fls);
+            let f = λ (y: VEnt) => match (y.mode.writes() && !y.back) as λ _ => Option<VEnt> { True => Some(y), False => (rest.map(u)).find(λ en => en.mode.writes() && !en.back) };
+            (match x.lvl.same(l) as λ c => x.lvl.same(l) = c → Exists<VEnt>(λ y => (f(u(x)) = Some(y)) ∧ (y.lvl = l)) {
+                True => λ ec => {
+                    let xe: (x = pe) = only(x, Inl(refl), ec);
+                    let y0 = VEnt(x.lvl, x.obj, x.reg, x.mode, x.par, x.at, False);
+                    let ux: (u(x) = y0) = j(sym(ec), λ c _ => (match c as λ _ => VEnt { True => y0, False => x }) = y0, refl);
+                    let wx: (x.mode.writes() = True) = j(sym(xe), λ q _ => q.mode.writes() = True, pw);
+                    let fy: (f(y0) = Some(y0)) = j(sym(wx), λ b _ => (match (b && !False) as λ _ => Option<VEnt> { True => Some(y0), False => (rest.map(u)).find(λ en => en.mode.writes() && !en.back) }) = Some(y0), refl);
+                    Exists(y0, ⟨trans(cong_fn(f, ux), fy), x.lvl.same_sound(l, ec)⟩)
+                },
+                False => λ ec => {
+                    let ux: (u(x) = x) = j(sym(ec), λ c _ => (match c as λ _ => VEnt { True => VEnt(x.lvl, x.obj, x.reg, x.mode, x.par, x.at, False), False => x }) = x, refl);
+                    let fx: (f(x) = (rest.map(u)).find(λ en => en.mode.writes() && !en.back)) =
+                        j(sym(fp.left), λ b _ => (match b as λ _ => Option<VEnt> { True => Some(x), False => (rest.map(u)).find(λ en => en.mode.writes() && !en.back) }) = (rest.map(u)).find(λ en => en.mode.writes() && !en.back), refl);
+                    let mr: Mem(pe, rest) = match mp {
+                        Inl(eq) => absurd(trans(sym(ec), trans(cong_fn(λ (n: Nat) => n.same(l), trans(cong_fn(λ (q: VEnt) => q.lvl, sym(eq)), pl)), l.same_self()))),
+                        Inr(m2) => m2,
+                    };
+                    match CSt::find_unback(rest, l, pe, pl, pw, λ y my => only(y, Inr(my)), fp.right, mr) {
+                        ⟨y, py⟩ => Exists(y, ⟨trans(cong_fn(f, ux), trans(fx, py.left)), py.right⟩),
+                    }
+                },
+            })(refl)
+        },
+    }
+}
+
+// What the patch is at a write's state: the chain from the written view
+// written up where its cell refers, nothing where it is a copy.
+theorem CSt::patched_unback(self s: CSt, tys: Nat → Type, strs: Strs(tys), l: Nat, pe: VEnt, none: s.pending() = False, hents: s.ents(l) = [pe], pw: pe.mode.writes() = True,
+    e2: Env(tys), m: Mach(tys)):
+    (s.written(l).unback(l)).patched(tys, strs, e2, m) =
+        (match (REnv::get(tys, m.env, s.var_at(l))).v as λ _ => Env(tys) { Refer(_) => (s.written(l).unback(l)).up(tys, strs, e2, l, s.na + s.nd), Plain(_) => e2 })
+{
+    let s1 = s.written(l).unback(l);
+    let q = λ (en: VEnt) => en.mode.writes() && !en.back;
+    let mpe: Mem(pe, s.ents(l)) = j(sym(hents), λ es _ => Mem(pe, es), Inl(refl));
+    let mp: Mem(pe, s.views) = s.views.mem_filter(pe, λ x => x.lvl.same(l), mpe);
+    let pl: (pe.lvl = l) = pe.lvl.same_sound(l, s.views.mem_filter_holds(pe, λ x => x.lvl.same(l), mpe));
+    let only: ((x: VEnt) → Mem(x, s.views) → x.lvl.same(l) = True → x = pe) = λ x mx h =>
+        match j(hents, λ es _ => Mem(x, es), VEnt::mem_filter_lvl(s.views, l, x, h, mx)) { Inl(eq) => eq, Inr(no) => false_elim(no) };
+    match CSt::find_unback(s.views, l, pe, pl, pw, only, none, mp) {
+        ⟨y, py⟩ => {
+            let fs = List::find_sound(s1.views, q, y, py.left);
+            let pend1: (s1.pending() = True) = s1.views.any_bit_mem(q, y, fs.left, fs.right);
+            let hh = λ (o: Option<VEnt>) => match o as λ _ => Env(tys) {
+                Some(en) => match (REnv::get(tys, m.env, s.var_at(en.lvl))).v as λ _ => Env(tys) { Refer(_) => s1.up(tys, strs, e2, en.lvl, s.na + s.nd), Plain(_) => e2 },
+                None => e2,
+            };
+            trans(j(sym(pend1), λ b _ => (match b as λ _ => Env(tys) { False => e2, True => hh(s1.views.find(q)) }) = hh(s1.views.find(q)), refl),
+                trans(cong_fn(hh, py.left), cong_fn(λ (k: Nat) => match (REnv::get(tys, m.env, s.var_at(k))).v as λ _ => Env(tys) { Refer(_) => s1.up(tys, strs, e2, k, s.na + s.nd), Plain(_) => e2 }, py.right)))
+        },
+    }
 }
