@@ -462,6 +462,13 @@ fn plain_list(xs: List<Nat>) → Value(tys()) { Plain(Dyn(nx(), xs)) }
 
 theorem keep_by_value(): Value::ViewIs(tys(), strs(), 0, [plain_list([1])], Nil, nx(), OParam(0), plain_list([9])) { refl }
 
+// A returned view of a read parameter passed by value is a copy: `at` at a
+// plain list answers a plain value, which `Value::ViewIs` accepts (it asked
+// a reference of it, so `at` was checked and not safe there).
+fn plain_word(n: Nat) → Value(tys()) { Plain(Dyn(nat_s(), n)) }
+
+theorem at_by_value(): Value::ViewIs(tys(), strs(), 0, [plain_list([1, 2]), plain_word(1)], Nil, nx(), OView(0, [SWindow(Var(1), Lit(1))]), plain_list([2])) { refl }
+
 // The view lies at `Span(k, 1)` in the caller's words, so the write at `j`
 // owes `k + 1 <= j ∨ j + 1 <= k`. Locals at the end: [a, 9, t].
 fn beside() → Func { Func(wsig(2), seq([Call(0, [x(), Arg(1)], 1), Lit(WNat, 9), Write(el(x(), Var(2)), Loc(0)), Read(el(Loc(1), Lit(0)))], Ret([Loc(0), x()]))) }

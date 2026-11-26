@@ -260,11 +260,12 @@ fn Value::Written(tys: Nat → Type, strs: Strs(tys), vs: List<Value(tys)>, ds: 
 // this call made (none below the heap's length before it, so no argument
 // reaches it); a parameter's is the argument itself where it refers (one
 // passed by value comes back a plain value, changed or not); a view is the
-// argument's reference narrowed by the steps the signature names, read at
+// argument's reference narrowed by the steps the signature names (a copy,
+// where the argument was passed by value), read at
 // the call's words: the arguments', then the results'.
 fn Value::ViewIs(tys: Nat → Type, strs: Strs(tys), n: Nat, vs: List<Value(tys)>, ws: List<Ix>, code: Shape, org: Origin, o: Value(tys)) → Type {
     match org {
-        OView(i, xs) => match vs.nth(i) { Some(v) => match v { Refer(r) => o = Refer(r.narrow(ws, xs)), Plain(_) => False }, None => False },
+        OView(i, xs) => match vs.nth(i) { Some(v) => match v { Refer(r) => o = Refer(r.narrow(ws, xs)), Plain(_) => Value::refers(tys, o) = False }, None => False },
         OFresh => match o { Plain(_) => True, Refer(r) => (Shape::plain(tys, strs, code) = False) ∧ (n <= r.b) ∧ (r.sels = Nil) },
         OParam(i) => match vs.nth(i) { Some(v) => match v { Refer(r) => o = Refer(r), Plain(_) => Value::refers(tys, o) = False }, None => False },
     }

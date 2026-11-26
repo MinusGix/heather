@@ -8989,3 +8989,68 @@ theorem Inv::ret_fresh(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys
         },
     })(refl)
 }
+
+// ---------------------------------------------------------------------------
+// `Like`: what the meaning keeps of the arguments as passed (§23.13)
+//
+// A record over the checker's state, the meaning's environment and the entry
+// arguments, with no machine: every holder of a written parameter's object
+// is like the argument as passed (the same code and length), so `Ret` gives
+// `Value::Written`'s fit; a holder of an argument object has its parameter's
+// access; an argument never written has its entry value (the meaning's side
+// of `CSt::sig_atom`'s refusal of a written argument, so a returned view's
+// words are the call's); a pending view is like what its place reads in its
+// parent, so its write-back keeps the parent like itself. It is carried
+// beside `Inv`: a write-back's like-ness where nothing is pending is
+// `Inv::back_like`'s (the licence's apartness lives there), a call's
+// written slot's is the callee's (`CallFits`).
+
+fn Dyn::Like(tys: Nat → Type, strs: Strs(tys), a, b: Dyn(tys)) → Type { (a.code = b.code) ∧ (Dyn::len(tys, strs, a) = Dyn::len(tys, strs, b)) }
+
+theorem Dyn::like_refl(tys: Nat → Type, strs: Strs(tys), a: Dyn(tys)): Dyn::Like(tys, strs, a, a) { ⟨refl, refl⟩ }
+
+theorem Dyn::like_trans(tys: Nat → Type, strs: Strs(tys), a, b, c: Dyn(tys), h1: Dyn::Like(tys, strs, a, b), h2: Dyn::Like(tys, strs, b, c)): Dyn::Like(tys, strs, a, c) {
+    ⟨trans(h1.left, h2.left), trans(h1.right, h2.right)⟩
+}
+
+fn Dyn::arg(tys: Nat → Type, ds: List<Dyn(tys)>, o: Nat) → Dyn(tys) { ds.nth(o).unwrap_or(Dyn::none(tys)) }
+
+record Like(tys: Nat → Type, strs: Strs(tys), ps: List<Param>, ds: List<Dyn(tys)>, s: CSt, e: Env(tys)) {
+    acc: (l, o: Nat) → (a: Acc) → l < s.na + s.nd → s.role(l) = KHold(o, a) → o < s.na → (p: Param) → ps.nth(o) = Some(p) → CSt::role_of(tys, strs, p, o) = KHold(o, a),
+    held: (x: Var) → (l, o: Nat) → s.lvl(x) = Some(l) → s.role(l) = KHold(o, AcWrite) → Dyn::Like(tys, strs, Env::get(tys, e, x), Dyn::arg(tys, ds, o)),
+    keep: (k: Nat) → k < s.na → k.member(s.wrote) = False → Env::get(tys, e, Arg(k)) = Dyn::arg(tys, ds, k),
+    pend: (en: VEnt) → Mem(en, s.views) → (en.mode.writes() && !en.back) = True → (y, z: Var) → s.lvl(y) = Some(en.par) → s.lvl(z) = Some(en.lvl) →
+        Dyn::Like(tys, strs, Env::get(tys, e, z), Dyn::read(tys, strs, Env::ixs(tys, e), s.unsteps(en.at), Env::get(tys, e, y))),
+}
+
+// A holder at the start is its own argument's, with its parameter's role.
+theorem CSt::start_hold(tys: Nat → Type, strs: Strs(tys), sig: Sig, l, o: Nat, a: Acc, b: l < sig.params.len(), hr: (CSt::start(tys, strs, sig)).role(l) = KHold(o, a)):
+    Exists<Param>(λ p => (sig.params.nth(l) = Some(p)) ∧ ((o = l) ∧ (CSt::role_of(tys, strs, p, l) = KHold(o, a))))
+{
+    match List::nth_present(sig.params, l, b) {
+        ⟨p, hp⟩ => {
+            let r1: (CSt::role_of(tys, strs, p, l) = KHold(o, a)) = trans(sym(cong_fn(λ (q: CVar) => q.role, CSt::start_var(tys, strs, sig, l, p, hp, b))), hr);
+            Exists(p, ⟨hp, ⟨CSt::role_of_hold(tys, strs, p, l, o, a, r1), r1⟩⟩)
+        },
+    }
+}
+
+theorem Like::start(tys: Nat → Type, strs: Strs(tys), sig: Sig, ds: List<Dyn(tys)>): Like(tys, strs, sig.params, ds, CSt::start(tys, strs, sig), Env::start(tys, ds)) {
+    Like(
+        λ l o a b hr _ p hp => match CSt::start_hold(tys, strs, sig, l, o, a, omega(b), hr) {
+            ⟨q, pq⟩ => {
+                let ol: (o = l) = pq.right.left;
+                let qp: (q = p) = Option::some_inj(q, p, trans(sym(pq.left), j(ol, λ k _ => sig.params.nth(k) = Some(p), hp)));
+                j(qp, λ r _ => CSt::role_of(tys, strs, r, o) = KHold(o, a), j(sym(ol), λ k _ => CSt::role_of(tys, strs, q, k) = KHold(o, a), pq.right.right))
+            },
+        },
+        λ x l o hl hr => {
+            let st = CSt::start_lvl(tys, strs, sig, x, l, hl);
+            match CSt::start_hold(tys, strs, sig, l, o, AcWrite, st.right, hr) {
+                ⟨q, pq⟩ => j(sym(st.left), λ y _ => Dyn::Like(tys, strs, Env::get(tys, Env::start(tys, ds), y), Dyn::arg(tys, ds, o)),
+                    j(pq.right.left, λ k _ => Dyn::Like(tys, strs, Dyn::arg(tys, ds, k), Dyn::arg(tys, ds, o)), Dyn::like_refl(tys, strs, Dyn::arg(tys, ds, o)))),
+            }
+        },
+        λ k _ _ => refl,
+        λ en no => false_elim(no))
+}
