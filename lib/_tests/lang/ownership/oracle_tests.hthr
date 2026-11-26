@@ -1,0 +1,56 @@
+// The deciders of `SafeAt` at closed data (lib/lang/ownership/oracle.hthr)
+// and the search (oracle_search.hthr), by evaluation in the kernel: a
+// decider answers the clause a hand-made program breaks, and the search
+// over the smallest size finds nothing in the checker as it is. The search
+// proper runs on the untrusted evaluator (`scripts/ownership-oracle`).
+import logic;
+import pair;
+import bool;
+import nat;
+import option;
+import list;
+import bitvec;
+import span_set;
+import store;
+import atom;
+import steps;
+import shape;
+import sequences;
+import body;
+import level2;
+import run;
+import verdict;
+import checker;
+import oracle;
+import oracle_search;
+import linux_world;
+
+fn io0() → Io { Io::of(World::piped(Nil)) }
+
+// `Ret([x, x])` of one made list as two fresh results: the checker refuses
+// it, and where it accepted it the run would answer one block twice.
+fn twice() → Func {
+    Func(Sig([Param(nat_s(), ByTake)], [Result(ns_s(), OFresh), Result(ns_s(), OFresh)]), seq([Fresh(ns_s(), Arg(0), Arg(0))], Ret([Loc(0), Loc(0)])))
+}
+
+theorem twice_refused(): check(tys())(strs(), λ _ => twice().sig, λ _ => False, λ _ => False, 0, twice()) = None { refl }
+
+theorem twice_breaks_fresh_apart(): Prog::verdict_b(tys(), deq, gen_prog(twice()), 0, 1, [Plain(nat(1))], heap0(), io0(), [nat(1)]).map(λ c => c.tag()) = Some(8) { refl }
+
+// An argument answered as a fresh result breaks `Value::Views`.
+fn moved_fresh() → Func { Func(Sig([Param(ns_s(), ByTake)], [Result(ns_s(), OFresh)]), Ret([Arg(0)])) }
+
+theorem moved_fresh_refused(): check(tys())(strs(), λ _ => moved_fresh().sig, λ _ => False, λ _ => False, 0, moved_fresh()) = None { refl }
+
+theorem moved_fresh_breaks_views(): Prog::verdict_b(tys(), deq, gen_prog(moved_fresh()), 0, 1, [at(2, Nil)], heap0(), io0(), [ns([1, 2])]).map(λ c => c.tag()) = Some(7) { refl }
+
+// Its accepted twin is safe there.
+fn moved_param() → Func { Func(Sig([Param(ns_s(), ByTake)], [Result(ns_s(), OParam(0))]), Ret([Arg(0)])) }
+
+theorem moved_param_safe(): Prog::verdict_b(tys(), deq, gen_prog(moved_param()), 0, 1, [at(2, Nil)], heap0(), io0(), [ns([1, 2])]).map(λ c => c.tag()) = None { refl }
+
+// Aliasing that `Lendable` excludes is not tried: a list written beside a
+// window of itself.
+theorem alias_not_owed(): Lendable::b(tys(), strs(), [Param(ns_s(), ByWrite), Param(ns_s(), ByRead)], heap0(), [at(2, Nil), at(2, [OnSeq(SeqRun(INat(1), INat(1)))])]) = False { refl }
+
+theorem apart_owed(): Lendable::b(tys(), strs(), [Param(ns_s(), ByWrite), Param(ns_s(), ByRead)], heap0(), [at(2, Nil), at(3, Nil)]) = True { refl }

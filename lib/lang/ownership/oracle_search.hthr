@@ -1,0 +1,336 @@
+// The search for a checked program that breaks `SafeAt`
+// (issues/ownership-soundness-oracle.md; the deciders are `oracle.hthr`).
+//
+// Run by `scripts/ownership-oracle` through `heather eval`, on the untrusted
+// evaluator: it reads the real checker, run and meaning, and nothing here is
+// a theorem. A mutant of the checker is a copy of `checker.hthr` placed
+// beside a copy of this file, which then imports it (a module beside its
+// importer is found first).
+//
+// - **The environment**: a word, a record of two words held as an object
+//   (`Pt`) and the same record as plain data (`QPt`), and a list of words
+//   with windows.
+// - **The generator** grows a body a statement at a time from a menu over
+//   the variables in scope and the places of each by its code, and keeps a
+//   prefix only where the checker's pass accepts its last statement (the
+//   pass refuses a prefix whatever follows it, so this prunes nothing the
+//   checker would accept). Every prefix is closed by every `Ret` whose
+//   variables and origins the roles allow, the signature's results read off
+//   it; the whole function is then checked by `check` itself.
+// - **The inputs**: every argument list over a fixed heap, references
+//   aliasing included; `Prog::owed_b` keeps those `SafeAt` is owed at.
+// - **The precondition** is the singleton of the arguments tried, so the
+//   verdict is owed exactly there (`CheckSound` quantifies over programs).
+import logic;
+import pair;
+import bool;
+import nat;
+import option;
+import list;
+import bitvec;
+import span_set;
+import store;
+import atom;
+import steps;
+import shape;
+import sequences;
+import body;
+import level2;
+import run;
+import verdict;
+import checker;
+import oracle;
+import linux_world;
+
+// ---------------------------------------------------------------------------
+// The environment
+
+record Pt { x: Nat, y: Nat }
+
+fn tys() → Nat → Type { λ k => match k { Zero => Pt, Succ(k1) => match k1 { Zero => List<Nat>, Succ(k2) => match k2 { Zero => Pt, Succ(_) => True } } } }
+
+fn nat_s() → Shape { SWord(WNat) }
+
+fn pt_s() → Shape { SNamed(0) }
+
+fn ns_s() → Shape { SNamed(1) }
+
+fn qpt_s() → Shape { SNamed(2) }
+
+fn Pt::fx() → Field(tys(), Pt) { Field(nat_s(), λ (p: Pt) => p.x, λ (p: Pt) => λ (v: Nat) => Pt(v, p.y)) }
+
+fn Pt::fy() → Field(tys(), Pt) { Field(nat_s(), λ (p: Pt) => p.y, λ (p: Pt) => λ (v: Nat) => Pt(p.x, v)) }
+
+fn strs() → Strs(tys()) {
+    λ k => match k {
+        Zero => Struct(Object, Some(Pt(0, 0)), Record([Pt::fx(), Pt::fy()])),
+        Succ(k1) => match k1 {
+            Zero => Struct(Object, None, Sequence(Seq::list(tys(), nat_s(), 0, Some(Seq::list_win(tys(), nat_s(), ns_s(), λ (l: List<Nat>) => l, λ (l: List<Nat>) => l))))),
+            Succ(k2) => match k2 {
+                Zero => Struct(Plain, Some(Pt(0, 0)), Record([Pt::fx(), Pt::fy()])),
+                Succ(_) => Struct(Plain, None, Opaque),
+            },
+        },
+    }
+}
+
+fn Pt::same(self a, b: Pt) → Bool { a.x.same(b.x) && a.y.same(b.y) }
+
+fn Nat::same_list(xs, ys: List<Nat>) → Bool {
+    match xs { Nil => match ys { Nil => True, Cons(_, _) => False }, Cons(a, ar) => match ys { Nil => False, Cons(b, br) => a.same(b) && Nat::same_list(ar, br) } }
+}
+
+// Two values equal: one code, and equal at it.
+fn deq(a, b: Dyn(tys())) → Bool {
+    a.code.same(b.code) &&
+    Option::same_by(Nat::same, Dyn::get(tys(), nat_s(), a), Dyn::get(tys(), nat_s(), b)) &&
+    Option::same_by(Pt::same, Dyn::get(tys(), pt_s(), a), Dyn::get(tys(), pt_s(), b)) &&
+    Option::same_by(Pt::same, Dyn::get(tys(), qpt_s(), a), Dyn::get(tys(), qpt_s(), b)) &&
+    Option::same_by(Nat::same_list, Dyn::get(tys(), ns_s(), a), Dyn::get(tys(), ns_s(), b))
+}
+
+fn nat(n: Nat) → Dyn(tys()) { Dyn(nat_s(), n) }
+
+fn pt(x, y: Nat) → Dyn(tys()) { Dyn(pt_s(), Pt(x, y)) }
+
+fn qpt(x, y: Nat) → Dyn(tys()) { Dyn(qpt_s(), Pt(x, y)) }
+
+fn ns(xs: List<Nat>) → Dyn(tys()) { Dyn(ns_s(), xs) }
+
+// ---------------------------------------------------------------------------
+// Enumeration helpers
+
+fn gen_flat<A, B>(xs: List<A>, f: A → List<B>) → List<B> { match xs { Nil => Nil, Cons(x, r) => f(x) ++ gen_flat(r, f) } }
+
+// Every choice of one element from each list.
+fn gen_product<A>(xss: List<List<A>>) → List<List<A>> {
+    match xss { Nil => [Nil], Cons(xs, rest) => gen_flat(xs, λ x => (gen_product(rest)).map(λ ys => Cons(x, ys))) }
+}
+
+// Every list of at most `n` elements of `xs`.
+fn gen_lists<A>(xs: List<A>, n: Nat) → List<List<A>> {
+    match n { Zero => [Nil], Succ(k) => Cons(Nil, gen_flat(xs, λ x => (gen_lists(xs, k)).map(λ ys => Cons(x, ys)))) }
+}
+
+// Every list of exactly `n` elements of `xs`.
+fn gen_exactly<A>(xs: List<A>, n: Nat) → List<List<A>> {
+    match n { Zero => [Nil], Succ(k) => gen_flat(xs, λ x => (gen_exactly(xs, k)).map(λ ys => Cons(x, ys))) }
+}
+
+// ---------------------------------------------------------------------------
+// Signatures' parameters, places, statements
+
+fn gen_params() → List<Param> {
+    [Param(nat_s(), ByTake), Param(nat_s(), ByWrite), Param(pt_s(), ByRead), Param(pt_s(), ByWrite), Param(pt_s(), ByTake),
+     Param(ns_s(), ByRead), Param(ns_s(), ByWrite), Param(ns_s(), ByTake), Param(qpt_s(), ByRead), Param(qpt_s(), ByWrite), Param(qpt_s(), ByTake)]
+}
+
+// The variables in scope.
+fn gen_vars(na, nl: Nat) → List<Var> { (List::range(na)).map(λ i => Arg(i)) ++ (List::range(nl)).map(λ j => Loc(j)) }
+
+// Index atoms: two literals, and each argument that is a word.
+fn gen_atoms(s: CSt) → List<Atom> { [Lit(0), Lit(1)] ++ ((List::range(s.na)).filter(λ i => (s.code(Arg(i))).is_word())).map(λ i => Var(i)) }
+
+// The steps of a place at a code: a record's fields; a list's elements and
+// windows.
+fn gen_steps(s: CSt, c: Shape) → List<List<Step>> {
+    Cons(Nil, match c {
+        SWord(_) => Nil,
+        SNamed(k) => match k {
+            Zero => [[SField(0)], [SField(1)]],
+            Succ(k1) => match k1 {
+                Zero => (gen_atoms(s)).map(λ a => Cons(SElem(a), Nil)) ++ [[SWindow(Lit(0), Lit(1))], [SWindow(Lit(1), Lit(1))], [SWindow(Lit(0), Lit(2))], [SWindow(Lit(0), Lit(2)), SElem(Lit(1))]],
+                Succ(k2) => match k2 { Zero => [[SField(0)], [SField(1)]], Succ(_) => Nil },
+            },
+        },
+    })
+}
+
+fn gen_places(s: CSt, x: Var) → List<Place> { (gen_steps(s, s.code(x))).map(λ xs => Place(x, xs)) }
+
+fn gen_stmts(s: CSt, na, nl: Nat) → List<Stmt> {
+    let vs = gen_vars(na, nl);
+    [Lit(WNat, 0), Lit(WNat, 1)] ++
+    gen_flat(vs, λ a => vs.map(λ b => Op(PAdd, a, b))) ++
+    gen_flat(vs, λ x => (gen_places(s, x)).map(λ p => Read(p))) ++
+    gen_flat(vs, λ x => gen_flat(gen_places(s, x), λ p => vs.map(λ v => Write(p, v)))) ++
+    gen_flat(vs, λ x => gen_flat(gen_places(s, x), λ p => Cons(View(p, Reading), Cons(View(p, Writing), Nil)))) ++
+    gen_flat(vs, λ x => (gen_places(s, x)).map(λ p => Take(p))) ++
+    gen_flat(vs, λ n => vs.map(λ v => Fresh(ns_s(), n, v))) ++
+    vs.map(λ x => Death(Place(x, Nil)))
+}
+
+fn Stmt::binds(self st: Stmt) → Nat { match st { Write(_, _) => 0, Death(_) => 0, Call(_, _, n) => n, _ => 1 } }
+
+// The checker's pass over one statement, as `Body::verdict`'s `Do` case
+// runs it: the state after, where it is accepted.
+fn gen_next(sigs: Nat → Sig, s: CSt, st: Stmt) → Option<CSt> {
+    match st.code_ok(tys(), strs(), sigs, s) {
+        False => None,
+        True => match st.unmeasured(λ _ => False, λ _ => False, 0) {
+            True => None,
+            False => ((!s.pending() || s.writes_back(st)).then(st.verdict(tys(), strs(), sigs, λ _ => False, False, s))).map(λ nx => nx.st),
+        },
+    }
+}
+
+// A prefix: its statements newest first, the state after them, the count
+// of locals.
+record Prefix { ss: List<Stmt>, st: CSt, nl: Nat }
+
+// Every accepted prefix of at most `k` statements after `pre`.
+fn gen_prefixes(sigs: Nat → Sig, na, k: Nat, pre: Prefix) → List<Prefix> {
+    Cons(pre, match k {
+        Zero => Nil,
+        Succ(k1) => gen_flat(gen_stmts(pre.st, na, pre.nl), λ st => match gen_next(sigs, pre.st, st) {
+            None => Nil,
+            Some(s2) => gen_prefixes(sigs, na, k1, Prefix(Cons(st, pre.ss), s2, pre.nl + st.binds())),
+        }),
+    })
+}
+
+// The origins a returned variable may be given: by its role, and the ones
+// the role does not allow (a mutant may accept them).
+fn gen_origins(s: CSt, x: Var) → List<Origin> {
+    let ps = List::range(s.na);
+    match s.lvl(x) {
+        None => Nil,
+        Some(l) => match s.role(l) {
+            KPlain => [OFresh],
+            KHold(_, _) => Cons(OFresh, ps.map(λ i => OParam(i))),
+            KView => Cons(OFresh, gen_flat(ps, λ i => (gen_steps(s, s.code(Arg(i)))).map(λ xs => OView(i, xs)))),
+            KGone => Nil,
+        },
+    }
+}
+
+// The written parameters' positions.
+fn gen_written(ps: List<Param>) → List<Nat> { Param::written_from(ps)(0) }
+
+// Every `Ret` of at most two results: the results with their origins, then
+// a holder of each written parameter's code.
+fn gen_rets(ps: List<Param>, s: CSt, na, nl: Nat) → List<Pair<List<Result>, List<Var>>> {
+    let vs = gen_vars(na, nl);
+    let outs = gen_flat(gen_lists(vs, 2), λ xs => (gen_product(xs.map(λ x => gen_origins(s, x)))).map(λ os => Pair(xs, os)));
+    let backs = gen_product((gen_written(ps)).map(λ i => vs.filter(λ v => (s.code(v)).same((ps.nth(i).map(λ p => p.code)).unwrap_or(nat_s())))));
+    gen_flat(outs, λ ro => backs.map(λ bs => Pair(List::zip<Var, Origin>(ro.fst)(ro.snd).map(λ xo => Result(s.code(xo.fst), xo.snd)), ro.fst ++ bs)))
+}
+
+// ---------------------------------------------------------------------------
+// Inputs
+
+// The heap every argument list is over: two objects of `Pt`, two lists, a
+// plain record held in a block.
+fn heap0() → Heap(tys()) { [Live(Obj(pt(1, 2), Nil)), Live(Obj(pt(3, 4), Nil)), Live(Obj(ns([1, 2]), Nil)), Live(Obj(ns([7]), Nil)), Live(Obj(qpt(8, 9), Nil))] }
+
+fn at(b: Nat, ss: List<Sel>) → Value(tys()) { Refer(Ref(b, ss)) }
+
+// The values tried at a parameter: plain and referring, one block's parts
+// besides its whole.
+fn gen_values(p: Param) → List<Value(tys())> {
+    match p.code {
+        SWord(_) => [Plain(nat(0)), Plain(nat(1)), at(0, [OnField(0)]), at(2, [OnSeq(SeqOne(INat(0)))])],
+        SNamed(k) => match k {
+            Zero => [at(0, Nil), at(1, Nil), Plain(pt(5, 6))],
+            Succ(k1) => match k1 {
+                Zero => [at(2, Nil), at(3, Nil), at(2, [OnSeq(SeqRun(INat(1), INat(1)))]), Plain(ns([4, 5]))],
+                Succ(_) => [Plain(qpt(5, 6)), at(4, Nil)],
+            },
+        },
+    }
+}
+
+fn gen_args(ps: List<Param>) → List<List<Value(tys())>> { gen_product(ps.map(λ p => gen_values(p))) }
+
+fn reads(h: Heap(tys()), vs: List<Value(tys())>) → List<Dyn(tys())> { vs.map(λ v => (Value::read(tys(), v, strs(), h, h.len())).unwrap_or(Dyn::none(tys()))) }
+
+// ---------------------------------------------------------------------------
+// One program
+
+fn none_f() → Func { Func(Sig(Nil, Nil), Ret(Nil)) }
+
+fn w_nil() → Callees(tys()) { λ _ _ => Nil }
+
+// A program of one function, `0`, whose world is its own meaning.
+fn gen_prog(f: Func) → Prog(tys()) {
+    let fns = λ (g: Nat) => match g { Zero => f, Succ(_) => none_f() };
+    Prog(strs(), fns, λ g ds => (fns(g)).denote(tys(), strs(), w_nil(), g, ds), λ _ _ => True, λ _ => None, λ _ => False, λ _ _ _ => True)
+}
+
+// A finding: the function, the arguments, the clause broken.
+record Finding { f: Func, vs: List<Value(tys())>, clause: Nat }
+
+// What one function gives: the inputs tried, owed, owing (its verdict held
+// there), and the findings.
+record Tally { progs: Nat, tried: Nat, owed: Nat, due: Nat, found: List<Finding> }
+
+fn Tally::zero() → Tally { Tally(0, 0, 0, 0, Nil) }
+
+fn Tally::add(self a, b: Tally) → Tally { Tally(a.progs + b.progs, a.tried + b.tried, a.owed + b.owed, a.due + b.due, a.found ++ b.found) }
+
+fn gen_try(f: Func, d: Owes, vs: List<Value(tys())>) → Tally {
+    let p = gen_prog(f);
+    let h = heap0();
+    let ds = reads(h, vs);
+    match Prog::owed_b(tys(), deq, p, 0, vs, h, ds) {
+        False => Tally(0, 1, 0, 0, Nil),
+        True => match d.due_b(tys(), CtxB(strs(), p.w, 0, λ _ _ => True, λ _ _ => 0, ds), f) {
+            False => Tally(0, 1, 1, 0, Nil),
+            True => match Prog::verdict_b(tys(), deq, p, 0, 1, vs, h, Io::of(World::piped(Nil)), ds) {
+                None => Tally(0, 1, 1, 1, Nil),
+                Some(c) => Tally(0, 1, 1, 1, [Finding(f, vs, c.tag())]),
+            },
+        },
+    }
+}
+
+fn gen_run_one(f: Func) → Tally {
+    match check(tys())(strs(), λ g => match g { Zero => f.sig, Succ(_) => none_f().sig }, λ _ => False, λ _ => False, 0, f) {
+        None => Tally::zero(),
+        Some(d) => (gen_args(f.sig.params)).foldl(λ (t: Tally) (vs: List<Value(tys())>) => t.add(gen_try(f, d, vs)), Tally(1, 0, 0, 0, Nil)),
+    }
+}
+
+// Every function over the parameters `ps` with a body of at most `k`
+// statements before its `Ret`.
+fn gen_funcs(ps: List<Param>, k: Nat) → List<Func> {
+    let sigs = λ (_: Nat) => Sig(ps, Nil);
+    let na = ps.len();
+    gen_flat(gen_prefixes(sigs, na, k, Prefix(Nil, CSt::start(tys(), strs(), Sig(ps, Nil)), 0)),
+        λ pre => (gen_rets(ps, pre.st, na, pre.nl)).map(λ ro => Func(Sig(ps, ro.fst), seq(pre.ss.rev(), Ret(ro.snd)))))
+}
+
+// The search at parameter lists of at most `np` parameters and bodies of
+// at most `k` statements; the parameter lists are cut to those from index
+// `lo`, `n` of them, so a driver can split the work.
+fn gen_param_lists(np: Nat) → List<List<Param>> { gen_lists(gen_params(), np) }
+
+fn search(np, k, lo, n: Nat) → Tally {
+    (((gen_param_lists(np)).drop(lo)).take(n)).foldl(λ (t: Tally) (ps: List<Param>) => (gen_funcs(ps, k)).foldl(λ (t2: Tally) (f: Func) => t2.add(gen_run_one(f)), t), Tally::zero())
+}
+
+// The counts alone: programs checked, inputs tried, owed, due, findings.
+fn search_counts(np, k, lo, n: Nat) → List<Nat> { let t = search(np, k, lo, n); [t.progs, t.tried, t.owed, t.due, t.found.len()] }
+
+// How many functions the generator offers the checker.
+fn count_funcs(np, k, lo, n: Nat) → Nat { (((gen_param_lists(np)).drop(lo)).take(n)).foldl(λ (c: Nat) (ps: List<Param>) => c + (gen_funcs(ps, k)).len(), 0) }
+
+// A value of the environment as numbers: a word; a record's two fields; a
+// list's length and elements.
+fn encd(d: Dyn(tys())) → List<Nat> {
+    match Dyn::get(tys(), nat_s(), d) {
+        Some(n) => [n],
+        None => match Dyn::get(tys(), ns_s(), d) {
+            Some(xs) => Cons(xs.len(), xs),
+            None => match Dyn::get(tys(), pt_s(), d) { Some(p) => [p.x, p.y], None => match Dyn::get(tys(), qpt_s(), d) { Some(p) => [p.x, p.y], None => Nil } },
+        },
+    }
+}
+
+fn enc_finding(x: Finding) → List<Nat> { Cons(x.clause, enc_func(x.f) ++ enc_list(λ (v: Value(tys())) => enc_value(tys(), encd, v), x.vs)) }
+
+// The search's counts, then its first `cap` findings, as numbers.
+fn search_enc(np, k, lo, n, cap: Nat) → List<Nat> {
+    let t = search(np, k, lo, n);
+    [t.progs, t.tried, t.owed, t.due, t.found.len()] ++ enc_list(enc_finding, t.found.take(cap))
+}

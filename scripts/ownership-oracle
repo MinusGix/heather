@@ -1,0 +1,347 @@
+#!/usr/bin/env python3
+"""The search for a checked program that breaks the ownership checker's
+soundness statement (issues/ownership-soundness-oracle.md).
+
+The deciders are `lib/lang/ownership/oracle.hthr`, the generator and the
+search `lib/lang/ownership/oracle_search.hthr`. This script runs the search
+through `heather eval` (the untrusted evaluator, reading the real checker,
+run and meaning), split over parameter lists and run in parallel, decodes
+the findings and prints each program.
+
+    scripts/ownership-oracle search [--np N] [--k K] [--mutant NAME] [--jobs J] [--cap C]
+    scripts/ownership-oracle calibrate [--only NAME] [--jobs J]
+    scripts/ownership-oracle mutants
+
+A **mutant** is a defect the proof found, put back: a copy of
+`checker.hthr` with one replacement, placed beside a copy of the search
+module in `target/ownership-oracle/<name>/`, which then imports it (a module
+beside its importer is found first). The checked-in checker is never edited.
+`calibrate` runs every mutant at growing sizes and reports where the search
+first finds it; a mutant it misses is a hole in the generator.
+
+Every `heather` run is capped (`--limits dev`).
+"""
+import argparse
+import os
+import shutil
+import subprocess
+import sys
+import time
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+LIB = ROOT / "lib" / "lang" / "ownership"
+SEARCH = LIB / "oracle_search.hthr"
+HEATHER = ROOT / "target" / "release" / "heather"
+WORK = ROOT / "target" / "ownership-oracle"
+
+# Parameters in the generator's menu (`gen_params`), so the number of
+# parameter lists of at most `np` is 1 + P + P^2 + ...
+N_PARAMS = 11
+
+# Each mutant: the defect it restores, where the design note or the
+# checker's log records it, and the replacements (file, old, new) made in
+# the copy. `old` must occur exactly once.
+MUTANTS = {
+    "fresh_twice": (
+        "Ret([x, x]) of one made object as two fresh results (§23.17, fresh_twice_refused)",
+        [("checker.hthr", "s.returns_all(tys, strs, ls, ls, sig.results) && s.fresh_once(ls, sig.results)",
+          "s.returns_all(tys, strs, ls, ls, sig.results) && True")],
+    ),
+    "fresh_is_param": (
+        "an argument's object answered as a fresh result (§23.4: OFresh only for an object made in the call)",
+        [("checker.hthr", "!Shape::plain(tys, strs, r.code) && s.na.leb(o) && (match a",
+          "!Shape::plain(tys, strs, r.code) && (match a")],
+    ),
+}
+
+
+def mutant_dir(name):
+    d = WORK / name
+    d.mkdir(parents=True, exist_ok=True)
+    shutil.copy(SEARCH, d / "oracle_search.hthr")
+    texts = {"checker.hthr": (LIB / "checker.hthr").read_text()}
+    for f, old, new in MUTANTS[name][1]:
+        if f not in texts:
+            texts[f] = (LIB / f).read_text()
+        n = texts[f].count(old)
+        if n != 1:
+            sys.exit(f"mutant {name}: `{old[:60]}…` occurs {n} times in {f}, not once (the checker moved: update the mutant)")
+        texts[f] = texts[f].replace(old, new)
+    for f, t in texts.items():
+        (d / f).write_text(t)
+    return d / "oracle_search.hthr"
+
+
+def heather_eval(path, term, timeout=3600):
+    cmd = [str(HEATHER), "eval", "--limits", "dev,cpu=3000", "--cache", "--limit", "4000000", str(path), term]
+    r = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True, timeout=timeout)
+    out = r.stdout.strip()
+    if r.returncode != 0 or not out.startswith("["):
+        raise RuntimeError(f"`{term}` on {path}: exit {r.returncode}\n{r.stderr[-2000:]}\n{out[-500:]}")
+    return [int(x) for x in out.strip("[]").replace("…", "").split(",") if x.strip()]
+
+
+# --------------------------------------------------------------------------
+# Decoding (oracle.hthr's `enc_*`)
+
+class Rd:
+    def __init__(self, xs):
+        self.xs, self.i = xs, 0
+
+    def n(self):
+        x = self.xs[self.i]
+        self.i += 1
+        return x
+
+    def many(self, f):
+        return [f() for _ in range(self.n())]
+
+
+SHAPES = {0: "Pt", 1: "L", 2: "QPt"}
+MODES = {0: "take", 1: "read", 2: "write"}
+CLAUSES = {1: "stuck", 2: "not done from its need", 3: "ReadAll (results against the meaning)", 4: "Value::Written",
+           5: "Heap::Frame", 6: "Heap::Kept", 7: "Value::Views", 8: "Value::FreshApart"}
+
+
+def shape(r):
+    t = r.n()
+    if t == 0:
+        w = r.n()
+        return "N" if w == 0 else f"u{r.n()}"
+    return SHAPES.get(r.n(), "?")
+
+
+def atom(r):
+    t, v = r.n(), r.n()
+    return str(v) if t == 0 else f"w{v}"
+
+
+def step(r):
+    t = r.n()
+    if t == 0:
+        return f".{'xy'[r.n()] if True else ''}"
+    if t == 1:
+        return f"[{atom(r)}]"
+    if t == 2:
+        lo = atom(r)
+        return f"[{lo}..+{atom(r)}]"
+    if t == 3:
+        a = atom(r)
+        return f"{{{a},{atom(r)}}}"
+    return f"#{r.n()}"
+
+
+def var(r):
+    t, v = r.n(), r.n()
+    return f"a{v}" if t == 0 else f"l{v}"
+
+
+def place(r):
+    v = var(r)
+    return v + "".join(r.many(lambda: step(r)))
+
+
+def stmt(r):
+    t = r.n()
+    if t == 0:
+        o = "+-*"[r.n()]
+        a = var(r)
+        return f"{a} {o} {var(r)}"
+    if t == 1:
+        w = r.n()
+        if w == 1:
+            r.n()
+        return f"lit {r.n()}"
+    if t == 2:
+        return f"read {place(r)}"
+    if t == 3:
+        p = place(r)
+        return f"write {p} := {var(r)}"
+    if t == 4:
+        p = place(r)
+        return f"view {p} to {'write' if r.n() else 'read'}"
+    if t == 5:
+        return f"take {place(r)}"
+    if t == 6:
+        c = shape(r)
+        n = var(r)
+        return f"fresh {c}({n} × {var(r)})"
+    if t == 7:
+        g = r.n()
+        args = r.many(lambda: var(r))
+        return f"call f{g}({', '.join(args)}) binding {r.n()}"
+    return f"death {place(r)}"
+
+
+def test(r):
+    t = r.n()
+    a = var(r)
+    return f"{a} {'<' if t == 0 else '<='} {var(r)}"
+
+
+def body(r, ind, binds):
+    t = r.n()
+    pad = "    " * ind
+    if t in (0, 1, 4):
+        xs = r.many(lambda: var(r))
+        return [pad + {0: "ret", 1: "yield", 4: "jump"}[t] + f" [{', '.join(xs)}]"]
+    if t == 2:
+        s = stmt(r)
+        return [pad + s] + body(r, ind, binds)
+    tst = test(r)
+    out = [pad + f"if {tst} {{"] + body(r, ind + 1, binds) + [pad + "} else {"] + body(r, ind + 1, binds) + [pad + "}"]
+    return out + body(r, ind, binds)
+
+
+def origin(r):
+    t = r.n()
+    if t == 0:
+        return "fresh"
+    if t == 1:
+        return f"param {r.n()}"
+    i = r.n()
+    return f"view of {i}" + "".join(r.many(lambda: step(r)))
+
+
+def func(r):
+    ps = r.many(lambda: f"{shape(r)} {MODES[r.n()]}")
+    rs = r.many(lambda: f"{shape(r)} {origin(r)}")
+    head = f"fn ({', '.join(f'a{i}: {p}' for i, p in enumerate(ps))}) → ({', '.join(rs)})"
+    return [head] + body(r, 1, 0)
+
+
+def sel(r):
+    t = r.n()
+    if t == 0:
+        return f".{'xy'[r.n()]}"
+    if t in (1, 2):
+        def ix():
+            k = r.n()
+            v = r.n() if k == 0 else (r.n(), r.n())[1]
+            return str(v)
+        if t == 1:
+            return f"[{ix()}]"
+        lo = ix()
+        return f"[{lo}..+{ix()}]"
+    if t == 3:
+        return "{key}"
+    return f"#{r.n()}"
+
+
+def dyn(r, c):
+    if c == "N":
+        return str(r.n())
+    if c in ("Pt", "QPt"):
+        x = r.n()
+        return f"{c}({x}, {r.n()})"
+    if c == "L":
+        return "[" + ", ".join(str(x) for x in r.many(r.n)) + "]"
+    return "?"
+
+
+def value(r):
+    t = r.n()
+    if t == 0:
+        return dyn(r, shape(r))
+    b = r.n()
+    return f"&b{b}" + "".join(r.many(lambda: sel(r)))
+
+
+def finding(r):
+    c = r.n()
+    f = func(r)
+    vs = r.many(lambda: value(r))
+    return c, f, vs
+
+
+HEAP = "b0 = Pt(1, 2), b1 = Pt(3, 4), b2 = L[1, 2], b3 = L[7], b4 = QPt(8, 9)"
+
+
+def run_search(path, np, k, jobs, cap, label=""):
+    total = sum(N_PARAMS ** i for i in range(np + 1))
+    chunk = max(1, total // (jobs * 3))
+    parts = [(lo, min(chunk, total - lo)) for lo in range(0, total, chunk)]
+    t0 = time.time()
+    with ThreadPoolExecutor(jobs) as ex:
+        res = list(ex.map(lambda p: heather_eval(path, f"search_enc({np}, {k}, {p[0]}, {p[1]}, {cap})"), parts))
+    dt = time.time() - t0
+    counts = [0] * 5
+    found = []
+    for xs in res:
+        for i in range(5):
+            counts[i] += xs[i]
+        r = Rd(xs[5:])
+        found += r.many(lambda: finding(r))
+    return counts, found, dt
+
+
+def show(counts, found, dt, cap):
+    progs, tried, owed, due, nfound = counts
+    print(f"checked programs {progs}, inputs tried {tried}, owed {owed}, verdict held {due}, findings {nfound} ({dt:.1f}s, {progs / dt:.0f} programs/s)")
+    seen = set()
+    for c, f, vs in found:
+        key = "\n".join(f)
+        if key in seen:
+            continue
+        seen.add(key)
+        print(f"\n-- breaks {CLAUSES.get(c, c)} at ({', '.join(vs)}) over {HEAP}")
+        print("\n".join(f))
+        if len(seen) >= cap:
+            break
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    s = sub.add_parser("search")
+    s.add_argument("--np", type=int, default=1)
+    s.add_argument("--k", type=int, default=2)
+    s.add_argument("--mutant")
+    s.add_argument("--jobs", type=int, default=os.cpu_count() or 4)
+    s.add_argument("--cap", type=int, default=3)
+    c = sub.add_parser("calibrate")
+    c.add_argument("--only")
+    c.add_argument("--jobs", type=int, default=os.cpu_count() or 4)
+    c.add_argument("--max-k", type=int, default=3)
+    sub.add_parser("mutants")
+    a = ap.parse_args()
+    if not HEATHER.exists():
+        sys.exit("build the release binary first: cargo build --release -p heather-cli --bin heather")
+    if a.cmd == "mutants":
+        for n, (why, _) in MUTANTS.items():
+            print(f"{n}: {why}")
+        return
+    if a.cmd == "search":
+        path = mutant_dir(a.mutant) if a.mutant else SEARCH
+        counts, found, dt = run_search(path, a.np, a.k, a.jobs, a.cap)
+        show(counts, found, dt, a.cap)
+        sys.exit(1 if counts[4] and not a.mutant else 0)
+    if a.cmd == "calibrate":
+        names = [a.only] if a.only else list(MUTANTS)
+        missed = []
+        print("| mutant | found at (np, k) | programs checked at that size | findings |")
+        print("|---|---|---|---|")
+        for n in names:
+            path = mutant_dir(n)
+            hit = None
+            for np in (1, 2):
+                for k in range(0, a.max_k + 1):
+                    counts, found, dt = run_search(path, np, k, a.jobs, 1)
+                    if counts[4]:
+                        hit = (np, k, counts, found)
+                        break
+                if hit:
+                    break
+            if hit:
+                np, k, counts, found = hit
+                print(f"| {n} | ({np}, {k}) | {counts[0]} | {counts[4]} |", flush=True)
+            else:
+                print(f"| {n} | missed | | |", flush=True)
+                missed.append(n)
+        sys.exit(1 if missed else 0)
+
+
+if __name__ == "__main__":
+    main()
