@@ -11,6 +11,15 @@ the findings and prints each program.
     scripts/ownership-oracle search [--np N] [--k K] [--mutant NAME] [--jobs J] [--cap C]
     scripts/ownership-oracle calibrate [--only NAME] [--jobs J]
     scripts/ownership-oracle mutants
+    scripts/ownership-oracle walk [--np N] [--k K] [--flags F] [--ka A --kb B] [--control C] [--jobs J] [--cap C]
+
+`walk` evaluates the restated invariant (`sound_local`'s `InvLocal`) at
+every state of every generated checked function at every input where
+`SafeAt` is owed, by `sound_trace`'s driver (`oracle_walk.hthr`), and prints
+each failing state: the program with its nodes numbered, the input, the
+node the state is recorded before, and the groups false there. `--control`
+1, 2, 3 walks a weakened invariant instead (agreement whole; sync of every
+entry to write; a grown entry heap), which must fail.
 
 A **mutant** is a defect the proof found, put back: a copy of
 `checker.hthr` with one replacement, placed beside a copy of the search
@@ -33,6 +42,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 LIB = ROOT / "lib" / "lang" / "ownership"
 SEARCH = LIB / "oracle_search.hthr"
+WALK = LIB / "oracle_walk.hthr"
 HEATHER = ROOT / "target" / "release" / "heather"
 WORK = ROOT / "target" / "ownership-oracle"
 
@@ -58,7 +68,7 @@ MUTANTS = {
     "call_atoms_plain": ("a view result's region naming an argument that is a view of a word (§23.21 D, at_by_view0_refused)",
         [("checker.hthr", "s0.subst_steps(xs, steps).and_then(λ at => s.atoms_ok(Steps::lvls(at)).and_then(λ _ =>", "s0.subst_steps(xs, steps).and_then(λ at => Some(Nil).and_then(λ _ =>")]),
     "sig_ok_read_param": ("a read parameter answered as OParam (§23.21 B, read_param_refused)",
-        [("checker.hthr", "OParam(i) => match ps.nth(i) { Some(p) => (match p.mode { ByTake => True, ByRead => False,", "OParam(i) => match ps.nth(i) { Some(p) => (match p.mode { ByTake => True, ByRead => True,")]),
+        [("checker.hthr", "OParam(i) => match ps.nth(i) { Some(p) => (match p.mode { ByTake => Shape::moves(tys, strs, p.code), ByRead => False,", "OParam(i) => match ps.nth(i) { Some(p) => (match p.mode { ByTake => Shape::moves(tys, strs, p.code), ByRead => True,")]),
     "sig_ok_telescope": ("a view result naming a later result (§23.21 C, found_fwd_refused)",
         [("checker.hthr", "}) && Steps::lvls(xs).all_bit(λ a => (a + 1).leb(ps.len() + k)),", "}),")]),
     "sig_ok_own": ("a function whose own signature fails Sig::ok checked (§23.21 B, B')",
@@ -237,7 +247,14 @@ def stmt(r):
         g = r.n()
         args = r.many(lambda: var(r))
         return f"call {CALLEES.get(g, f'f{g}')}({', '.join(args)}) binding {r.n()}"
-    return f"death {place(r)}"
+    if t == 8:
+        return f"death {place(r)}"
+    if t == 9:
+        p = place(r)
+        return f"back {p} := {var(r)}"
+    p = place(r)
+    w = r.n()
+    return f"len {p}" + (f" as u{r.n()}" if w == 1 else "")
 
 
 def test(r):
@@ -352,6 +369,98 @@ def run_search(path, np, k, jobs, cap, fl=0, ka=0, kb=0):
     return counts, found, dt
 
 
+GROUPS = ["wf", "agree", "sync", "cells", "apart", "likes", "heap"]
+KINDS = {1: "op", 2: "lit", 4: "read", 8: "write", 16: "back", 32: "len", 64: "view-read", 128: "view-write", 256: "take",
+         512: "fresh", 1024: "call", 2048: "call-prim", 4096: "death", 8192: "join", 16384: "jump", 32768: "ret-in-arm"}
+
+
+def numbered(fr):
+    """A function decoded with its body's nodes numbered in pre-order (oracle_walk's `Body::walk` labels)."""
+    ps = fr.many(lambda: f"{shape(fr)} {MODES[fr.n()]}")
+    rs = fr.many(lambda: f"{shape(fr)} {origin(fr)}")
+    head = f"fn ({', '.join(f'a{i}: {p}' for i, p in enumerate(ps))}) → ({', '.join(rs)})"
+    lines, labels, prev = [head], {}, {}
+    ctr = [0]
+
+    def go(ind, before):
+        i = ctr[0]
+        ctr[0] += 1
+        prev[i] = before
+        t = fr.n()
+        pad = "    " * ind
+        if t in (0, 1, 4):
+            xs = fr.many(lambda: var(fr))
+            txt = {0: "ret", 1: "yield", 4: "jump"}[t] + f" [{', '.join(xs)}]"
+            lines.append(f"{i:>3} {pad}{txt}")
+            labels[i] = txt
+            return
+        if t == 2:
+            txt = stmt(fr)
+            lines.append(f"{i:>3} {pad}{txt}")
+            labels[i] = txt
+            go(ind, i)
+            return
+        tst = test(fr)
+        txt = f"if {tst}"
+        lines.append(f"{i:>3} {pad}{txt} {{")
+        labels[i] = txt
+        go(ind + 1, i)
+        lines.append(f"    {pad}}} else {{")
+        go(ind + 1, i)
+        lines.append(f"    {pad}}}")
+        go(ind, i)
+
+    go(1, None)
+    return lines, labels, prev
+
+
+def run_walk(path, ctl, np, k, jobs, fl=0, ka=0, kb=0, lo0=0, n0=None):
+    total = sum(N_PARAMS ** i for i in range(np + 1))
+    end = total if n0 is None else min(total, lo0 + n0)
+    chunk = max(1, (end - lo0) // (jobs * 3))
+    parts = [(lo, min(chunk, end - lo)) for lo in range(lo0, end, chunk)]
+    t0 = time.time()
+    with ThreadPoolExecutor(jobs) as ex:
+        res = list(ex.map(lambda p: heather_eval(path, f"walk_stream({ctl}, {fl}, {np}, {k}, {ka}, {kb}, {p[0]}, {p[1]})"), parts))
+    dt = time.time() - t0
+    keys = ["programs", "tried", "owed", "walked", "states", "halted_run", "halted_join", "halted_checker", "byref", "byval", "failing_programs", "failing_inputs"]
+    c = dict.fromkeys(keys, 0)
+    kinds = {}
+    fails = []
+    for xs in res:
+        r = Rd(xs)
+        while r.i < len(xs):
+            c["programs"] += 1
+            for key in keys[1:10]:
+                c[key] += r.n()
+            for kd in set(r.many(r.n)):
+                kinds[kd] = kinds.get(kd, 0) + 1
+            if r.n():
+                lines, labels, prev = numbered(r)
+                fs = r.many(lambda: (r.n(), r.n(), r.n(), r.many(lambda: value(r))))
+                c["failing_programs"] += 1
+                c["failing_inputs"] += len(fs)
+                fails.append((lines, labels, prev, fs))
+    return c, kinds, fails, dt
+
+
+def show_walk(c, kinds, fails, dt, cap):
+    print(f"programs {c['programs']}, inputs tried {c['tried']}, walked {c['walked']}, states {c['states']}, "
+          f"halted (run {c['halted_run']}, join {c['halted_join']}, checker {c['halted_checker']}), "
+          f"walked inputs with a named value by reference {c['byref']}, by value {c['byval']}, "
+          f"failing programs {c['failing_programs']}, failing inputs {c['failing_inputs']} ({dt:.1f}s)")
+    print("statement kinds (programs holding each): " + ", ".join(f"{KINDS.get(kd, kd)} {n}" for kd, n in sorted(kinds.items())))
+    fails = sorted(fails, key=lambda f: len(f[0]))
+    for lines, labels, prev, fs in fails[:cap]:
+        node, at, groups, vs = fs[0]
+        gs = [g for b, g in enumerate(GROUPS) if groups >> b & 1]
+        p = prev.get(node)
+        after = "the entry state" if p is None else f"node {p} ({labels[p]})"
+        print(f"\n-- {', '.join(gs)} false at state {at}, before node {node} ({labels[node]}), after {after}; "
+              f"arguments ({', '.join(vs)}) over {HEAP}; {len(fs)} failing input(s)")
+        print("\n".join(lines))
+
+
 def show(counts, found, dt, cap):
     progs, tried, owed, due, nfound = counts
     print(f"checked programs {progs}, inputs tried {tried}, owed {owed}, verdict held {due}, findings {nfound} ({dt:.1f}s, {progs / dt:.0f} programs/s)")
@@ -384,6 +493,17 @@ def main():
     c.add_argument("--jobs", type=int, default=os.cpu_count() or 4)
     c.add_argument("--claims", action="store_true", help="check the claims instead: each copy accepts what the checker does")
     sub.add_parser("mutants")
+    w = sub.add_parser("walk")
+    w.add_argument("--np", type=int, default=1)
+    w.add_argument("--k", type=int, default=1)
+    w.add_argument("--flags", type=int, default=0)
+    w.add_argument("--ka", type=int, default=1)
+    w.add_argument("--kb", type=int, default=0)
+    w.add_argument("--control", type=int, default=0, help="0 the invariant; 1 agreement whole; 2 sync of every entry to write; 3 a grown entry heap")
+    w.add_argument("--jobs", type=int, default=os.cpu_count() or 4)
+    w.add_argument("--cap", type=int, default=3)
+    w.add_argument("--lo", type=int, default=0, help="the first parameter list (in `gen_param_lists` order) walked")
+    w.add_argument("--n", type=int, help="how many parameter lists from --lo")
     a = ap.parse_args()
     if not HEATHER.exists():
         sys.exit("build the release binary first: cargo build --release -p heather-cli --bin heather")
@@ -393,6 +513,10 @@ def main():
         for n, (why, _) in CLAIMS.items():
             print(f"(claim) {n}: {why}")
         return
+    if a.cmd == "walk":
+        c, kinds, fails, dt = run_walk(WALK, a.control, a.np, a.k, a.jobs, a.flags, a.ka, a.kb, a.lo, a.n)
+        show_walk(c, kinds, fails, dt, a.cap)
+        sys.exit(1 if fails and not a.control else 0)
     if a.cmd == "search":
         path = mutant_dir(a.mutant) if a.mutant else SEARCH
         counts, found, dt = run_search(path, a.np, a.k, a.jobs, a.cap, a.flags, a.ka, a.kb)

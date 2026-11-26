@@ -1,0 +1,92 @@
+// The invariant walk (lib/lang/ownership/oracle_walk.hthr): its labelled
+// walk gives the driver's verdicts in the driver's order
+// (`sound_trace.hthr`'s `Func::trace`), its labels number the body's nodes
+// in pre-order as `scripts/ownership-oracle walk` prints them, and each
+// control fails where it must. Over `oracle_search.hthr`'s environment and
+// heap: `b2` is the list `[1, 2]`.
+import logic;
+import pair;
+import bool;
+import nat;
+import option;
+import list;
+import bitvec;
+import span_set;
+import store;
+import atom;
+import steps;
+import shape;
+import sequences;
+import body;
+import level2;
+import run;
+import verdict;
+import checker;
+import oracle;
+import linux_world;
+import sound_paths;
+import sound_state;
+import sound_heap;
+import sound_inv;
+import sound_wf;
+import sound_local;
+import sound_trace;
+import oracle_search;
+import oracle_walk;
+
+fn el0(r: Var) → Place { Place(r, [SElem(Lit(0))]) }
+
+// A view to write of a list's first element, written, written back, dead.
+fn loan1() → Func {
+    Func(Sig([Param(ns_s(), ByWrite), Param(nat_s(), ByTake)], Nil),
+        seq([View(el0(Arg(0)), Writing), Write(Place(Loc(0), Nil), Arg(1)), Back(el0(Arg(0)), Loc(0)), Death(Place(Loc(0), Nil))], Ret([Arg(0)])))
+}
+
+// A join on two words, each arm yielding a word.
+fn join1() → Func {
+    Func(Sig([Param(nat_s(), ByTake), Param(nat_s(), ByTake)], [Result(nat_s(), OFresh)]),
+        Join(TLt(Arg(0), Arg(1)), seq([Lit(WNat, 1)], Yield([Loc(0)])), seq([Lit(WNat, 0)], Yield([Loc(0)])), Ret([Loc(0)])))
+}
+
+fn by_ref() → List<Value(tys())> { [at(2, Nil), Plain(nat(5))] }
+
+fn by_val() → List<Value(tys())> { [Plain(ns([1, 2])), Plain(nat(5))] }
+
+fn words01() → List<Value(tys())> { [Plain(nat(0)), Plain(nat(1))] }
+
+theorem loan1_checked(): (verdict_of(loan1(), 0)).is_some() = True { refl }
+
+theorem join1_checked(): (verdict_of(join1(), 0)).is_some() = True { refl }
+
+fn bits_of(xs: List<LocalVerdict>) → List<Nat> { xs.map(λ v => LocalVerdict::bits(v)) }
+
+fn walk_bits(ctl: Nat, f: Func, vs: List<Value(tys())>) → List<Nat> { ((walk_log(ctl, f, vs)).log).map(λ x => LocalVerdict::bits(x.snd)) }
+
+fn walk_labels(f: Func, vs: List<Value(tys())>) → List<Nat> { ((walk_log(0, f, vs)).log).map(λ x => x.fst) }
+
+// The walk is the driver's, state for state; every group holds.
+theorem loan1_ref_driver(): List::same_by(Nat::same, walk_bits(0, loan1(), by_ref()), bits_of(driver_log(loan1(), by_ref()))) = True { refl }
+
+theorem loan1_ref_holds(): walk_bits(0, loan1(), by_ref()) = [0, 0, 0, 0, 0] { refl }
+
+theorem loan1_val_holds(): walk_bits(0, loan1(), by_val()) = [0, 0, 0, 0, 0] { refl }
+
+theorem join1_driver(): List::same_by(Nat::same, walk_bits(0, join1(), words01()), bits_of(driver_log(join1(), words01()))) = True { refl }
+
+// The labels: a join (0), its yes arm (1, 2), its no arm (3, 4), the `Ret` after it (5).
+theorem join1_labels(): walk_labels(join1(), words01()) = [0, 1, 2, 3, 4, 5] { refl }
+
+theorem loan1_labels(): walk_labels(loan1(), by_ref()) = [0, 1, 2, 3, 4] { refl }
+
+// The controls. Agreement whole fails after the write through the view,
+// before its write-back, where the view refers (bit 2, agreement); along
+// the copy it holds.
+theorem whole_fails_loan1(): walk_bits(1, loan1(), by_ref()) = [0, 0, 2, 0, 0] { refl }
+
+theorem whole_holds_copy_loan1(): walk_bits(1, loan1(), by_val()) = [0, 0, 0, 0, 0] { refl }
+
+// Sync of an entry not yet written back fails there (bit 4, sync).
+theorem sync_unbacked_fails_loan1(): walk_bits(2, loan1(), by_ref()) = [0, 0, 4, 0, 0] { refl }
+
+// A grown entry heap fails the heap group at every state (bit 64).
+theorem grown_fails_join1(): walk_bits(3, join1(), words01()) = [64, 64, 64, 64, 64, 64] { refl }

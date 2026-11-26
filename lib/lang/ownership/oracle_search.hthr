@@ -241,6 +241,8 @@ fn gen_stmts(fl: Nat, sigs: Nat → Sig, s: CSt, na, nl: Nat) → List<Stmt> {
     gen_flat(ws, λ a => ws.map(λ b => Op(PAdd, a, b))) ++
     gen_flat(lv, λ x => (gen_places(s, x)).map(λ p => Read(p))) ++
     gen_flat(lv, λ x => gen_flat(gen_places(s, x), λ p => (gen_of(s, vs, gen_code_at(s.code(x), p.steps))).map(λ v => Write(p, v)))) ++
+    gen_flat(lv, λ x => gen_flat(gen_places(s, x), λ p => (gen_of(s, vs, gen_code_at(s.code(x), p.steps))).map(λ v => Back(p, v)))) ++
+    gen_flat(lv, λ x => gen_flat((gen_places(s, x)).filter(λ p => (gen_code_at(s.code(x), p.steps)).same(ns_s())), λ (p: Place) => Cons(Len(p, WNat), Cons(Len(p, WBits(1)), Nil)))) ++
     gen_flat(lv, λ x => gen_flat(gen_places(s, x), λ p => Cons(View(p, Reading), Cons(View(p, Writing), Nil)))) ++
     gen_flat(lv, λ x => (gen_places(s, x)).map(λ p => Take(p))) ++
     gen_flat(ws, λ n => ws.map(λ v => Fresh(ns_s(), n, v))) ++
@@ -251,7 +253,7 @@ fn gen_stmts(fl: Nat, sigs: Nat → Sig, s: CSt, na, nl: Nat) → List<Stmt> {
     })
 }
 
-fn Stmt::binds(self st: Stmt) → Nat { match st { Write(_, _) => 0, Death(_) => 0, Call(_, _, n) => n, _ => 1 } }
+fn Stmt::binds(self st: Stmt) → Nat { match st { Write(_, _) => 0, Back(_, _) => 0, Death(_) => 0, Call(_, _, n) => n, _ => 1 } }
 
 fn gen_next(sigs: Nat → Sig, s: CSt, st: Stmt) → Option<CSt> {
     match st.code_ok(tys(), strs(), sigs, s) {

@@ -182,6 +182,7 @@ fn Residual::holds_b(self r: Residual, tys: Nat → Type, cx: CtxB(tys), env: En
             let new = Env::get(tys, env, v);
             new.code.same(old.code) && (Dyn::len(tys, cx.strs, new)).same(Dyn::len(tys, cx.strs, old))
         },
+        RLen(p, w) => match w { WNat => True, WBits(k) => (Dyn::len(tys, cx.strs, p.val(tys, cx.strs, env)) + 1).leb(Nat::pow(2, k)) },
         RMeasure(g, args) => (cx.need(g, args.map(λ x => Env::get(tys, env, x))) + 1).leb(cx.need(cx.me, cx.args)),
     }
 }
@@ -378,6 +379,8 @@ fn enc_stmt(s: Stmt) → List<Nat> {
         Fresh(c, n, v) => Cons(6, enc_shape(c) ++ enc_var(n) ++ enc_var(v)),
         Call(g, args, n) => Cons(7, Cons(g, enc_list(λ (x: Var) => enc_var(x), args) ++ [n])),
         Death(p) => Cons(8, enc_place(p)),
+        Back(p, v) => Cons(9, enc_place(p) ++ enc_var(v)),
+        Len(p, w) => Cons(10, enc_place(p) ++ enc_width(w)),
     }
 }
 

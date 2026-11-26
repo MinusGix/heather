@@ -1,0 +1,252 @@
+// The restated invariant walked along every generated checked program
+// (issues/ownership-soundness-oracle.md; docs/language/ownership-design.md
+// §26.6): for each function `oracle_search` generates and each input at which
+// `SafeAt` is owed (its premises and the precondition, the world pinned
+// there), the checker, the meaning and the run are stepped together by
+// `sound_trace`'s driver, and `sound_local`'s decider is evaluated at every
+// state, group by group. A failure names the first state some group is false
+// at: the body's node it is recorded before, and the groups false there.
+//
+// - **The stepping is the driver's**: `Stmt::step3` for a statement,
+//   `Tri::joined` after a join, `Tri::verdict`'s groups (or a control's).
+//   `Body::walk` is `Body::trace_with` with each state labelled by the
+//   node it is recorded before (in pre-order: a statement, then what follows
+//   it; a join, then its yes arm, its no arm, what follows it), so that a
+//   failure can name its statement. Both arms of a join are walked from the
+//   state before it, as the driver does; the walk continues from the arm the
+//   run's test picks.
+// - **Controls** (`ctl`): 0 is the invariant; 1 asks agreement whole
+//   (`val = d`, no patch for the write children); 2 asks sync of every entry
+//   to write, written back or not; 3 asks the heap group against an entry
+//   heap with one block more. Each is a weakened invariant the walk must
+//   find failing (`sound_local_tests.hthr`'s `whole_fails_ref`,
+//   `sync_all_fails`, `grown_fails`).
+// - **What is emitted** is a stream of numbers per checked function (the
+//   driver `scripts/ownership-oracle walk` sums it): the inputs tried, owed,
+//   walked, the states visited, the traces that halted (by why), which
+//   statement kinds the body holds, how many walked inputs passed a named
+//   value by reference and by value, then each failing input.
+import logic;
+import pair;
+import bool;
+import nat;
+import option;
+import list;
+import bitvec;
+import span_set;
+import store;
+import atom;
+import steps;
+import shape;
+import sequences;
+import body;
+import level2;
+import run;
+import verdict;
+import checker;
+import oracle;
+import linux_world;
+import sound_paths;
+import sound_state;
+import sound_heap;
+import sound_inv;
+import sound_wf;
+import sound_local;
+import sound_trace;
+import oracle_search;
+
+// ---------------------------------------------------------------------------
+// Equality at each named type of `oracle_search`'s environment
+
+fn walk_eqn() → DEq(tys()) {
+    λ k => match k as λ k2 => tys()(k2) → tys()(k2) → Bool {
+        Zero => λ (a: Pt) (b: Pt) => a.same(b),
+        Succ(k1) => match k1 as λ k3 => tys()(Succ(k3)) → tys()(Succ(k3)) → Bool {
+            Zero => Nat::same_list,
+            Succ(k2) => match k2 as λ k4 => tys()(Succ(Succ(k4))) → tys()(Succ(Succ(k4))) → Bool { Zero => λ (a: Pt) (b: Pt) => a.same(b), Succ(_) => λ _ _ => True },
+        },
+    }
+}
+
+// What a trace is evaluated against: the function under test at 0 beside
+// the catalogue, unmeasured; the world `oracle_search` pins; the run's calls
+// at a fuel the catalogue never exhausts; the activation as `Func::run`
+// builds it.
+fn walk_cx(f: Func, vs: List<Value(tys())>, h: Heap(tys())) → TCx(tys()) {
+    let lent = Value::lent(tys(), f.sig.params, vs);
+    TCx(strs(), walk_eqn(), fns_of(f), prim(), λ _ => False, 0, world(f, depth()), Run::calls(tys(), strs(), fns_of(f), world(f, depth()), prim(), 5), Act(lent, h.len()), h, lent)
+}
+
+// ---------------------------------------------------------------------------
+// The controls
+
+fn walk_whole_b(t: Tri(tys())) → Bool {
+    (t.s).levels().all_bit(λ l => !(t.s).live(l) || Dyn::opt_eq_b(tys(), walk_eqn(), CSt::val_at(tys(), strs(), t.s, t.m, l), Some(CSt::mean_at(tys(), t.s, t.e, l))))
+}
+
+fn walk_sync_unbacked_b(t: Tri(tys())) → Bool {
+    let s = t.s;
+    s.levels().all_bit(λ l => !s.live(l) || match s.role(l) {
+        KView => match (s.ents(l)).any_bit(λ en => en.mode.writes()) {
+            True => (s.ents(l)).all_bit(λ en => VEnt::sync_b(tys(), strs(), walk_eqn(), s, t.e, t.m, en)),
+            False => (s.ents(l)).any_bit(λ en => VEnt::sync_b(tys(), strs(), walk_eqn(), s, t.e, t.m, en)),
+        },
+        _ => True,
+    })
+}
+
+fn walk_verdict(ctl: Nat, cx: TCx(tys()), t: Tri(tys())) → LocalVerdict {
+    let v = Tri::verdict(tys(), cx, t);
+    match ctl {
+        Zero => v,
+        Succ(c1) => match c1 {
+            Zero => LocalVerdict(v.wf, walk_whole_b(t), v.sync, v.cells, v.apart, v.likes, v.heap),
+            Succ(c2) => match c2 {
+                Zero => LocalVerdict(v.wf, v.agree, walk_sync_unbacked_b(t), v.cells, v.apart, v.likes, v.heap),
+                Succ(_) => LocalVerdict(v.wf, v.agree, v.sync, v.cells, v.apart, v.likes,
+                    Heaped::holds_b(tys(), strs(), walk_eqn(), t.s, t.m, cx.h0 ++ [Live(Obj(nat(0), Nil))], cx.lent, t.root)),
+            },
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The walk: `Body::trace_with`, each state labelled by its node
+
+// A body's nodes in pre-order.
+fn Body::nodes(self b: Body) → Nat {
+    match b { Ret(_) => 1, Jump(_) => 1, Yield(_) => 1, Do(_, rest) => 1 + rest.nodes(), Join(_, y, n, rest) => 1 + y.nodes() + n.nodes() + rest.nodes() }
+}
+
+fn Body::walk<V>(self b: Body, cx: TCx(tys()), f: Tri(tys()) → V, i: Nat, t: Tri(tys())) → TOut(tys(), Pair<Nat, V>) {
+    match b {
+        Ret(_) => TOut([Pair(i, f(t))], TLeft),
+        Jump(_) => TOut([Pair(i, f(t))], TLeft),
+        Yield(os) => TOut([Pair(i, f(t))], TYield(t, os)),
+        Do(st, rest) => match st.step3(tys(), cx, t) {
+            SHalt(h) => TOut([Pair(i, f(t))], THalt(h)),
+            SNext(t2) => {
+                let o = rest.walk(cx, f, i + 1, t2);
+                TOut(Cons(Pair(i, f(t)), o.log), o.end)
+            },
+        },
+        Join(tst, yes, no, rest) => {
+            let iy = i + 1;
+            let ino = iy + yes.nodes();
+            let ir = ino + no.nodes();
+            let ty = yes.walk(cx, f, iy, Tri((t.s).arm(), t.e, t.m, t.root));
+            let tn = no.walk(cx, f, ino, Tri((t.s).arm(), t.e, t.m, t.root));
+            match Tri::joined(tys(), cx, t, tst, ty.end, tn.end) {
+                None => TOut(Cons(Pair(i, f(t)), ty.log ++ tn.log), THalt(HJoin)),
+                Some(t1) => {
+                    let o = rest.walk(cx, f, ir, t1);
+                    TOut(Cons(Pair(i, f(t)), ty.log ++ tn.log ++ o.log), o.end)
+                },
+            }
+        },
+    }
+}
+
+// The walk agrees with the driver: the same verdicts in the same order
+// (`oracle_walk_tests.hthr` checks it at closed programs).
+fn walk_log(ctl: Nat, f: Func, vs: List<Value(tys())>) → TOut(tys(), Pair<Nat, LocalVerdict>) {
+    let h = heap0();
+    let cx = walk_cx(f, vs, h);
+    f.body.walk(cx, λ u => walk_verdict(ctl, cx, u), 0, f.start3(tys(), cx, vs, reads(h, vs), h, Io::of(World::piped(Nil))))
+}
+
+fn driver_log(f: Func, vs: List<Value(tys())>) → List<LocalVerdict> {
+    let h = heap0();
+    (f.trace(tys(), walk_cx(f, vs, h), vs, reads(h, vs), h, Io::of(World::piped(Nil)))).log
+}
+
+// ---------------------------------------------------------------------------
+// What a function's walk gives
+
+fn LocalVerdict::bits(v: LocalVerdict) → Nat {
+    (match v.wf { True => 0, False => 1 }) + (match v.agree { True => 0, False => 2 }) + (match v.sync { True => 0, False => 4 }) + (match v.cells { True => 0, False => 8 }) +
+        (match v.apart { True => 0, False => 16 }) + (match v.likes { True => 0, False => 32 }) + (match v.heap { True => 0, False => 64 })
+}
+
+fn walk_first(xs: List<Pair<Nat, LocalVerdict>>, k: Nat) → Option<Pair<Nat, Pair<Nat, LocalVerdict>>> {
+    match xs { Nil => None, Cons(x, rest) => match LocalVerdict::every(x.snd) { True => walk_first(rest, k + 1), False => Some(Pair(k, x)) } }
+}
+
+fn TEnd::tag(tys: Nat → Type, e: TEnd(tys)) → Nat { match e { TLeft => 0, TYield(_, _) => 0, THalt(h) => match h { HChecker => 1, HRun => 2, HJoin => 3 } } }
+
+// The statement kinds a body holds, as numbers: 1 `Op`, 2 `Lit`, 4 `Read`,
+// 8 `Write`, 16 `Back`, 32 `Len`, 64 a view to read, 128 a view to write,
+// 256 `Take`, 512 `Fresh`, 1024 a call of the catalogue, 2048 the
+// primitive's, 4096 `Death`, 8192 a join, 16384 `Jump`, 32768 a `Ret`
+// inside an arm.
+fn Stmt::kind(self st: Stmt) → Nat {
+    match st {
+        Op(_, _, _) => 1, Lit(_, _) => 2, Read(_) => 4, Write(_, _) => 8, Back(_, _) => 16, Len(_, _) => 32,
+        View(_, m) => match m { Reading => 64, Writing => 128 }, Take(_) => 256, Fresh(_, _, _) => 512,
+        Call(g, _, _) => match prim()(g) { True => 2048, False => 1024 }, Death(_) => 4096,
+    }
+}
+
+// Every kind a body holds, with repeats (the driver takes the union).
+fn Body::kinds(self b: Body, arm: Bool) → List<Nat> {
+    match b {
+        Ret(_) => match arm { True => [32768], False => Nil },
+        Jump(_) => [16384],
+        Yield(_) => Nil,
+        Do(st, rest) => Cons(st.kind(), rest.kinds(arm)),
+        Join(_, y, n, rest) => Cons(8192, y.kinds(True) ++ n.kinds(True) ++ rest.kinds(arm)),
+    }
+}
+
+// Whether an argument list passes a named value by reference, by value.
+fn walk_by(vs: List<Value(tys())>, rf: Bool) → Bool {
+    vs.any_bit(λ v => match v { Refer(r) => rf && match r.sels { Nil => True, Cons(_, _) => False }, Plain(d) => !rf && !(d.code).is_word() })
+}
+
+// A failure: the input, the label of the state, its position in the log,
+// the groups false there.
+record WFail { vs: List<Value(tys())>, node: Nat, at: Nat, groups: Nat }
+
+record WTally { tried: Nat, owed: Nat, walked: Nat, states: Nat, hrun: Nat, hjoin: Nat, hchk: Nat, byref: Nat, byval: Nat, fails: List<WFail> }
+
+fn WTally::zero() → WTally { WTally(0, 0, 0, 0, 0, 0, 0, 0, 0, Nil) }
+
+fn WTally::add(self a, b: WTally) → WTally {
+    WTally(a.tried + b.tried, a.owed + b.owed, a.walked + b.walked, a.states + b.states, a.hrun + b.hrun, a.hjoin + b.hjoin, a.hchk + b.hchk, a.byref + b.byref, a.byval + b.byval, a.fails ++ b.fails)
+}
+
+fn walk_sum<A>(xs: List<A>, f: A → WTally) → WTally { match xs { Nil => WTally::zero(), Cons(x, r) => (f(x)).add(walk_sum(r, f)) } }
+
+fn b01(b: Bool) → Nat { match b { True => 1, False => 0 } }
+
+// One input: walked where `SafeAt` is owed there (`gen_try`'s premises).
+fn walk_try(ctl: Nat, f: Func, vs: List<Value(tys())>) → WTally {
+    let p = gen_prog(f);
+    let h = heap0();
+    let ds = reads(h, vs);
+    match Prog::owed_b(tys(), deq, p, 0, vs, h, ds) && pres_b(f, depth(), 0, ds) && gen_pinned(f, ds) {
+        False => WTally(1, 0, 0, 0, 0, 0, 0, 0, 0, Nil),
+        True => {
+            let o = walk_log(ctl, f, vs);
+            let e = TEnd::tag(tys(), o.end);
+            WTally(1, 1, 1, o.log.len(), b01(e.same(2)), b01(e.same(3)), b01(e.same(1)), b01(walk_by(vs, True)), b01(walk_by(vs, False)),
+                match walk_first(o.log, 0) { None => Nil, Some(x) => [WFail(vs, x.snd.fst, x.fst, LocalVerdict::bits(x.snd.snd))] })
+        },
+    }
+}
+
+fn enc_wfail(x: WFail) → List<Nat> { [x.node, x.at, x.groups] ++ enc_list(λ (v: Value(tys())) => enc_value(tys(), encd, v), x.vs) }
+
+// The walk as a stream, one record per checked function: tried, owed,
+// walked, states, halted (run, join, checker), kinds, by reference, by
+// value, then the function and its failures where it has any (else a 0).
+fn walk_stream(ctl, fl, np, k, ka, kb, lo, n: Nat) → List<Nat> {
+    gen_flat(((gen_param_lists(np)).drop(lo)).take(n), λ ps => gen_flat(gen_funcs(fl, ps, k, ka, kb), λ f => match verdict_of(f, 0) {
+        None => Nil,
+        Some(_) => {
+            let t = walk_sum(gen_args(f.sig.params), λ vs => walk_try(ctl, f, vs));
+            [t.tried, t.owed, t.walked, t.states, t.hrun, t.hjoin, t.hchk, t.byref, t.byval] ++ enc_list(λ (x: Nat) => [x], f.body.kinds(False)) ++
+                match t.fails { Nil => [0], Cons(_, _) => Cons(1, enc_func(f) ++ enc_list(enc_wfail, t.fails)) }
+        },
+    }))
+}
