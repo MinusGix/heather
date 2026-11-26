@@ -822,3 +822,63 @@ theorem Seq::list_win_laws(tys: Nat → Type, a: Shape, pad: El(tys, a), me: Sha
         λ v lo n => trans(cong_fn(λ (t: List<El(tys, a)>) => v.ix_put_win(lo, n, t), to_of(v.ix_win(lo, n))), v.ix_win_put_back(lo, n)),
     )
 }
+
+// ---------------------------------------------------------------------------
+// A list of words indexed by a machine word, with windows
+// (docs/language/ownership-design.md §25; issues/ownership-end-to-end-slice.md)
+//
+// The instance compiled programs use: `List<A>` at a word element, read and
+// updated at the index's value (`Ix::num`: any index through `toNat`, as
+// `[A; n]` reads, so a `u64` variable and a literal step select alike), and
+// windows of itself. `Bytes(n)` has no windows (a window's code is one
+// fixed name and `Bytes(n)`'s length is in its type), and `Seq::list`
+// selects only at a number, which has no layout; this is `Seq::list` at the
+// index's number, so its laws are `Seq::list`'s there, by conversion.
+
+fn Ix::num(self i: Ix) → Ix { INat(i.toNat()) }
+
+fn Seq::words_win(tys: Nat → Type, a: Shape, me: Shape, to: El(tys, me) → List<El(tys, a)>, of: List<El(tys, a)> → El(tys, me)) → Win(tys, List<El(tys, a)>) {
+    Win(me, λ ys => List::len(to(ys)), λ xs lo n => of(xs.ix_win(lo.num(), n.num())), λ xs lo n ys => xs.ix_put_win(lo.num(), n.num(), to(ys)),
+        λ xs lo n => xs.ix_win_inside(lo.num(), n.num()), λ xs lo n => xs.ix_win_pre(lo.num(), n.num()))
+}
+
+fn Seq::words(tys: Nat → Type, a: Shape, pad: El(tys, a), win: Option<Win(tys, List<El(tys, a)>)>) → Seq(tys, List<El(tys, a)>) {
+    Seq(a, λ xs => xs.len(), λ xs i => xs.ix_get(i.num(), pad), λ xs i x => xs.ix_set(i.num(), x), λ xs i => xs.ix_inside(i.num()), λ xs i => xs.ix_pre(i.num()),
+        λ n x => List::replicate(x, n.toNat()), win)
+}
+
+theorem Seq::words_laws(tys: Nat → Type, a: Shape, pad: El(tys, a), win: Option<Win(tys, List<El(tys, a)>)>): SeqLaws(tys, List<El(tys, a)>, Seq::words(tys, a, pad, win)) {
+    let l = Seq::list_laws(tys, a, pad, win);
+    SeqLaws(
+        λ v i h x => l.get_set(v, i.num(), h, x),
+        λ v i x y => l.set_set(v, i.num(), x, y),
+        λ v i h x => l.still(v, i.num(), h, x),
+        λ v i x => l.len_set(v, i.num(), x),
+        λ v i j h x => l.get_other(v, i.num(), j.num(), h, x),
+        λ v i j h x y => l.commute(v, i.num(), j.num(), h, x, y),
+        λ v i q => l.pre_inside(v, i.num(), q),
+        λ v w i e => l.inside_len(v, w, i.num(), e),
+        λ v i => l.put_back(v, i.num()),
+    )
+}
+
+theorem Seq::words_win_laws(tys: Nat → Type, a: Shape, pad: El(tys, a), me: Shape, to: El(tys, me) → List<El(tys, a)>, of: List<El(tys, a)> → El(tys, me),
+    to_of: (l: List<El(tys, a)>) → to(of(l)) = l, of_to: (y: El(tys, me)) → of(to(y)) = y, win: Option<Win(tys, List<El(tys, a)>)>):
+    WinLaws(tys, List<El(tys, a)>, Seq::words(tys, a, pad, win), Seq::words_win(tys, a, me, to, of))
+{
+    let l = Seq::list_win_laws(tys, a, pad, me, to, of, to_of, of_to, win);
+    WinLaws(
+        λ v lo n h ys e => l.get_set(v, lo.num(), n.num(), h, ys, e),
+        λ v lo n ys zs e => l.set_set(v, lo.num(), n.num(), ys, zs, e),
+        λ v lo n h ys => l.still(v, lo.num(), n.num(), h, ys),
+        λ v lo n ys => l.len_set(v, lo.num(), n.num(), ys),
+        λ v lo n j h x => l.get_elem(v, lo.num(), n.num(), j.num(), h, x),
+        λ v lo n i h ys => l.elem_get(v, lo.num(), n.num(), i.num(), h, ys),
+        λ v lo n lo2 n2 h ys => l.get_win(v, lo.num(), n.num(), lo2.num(), n2.num(), h, ys),
+        λ v lo n j h ys x => l.commute_elem(v, lo.num(), n.num(), j.num(), h, ys, x),
+        λ v lo n lo2 n2 h ys zs => l.commute_win(v, lo.num(), n.num(), lo2.num(), n2.num(), h, ys, zs),
+        λ v lo n q => l.pre_inside(v, lo.num(), n.num(), q),
+        λ v u lo n e => l.inside_len(v, u, lo.num(), n.num(), e),
+        λ v lo n => l.put_back(v, lo.num(), n.num()),
+    )
+}
