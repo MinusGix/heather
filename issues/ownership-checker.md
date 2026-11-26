@@ -60,7 +60,13 @@ but `sim` to a state where one view's entry is no longer written back.
      (`CSt::pone_none`); `Inv::unback` from `none` before (only the written
      view's entries change); the write-back keeps it (the child is written
      back, only the parent's entry becomes pending).
-   - **A fit for copies** (asked of the coordinating session, see below): a
+   - **`cfit`** (decided: option (a)): a live entry whose parent's cell is a
+     copy has its place fitting that copy at the run's words; opened by
+     `Sim::place`, kept by writes through the parent via `SelApart`'s fit
+     fields (with the decider law `Steps::apart(r ++ a, r ++ b) =
+     Steps::apart(a, b)` in `steps.hthr` beside `apart_sound`, with a probe;
+     test a window then an element under a common prefix first), and by
+     write-backs. Why: a
      plain chain's write-back runs `Sel::put` into the parent's cell, stuck
      unless the child's place fits the parent's value, and nothing records
      that for a copy (for a referring chain it follows from the child's
@@ -82,7 +88,8 @@ but `sim` to a state where one view's entry is no longer written back.
 **Costs and traps found this session**:
 
 - One undivided stage (`stage_write_view`) exhausted the 8 GiB rail though
-  each lemma it used checked in well under a second; the `--timings`
+  every lemma it cited was cheap (the next stages, the call especially, will
+  be larger: split them from the start); the `--timings`
   `<stem>.open.tsv` named it. Split into lemmas whose statements spell their
   objects out (no `let` in a statement), it checks in under a second.
 - A run that dies at the rail prints no `error:` line: read the last line
@@ -110,3 +117,4 @@ but `sim` to a state where one view's entry is no longer written back.
 - 2026-11-26: `b771b8e` (the `Fresh`, `Take`, `Death` and `View` stages): `scripts/test --pr`: `== suite: 4140 passed, 0 failed, 3 ignored ==`.
 - 2026-11-26: item 3, the write's groundwork: `Sel::Apart` keeps fits (`SelApart`, model law `fits_over`, `Steps::apart_fit`), `CSt::write_last` split out, `Stmt::stage_write_plain` and the lemmas the holder and view writes use (design §23.10).
 - 2026-11-26: `187e2f5` (apartness keeps fits, the plain write): `scripts/test --pr`: `== suite: 4140 passed, 0 failed, 3 ignored ==`. Handoff rewritten.
+- 2026-11-26 (third session): the writes through a holder and through a view (`131aef7`…`fcf1a1c`, split stage `stage_write_view`); proof-side invariant changes: `patched` only along a referring chain, `wpar`, `uni` (design §23.11). `scripts/test --pr` at the whitespace commit after them: `== suite: 4140 passed, 0 failed, 3 ignored ==`.
