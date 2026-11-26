@@ -9609,3 +9609,123 @@ theorem Body::stage_ret(tys: Nat → Type, strs: Strs(tys), sig: Sig, {s: CSt}, 
     RetOk(Sim::read_all(tys, strs, sim, xs, Nil, ri.reads), wr2, inv.frame,
         Inv::ret_views(tys, strs, inv, sig.params, vs, ent, vl, Dyn::ixs(tys, ds ++ xs.map(λ x => Env::get(tys, e, x))), ri.ls, sw, sig.results, xs, ri.ls, ri.lvls, ri.rets))
 }
+
+// ---------------------------------------------------------------------------
+// `Like`, statement by statement
+
+// Nothing pending: no entry is.
+theorem CSt::not_pending(self s: CSt, none: s.pending() = False, en: VEnt, mem: Mem(en, s.views)): (en.mode.writes() && !en.back) = False {
+    Bool::false_of_not_true(en.mode.writes() && !en.back, (match en.mode.writes() && !en.back as λ c => (en.mode.writes() && !en.back) = c → !c = True {
+        True => λ h => absurd(trans(sym(s.views.any_bit_mem(λ e2 => e2.mode.writes() && !e2.back, en, mem, h)), none)),
+        False => λ _ => refl,
+    })(refl))
+}
+
+theorem Env::get_push_up(tys: Nat → Type, e: Env(tys), d: Dyn(tys), x: Var): Env::get(tys, Env::push(tys, e, d), x.up()) = Env::get(tys, e, x) { match x { Arg(_) => refl, Loc(_) => refl } }
+
+// A binding, nothing pending after it: an old variable keeps its value, the
+// new one is like the argument where it holds a written parameter's object.
+theorem Like::push(tys: Nat → Type, strs: Strs(tys), {ps: List<Param>}, {ds: List<Dyn(tys)>}, {s: CSt}, {e: Env(tys)}, lk: Like(tys, strs, ps, ds, s, e), vs2: List<VEnt>,
+    np: (en: VEnt) → Mem(en, vs2) → (en.mode.writes() && !en.back) = False, cv: CVar, d: Dyn(tys),
+    nacc: (o: Nat) → (a: Acc) → cv.role = KHold(o, a) → o < s.na → (p: Param) → ps.nth(o) = Some(p) → CSt::role_of(tys, strs, p, o) = KHold(o, a),
+    nheld: (o: Nat) → cv.role = KHold(o, AcWrite) → Dyn::Like(tys, strs, d, Dyn::arg(tys, ds, o))):
+    Like(tys, strs, ps, ds, (s.with_views(vs2)).push(cv), Env::push(tys, e, d))
+{
+    let s1 = s.with_views(vs2);
+    let s2 = s1.push(cv);
+    let rnew: (s2.role(s.na + s.nd) = cv.role) = cong_fn(λ (v: CVar) => v.role, s1.var_pushed(cv));
+    Like(
+        λ l o a b hr lt p hp => match Nat::below_succ(l, s.na + s.nd, b) {
+            Inl(c1) => lk.acc(l, o, a, c1, trans(sym(s1.role_push(cv, l, c1)), hr), lt, p, hp),
+            Inr(at) => nacc(o, a, trans(sym(rnew), j(at, λ q _ => s2.role(q) = KHold(o, a), hr)), lt, p, hp),
+        },
+        λ x l o hl hr => match s1.push_lvl(cv, x, l, hl) {
+            Inl(nw) => j(sym(nw.left), λ y _ => Dyn::Like(tys, strs, Env::get(tys, Env::push(tys, e, d), y), Dyn::arg(tys, ds, o)),
+                nheld(o, trans(sym(rnew), j(nw.right, λ q _ => s2.role(q) = KHold(o, AcWrite), hr)))),
+            Inr(⟨x0, p⟩) => {
+                let below = s1.lvl_below(x0, l, p.right);
+                j(sym(p.left), λ y _ => Dyn::Like(tys, strs, Env::get(tys, Env::push(tys, e, d), y), Dyn::arg(tys, ds, o)),
+                    j(sym(Env::get_push_up(tys, e, d, x0)), λ q _ => Dyn::Like(tys, strs, q, Dyn::arg(tys, ds, o)), lk.held(x0, l, o, p.right, trans(sym(s1.role_push(cv, l, below)), hr))))
+            },
+        },
+        lk.keep,
+        λ en mem w => absurd(trans(sym(w), np(en, mem))))
+}
+
+theorem CSt::hold_set_gone(self s: CSt, l: Nat, b: l < s.na + s.nd, l2, o: Nat, a: Acc, b2: l2 < s.na + s.nd, hr: (s.set(l, KGone)).role(l2) = KHold(o, a)): s.role(l2) = KHold(o, a) {
+    match Nat::eq_or_ne(l2, l) {
+        Inl(eq) => absurd(trans(sym(hr), j(sym(eq), λ q _ => (s.set(l, KGone)).role(q) = KGone, s.set_gone_role(l)))),
+        Inr(ne) => trans(sym(s.role_set_other(l, l2, KGone, ne, b, b2)), hr),
+    }
+}
+
+theorem Like::gone(tys: Nat → Type, strs: Strs(tys), {ps: List<Param>}, {ds: List<Dyn(tys)>}, {s: CSt}, {e: Env(tys)}, lk: Like(tys, strs, ps, ds, s, e), vs2: List<VEnt>,
+    pv: (en: VEnt) → Mem(en, vs2) → (en.mode.writes() && !en.back) = True → Mem(en, s.views), l: Nat, b: l < s.na + s.nd): Like(tys, strs, ps, ds, (s.with_views(vs2)).set(l, KGone), e)
+{
+    let s1 = s.with_views(vs2);
+    Like(
+        λ l2 o a b2 hr lt p hp => lk.acc(l2, o, a, b2, s1.hold_set_gone(l, b, l2, o, a, b2, hr), lt, p, hp),
+        λ x l2 o hl hr => lk.held(x, l2, o, hl, s1.hold_set_gone(l, b, l2, o, AcWrite, s.lvl_below(x, l2, hl), hr)),
+        lk.keep,
+        λ en mem w => lk.pend(en, pv(en, mem, w), w))
+}
+
+theorem Bool::or_false_parts(a, b: Bool, h: (a || b) = False): (a = False) ∧ (b = False) {
+    (match a as λ c => (c || b) = False → (c = False) ∧ (b = False) { True => λ no => absurd(no), False => λ hb => ⟨refl, hb⟩ })(h)
+}
+
+// What a variable reads after it is set: the function of what it read, or,
+// past the environment's end, what it read.
+theorem Env::get_set_self(tys: Nat → Type, e: Env(tys), x: Var, f: Dyn(tys) → Dyn(tys)):
+    (Env::get(tys, Env::set(tys, e, x, f), x) = f(Env::get(tys, e, x))) ∨ (Env::get(tys, Env::set(tys, e, x, f), x) = Env::get(tys, e, x))
+{
+    match x {
+        Arg(i) => (match e.args.nth(i) as λ o => e.args.nth(i) = o →
+                ((e.args.update(i, f)).nth(i).unwrap_or(Dyn::none(tys)) = f(o.unwrap_or(Dyn::none(tys)))) ∨ ((e.args.update(i, f)).nth(i).unwrap_or(Dyn::none(tys)) = o.unwrap_or(Dyn::none(tys))) {
+            None => λ h => Inr(cong_fn(λ (q: Option<Dyn(tys)>) => q.unwrap_or(Dyn::none(tys)), e.args.nth_update_none(i, f, h))),
+            Some(d) => λ h => Inl(cong_fn(λ (q: Option<Dyn(tys)>) => q.unwrap_or(Dyn::none(tys)), e.args.nth_update_here(i, f, d, h))),
+        })(refl),
+        Loc(k) => (match e.locs.nth(k) as λ o => e.locs.nth(k) = o →
+                ((e.locs.update(k, f)).nth(k).unwrap_or(Dyn::none(tys)) = f(o.unwrap_or(Dyn::none(tys)))) ∨ ((e.locs.update(k, f)).nth(k).unwrap_or(Dyn::none(tys)) = o.unwrap_or(Dyn::none(tys))) {
+            None => λ h => Inr(cong_fn(λ (q: Option<Dyn(tys)>) => q.unwrap_or(Dyn::none(tys)), e.locs.nth_update_none(k, f, h))),
+            Some(d) => λ h => Inl(cong_fn(λ (q: Option<Dyn(tys)>) => q.unwrap_or(Dyn::none(tys)), e.locs.nth_update_here(k, f, d, h))),
+        })(refl),
+    }
+}
+
+// A write of a variable's value `f` of what it was: every holder of a
+// written parameter's object stays like the argument where the root stays
+// like itself (what the verdict, `Inv::back_like` or `CallFits` gives), the
+// root's level is recorded as written (`CSt::wrote_to`), and what is pending
+// after it is the stage's to show (`pp`).
+theorem Like::write(tys: Nat → Type, strs: Strs(tys), {ps: List<Param>}, {ds: List<Dyn(tys)>}, {s: CSt}, {e: Env(tys)}, lk: Like(tys, strs, ps, ds, s, e),
+    x: Var, l: Nat, hl: s.lvl(x) = Some(l), f: Dyn(tys) → Dyn(tys), lx: Dyn::Like(tys, strs, f(Env::get(tys, e, x)), Env::get(tys, e, x)), vs2: List<VEnt>, t2: List<Nat>,
+    pp: (en: VEnt) → Mem(en, vs2) → (en.mode.writes() && !en.back) = True → (y, z: Var) → s.lvl(y) = Some(en.par) → s.lvl(z) = Some(en.lvl) →
+        Dyn::Like(tys, strs, Env::get(tys, Env::set(tys, e, x, f), z), Dyn::read(tys, strs, Env::ixs(tys, Env::set(tys, e, x, f)), s.unsteps(en.at), Env::get(tys, Env::set(tys, e, x, f), y)))):
+    Like(tys, strs, ps, ds, CSt(s.args, s.locs, s.na, s.nd, vs2, s.nobj, t2, Cons(l, s.wrote)), Env::set(tys, e, x, f))
+{
+    let e2 = Env::set(tys, e, x, f);
+    Like(
+        lk.acc,
+        λ y l2 o hy hr => match Nat::eq_or_ne(l2, l) {
+            Inl(eq) => {
+                let yx: (y = x) = trans(sym(s.lvl_var(y, l2, hy)), trans(cong_fn(λ (q: Nat) => s.var_at(q), eq), s.lvl_var(x, l, hl)));
+                let hrx: (s.role(l) = KHold(o, AcWrite)) = j(eq, λ q _ => s.role(q) = KHold(o, AcWrite), hr);
+                let old = lk.held(x, l, o, hl, hrx);
+                j(sym(yx), λ z _ => Dyn::Like(tys, strs, Env::get(tys, e2, z), Dyn::arg(tys, ds, o)), match Env::get_set_self(tys, e, x, f) {
+                    Inl(h1) => j(sym(h1), λ q _ => Dyn::Like(tys, strs, q, Dyn::arg(tys, ds, o)), Dyn::like_trans(tys, strs, f(Env::get(tys, e, x)), Env::get(tys, e, x), Dyn::arg(tys, ds, o), lx, old)),
+                    Inr(h2) => j(sym(h2), λ q _ => Dyn::Like(tys, strs, q, Dyn::arg(tys, ds, o)), old),
+                })
+            },
+            Inr(ne) => j(sym(Env::get_set_other(tys, e, x, y, f, λ eq => s.var_ne(y, x, l2, l, hy, hl, ne)(sym(eq)))), λ q _ => Dyn::Like(tys, strs, q, Dyn::arg(tys, ds, o)), lk.held(y, l2, o, hy, hr)),
+        },
+        λ k lt nw => {
+            let p = Bool::or_false_parts(l.same(k), k.member(s.wrote), nw);
+            let ne: ¬(x = Arg(k)) = λ eq => {
+                let lk2: (l = k) = Option::some_inj(l, k, trans(sym(hl), trans(cong_fn(λ (q: Var) => s.lvl(q), eq), CSt::lvl_arg(s, k, lt))));
+                absurd(trans(sym(j(lk2, λ q _ => l.same(q) = True, l.same_self())), p.left))
+            };
+            trans(Env::get_set_other(tys, e, x, Arg(k), f, ne), lk.keep(k, lt, p.right))
+        },
+        pp)
+}
