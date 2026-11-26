@@ -35,7 +35,6 @@ import shape;
 import rt;
 import rt_file;
 import bytes;
-import placement;
 
 // ---------------------------------------------------------------------------
 // Unique identity proofs at `Nat` (Hedberg's argument from `Nat::dec`), for
@@ -885,12 +884,39 @@ theorem Seq::words_win_laws(tys: Nat → Type, a: Shape, pad: El(tys, a), me: Sh
 }
 
 // ---------------------------------------------------------------------------
-// The layout's law for the word instances (docs/language/ownership-design.md
-// §25.8, F1; §25.9): what `placement_laid.hthr` needs of an instance beyond
-// its laws, at its own type. `Seq::words` and `Seq::vec` read an element at
-// the index's number and hold it inside only below the length;
-// `Seq::words`' windows are its elements from the start, as many as they
-// say. `Seq::list` reads only at a number, and does not meet this.
+// Numbered instances (docs/language/ownership-design.md §25.8, F1; §25.9):
+// `Seq::words` and `Seq::vec` read an element at the index's number and hold
+// it inside only below the length; `Seq::words`' windows are its elements
+// from the start, as many as they say. `Seq::list` reads only at a number,
+// and is not numbered.
+
+// A numbered instance, at its own type: an element is read at the index's
+// number, and is inside only below the length. (The layout's law
+// `Strs::Laid`, placement.hthr, follows from this and `StrsLaws`:
+// `placement_laid.hthr`.)
+record SeqNum(tys: Nat → Type, T: Type, q: Seq(tys, T)) {
+    get_num: (v: T) → (i, j: Ix) → i.toNat() = j.toNat() → q.get(v, i) = q.get(v, j),
+    inside_lt: (v: T) → (i: Ix) → q.inside(v, i) = True → i.toNat() < q.len(v),
+}
+
+// Its windows, read as the sequence through `to`: inside only within the
+// length, as long as they say, their elements the parent's from the start.
+record WinNum(tys: Nat → Type, T: Type, q: Seq(tys, T), w: Win(tys, T), to: El(tys, w.shape) → T) {
+    win_inside: (v: T) → (lo, n: Ix) → w.inside(v, lo, n) = True → lo.toNat() + n.toNat() <= q.len(v),
+    win_len: (v: T) → (lo, n: Ix) → w.inside(v, lo, n) = True → q.len(to(w.get(v, lo, n))) = n.toNat(),
+    win_get: (v: T) → (lo, n: Ix) → w.inside(v, lo, n) = True → (i, j: Ix) → i.toNat() < n.toNat() → j.toNat() = lo.toNat() + i.toNat() →
+        q.get(to(w.get(v, lo, n)), i) = q.get(v, j),
+}
+
+// A sequence at name `k`'s windows are of `k` itself, `to` reading one as
+// the sequence's own value.
+fn WinsNum(tys: Nat → Type, k: Nat, q: Seq(tys, tys(k)), ow: Option<Win(tys, tys(k))>) → Type {
+    match ow {
+        None => True,
+        Some(w) => (w.shape = SNamed(k)) ∧ Exists<El(tys, w.shape) → tys(k)>(λ to =>
+            ((y: El(tys, w.shape)) → Dyn(w.shape, y) = Dyn(SNamed(k), to(y))) ∧ WinNum(tys, tys(k), q, w, to)),
+    }
+}
 
 theorem Seq::words_num(tys: Nat → Type, a: Shape, pad: El(tys, a), win: Option<Win(tys, List<El(tys, a)>)>): SeqNum(tys, List<El(tys, a)>, Seq::words(tys, a, pad, win)) {
     SeqNum(

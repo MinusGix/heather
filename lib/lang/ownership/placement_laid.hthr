@@ -4,7 +4,7 @@
 // `Strs::Laid` (placement.hthr) is stated over the model at a code; an
 // instance is defined at its own type (`sequences.hthr`), where the code's
 // structure is not in sight. So an instance owes its positional laws at its
-// own type (`SeqNum`, and `WinNum` for windows of itself), and this module
+// own type (`sequences.hthr`'s `SeqNum`, and `WinNum` for windows of itself), and this module
 // gives `Strs::Laid` from them and `StrsLaws` (`Strs::laid_of`): an
 // environment is laid out where every sequence name's instance meets them
 // and every record of words is laid out (`KindNum`). A record's law is
@@ -21,6 +21,7 @@ import store;
 import atom;
 import steps;
 import shape;
+import sequences;
 import placement;
 
 // ---------------------------------------------------------------------------
