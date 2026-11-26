@@ -25,8 +25,10 @@
 //   §18.3's lens equation), its old blocks are live only where they were and keep having no holes
 //   (`Heap::Kept`), and each returned view is its parameter's reference
 //   narrowed by the steps its signature names at the call's words
-//   (`Value::Views`, `Ref::narrow`), each fresh one a bare block of its own
-//   (`Heap::Bare`, `Value::FreshApart`); where an unmeasured run is going, its history is a
+//   (`Value::Views`, `Ref::narrow`), each fresh one a bare block, each
+//   owning one (fresh or a moved parameter) a block of its own
+//   (`Heap::Bare`, `Value::OwnedApart`), and the results have their codes
+//   (`Dyn::Coded`); where an unmeasured run is going, its history is a
 //   prefix of one the meaning reaches.
 // - **The check's refusals from codes alone** are the checker's own
 //   (`checker.hthr`, one pass): a word primitive or test at a non-word, a
@@ -239,6 +241,10 @@ fn Dyn::coded(tys: Nat → Type, ds: List<Dyn(tys)>, ps: List<Param>) → Bool {
 
 fn Dyn::Coded(tys: Nat → Type, ds: List<Dyn(tys)>, ps: List<Param>) → Type { Dyn::coded(tys, ds, ps) = True }
 
+// A signature's results read as parameters of their codes, for `Dyn::Coded`
+// (the mode is not read).
+fn Sig::res_params(self sg: Sig) → List<Param> { sg.results.map(λ r => Param(r.code, ByTake)) }
+
 // Each written parameter, after: a referring argument's slot in the answer
 // is the argument itself, so the caller's view of what it lent stays its
 // own reference (what the slot reads is `ReadAll`'s), and one passed by value
@@ -289,24 +295,27 @@ fn Value::Views(tys: Nat → Type, strs: Strs(tys), n: Nat, h: Heap(tys), vs: Li
     }
 }
 
-// A fresh result's block, where it refers.
-fn Value::fresh_b(tys: Nat → Type, org: Origin, o: Value(tys)) → Option<Nat> {
-    match org { OFresh => match o { Refer(r) => Some(r.b), Plain(_) => None }, OParam(_) => None, OView(_, _) => None }
+// An owning result's block, where it refers: a fresh one, or a parameter
+// answered back (a view owns nothing).
+fn Value::owned_b(tys: Nat → Type, org: Origin, o: Value(tys)) → Option<Nat> {
+    match org { OFresh => match o { Refer(r) => Some(r.b), Plain(_) => None }, OParam(_) => match o { Refer(r) => Some(r.b), Plain(_) => None }, OView(_, _) => None }
 }
 
-// No later result is fresh in block `b`.
-fn Value::NotFresh(tys: Nat → Type, b: Nat, rs: List<Result>, outs: List<Value(tys)>) → Type {
-    match rs { Nil => True, Cons(r, rest) => match outs { Nil => True, Cons(o, orest) => ¬(Value::fresh_b(tys, r.origin, o) = Some(b)) ∧ Value::NotFresh(tys, b, rest, orest) } }
+// No later result owns block `b`.
+fn Value::NotOwned(tys: Nat → Type, b: Nat, rs: List<Result>, outs: List<Value(tys)>) → Type {
+    match rs { Nil => True, Cons(r, rest) => match outs { Nil => True, Cons(o, orest) => ¬(Value::owned_b(tys, r.origin, o) = Some(b)) ∧ Value::NotOwned(tys, b, rest, orest) } }
 }
 
-// Two fresh results of one call are in different blocks (§23.17): the caller
-// takes each as an object alone in its block (`Inv.own`).
-fn Value::FreshApart(tys: Nat → Type, rs: List<Result>, outs: List<Value(tys)>) → Type {
+// Two results that own are in different blocks (§23.17, §23.21): fresh or a
+// moved parameter, the caller (or a host outside the program) takes each as
+// an object alone in its block (`Inv.own`), and the death of one frees no
+// other's.
+fn Value::OwnedApart(tys: Nat → Type, rs: List<Result>, outs: List<Value(tys)>) → Type {
     match rs {
         Nil => True,
         Cons(r, rest) => match outs {
             Nil => True,
-            Cons(o, orest) => (match Value::fresh_b(tys, r.origin, o) as λ _ => Type { Some(b) => Value::NotFresh(tys, b, rest, orest), None => True }) ∧ Value::FreshApart(tys, rest, orest),
+            Cons(o, orest) => (match Value::owned_b(tys, r.origin, o) as λ _ => Type { Some(b) => Value::NotOwned(tys, b, rest, orest), None => True }) ∧ Value::OwnedApart(tys, rest, orest),
         },
     }
 }
@@ -390,7 +399,8 @@ fn SafeAt(tys: Nat → Type, p: Prog(tys), g: Nat, fuel: Nat) → Type {
             Heap::Frame(tys, p.strs, h, a.heap, Value::lent(tys, (p.fns(g)).sig.params, vs)) ∧
             Heap::Kept(tys, h, a.heap) ∧
             Value::Views(tys, p.strs, h.len(), a.heap, vs, Dyn::ixs(tys, ds ++ p.w(g, ds)), (p.fns(g)).sig.results, a.results) ∧
-            Value::FreshApart(tys, (p.fns(g)).sig.results, a.results)) ∧
+            Value::OwnedApart(tys, (p.fns(g)).sig.results, a.results) ∧
+            Dyn::Coded(tys, (p.w(g, ds)).take((p.fns(g)).sig.results.len()), (p.fns(g)).sig.res_params())) ∧
         (match p.need(g) as λ _ => Type { Some(_) => True, None => (io2: Io) → p.run(tys, fuel, g, vs, h, io) = Going(io2) → p.reaches(g, ds, io2.past) })))
 }
 
@@ -419,10 +429,21 @@ fn Prog::Pinned(tys: Nat → Type, p: Prog(tys)) → Type {
     (g: Nat) → p.prim(g) = False → (ds: List<Dyn(tys)>) → p.w(g, ds) = (p.fns(g)).denote(tys, p.strs, p.w, g, ds)
 }
 
-// `check_sound`: in a program whose functions are pinned, a verdict, and
-// what it owes holding at every argument list meeting the function's
-// precondition, give the function's safety.
+// A law of the world (§23.21): a primitive's answer at coded arguments has
+// its signature's result codes. A function with a body gives its results'
+// codes from its own checked `Ret`; a primitive's answer is the world's, so
+// the program states it. Without it `y = g(); Read(y.f)`, checked, is stuck
+// at a world answering a word (`prim_word_stuck`).
+fn Prog::Coded(tys: Nat → Type, p: Prog(tys)) → Type {
+    (g: Nat) → p.prim(g) = True → (ds: List<Dyn(tys)>) → Dyn::Coded(tys, ds, (p.fns(g)).sig.params) →
+        Dyn::Coded(tys, (p.w(g, ds)).take((p.fns(g)).sig.results.len()), (p.fns(g)).sig.res_params())
+}
+
+// `check_sound`: in a program whose functions are pinned and whose
+// primitives answer coded, a verdict, and what it owes holding at every
+// argument list meeting the function's precondition, give the function's
+// safety.
 fn CheckSound(tys: Nat → Type, check: Checker(tys)) → Type<1> {
-    (p: Prog(tys)) → Prog::Pinned(tys, p) → (g: Nat) → (d: Owes) → check(p.strs, λ g2 => (p.fns(g2)).sig, p.prim, λ g2 => p.measured(tys, g2), g, p.fns(g)) = Some(d) →
+    (p: Prog(tys)) → Prog::Pinned(tys, p) → Prog::Coded(tys, p) → (g: Nat) → (d: Owes) → check(p.strs, λ g2 => (p.fns(g2)).sig, p.prim, λ g2 => p.measured(tys, g2), g, p.fns(g)) = Some(d) →
         ((args: List<Dyn(tys)>) → Dyn::Coded(tys, args, (p.fns(g)).sig.params) → p.pres(g, args) → d.Due(tys, Prog::ctx(tys, p, g, args), p.fns(g))) → Safety(tys, p, g)
 }

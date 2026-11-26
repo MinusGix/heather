@@ -4802,10 +4802,11 @@ proof; each is listed with the program that forced it.
       0); Ret([b]) }` called as `y = f(); Write(y[0], 1)`; a callee whose
       answer's block held an owned hole would read the same and leave the
       caller's write of `y[0]` storing into a value it does not hold.
-    - **`Value::FreshApart`, beside `Views`**: two fresh results of one call
-      are in different blocks; the caller's `own` needs each new owned root
-      alone in its block. The program is the checker's own defect it
-      exposed: `f(r: Buf read) → (Buf fresh, Buf fresh) { x = Fresh(2, 0);
+    - **`Value::OwnedApart`, beside `Views`** (was `FreshApart`; §23.21
+      widened it to every owning result, a moved parameter's too, with
+      `twice_param_refused`): two results that own are in different blocks;
+      the caller's `own` needs each new owned root alone in its block. The
+      program is the checker's own defect it exposed: `f(r: Buf read) → (Buf fresh, Buf fresh) { x = Fresh(2, 0);
       Ret([x, x]) }` was checked, and gave its caller two owned objects in
       one block, the death of either freeing the other's. `CSt::ret` now
       refuses a holder answered fresh twice (`CSt::fresh_once`,
@@ -4815,6 +4816,11 @@ proof; each is listed with the program that forced it.
       are not apart, `Sel::apart_nil_nil`).
     - `OParam`: the argument itself where it refers, plain where it was
       passed by value (`keep_by_value`, §23.13).
+  - **The results have the signature's codes** (`Dyn::Coded` of the
+    meaning's first `nres` answers, §23.21): `Sim.codes` at the caller needs
+    them. A primitive's are a law of the world (`Prog::Coded`, a premise of
+    `CheckSound`). The program: `y = g(); Read(y.f)` with `g` a primitive,
+    stuck at a world answering a word (`prim_word_stuck`).
     - `OView`: the argument's reference narrowed by the signature's steps at
       the call's words, the arguments' then the results' (`found_checked`,
       §23.4); a copy where the argument was plain (`at_by_value`, §23.14).
@@ -5034,7 +5040,7 @@ signature's result codes):
 - A body gives it from its checked `Ret` (the `Ret` code check and
   `Sim.codes`, in `RetOk`).
 - A primitive's answer is the world's, so a law of the world is a premise
-  of `CheckSound` (`World::Coded`). The program is a primitive `g() → (S
+  of `CheckSound` (`World::Coded`; built as `Prog::Coded`, §23.21). The program is a primitive `g() → (S
   fresh)` and the checked caller `y = g(); Read(y.f)`, stuck at a world
   answering a word. The `¬` theorem without the law pins it.
 - Every other thing a primitive answers that the caller's invariant reads
@@ -5071,6 +5077,100 @@ Two things are needed:
 - **Nested written arguments excluded.** The checker refuses them:
   `apart_args` on related levels asks `Steps::apart(p, p ++ t)`, which is
   `None`.
+
+### 23.21 Four rulings on what a caller may know of a signature (2026-11-26, eleventh session)
+
+`Safety` is `SafeAt` of a function relative to `SafeAt` of every function at
+less fuel, over an arbitrary table of signatures. A caller's stage knows of
+its callee only the callee's `SafeAt` and its entry in the table, so a
+property of a signature the caller's proof needs is either a conclusion of
+`SafeAt` or something the caller's own check tested. The tenth session's
+three open questions (§23.20) and the rest of its `twice_param` fix are
+settled so:
+
+**A. A result's code is a conclusion of `SafeAt`.** Its `Done` part also
+says `Dyn::Coded(tys, (p.w(g, ds)).take(nres), sig.res_params())`: the
+meaning's results have the signature's result codes (`Sig::res_params`
+reads each result as a parameter of its code). A function with a body gives
+it from its own checked `Ret`: the `Ret` code check (`s.codes(xs)` against
+`ret_codes`) through `Sim.codes` (`Sim::coded_res`; `Body::stage_ret` takes
+the code check as `cd` and builds `RetOk.coded`). A primitive's answer is
+the world's, so it is a law of the world and a premise of `CheckSound`,
+beside `Prog::Pinned`: **`Prog::Coded`**, at every primitive and coded
+arguments, the answer's first `nres` values have the result codes (and so
+there are that many). Nothing else a primitive hands back is read by the
+caller's invariant: its results are fresh and plain (`Sig::reads_only`), so
+`Value::Views` asks them plain and `OwnedApart` asks nothing; it has no
+written parameters; its heap is the caller's. The programs:
+`pt_reader_checked` (a primitive answering a point, its caller reading a
+field), `prim_record_done`, and the controls `prim_word_stuck` and
+`word_world_not_coded` (the world answering a word breaks the law, and the
+checked caller's run is stuck there).
+
+**B. One owned object answered once: the duplicating function is at
+fault.** A host outside the checked program calling `twice_param`
+(`Ret([a, a])`, `a` taken) would receive two owners of one block. The tenth
+session refused it at the callee's `Ret` (`CSt::fresh_once` covering a
+parameter result as a made one; `twice_param_refused`,
+`once_param_callee_checked`), which is complete: two holders of one object
+cannot exist to answer the signature any other way. The rest:
+- **The interface says the conclusion**: `Value::FreshApart` is
+  `Value::OwnedApart`, over every owning result (`Value::owned_b`: a fresh
+  one that refers, or a parameter answered back): two results that own are
+  in different blocks. At `Ret` (`Inv::ret_owned_apart`) each owning result
+  is a level holding its object to own (`Inv::owned_hold`) whose root is its
+  whole block: made here (`made`), or the argument (`Inv::arg_root`), whole
+  by `Lendable.whole` (one of a plain code is passed by value by
+  `Lendable.plain`, so does not refer). Two such results are at different
+  levels (`fresh_once`), so hold different objects (`one`), which are apart
+  (`apart`), and two whole references into one block are not.
+- **The caller's test is gone** (`CSt::holds`, and the probe
+  `twice_param_caller_refused` with it): a caller of a table entry
+  answering one taken parameter twice is checked, since `SafeAt` says two
+  owning results are in different blocks while `Value::ViewIs` says both
+  are the argument, so no safe callee answers so. `Inv::bind_moved`'s "no
+  level holds the object" (`nh`) is to come from that and the lends (the
+  moved holder is gone after them); it is now stated as that, not as the
+  checker's test. No primitive can answer a parameter (`Sig::reads_only`).
+- **`Sig::ok`**, one predicate on signatures, holds the modes the callee's
+  `returns` and the caller's `result` each tested their own way: an
+  `OParam(i)` result names a taken parameter and an `OView(i, …)` result a
+  read one, each in range; and the telescope (C). `check` tests it of a
+  function's own signature (`Func::verdict`, refusing `WOwn`) and
+  `CSt::call` of the callee's, since the table is arbitrary. The probes:
+  `read_param_refused` (a read parameter answered as its own),
+  `view_of_written_refused`.
+- **`CSt::returns` asks the holder of a parameter answered back to own it**
+  (`AcOwn`). The start state gives a taken parameter's holder `AcOwn`, and
+  every later holder of that object inherits it (`Take` keeps the access;
+  a call binds a moved result only from an owner), so a checked function
+  that `Sig::ok` passes never meets the test failing; it makes the owning
+  holder a fact of the state at `Ret` (`CSt::returns_param`) instead of an
+  invariant on accesses by object. **It is a test of the checker's own
+  state standing in for that invariant** ("every holder of a taken
+  parameter's object owns it"), **not a rule of the language**: it never
+  refuses a function whose signature is `Sig::ok`. That claim is one for
+  the soundness search to confirm (`issues/ownership-soundness-oracle.md`,
+  §24 on the coordinating branch): no program it generates should be
+  refused by this test alone.
+
+**C. A signature's results are a telescope.** A view result's steps name
+parameters and earlier results only, as a dependent answer is scoped
+(`(i: Nat, v: view of xs[i])`). A clause of `Sig::ok`, so tested where the
+signature is written and where it is called. The caller binds the results
+one at a time, each `Inv` whole. `found_sig` answers `j` then the view at
+`Var(2)` (`found_checked`, `beside_found_checked`, the residual reading the
+first binding); the forward form is `found_fwd_refused` and
+`found_fwd_caller_refused`. `found_self` is now a view naming an earlier
+view, refused at `Ret` (`sig_atom`).
+
+**D. Non-plain atoms are refused at the call.** An argument whose level a
+view result's region names as an atom must be a plain level, by the function
+`View` uses: `CSt::result`'s `OView` case runs `atoms_ok` on the levels its
+substituted steps name, in the binding state (the arguments' levels, and the
+earlier results', which the telescope puts there). One rule for an atom,
+wherever a region is formed. `at_by_view0_refused` passes a view of a word as
+`at`'s index; `at_by_copy0_checked` copies the word into a plain local first.
 
 ## 24. How the build is organised (2026-11-26, the coordinating session)
 
