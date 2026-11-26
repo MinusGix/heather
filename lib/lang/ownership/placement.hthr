@@ -64,8 +64,11 @@
 //   `Ret`'s values at the results' and written parameters', a `Jump`'s at
 //   the parameters', a shared join's second arm at the first's. Level 2
 //   reads a word of another code as zero (`Dyn::words`) and ignores a store
-//   of one (`Dyn::back`), which no node does: refused. This is typing, not
-//   an ownership rule; the checker refuses the same programs by their codes.
+//   of one (`Dyn::back`), which no node does: refused. An interim (the
+//   coordinator's ruling on §25.8, F4): the run is to be stuck wherever the
+//   meaning takes a fallback, and then these comparisons go, since a second
+//   statement of the checker's code rule here would make `PlaceComplete`
+//   owe a lemma tying the two. Each is marked.
 //
 // Ids are numbered once per routine from one counter, so no id is bound
 // twice along any path (`Body::fresh`).
@@ -136,6 +139,76 @@ fn fields_offset(fs: List<Shape>, i: Nat) → Option<Nat> {
 }
 
 fn fields_nth(fs: List<Shape>, i: Nat) → Option<Shape> { fs.nth(i) }
+
+// ---------------------------------------------------------------------------
+// The layout's law (docs/language/ownership-design.md §25.8, §19): what a
+// structure owes the layout `Shape::layout` reads from it, stated in the
+// model the run reads it through (`Dyn::at`, `Dyn::over`, `Dyn::fits`,
+// `Dyn::len`). `StrsLaws` does not say the positional part: the library's
+// lawful `Seq::list` reads only at a number and does not meet it (§25.8,
+// F1), `Seq::words` and `Seq::vec` do.
+
+fn el_sel(i: Ix) → Sel { OnSeq(SeqOne(i)) }
+
+fn win_sel(lo, n: Ix) → Sel { OnSeq(SeqRun(lo, n)) }
+
+// A sequence of words, read through the model: an element is of the
+// element's code and read at the index's number; it fits only below the
+// length; a write at one element is read back there and leaves the others;
+// no write changes the length, and whether a selection fits reads only it.
+record SeqLaid(tys: Nat → Type, strs: Strs(tys), c, el: Shape, size: Nat) {
+    el_size: el.word_size() = Some(size),
+    elem_code: (v: El(tys, c)) → (i: Ix) → (Dyn::at(tys, strs, el_sel(i), Dyn(c, v))).code = el,
+    elem_num: (v: El(tys, c)) → (i, j: Ix) → i.toNat() = j.toNat() → Dyn::at(tys, strs, el_sel(i), Dyn(c, v)) = Dyn::at(tys, strs, el_sel(j), Dyn(c, v)),
+    elem_fits: (v: El(tys, c)) → (i: Ix) → Dyn::fits(tys, strs, el_sel(i), Dyn(c, v)) = True → i.toNat() < Dyn::len(tys, strs, Dyn(c, v)),
+    elem_put: (v: El(tys, c)) → (i: Ix) → Dyn::fits(tys, strs, el_sel(i), Dyn(c, v)) = True → (x: Dyn(tys)) → x.code = el →
+        Dyn::at(tys, strs, el_sel(i), Dyn::over(tys, strs, el_sel(i), λ _ => x, Dyn(c, v))) = x,
+    elem_other: (v: El(tys, c)) → (i, j: Ix) → ¬(i.toNat() = j.toNat()) → (g: Dyn(tys) → Dyn(tys)) →
+        Dyn::at(tys, strs, el_sel(i), Dyn::over(tys, strs, el_sel(j), g, Dyn(c, v))) = Dyn::at(tys, strs, el_sel(i), Dyn(c, v)),
+    len_over: (v: El(tys, c)) → (s: Sel) → (g: Dyn(tys) → Dyn(tys)) → Dyn::len(tys, strs, Dyn::over(tys, strs, s, g, Dyn(c, v))) = Dyn::len(tys, strs, Dyn(c, v)),
+    fits_len: (v, u: El(tys, c)) → (s: Sel) → Dyn::len(tys, strs, Dyn(c, v)) = Dyn::len(tys, strs, Dyn(c, u)) →
+        Dyn::fits(tys, strs, s, Dyn(c, v)) = Dyn::fits(tys, strs, s, Dyn(c, u)),
+}
+
+// Its windows, of code `w`: a sequence of the same element, inside the
+// length, as long as it says, its elements its parent's from its start; a
+// write of the window is read back there and leaves the elements outside it.
+record WinLaid(tys: Nat → Type, strs: Strs(tys), c, el: Shape, size: Nat, w: Shape) {
+    win_layout: Exists<Option<Shape>>(λ wc => Shape::layout(tys, strs, w) = LSeq(el, size, wc)),
+    win_code: (v: El(tys, c)) → (lo, n: Ix) → (Dyn::at(tys, strs, win_sel(lo, n), Dyn(c, v))).code = w,
+    win_fits: (v: El(tys, c)) → (lo, n: Ix) → Dyn::fits(tys, strs, win_sel(lo, n), Dyn(c, v)) = True → lo.toNat() + n.toNat() <= Dyn::len(tys, strs, Dyn(c, v)),
+    win_len: (v: El(tys, c)) → (lo, n: Ix) → Dyn::fits(tys, strs, win_sel(lo, n), Dyn(c, v)) = True →
+        Dyn::len(tys, strs, Dyn::at(tys, strs, win_sel(lo, n), Dyn(c, v))) = n.toNat(),
+    win_elem: (v: El(tys, c)) → (lo, n: Ix) → Dyn::fits(tys, strs, win_sel(lo, n), Dyn(c, v)) = True → (i, j: Ix) → i.toNat() < n.toNat() →
+        j.toNat() = lo.toNat() + i.toNat() → Dyn::at(tys, strs, el_sel(i), Dyn::at(tys, strs, win_sel(lo, n), Dyn(c, v))) = Dyn::at(tys, strs, el_sel(j), Dyn(c, v)),
+    win_put: (v: El(tys, c)) → (lo, n: Ix) → Dyn::fits(tys, strs, win_sel(lo, n), Dyn(c, v)) = True → (x: Dyn(tys)) → x.code = w → Dyn::len(tys, strs, x) = n.toNat() →
+        Dyn::at(tys, strs, win_sel(lo, n), Dyn::over(tys, strs, win_sel(lo, n), λ _ => x, Dyn(c, v))) = x,
+    win_other: (v: El(tys, c)) → (lo, n, j: Ix) → (j.toNat() < lo.toNat()) ∨ (lo.toNat() + n.toNat() <= j.toNat()) → (g: Dyn(tys) → Dyn(tys)) →
+        Dyn::at(tys, strs, el_sel(j), Dyn::over(tys, strs, win_sel(lo, n), g, Dyn(c, v))) = Dyn::at(tys, strs, el_sel(j), Dyn(c, v)),
+}
+
+// A record of words: its fields are lenses of their codes, apart, and fit.
+record RecLaid(tys: Nat → Type, strs: Strs(tys), c: Shape, fs: List<Shape>) {
+    field_sized: (i: Nat) → (f: Shape) → fs.nth(i) = Some(f) → f.word_size().is_some() = True,
+    field_code: (v: El(tys, c)) → (i: Nat) → (f: Shape) → fs.nth(i) = Some(f) → (Dyn::at(tys, strs, OnField(i), Dyn(c, v))).code = f,
+    field_fits: (v: El(tys, c)) → (i: Nat) → (f: Shape) → fs.nth(i) = Some(f) → Dyn::fits(tys, strs, OnField(i), Dyn(c, v)) = True,
+    field_put: (v: El(tys, c)) → (i: Nat) → (f: Shape) → fs.nth(i) = Some(f) → (x: Dyn(tys)) → x.code = f →
+        Dyn::at(tys, strs, OnField(i), Dyn::over(tys, strs, OnField(i), λ _ => x, Dyn(c, v))) = x,
+    field_other: (v: El(tys, c)) → (i, j: Nat) → ¬(i = j) → (g: Dyn(tys) → Dyn(tys)) →
+        Dyn::at(tys, strs, OnField(i), Dyn::over(tys, strs, OnField(j), g, Dyn(c, v))) = Dyn::at(tys, strs, OnField(i), Dyn(c, v)),
+}
+
+fn WinsLaid(tys: Nat → Type, strs: Strs(tys), c, el: Shape, size: Nat, wc: Option<Shape>) → Type {
+    match wc { None => (v: El(tys, c)) → (lo, n: Ix) → Dyn::fits(tys, strs, win_sel(lo, n), Dyn(c, v)) = False, Some(w) => WinLaid(tys, strs, c, el, size, w) }
+}
+
+// The seam's premise on the structures: every code with a layout is laid
+// out as `Dyn::encode` reads it.
+fn Strs::Laid(tys: Nat → Type, strs: Strs(tys)) → Type {
+    ((c, el: Shape) → (size: Nat) → (wc: Option<Shape>) → Shape::layout(tys, strs, c) = LSeq(el, size, wc) →
+        SeqLaid(tys, strs, c, el, size) ∧ WinsLaid(tys, strs, c, el, size, wc)) ∧
+    ((c: Shape) → (fs: List<Shape>) → Shape::layout(tys, strs, c) = LRecord(fs) → RecLaid(tys, strs, c, fs))
+}
 
 // ---------------------------------------------------------------------------
 // Slots
@@ -362,6 +435,7 @@ fn PEnv::call_args(self e: PEnv, ps: List<Param>, xs: List<Var>) → Option<List
             Nil => None,
             Cons(x, xr) => match e.get(x) {
                 None => None,
+                // Interim (§25.8, F4): goes when the run is stuck at a code mismatch.
                 Some(s) => match !s.code.same(p.code) { True => None, False => match p.code.word_size() {
                     Some(_) => match s.word() { None => None, Some(t) => e.call_args(pr, xr).map(λ rest => Cons(t, rest)) },
                     None => match p.mode {
@@ -454,6 +528,7 @@ fn Stmt::place(self st: Stmt, tys: Nat → Type, cx: PCx(tys), e: PEnv, next: Na
                         None => None,
                         Some(ta) => match sb.word() {
                             None => None,
+                            // Interim (§25.8, F4): goes when the run is stuck at a code mismatch.
                             // Level 2 reads the second at the first's code.
                             Some(tb) => match !sb.code.same(sa.code) { True => None, False => match op.node(w.bits(), next, ta.id, tb.id) {
                                 None => None,
@@ -495,6 +570,7 @@ fn Stmt::place(self st: Stmt, tys: Nat → Type, cx: PCx(tys), e: PEnv, next: Na
                           False => None,
                           True => match e.locate(tys, strs, p, next) {
                             None => None,
+                            // Interim (§25.8, F4): goes when the run is stuck at a code mismatch.
                             // Level 2 stores only a value of the element's code.
                             Some(at) => match at.code.word_size() {
                                 None => None,
@@ -681,6 +757,7 @@ fn PEnv::less(self e: PEnv, a, b: Var, swap: Bool, next: Nat) → Option<Pair<Li
                     None => None,
                     Some(ta) => match sb.word() {
                         None => None,
+                        // Interim (§25.8, F4): goes when the run is stuck at a code mismatch.
                         Some(tb) => match sb.code.same(sa.code) { False => None, True => Some(Pair([Compute(UnsignedLessThan(64, next, ta.id, tb.id))], swap)) },
                     },
                 },
@@ -710,6 +787,7 @@ fn PSlot::fresh_like(tys: Nat → Type, strs: Strs(tys), ss: List<PSlot>, next: 
 fn share(tys: Nat → Type, strs: Strs(tys), outs: Option<List<PSlot>>, ss: List<PSlot>, next: Nat) → Option<Pair<bytes_level::Body, Pair<List<PSlot>, Nat>>> {
     let zero = next;
     let target: Option<Pair<List<PSlot>, Nat>> = match outs {
+        // Interim (§25.8, F4): goes when the run is stuck at a code mismatch.
         // The second arm's outputs of the first's codes.
         Some(ts) => match shapes_same(PSlot::codes(ss), PSlot::codes(ts)) {
             False => None,
@@ -733,6 +811,7 @@ fn place_go(fuel: Nat, b: body::Body, tys: Nat → Type, cx: PCx(tys), sig: Sig,
     match fuel {
         Zero => None,
         Succ(f) => match b {
+            // Interim (§25.8, F4): goes when the run is stuck at a code mismatch.
             // A `Ret`'s values at the codes it answers, a `Jump`'s at the
             // parameters'.
             Ret(rs) => match e.gets(rs) {

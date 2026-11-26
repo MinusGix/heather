@@ -112,11 +112,12 @@ fn Dyn::encode(tys: Nat → Type, strs: Strs(tys), d: Dyn(tys)) → Option<List<
 fn Heap::NoPointerIn(hb: x86_64_memory_contract::Heap, c: Nat) → Type { (e: Pointer) → Mem(e, hb.shadow) → ¬(e.block = c) }
 
 // Level 2's heap in the bytes level's under `inj`: each live block's value's
-// bytes at its image, all defined, no reference among them; live blocks to
-// distinct images.
+// bytes at its image, all defined, no reference among them, fewer than 2^64
+// of them (an offset is a word: §25.8, F5); live blocks to distinct images.
 fn HeapInjects(tys: Nat → Type, strs: Strs(tys), inj: Nat → Nat, h: level2::Heap(tys), hb: x86_64_memory_contract::Heap) → Type {
     ((b: Nat) → (o: Obj(tys)) → level2::Heap::obj(tys, h, b) = Some(o) →
-        (o.holes = Nil) ∧ ((Dyn::encode(tys, strs, o.val) = Some(hb.bytes(inj(b)))) ∧ (((j: Nat) → hb.undefined(inj(b), j) = False) ∧ Heap::NoPointerIn(hb, inj(b))))) ∧
+        (o.holes = Nil) ∧ ((Dyn::encode(tys, strs, o.val) = Some(hb.bytes(inj(b)))) ∧ (((j: Nat) → hb.undefined(inj(b), j) = False) ∧
+            (Heap::NoPointerIn(hb, inj(b)) ∧ (hb.bytes(inj(b)).len() < Nat::pow(2, 64)))))) ∧
     ((b, c: Nat) → (o, o2: Obj(tys)) → level2::Heap::obj(tys, h, b) = Some(o) → level2::Heap::obj(tys, h, c) = Some(o2) → inj(b) = inj(c) → b = c)
 }
 
@@ -208,12 +209,13 @@ fn PlacementSound(tys: Nat → Type, strs: Strs(tys), fs: List<Func>, w: Callees
     (n, g: Nat) → g < fs.len() → (vs: List<level2::Value(tys)>) → (h: level2::Heap(tys)) → (io: Io) → (inj: Nat → Nat) → (hb: x86_64_memory_contract::Heap) →
         (args: List<x86_64_call_contract::Value>) → (blocks: Blocks) →
         HeapInjects(tys, strs, inj, h, hb) → values_lower(tys, strs, inj, h, vs) = Some(args) → WritesLent(tys, inj, blocks, (funcs_at(fs)(g)).sig.params, vs) →
+        (ds: List<Dyn(tys)>) → Value::ReadAll(tys, strs, h, h.len(), vs, ds) → Dyn::Coded(tys, ds, (funcs_at(fs)(g)).sig.params) →
         ran_lowers(tys, strs, (funcs_at(fs)(g)).sig, inj, h, Run::of(tys, strs, funcs_at(fs), w, prim, n, g, vs, h, io), bytes_level::run(placed, blocks, n + 1, g, args, hb, io))
 }
 
 // The theorem's statement: `place`'s every answer is placement-sound.
 fn PlacementSoundAll(tys: Nat → Type, strs: Strs(tys), w: Callees(tys), prim: Nat → Bool) → Type {
-    (fs: List<Func>) → (placed: Program) → place(tys, strs, prim, fs) = Some(placed) → PlacementSound(tys, strs, fs, w, prim, placed)
+    StrsLaws(tys, strs) → Strs::Laid(tys, strs) → (fs: List<Func>) → (placed: Program) → place(tys, strs, prim, fs) = Some(placed) → PlacementSound(tys, strs, fs, w, prim, placed)
 }
 
 // ---------------------------------------------------------------------------
@@ -266,7 +268,7 @@ fn EndToEnd<M>(tys: Nat → Type, p: verdict::Prog(tys), placed: Program, site: 
 fn EndToEndAll(tys: Nat → Type) → Type<1> {
     (strs: Strs(tys)) → (w: Callees(tys)) → (pres: Pres(tys)) → (need: Nat → Option<Need(tys)>) → (prim: Nat → Bool) →
     (reaches: Nat → List<Dyn(tys)> → List<Exchange> → Type) → (fs: List<Func>) →
-    PlacementSoundAll(tys, strs, w, prim) → CheckSound(tys, check(tys)) → prog_checked(tys, prog_of_list(tys, strs, fs, w, pres, need, prim, reaches)) →
+    StrsLaws(tys, strs) → Strs::Laid(tys, strs) → PlacementSoundAll(tys, strs, w, prim) → CheckSound(tys, check(tys)) → prog_checked(tys, prog_of_list(tys, strs, fs, w, pres, need, prim, reaches)) →
     (placed: Program) → place(tys, strs, prim, fs) = Some(placed) →
     (placement: List<function_ir_lower::Place>) → (program: x86_64_asm::Prog) → placed.lower(placement) = Some(program) →
     (M: Type) → (fetch: FetchAccess<M>) → (data: ByteReadAccess<M>) → (last: List<BitVec(8)>) → (origin: BitVec(64)) → (stack: Stack<M>(fetch, data)) →
@@ -318,7 +320,7 @@ theorem place_len(tys: Nat → Type, strs: Strs(tys), prim: Nat → Bool, fs: Li
 
 // The composed theorem at one site, stack, lending and writable blocks.
 theorem end_to_end_at<M>(tys: Nat → Type, strs: Strs(tys), w: Callees(tys), pres: Pres(tys), need: Nat → Option<Need(tys)>, prim: Nat → Bool,
-    reaches: Nat → List<Dyn(tys)> → List<Exchange> → Type, fs: List<Func>,
+    reaches: Nat → List<Dyn(tys)> → List<Exchange> → Type, fs: List<Func>, sl: StrsLaws(tys, strs), laid: Strs::Laid(tys, strs),
     psa: PlacementSoundAll(tys, strs, w, prim), cs: CheckSound(tys, check(tys)), pc: prog_checked(tys, prog_of_list(tys, strs, fs, w, pres, need, prim, reaches)),
     placed: Program, hplace: place(tys, strs, prim, fs) = Some(placed),
     placement: List<function_ir_lower::Place>, program: x86_64_asm::Prog, lowered: placed.lower(placement) = Some(program),
@@ -345,7 +347,7 @@ theorem end_to_end_at<M>(tys: Nat → Type, strs: Strs(tys), w: Callees(tys), pr
         let done = sa.right.right.left(a, ex.proof);
         let lens = place_len(tys, strs, prim, fs, placed, hplace);
         let glt: (f < fs.len()) = { omega };
-        let ps = psa(fs, placed, hplace, n, f, glt, vs, h, io, inj, heap, args, blocks, injh, low, wr);
+        let ps = psa(sl, laid, fs, placed, hplace, n, f, glt, vs, h, io, inj, heap, args, blocks, injh, low, wr, ds, ra, cod);
         let ps2 = j(ex.proof, λ r _ => ran_lowers(tys, strs, (funcs_at(fs)(f)).sig, inj, h, r, bytes_level::run(placed, blocks, n + 1, f, args, heap, io)), ps);
         let a2 = ps2.witness;
         let t1 = j(em, λ x _ => site.Tracked(stack, spans, s, i, ret, io, x, bytes_level::run(placed, blocks, x, f, args, heap, io)), t);
@@ -356,8 +358,8 @@ theorem end_to_end_at<M>(tys: Nat → Type, strs: Strs(tys), w: Callees(tys), pr
 }
 
 theorem end_to_end(tys: Nat → Type): EndToEndAll(tys) {
-    λ strs w pres need prim reaches fs psa cs pc placed hplace placement program lowered M fetch data last origin stack top spans blocks =>
-        end_to_end_at(tys, strs, w, pres, need, prim, reaches, fs, psa, cs, pc, placed, hplace, placement, program, lowered, fetch, data, last, origin, stack, top, spans, blocks)
+    λ strs w pres need prim reaches fs sl laid psa cs pc placed hplace placement program lowered M fetch data last origin stack top spans blocks =>
+        end_to_end_at(tys, strs, w, pres, need, prim, reaches, fs, sl, laid, psa, cs, pc, placed, hplace, placement, program, lowered, fetch, data, last, origin, stack, top, spans, blocks)
 }
 
 // ---------------------------------------------------------------------------
@@ -476,10 +478,23 @@ fn PlaceComplete(tys: Nat → Type, strs: Strs(tys), prim: Nat → Bool) → Typ
 // taken as `Stmt::Steps` (the run hands its continuation one machine, for
 // every continuation), so a stage never mentions what follows it.
 
-// A cell's slots read its value lowered.
+// A cell's slots read its value lowered, and the slot's code is the code of
+// the value the cell reads (§25.8, F2).
 fn SlotHolds(tys: Nat → Type, strs: Strs(tys), inj: Nat → Nat, h: level2::Heap(tys), s: PSlot, c: Cell(tys), l: Locals) → Type {
-    read_values(s.ids, l) = value_lower(tys, strs, inj, h, c.v)
+    (read_values(s.ids, l) = value_lower(tys, strs, inj, h, c.v)) ∧ ((Value::get(tys, strs, h, c.v, Nil)).map(λ (d: Dyn(tys)) => d.code) = Some(s.code))
 }
+
+// Every id of the environment's slots is below `next` (§25.8, F3).
+fn PEnv::Below(self e: PEnv, next: Nat) → Type { (k: Nat) → (s: PSlot) → e.vars.nth(k) = Some(s) → (t: Typed) → Mem(t, s.ids) → t.id < next }
+
+// The ids a path's end writes: the results', or the next state's and the
+// flag.
+fn Leave::ids(self t: Leave) → List<Nat> {
+    match t { TRet(res) => res.map(λ (x: Typed) => x.id), TLoop(_, _, nx, flag) => nx.map(λ (x: Typed) => x.id) ++ [flag] }
+}
+
+// No slot of the environment is among them.
+fn Leave::Apart(self t: Leave, e: PEnv) → Type { (k: Nat) → (s: PSlot) → e.vars.nth(k) = Some(s) → (x: Typed) → Mem(x, s.ids) → ¬Mem(x.id, t.ids()) }
 
 fn SlotsHold(tys: Nat → Type, strs: Strs(tys), inj: Nat → Nat, h: level2::Heap(tys), ss: List<PSlot>, cs: List<Cell(tys)>, l: Locals) → Type {
     match ss {
@@ -494,11 +509,12 @@ fn SlotsWritable(tys: Nat → Type, inj: Nat → Nat, blocks: Blocks, ss: List<P
 }
 
 // The stage invariant: the heap injected, every variable's slots holding
-// its value (the environment by level: arguments, then locals oldest
-// first), the same world, and stores only where the bytes level may write.
-fn StageRel(tys: Nat → Type, strs: Strs(tys), inj: Nat → Nat, blocks: Blocks, e: PEnv, m: Mach(tys), c: Config) → Type {
+// its value at its code (the environment by level: arguments, then locals
+// oldest first), the same world, stores only where the bytes level may
+// write, and every slot's ids below the next id.
+fn StageRel(tys: Nat → Type, strs: Strs(tys), inj: Nat → Nat, blocks: Blocks, e: PEnv, m: Mach(tys), c: Config, next: Nat) → Type {
     HeapInjects(tys, strs, inj, m.heap, c.memory) ∧ ((e.na = m.env.args.len()) ∧ (SlotsHold(tys, strs, inj, m.heap, e.vars, m.env.args ++ m.env.locs.rev(), c.locals) ∧
-        ((c.io = m.io) ∧ SlotsWritable(tys, inj, blocks, e.vars, m.env.args ++ m.env.locs.rev()))))
+        ((c.io = m.io) ∧ (SlotsWritable(tys, inj, blocks, e.vars, m.env.args ++ m.env.locs.rev()) ∧ e.Below(next)))))
 }
 
 // Level 2's statement hands every continuation the machine `m2`.
@@ -514,12 +530,18 @@ fn CallsLower(tys: Nat → Type, strs: Strs(tys), sigs: Nat → Sig, call: Calle
         call(g, vs, h, io) = level2::Done(a) → Exists<x86_64_call_contract::Answer>(λ a2 => (calls(g, args, hb, io) = x86_64_call_contract::Done(a2)) ∧ AnswerLowers(tys, strs, sigs(g), inj, h, a, a2))
 }
 
-// A statement `place` emits as a leaf (every kind but a call): its nodes
-// run (`run_instrs`) to a configuration related to level 2's step.
+// A statement `place` emits as a leaf (every kind but a call): level 2 is
+// stuck there for every continuation, or it steps to a machine the stage
+// names, related to the configuration the leaf's nodes run to (§25.8, F6).
 fn LeafStage(tys: Nat → Type, strs: Strs(tys), sigs: Nat → Sig, prim: Nat → Bool, fns: Nat → Func, call: Caller(tys), blocks: Blocks, s: Stmt) → Type {
     (e: PEnv) → (next: Nat) → (o: SOut) → s.place(tys, PCx(strs, sigs, prim), e, next) = Some(o) → (inj: Nat → Nat) → (m: Mach(tys)) → (c: Config) →
-        StageRel(tys, strs, inj, blocks, e, m, c) → (m2: Mach(tys)) → Stmt::Steps(tys, strs, fns, call, s, m, m2) →
-        (match o.code as λ _ => Type { Leaf(is) => Exists<Config>(λ c2 => (run_instrs(blocks, is, c) = Some(c2)) ∧ StageRel(tys, strs, inj, blocks, o.env, m2, c2)), _ => False })
+        StageRel(tys, strs, inj, blocks, e, m, c, next) →
+        (match o.code as λ _ => Type {
+            Leaf(is) => ((k: Mach(tys) → level2::Ran(tys)) → s.run(tys, strs, fns, call, m, k) = level2::Stuck) ∨
+                Exists<Mach(tys)>(λ m2 => Stmt::Steps(tys, strs, fns, call, s, m, m2) ∧
+                    Exists<Config>(λ c2 => (run_instrs(blocks, is, c) = Some(c2)) ∧ StageRel(tys, strs, inj, blocks, o.env, m2, c2, o.next))),
+            _ => False,
+        })
 }
 
 // The leaf stages, by kind.
@@ -549,11 +571,11 @@ fn StageDeath(tys: Nat → Type, strs: Strs(tys), sigs: Nat → Sig, prim: Nat �
 // emits, to a configuration related to level 2's step.
 fn StageCall(tys: Nat → Type, strs: Strs(tys), sigs: Nat → Sig, prim: Nat → Bool, fns: Nat → Func, call: Caller(tys), calls: Calls(), blocks: Blocks) → Type {
     (g: Nat) → (xs: List<Var>) → (n: Nat) → (e: PEnv) → (next: Nat) → (o: SOut) → (Stmt::Call(g, xs, n)).place(tys, PCx(strs, sigs, prim), e, next) = Some(o) →
-        CallsLower(tys, strs, sigs, call, calls) → (inj: Nat → Nat) → (m: Mach(tys)) → (c: Config) → StageRel(tys, strs, inj, blocks, e, m, c) →
+        CallsLower(tys, strs, sigs, call, calls) → (inj: Nat → Nat) → (m: Mach(tys)) → (c: Config) → StageRel(tys, strs, inj, blocks, e, m, c, next) →
         (m2: Mach(tys)) → Stmt::Steps(tys, strs, fns, call, Stmt::Call(g, xs, n), m, m2) →
         (match o.code as λ _ => Type {
             bytes_level::Call(g2, args, rs) => Exists<Config>(λ c2 => Exists<Nat → Nat>(λ inj2 => CallRan(calls, g2, args, rs, c, c2) ∧ (inj_extends(tys, inj2, inj, m.heap) ∧
-                StageRel(tys, strs, inj2, blocks, o.env, m2, c2)))),
+                StageRel(tys, strs, inj2, blocks, o.env, m2, c2, o.next)))),
             _ => False,
         })
 }
@@ -562,16 +584,17 @@ fn StageCall(tys: Nat → Type, strs: Strs(tys), sigs: Nat → Sig, prim: Nat �
 // `place` swapped the arms, is level 2's test.
 fn StageTest(tys: Nat → Type, strs: Strs(tys), blocks: Blocks) → Type {
     (t: body::Test) → (e: PEnv) → (next: Nat) → (tested: Pair<List<Instr>, Bool>) → t.place(e, next) = Some(tested) → (inj: Nat → Nat) → (m: Mach(tys)) → (c: Config) →
-        StageRel(tys, strs, inj, blocks, e, m, c) → (bit: Bool) → t.run(tys, strs, m) = Some(bit) →
+        StageRel(tys, strs, inj, blocks, e, m, c, next) → (bit: Bool) → t.run(tys, strs, m) = Some(bit) →
         Exists<Config>(λ c2 => (run_instrs(blocks, tested.fst, c) = Some(c2)) ∧ ((c2.locals.words(1, next).head_bit() = (match tested.snd { False => bit, True => !bit })) ∧
-            StageRel(tys, strs, inj, blocks, e, m, c2)))
+            StageRel(tys, strs, inj, blocks, e, m, c2, next + 1)))
 }
 
 // A path's end: a `Ret`'s leaf binds the leave's ids to the values level 2
 // answers (results, then written words), lowered.
 fn StageRet(tys: Nat → Type, strs: Strs(tys), blocks: Blocks) → Type {
     (sig: Sig) → (tail: Leave) → (rs: List<Var>) → (e: PEnv) → (next: Nat) → (ss: List<PSlot>) → e.gets(rs) = Some(ss) → (code: bytes_level::Body) →
-        tail.ret(ret_values(ss, sig.results.len()), next) = Some(code) → (inj: Nat → Nat) → (m: Mach(tys)) → (c: Config) → StageRel(tys, strs, inj, blocks, e, m, c) →
+        tail.ret(ret_values(ss, sig.results.len()), next) = Some(code) → (inj: Nat → Nat) → (m: Mach(tys)) → (c: Config) → StageRel(tys, strs, inj, blocks, e, m, c, next) →
+        tail.Apart(e) → ((x: Nat) → Mem(x, tail.ids()) → x < next) →
         (match code as λ _ => Type {
             Leaf(is) => Exists<Config>(λ c2 => (run_instrs(blocks, is, c) = Some(c2)) ∧ ((match tail as λ _ => Type {
                 TRet(res) => read_values(res, c2.locals) = values_lower(tys, strs, inj, m.heap, sig.returned(tys, rs.map(λ x => (REnv::get(tys, m.env, x)).v))),
@@ -584,7 +607,8 @@ fn StageRet(tys: Nat → Type, strs: Strs(tys), blocks: Blocks) → Type {
 // A `Jump`'s leaf: the next state is its arguments lowered, the flag zero.
 fn StageJump(tys: Nat → Type, strs: Strs(tys), blocks: Blocks) → Type {
     (tail: Leave) → (xs: List<Var>) → (e: PEnv) → (next: Nat) → (ss: List<PSlot>) → e.gets(xs) = Some(ss) → (code: bytes_level::Body) →
-        tail.jump(PSlot::ids_of(ss), next) = Some(code) → (inj: Nat → Nat) → (m: Mach(tys)) → (c: Config) → StageRel(tys, strs, inj, blocks, e, m, c) →
+        tail.jump(PSlot::ids_of(ss), next) = Some(code) → (inj: Nat → Nat) → (m: Mach(tys)) → (c: Config) → StageRel(tys, strs, inj, blocks, e, m, c, next) →
+        tail.Apart(e) → ((x: Nat) → Mem(x, tail.ids()) → x < next) →
         (match code as λ _ => Type {
             Leaf(is) => Exists<Config>(λ c2 => (run_instrs(blocks, is, c) = Some(c2)) ∧ ((match tail as λ _ => Type {
                 TRet(_) => False,
@@ -602,6 +626,6 @@ fn StageRoutine(tys: Nat → Type, strs: Strs(tys), sigs: Nat → Sig, prim: Nat
     (f: Func) → (r: Routine) → f.place(tys, PCx(strs, sigs, prim)) = Some(r) → (g: Nat) → (call: Caller(tys)) → CallsLower(tys, strs, sigs, call, calls) →
         (blocks: Blocks) → (fuel: Nat) → (vs: List<level2::Value(tys)>) → (h: level2::Heap(tys)) → (io: Io) → (inj: Nat → Nat) → (hb: x86_64_memory_contract::Heap) →
         (args: List<x86_64_call_contract::Value>) → HeapInjects(tys, strs, inj, h, hb) → values_lower(tys, strs, inj, h, vs) = Some(args) → WritesLent(tys, inj, blocks, f.sig.params, vs) →
-        (a: level2::Answer(tys)) → f.run(tys, strs, fns, call, g, vs, h, io) = level2::Done(a) →
+        (ds: List<Dyn(tys)>) → Value::ReadAll(tys, strs, h, h.len(), vs, ds) → Dyn::Coded(tys, ds, f.sig.params) → (a: level2::Answer(tys)) → f.run(tys, strs, fns, call, g, vs, h, io) = level2::Done(a) →
         Exists<x86_64_call_contract::Answer>(λ a2 => RoutineRan(r, blocks, calls, fuel, args, hb, io, a2) ∧ AnswerLowers(tys, strs, f.sig, inj, h, a, a2))
 }

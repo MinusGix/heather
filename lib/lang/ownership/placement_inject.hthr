@@ -3,7 +3,8 @@
 // `HeapInjects`, `Dyn::encode` and `Sel::locate` (placement_seam.hthr), the
 // seam's analogue of the lens laws. Nothing here is about a statement kind.
 //
-// - **The structures laid out** (`Strs::Laid`): what the encoding needs of
+// - **The structures laid out** (`Strs::Laid`, placement.hthr beside
+//   `Shape::layout`, the layout's law): what the encoding needs of
 //   the structures, stated in the model the run reads them through
 //   (`Dyn::at`, `Dyn::over`, `Dyn::fits`, `Dyn::len`): a sequence whose
 //   element is a word is read at the index's number, an element fits only
@@ -63,10 +64,6 @@ theorem List::put_window_mid<A>(xs: List<A>): (ys, zs, ys2: List<A>) → ys2.len
 
 // ---------------------------------------------------------------------------
 // A sequence's encoding, element by element
-
-fn el_sel(i: Ix) → Sel { OnSeq(SeqOne(i)) }
-
-fn win_sel(lo, n: Ix) → Sel { OnSeq(SeqRun(lo, n)) }
 
 // The 64-bit index the encoding reads element `j` at.
 fn ix64(j: Nat) → Ix { IWord(64, BitVec::ofNat(j)) }
@@ -195,64 +192,6 @@ theorem encode_elems_put(tys: Nat → Type, strs: Strs(tys), d1, d2: Dyn(tys), s
 // A value's bytes: a word's at its size, a value with a layout its encoding.
 fn Dyn::image(tys: Nat → Type, strs: Strs(tys), d: Dyn(tys)) → Option<List<BitVec(8)>> {
     match d.code.word_size() { Some(size) => Some(word_bytes_at(size, Dyn::index(tys, d))), None => Dyn::encode(tys, strs, d) }
-}
-
-// A sequence of words, read through the model: an element is of the
-// element's code and read at the index's number; it fits only below the
-// length; a write at one element is read back there and leaves the others;
-// no write changes the length, and whether a selection fits reads only it.
-record SeqLaid(tys: Nat → Type, strs: Strs(tys), c, el: Shape, size: Nat) {
-    el_size: el.word_size() = Some(size),
-    elem_code: (v: El(tys, c)) → (i: Ix) → (Dyn::at(tys, strs, el_sel(i), Dyn(c, v))).code = el,
-    elem_num: (v: El(tys, c)) → (i, j: Ix) → i.toNat() = j.toNat() → Dyn::at(tys, strs, el_sel(i), Dyn(c, v)) = Dyn::at(tys, strs, el_sel(j), Dyn(c, v)),
-    elem_fits: (v: El(tys, c)) → (i: Ix) → Dyn::fits(tys, strs, el_sel(i), Dyn(c, v)) = True → i.toNat() < Dyn::len(tys, strs, Dyn(c, v)),
-    elem_put: (v: El(tys, c)) → (i: Ix) → Dyn::fits(tys, strs, el_sel(i), Dyn(c, v)) = True → (x: Dyn(tys)) → x.code = el →
-        Dyn::at(tys, strs, el_sel(i), Dyn::over(tys, strs, el_sel(i), λ _ => x, Dyn(c, v))) = x,
-    elem_other: (v: El(tys, c)) → (i, j: Ix) → ¬(i.toNat() = j.toNat()) → (g: Dyn(tys) → Dyn(tys)) →
-        Dyn::at(tys, strs, el_sel(i), Dyn::over(tys, strs, el_sel(j), g, Dyn(c, v))) = Dyn::at(tys, strs, el_sel(i), Dyn(c, v)),
-    len_over: (v: El(tys, c)) → (s: Sel) → (g: Dyn(tys) → Dyn(tys)) → Dyn::len(tys, strs, Dyn::over(tys, strs, s, g, Dyn(c, v))) = Dyn::len(tys, strs, Dyn(c, v)),
-    fits_len: (v, u: El(tys, c)) → (s: Sel) → Dyn::len(tys, strs, Dyn(c, v)) = Dyn::len(tys, strs, Dyn(c, u)) →
-        Dyn::fits(tys, strs, s, Dyn(c, v)) = Dyn::fits(tys, strs, s, Dyn(c, u)),
-}
-
-// Its windows, of code `w`: a sequence of the same element, inside the
-// length, as long as it says, its elements its parent's from its start; a
-// write of the window is read back there and leaves the elements outside it.
-record WinLaid(tys: Nat → Type, strs: Strs(tys), c, el: Shape, size: Nat, w: Shape) {
-    win_layout: Exists<Option<Shape>>(λ wc => Shape::layout(tys, strs, w) = LSeq(el, size, wc)),
-    win_code: (v: El(tys, c)) → (lo, n: Ix) → (Dyn::at(tys, strs, win_sel(lo, n), Dyn(c, v))).code = w,
-    win_fits: (v: El(tys, c)) → (lo, n: Ix) → Dyn::fits(tys, strs, win_sel(lo, n), Dyn(c, v)) = True → lo.toNat() + n.toNat() <= Dyn::len(tys, strs, Dyn(c, v)),
-    win_len: (v: El(tys, c)) → (lo, n: Ix) → Dyn::fits(tys, strs, win_sel(lo, n), Dyn(c, v)) = True →
-        Dyn::len(tys, strs, Dyn::at(tys, strs, win_sel(lo, n), Dyn(c, v))) = n.toNat(),
-    win_elem: (v: El(tys, c)) → (lo, n: Ix) → Dyn::fits(tys, strs, win_sel(lo, n), Dyn(c, v)) = True → (i, j: Ix) → i.toNat() < n.toNat() →
-        j.toNat() = lo.toNat() + i.toNat() → Dyn::at(tys, strs, el_sel(i), Dyn::at(tys, strs, win_sel(lo, n), Dyn(c, v))) = Dyn::at(tys, strs, el_sel(j), Dyn(c, v)),
-    win_put: (v: El(tys, c)) → (lo, n: Ix) → Dyn::fits(tys, strs, win_sel(lo, n), Dyn(c, v)) = True → (x: Dyn(tys)) → x.code = w → Dyn::len(tys, strs, x) = n.toNat() →
-        Dyn::at(tys, strs, win_sel(lo, n), Dyn::over(tys, strs, win_sel(lo, n), λ _ => x, Dyn(c, v))) = x,
-    win_other: (v: El(tys, c)) → (lo, n, j: Ix) → (j.toNat() < lo.toNat()) ∨ (lo.toNat() + n.toNat() <= j.toNat()) → (g: Dyn(tys) → Dyn(tys)) →
-        Dyn::at(tys, strs, el_sel(j), Dyn::over(tys, strs, win_sel(lo, n), g, Dyn(c, v))) = Dyn::at(tys, strs, el_sel(j), Dyn(c, v)),
-}
-
-// A record of words: its fields are lenses of their codes, apart, and fit.
-record RecLaid(tys: Nat → Type, strs: Strs(tys), c: Shape, fs: List<Shape>) {
-    field_sized: (i: Nat) → (f: Shape) → fs.nth(i) = Some(f) → f.word_size().is_some() = True,
-    field_code: (v: El(tys, c)) → (i: Nat) → (f: Shape) → fs.nth(i) = Some(f) → (Dyn::at(tys, strs, OnField(i), Dyn(c, v))).code = f,
-    field_fits: (v: El(tys, c)) → (i: Nat) → (f: Shape) → fs.nth(i) = Some(f) → Dyn::fits(tys, strs, OnField(i), Dyn(c, v)) = True,
-    field_put: (v: El(tys, c)) → (i: Nat) → (f: Shape) → fs.nth(i) = Some(f) → (x: Dyn(tys)) → x.code = f →
-        Dyn::at(tys, strs, OnField(i), Dyn::over(tys, strs, OnField(i), λ _ => x, Dyn(c, v))) = x,
-    field_other: (v: El(tys, c)) → (i, j: Nat) → ¬(i = j) → (g: Dyn(tys) → Dyn(tys)) →
-        Dyn::at(tys, strs, OnField(i), Dyn::over(tys, strs, OnField(j), g, Dyn(c, v))) = Dyn::at(tys, strs, OnField(i), Dyn(c, v)),
-}
-
-fn WinsLaid(tys: Nat → Type, strs: Strs(tys), c, el: Shape, size: Nat, wc: Option<Shape>) → Type {
-    match wc { None => (v: El(tys, c)) → (lo, n: Ix) → Dyn::fits(tys, strs, win_sel(lo, n), Dyn(c, v)) = False, Some(w) => WinLaid(tys, strs, c, el, size, w) }
-}
-
-// The seam's premise on the structures: every code with a layout is laid
-// out as `Dyn::encode` reads it.
-fn Strs::Laid(tys: Nat → Type, strs: Strs(tys)) → Type {
-    ((c, el: Shape) → (size: Nat) → (wc: Option<Shape>) → Shape::layout(tys, strs, c) = LSeq(el, size, wc) →
-        SeqLaid(tys, strs, c, el, size) ∧ WinsLaid(tys, strs, c, el, size, wc)) ∧
-    ((c: Shape) → (fs: List<Shape>) → Shape::layout(tys, strs, c) = LRecord(fs) → RecLaid(tys, strs, c, fs))
 }
 
 // ---------------------------------------------------------------------------
@@ -1249,6 +1188,8 @@ theorem mem_cleared(b, k, n: Nat, e: Pointer, shadow: List<Pointer>): Mem(e, cle
     }
 }
 
+theorem trans_lt({a, b, c, d: Nat}, ab: a = b, bc: b = c, lt: c < d): a < d { omega(ab, bc, lt) }
+
 // A store of plain bytes inside one live block, of the bytes the block's
 // new value encodes to there, keeps the injection.
 theorem injects_store(tys: Nat → Type, strs: Strs(tys), inj: Nat → Nat, h: level2::Heap(tys), hb: x86_64_memory_contract::Heap, hi: HeapInjects(tys, strs, inj, h, hb),
@@ -1267,16 +1208,17 @@ theorem injects_store(tys: Nat → Type, strs: Strs(tys), inj: Nat → Nat, h: l
             let old = hi.left(b, o, live);
             let bytes: (hb2.bytes(inj(b)) = hb.bytes(inj(b)).put_window(r, ys)) =
                 trans(hb.placed_bytes(loc, Piece::plain(ys), fits, inj(b)), set_block_here(λ (dd: Nat) => hb.bytes(dd), inj(b), hb.bytes(inj(b)).put_window(r, ys)));
-            j(sym(here.left), λ c2 _ => (o2.holes = Nil) ∧ ((Dyn::encode(tys, strs, o2.val) = Some(hb2.bytes(inj(c2)))) ∧ (((jj: Nat) → hb2.undefined(inj(c2), jj) = False) ∧ Heap::NoPointerIn(hb2, inj(c2)))),
-                j(sym(here.right), λ o3 _ => (o3.holes = Nil) ∧ ((Dyn::encode(tys, strs, o3.val) = Some(hb2.bytes(inj(b)))) ∧ (((jj: Nat) → hb2.undefined(inj(b), jj) = False) ∧ Heap::NoPointerIn(hb2, inj(b)))),
-                    ⟨old.left, ⟨trans(enc, cong_fn(λ (l: List<BitVec(8)>) => Some(l), sym(bytes))), ⟨undef(inj(b), old.right.right.left), shadow(inj(b), old.right.right.right)⟩⟩⟩))
+            j(sym(here.left), λ c2 _ => (o2.holes = Nil) ∧ ((Dyn::encode(tys, strs, o2.val) = Some(hb2.bytes(inj(c2)))) ∧ (((jj: Nat) → hb2.undefined(inj(c2), jj) = False) ∧ (Heap::NoPointerIn(hb2, inj(c2)) ∧ (hb2.bytes(inj(c2)).len() < Nat::pow(2, 64))))),
+                j(sym(here.right), λ o3 _ => (o3.holes = Nil) ∧ ((Dyn::encode(tys, strs, o3.val) = Some(hb2.bytes(inj(b)))) ∧ (((jj: Nat) → hb2.undefined(inj(b), jj) = False) ∧ (Heap::NoPointerIn(hb2, inj(b)) ∧ (hb2.bytes(inj(b)).len() < Nat::pow(2, 64))))),
+                    ⟨old.left, ⟨trans(enc, cong_fn(λ (l: List<BitVec(8)>) => Some(l), sym(bytes))), ⟨undef(inj(b), old.right.right.left), ⟨shadow(inj(b), old.right.right.right.left),
+                        trans_lt(cong_fn(λ (l: List<BitVec(8)>) => l.len(), bytes), hb.bytes(inj(b)).len_put_window(r, ys, omega(fits)), old.right.right.right.right)⟩⟩⟩⟩))
         },
         Inr(other) => {
             let old = hi.left(c, o2, other.right);
             let apart: (inj(c) ≠ inj(b)) = λ e => other.left(hi.right(c, b, o2, o, other.right, live, e));
             let bytes: (hb2.bytes(inj(c)) = hb.bytes(inj(c))) =
                 trans(hb.placed_bytes(loc, Piece::plain(ys), fits, inj(c)), set_block_other(λ (dd: Nat) => hb.bytes(dd), inj(b), hb.bytes(inj(b)).put_window(r, ys), inj(c), apart));
-            ⟨old.left, ⟨trans(old.right.left, cong_fn(λ (l: List<BitVec(8)>) => Some(l), sym(bytes))), ⟨undef(inj(c), old.right.right.left), shadow(inj(c), old.right.right.right)⟩⟩⟩
+            ⟨old.left, ⟨trans(old.right.left, cong_fn(λ (l: List<BitVec(8)>) => Some(l), sym(bytes))), ⟨undef(inj(c), old.right.right.left), ⟨shadow(inj(c), old.right.right.right.left), trans_lt(cong_fn(λ (l: List<BitVec(8)>) => l.len(), bytes), (refl: hb.bytes(inj(c)).len() = hb.bytes(inj(c)).len()), old.right.right.right.right)⟩⟩⟩⟩
         },
     },
      λ c1 c2 o1 o2 a1 a2 same => {
