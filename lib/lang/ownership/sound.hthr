@@ -12261,3 +12261,130 @@ theorem CSt::lend_write(self si: CSt, s: CSt, th: Thin(si, s), tys: Nat → Type
         },
     }
 }
+
+// P2: a referring variable anchored in its object: the object's root, and a
+// region (`Nil` for a holder, an entry's for a view) that narrows the root to
+// the variable's reference, among the places the variable lends whole.
+record ArgAt(s: CSt, root: Nat → Option<Ref>, ws: List<Ix>, l: Nat, r: Ref) {
+    o: Nat,
+    reg: List<Step>,
+    r0: Ref,
+    rt: root(o) = Some(r0),
+    rr: r = Ref(r0.b, r0.sels ++ Steps::sels(s.unsteps(reg), ws)),
+    pl: Mem(Pl(o, reg ++ Nil), s.places(l, Nil)),
+    kind: Exists<Acc>(λ a => (s.role(l) = KHold(o, a)) ∧ (reg = Nil)) ∨ ((s.role(l) = KView) ∧ Exists<VEnt>(λ en => Mem(en, s.ents(l)) ∧ ((en.obj = o) ∧ (en.reg = reg)))),
+    wd: (k: Nat) → k.member(Steps::lvls(reg)) = True → (k < s.na + s.nd) ∧ ((s.role(k)).plain() = True),
+}
+
+theorem Inv::arg_at(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>}, inv: Inv(tys, strs, s, e, m, h0, lent),
+    sim: Sim(tys, strs, s, e, m), x: Var, l: Nat, hl: s.lvl(x) = Some(l), ng: ¬(s.role(l) = KGone), r: Ref, cv: (REnv::get(tys, m.env, x)).v = level2::Refer(r)):
+    ArgAt(s, inv.root, Mach::ixs(tys, strs, m), l, r)
+{
+    let ws = Mach::ixs(tys, strs, m);
+    let rk = inv.refs(x, l, hl, r, cv);
+    (match s.role(l) as λ q => s.role(l) = q → (match q { KHold(o, _) => inv.root(o) = Some(r), KView => VEnt::Any(s.ents(l), λ en => (inv.root(en.obj)).map(λ r0 => r0.narrow(ws, s.unsteps(en.reg))) = Some(r)),
+            KPlain => False, KGone => True }) → ArgAt(s, inv.root, ws, l, r) {
+        KPlain => λ _ no => false_elim(no),
+        KGone => λ hg _ => false_elim(ng(hg)),
+        KHold(o, a) => λ hr h1 => {
+            let rr: (r = Ref(r.b, r.sels ++ Steps::sels(s.unsteps(Nil), ws))) = trans(sym(Ref::eta(r)), cong_fn(λ (q: List<Sel>) => Ref(r.b, q), sym(r.sels.append_nil())));
+            let pm: Mem(Pl(o, Nil<Step>() ++ Nil<Step>()), s.places(l, Nil<Step>())) = j(sym(hr), λ q _ => Mem(Pl(o, Nil<Step>()), match q as λ _ => List<Pl> { KHold(o2, _) => [Pl(o2, Nil<Step>())], KView => (s.ents(l)).map(λ e2 => Pl(e2.obj, e2.reg ++ Nil<Step>())), KPlain => Nil<Pl>(), KGone => Nil<Pl>() }), Inl(refl));
+            ArgAt(o, Nil, r, h1, rr, pm, Inl(Exists(a, ⟨hr, refl⟩)), λ k no => absurd(no))
+        },
+        KView => λ hr h1 => match VEnt::any_mem(s.ents(l), λ en => (inv.root(en.obj)).map(λ r0 => r0.narrow(ws, s.unsteps(en.reg))) = Some(r), h1) {
+            ⟨en, pen⟩ => match Option::map_some_inv(inv.root(en.obj), λ r0 => r0.narrow(ws, s.unsteps(en.reg)), r, pen.right) {
+                ⟨r0, pr0⟩ => {
+                    let pm0: Mem(Pl(en.obj, en.reg ++ Nil<Step>()), (s.ents(l)).map(λ e2 => Pl(e2.obj, e2.reg ++ Nil<Step>()))) = (s.ents(l)).mem_map(en, λ e2 => Pl(e2.obj, e2.reg ++ Nil<Step>()), pen.left);
+                    let pm: Mem(Pl(en.obj, en.reg ++ Nil<Step>()), s.places(l, Nil<Step>())) = j(sym(hr), λ q _ => Mem(Pl(en.obj, en.reg ++ Nil<Step>()), match q as λ _ => List<Pl> { KHold(o2, _) => [Pl(o2, Nil<Step>())], KView => (s.ents(l)).map(λ e2 => Pl(e2.obj, e2.reg ++ Nil<Step>())), KPlain => Nil<Pl>(), KGone => Nil<Pl>() }), pm0);
+                    let mv: Mem(en, s.views) = s.views.mem_filter(en, λ q => q.lvl.same(l), pen.left);
+                    ArgAt(en.obj, en.reg, r0, pr0.left, sym(pr0.right), pm, Inr(⟨hr, Exists(en, ⟨pen.left, ⟨refl, refl⟩⟩)⟩), λ k mk => inv.words(k, s.region_lvl(en, mv, k, mk)))
+                },
+            },
+        },
+    })(refl, rk)
+}
+
+theorem Role::same_view(self r: Role, h: r.same(KView) = True): r = KView {
+    (match r as λ q => q.same(KView) = True → q = KView { KView => λ _ => refl, KPlain => λ no => absurd(no), KGone => λ no => absurd(no), KHold(_, _) => λ no => absurd(no) })(h)
+}
+
+theorem Role::same_gone(self r: Role, h: r.same(KGone) = True): r = KGone {
+    (match r as λ q => q.same(KGone) = True → q = KGone { KGone => λ _ => refl, KPlain => λ no => absurd(no), KView => λ no => absurd(no), KHold(_, _) => λ no => absurd(no) })(h)
+}
+
+// What passing a referring value at an index says of its argument.
+theorem Inv::pass_arg(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {m: Mach(tys)}, ps: List<Param>, xs: List<Var>, nl: Next, okl: s.lend_all(tys, strs, ps, xs) = Some(nl),
+    vs: List<Value(tys)>, pv: Cell::pass_all(tys, strs, m.heap, ps, xs.map(λ x => REnv::get(tys, m.env, x))) = Some(vs), i: Nat, r: Ref, hv: vs.nth(i) = Some(level2::Refer(r))):
+    Exists<Var>(λ x => (xs.nth(i) = Some(x)) ∧ Exists<Nat>(λ l => (s.lvl(x) = Some(l)) ∧ ((¬(s.role(l) = KGone)) ∧ (((REnv::get(tys, m.env, x)).v = level2::Refer(r)) ∧
+        ((ps.nth(i).unwrap_or(Param(SWord(WNat), ByRead))).mode = ByTake → ((REnv::get(tys, m.env, x)).own = True) ∧ (Shape::plain(tys, strs, (ps.nth(i).unwrap_or(Param(SWord(WNat), ByRead))).code) = False))))))
+{
+    match (Cell::pass_all_nth(tys, strs, m.heap, xs.map(λ x => REnv::get(tys, m.env, x)), ps, vs, pv)).right(i, level2::Refer(r), hv) {
+        ⟨c, pc⟩ => match xs.nth_map_inv(λ x => REnv::get(tys, m.env, x), i, c, pc.left) {
+            ⟨x, px⟩ => {
+                let pr = Cell::pass_refer(tys, strs, m.heap, ps.nth(i).unwrap_or(Param(SWord(WNat), ByRead)), c, r, pc.right);
+                let pr2 = j(sym(px.right), λ q _ => (q.v = level2::Refer(r)) ∧ ((ps.nth(i).unwrap_or(Param(SWord(WNat), ByRead))).mode = ByTake → (q.own = True) ∧ (Shape::plain(tys, strs, (ps.nth(i).unwrap_or(Param(SWord(WNat), ByRead))).code) = False)), pr);
+                match CSt::lend_all_live(tys, strs, xs, s, ps, nl, okl, x, xs.nth_mem(i, x, px.left)) {
+                    ⟨l, pl⟩ => Exists(x, ⟨px.left, Exists(l, ⟨pl.left, ⟨pl.right, pr2⟩⟩)⟩),
+                }
+            },
+        },
+    }
+}
+
+// An argument lent to change: its object is one something live changes, and
+// where it is a view, its one entry is to write.
+theorem Inv::arg_changes(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>}, inv: Inv(tys, strs, s, e, m, h0, lent),
+    ps: List<Param>, xs: List<Var>, nl: Next, okl: s.lend_all(tys, strs, ps, xs) = Some(nl), i: Nat, x: Var, hx: xs.nth(i) = Some(x), p: Param, hp: ps.nth(i) = Some(p),
+    ch: p.mode.changes() = True, l: Nat, hl: s.lvl(x) = Some(l), ng: ¬(s.role(l) = KGone), r: Ref, cv: (REnv::get(tys, m.env, x)).v = level2::Refer(r),
+    tk: p.mode = ByTake → ((REnv::get(tys, m.env, x)).own = True), a: ArgAt(s, inv.root, Mach::ixs(tys, strs, m), l, r)):
+    s.Changes(a.o) ∧ (s.role(l) = KView → Exists<VEnt>(λ en => (s.ents(l) = [en]) ∧ ((en.mode.writes() = True) ∧ ((en.obj = a.o) ∧ (en.reg = a.reg)))))
+{
+    let lb: (l < s.na + s.nd) = s.lvl_below(x, l, hl);
+    let notview: ((o: Nat) → (ac: Acc) → s.role(l) = KHold(o, ac) → s.role(l) = KView → Exists<VEnt>(λ en => (s.ents(l) = [en]) ∧ ((en.mode.writes() = True) ∧ ((en.obj = a.o) ∧ (en.reg = a.reg))))) =
+        λ o ac hr hv => absurd(trans(sym(hr), hv));
+    (match p.mode as λ md => p.mode = md → md.changes() = True → s.Changes(a.o) ∧ (s.role(l) = KView → Exists<VEnt>(λ en => (s.ents(l) = [en]) ∧ ((en.mode.writes() = True) ∧ ((en.obj = a.o) ∧ (en.reg = a.reg))))) {
+        ByRead => λ _ no => absurd(no),
+        ByTake => λ pm _ => match inv.own(x, l, hl, λ hg => ng(Role::same_gone(s.role(l), hg)), tk(pm), r, cv) {
+            ⟨o2, po⟩ => match a.kind {
+                Inl(⟨ac, pa⟩) => {
+                    let eo = Role::hold_obj(a.o, o2, ac, AcOwn, trans(sym(pa.left), po.left));
+                    ⟨Inl(Exists(l, ⟨lb, Exists(AcOwn, ⟨j(sym(eo.left), λ q _ => s.role(l) = KHold(q, AcOwn), po.left), refl⟩)⟩)), λ hv => notview(o2, AcOwn, po.left, hv)⟩
+                },
+                Inr(pv) => false_elim(absurd(trans(sym(po.left), pv.left))),
+            },
+        },
+        ByWrite => λ pm _ => match CSt::lend_all_at(tys, strs, xs, s, ps, nl, okl, i, x, hx, p, hp) {
+            ⟨si, psi⟩ => match psi.right {
+                ⟨ni, pni⟩ => match si.lend_write(s, psi.left, tys, strs, p, pm, x, ni, pni, l, hl) {
+                    Inl(hpl) => match a.kind {
+                        Inl(⟨ac, pa⟩) => false_elim(absurd(trans(sym(hpl), pa.left))),
+                        Inr(pv) => false_elim(absurd(trans(sym(hpl), pv.left))),
+                    },
+                    Inr(Inl(⟨o, ⟨ac, pa⟩⟩)) => match a.kind {
+                        Inl(⟨ac2, pa2⟩) => {
+                            let eo = Role::hold_obj(o, a.o, ac, ac2, trans(sym(pa.left), pa2.left));
+                            ⟨Inl(Exists(l, ⟨lb, Exists(ac, ⟨j(eo.left, λ q _ => s.role(l) = KHold(q, ac), pa.left), pa.right⟩)⟩)), λ hv => notview(o, ac, pa.left, hv)⟩
+                        },
+                        Inr(pv) => false_elim(absurd(trans(sym(pa.left), pv.left))),
+                    },
+                    Inr(Inr(⟨en, pen⟩)) => {
+                        let em = s.ent_mem(l, en, pen.left);
+                        match a.kind {
+                            Inl(⟨ac2, pa2⟩) => false_elim(absurd(trans(sym(pa2.left), j(em.right, λ q _ => s.role(q) = KView, (inv.vents(en, em.left)).right.right)))),
+                            Inr(pv) => match pv.right {
+                                ⟨en2, pen2⟩ => {
+                                    let mv2: Mem(en2, s.views) = s.views.mem_filter(en2, λ q => q.lvl.same(l), pen2.left);
+                                    let l2: (en2.lvl = l) = en2.lvl.same_sound(l, s.views.mem_filter_holds(en2, λ q => q.lvl.same(l), pen2.left));
+                                    let ee: (en2 = en) = s.ent_only(l, en, pen.left, en2, mv2, l2);
+                                    let fo: (en.obj = a.o) = j(ee, λ q _ => q.obj = a.o, pen2.right.left);
+                                    let fr: (en.reg = a.reg) = j(ee, λ q _ => q.reg = a.reg, pen2.right.right);
+                                    ⟨Inr(Exists(en, ⟨em.left, ⟨fo, pen.right⟩⟩)), λ _ => Exists(en, ⟨pen.left, ⟨pen.right, ⟨fo, fr⟩⟩⟩)⟩
+                                },
+                            },
+                        }
+                    },
+                },
+            },
+        },
+    })(refl, ch)
+}
