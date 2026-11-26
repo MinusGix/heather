@@ -1140,6 +1140,15 @@ fn CSt::HRef(tys: Nat → Type, s: CSt, root: Nat → Option<Ref>, env: REnv(tys
     (x: Var) → (l, o: Nat) → (a: Acc) → s.lvl(x) = Some(l) → s.role(l) = KHold(o, a) → (r: Ref) → root(o) = Some(r) → (REnv::get(tys, env, x)).v = Refer(r)
 }
 
+// `Heap::Stays` (§23.17): the run's heap beside the entry's.
+theorem Heap::stays_refl(tys: Nat → Type, h: Heap(tys)): Heap::Stays(tys, h, h) { λ b _ ob2 ho => Exists(ob2, ⟨ho, λ hn => hn⟩) }
+
+theorem Heap::stays_trans(tys: Nat → Type, h1, h2, h3: Heap(tys), a: Heap::Stays(tys, h1, h2), b: Heap::Stays(tys, h2, h3), le: h1.len() <= h2.len()): Heap::Stays(tys, h1, h3) {
+    λ k kl ob3 h3k => match b(k, omega(kl, le), ob3, h3k) {
+        ⟨ob2, p2⟩ => match a(k, kl, ob2, p2.left) { ⟨ob1, p1⟩ => Exists(ob1, ⟨p1.left, λ hn => p2.right(p1.right(hn))⟩) },
+    }
+}
+
 record Inv(tys: Nat → Type, strs: Strs(tys), s: CSt, e: Env(tys), m: Mach(tys), h0: Heap(tys), lent: List<Ref>) {
     sim: Sim(tys, strs, s, s.patched(tys, strs, e, m), m),
     root: Nat → Option<Ref>,
@@ -1169,6 +1178,7 @@ record Inv(tys: Nat → Type, strs: Strs(tys), s: CSt, e: Env(tys), m: Mach(tys)
     href: CSt::HRef(tys, s, root, m.env),
     made: (o: Nat) → s.na <= o → (r: Ref) → root(o) = Some(r) → (h0.len() <= r.b) ∧ (r.sels = Nil),
     nbase: s.na <= s.nobj,
+    stays: Heap::Stays(tys, h0, m.heap),
 }
 
 // Where nothing is pending, the invariant's first part is `Sim` itself.
@@ -1709,7 +1719,7 @@ theorem Inv::start(tys: Nat → Type, strs: Strs(tys), sig: Sig, vs: List<Value(
             }
         },
         λ o ge r rt => absurd(trans(sym(rt), CSt::start_root_past(tys, vs, o, omega(ge, lv)))),
-        omega())
+        omega(), Heap::stays_refl(tys, h))
 }
 
 // ---------------------------------------------------------------------------
@@ -2224,7 +2234,7 @@ theorem Inv::push_plain(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(ty
         CSt::cfit_push(tys, strs, s, cv, m.env, c, ws, ws2, inv.cfit, λ en mem => omega((inv.chain(en, mem)).left, (inv.vents(en, mem)).right.left),
             λ en mem at => false_elim(Nat::lt_irrefl(en.lvl, omega((inv.vents(en, mem)).right.left, at))), ats),
         CSt::sib_keep(tys, strs, s, s2, ws, ws2, refl, ats, inv.sib),
-        inv.args, CSt::href_push(tys, s, cv, m.env, c, inv.root, inv.href, λ o a eq => absurd(eq)), inv.made, inv.nbase)
+        inv.args, CSt::href_push(tys, s, cv, m.env, c, inv.root, inv.href, λ o a eq => absurd(eq)), inv.made, inv.nbase, inv.stays)
 }
 
 // ---------------------------------------------------------------------------
@@ -2307,6 +2317,10 @@ theorem Heap::val_bare(tys: Nat → Type, strs: Strs(tys), h: Heap(tys), b: Nat,
 
 theorem Heap::obj_grow(tys: Nat → Type, h: Heap(tys), x: Block(tys), b: Nat, below: b < h.len()): Heap::obj(tys, h ++ [x], b) = Heap::obj(tys, h, b) {
     cong_fn(λ (q: Option<Block(tys)>) => match q { Some(bl) => match bl { Live(o) => Some(o), Dead => None<Obj(tys)>() }, None => None<Obj(tys)>() }, h.nth_snoc_below(x, b, below))
+}
+
+theorem Heap::stays_grow(tys: Nat → Type, h: Heap(tys), x: Block(tys)): Heap::Stays(tys, h, h ++ [x]) {
+    λ b bl ob2 ho => Exists(ob2, ⟨trans(sym(Heap::obj_grow(tys, h, x, b, bl)), ho), λ hn => hn⟩)
 }
 
 theorem Heap::obj_new(tys: Nat → Type, h: Heap(tys), o: Obj(tys)): Heap::obj(tys, h ++ [Live(o)], h.len()) = Some(o) {
@@ -2637,7 +2651,8 @@ theorem Inv::fresh(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, 
         {
             let nb: (s.na <= s.nobj + 1) = omega(inv.nbase);
             nb
-        })
+        },
+        Heap::stays_trans(tys, h0, m.heap, m.heap ++ [Live(Obj(d, Nil))], inv.stays, Heap::stays_grow(tys, m.heap, Live(Obj(d, Nil))), inv.grows))
 }
 
 // A value read at its own code is there.
@@ -2844,7 +2859,7 @@ theorem Inv::gone(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {
         },
         inv.excl,
         λ en mem w => CSt::wpar_keep(s, s2, en, other(en.par, omega((inv.chain(en, mem)).left, (inv.vents(en, mem)).right.left), nopar(en, mem)), refl, inv.wpar(en, mem, w)), inv.uni, inv.cfit, inv.sib,
-        inv.args, CSt::href_gone(tys, s, l, b, inv.root, m.env, inv.href), inv.made, inv.nbase)
+        inv.args, CSt::href_gone(tys, s, l, b, inv.root, m.env, inv.href), inv.made, inv.nbase, inv.stays)
 }
 
 // ---------------------------------------------------------------------------
@@ -2852,6 +2867,20 @@ theorem Inv::gone(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {
 
 theorem Heap::obj_kill_other(tys: Nat → Type, h: Heap(tys), kb, b: Nat, ne: ¬(b = kb)): Heap::obj(tys, Heap::kill(tys, h, kb), b) = Heap::obj(tys, h, b) {
     cong_fn(λ (q: Option<Block(tys)>) => match q { Some(bl) => match bl { Live(o) => Some(o), Dead => None<Obj(tys)>() }, None => None<Obj(tys)>() }, h.nth_update_other(kb, λ _ => Dead, b, ne))
+}
+
+theorem Heap::stays_kill(tys: Nat → Type, h: Heap(tys), kb: Nat): Heap::Stays(tys, h, Heap::kill(tys, h, kb)) {
+    λ b bl ob2 ho => match Nat::eq_or_ne(b, kb) {
+        Inr(ne) => Exists(ob2, ⟨trans(sym(Heap::obj_kill_other(tys, h, kb, b, ne)), ho), λ hn => hn⟩),
+        Inl(eq) => {
+            let ho2: (Heap::obj(tys, Heap::kill(tys, h, kb), kb) = Some(ob2)) = j(eq, λ q _ => Heap::obj(tys, Heap::kill(tys, h, kb), q) = Some(ob2), ho);
+            let dead: (Heap::obj(tys, Heap::kill(tys, h, kb), kb) = None<Obj(tys)>()) = (match h.nth(kb) as λ q => h.nth(kb) = q → Heap::obj(tys, Heap::kill(tys, h, kb), kb) = None<Obj(tys)>() {
+                None => λ e1 => cong_fn(λ (q: Option<Block(tys)>) => match q { Some(bl2) => match bl2 { Live(o) => Some(o), Dead => None<Obj(tys)>() }, None => None<Obj(tys)>() }, h.nth_update_none(kb, λ _ => Dead, e1)),
+                Some(x) => λ e1 => cong_fn(λ (q: Option<Block(tys)>) => match q { Some(bl2) => match bl2 { Live(o) => Some(o), Dead => None<Obj(tys)>() }, None => None<Obj(tys)>() }, h.nth_update_here(kb, λ _ => Dead, x, e1)),
+            })(refl);
+            absurd(trans(sym(ho2), dead))
+        },
+    }
 }
 
 theorem Heap::val_kill_other(tys: Nat → Type, strs: Strs(tys), h: Heap(tys), kb, b: Nat, ne: ¬(b = kb), bare: (ob: Obj(tys)) → Heap::obj(tys, h, b) = Some(ob) → ob.holes = Nil):
@@ -3043,7 +3072,7 @@ theorem Inv::kill(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {
         ig.chain,
         CSt::excl_keep(tys, strs, s2, s2, ws, ws2, refl, omega(), λ en mem => (ig.chain(en, mem)).left, λ en mem => (ig.vents(en, mem)).right.left, regs, ig.excl), ig.wpar, ig.uni,
         CSt::cfit_ws(tys, strs, s2, m.env, ws, ws2, ats, ig.cfit), CSt::sib_keep(tys, strs, s2, s2, ws, ws2, refl, ats, ig.sib),
-        inv.args, CSt::href_gone(tys, s, l, b, inv.root, m.env, inv.href), inv.made, inv.nbase)
+        inv.args, CSt::href_gone(tys, s, l, b, inv.root, m.env, inv.href), inv.made, inv.nbase, Heap::stays_trans(tys, h0, m.heap, Heap::kill(tys, m.heap, r.b), inv.stays, Heap::stays_kill(tys, m.heap, r.b), inv.grows))
 }
 
 // ---------------------------------------------------------------------------
@@ -3277,7 +3306,7 @@ theorem Inv::push_hold(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys
         CSt::sib_keep(tys, strs, s, s2, ws, ws2, refl, ats, inv.sib),
         inv.args,
         CSt::href_push(tys, s, CVar(code, KHold(o, a)), m.env, c, inv.root, inv.href, λ o2 a2 eq r rt => hrf(r, j(sym(cong_fn(Role::held, eq)), λ q _ => inv.root(q) = Some(r), rt))),
-        inv.made, inv.nbase)
+        inv.made, inv.nbase, inv.stays)
 }
 
 // ---------------------------------------------------------------------------
@@ -4021,7 +4050,7 @@ theorem Inv::push_view(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys
                 Inr(mo) => false_elim(Nat::lt_irrefl(en.lvl, omega(lv(en, mo), at))),
             }, ats),
         sib2,
-        inv.args, CSt::href_push(tys, s.with_views(ne ++ s.views), CVar(code, KView), m.env, c, inv.root, inv.href, λ o a eq => absurd(eq)), inv.made, inv.nbase)
+        inv.args, CSt::href_push(tys, s.with_views(ne ++ s.views), CVar(code, KView), m.env, c, inv.root, inv.href, λ o a eq => absurd(eq)), inv.made, inv.nbase, inv.stays)
 }
 
 // ---------------------------------------------------------------------------
@@ -5347,6 +5376,10 @@ theorem Heap::obj_store_holes(tys: Nat → Type, h: Heap(tys), sb, b: Nat, d: Dy
     }
 }
 
+theorem Heap::stays_store(tys: Nat → Type, h: Heap(tys), sb: Nat, d: Dyn(tys)): Heap::Stays(tys, h, Heap::store(tys, h, sb, d)) {
+    λ b bl ob2 ho => match Heap::obj_store_holes(tys, h, sb, b, d, ob2, ho) { ⟨o0, p0⟩ => Exists(o0, ⟨p0.left, λ hn => trans(p0.right, hn)⟩) }
+}
+
 // What a path apart from a write reads after it: what it read.
 theorem Sel::get_apart(tys: Nat → Type, strs: Strs(tys), xs, ys: List<Sel>, ap: Sel::Apart(tys, strs, xs, ys), g: Dyn(tys) → Dyn(tys), d: Dyn(tys)):
     Sel::get(tys, strs, ys, Sel::write_at(tys, strs, xs, g, d)) = Sel::get(tys, strs, ys, d)
@@ -5641,7 +5674,7 @@ theorem Inv::set_cell(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)
             let yn: ¬(x = y) = λ eq => absurd(trans(sym(cong_fn(λ (u: Value(tys)) => Value::refers(tys, u), j(sym(eq), λ z _ => (REnv::get(tys, m.env, z)).v = Refer(r), old))), cref));
             trans(cong_fn(λ (cc: Cell(tys)) => cc.v, mcell(y, yn)), old)
         },
-        inv.made, inv.nbase)
+        inv.made, inv.nbase, inv.stays)
 }
 
 // A holder's block stored: the holder reads its new meaning; every other
@@ -5697,7 +5730,7 @@ theorem Inv::store_rest(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(ty
         inv.chain,
         CSt::excl_keep(tys, strs, s, s, ws, ws2, refl, le0, λ en me => (inv.chain(en, me)).left, λ en me => (inv.vents(en, me)).right.left, regs, inv.excl), inv.wpar, inv.uni,
         CSt::cfit_ws(tys, strs, s, m.env, ws, ws2, ats, inv.cfit), CSt::sib_keep(tys, strs, s, s, ws, ws2, refl, ats, inv.sib),
-        inv.args, inv.href, inv.made, inv.nbase)
+        inv.args, inv.href, inv.made, inv.nbase, Heap::stays_trans(tys, h0, m.heap, Heap::store(tys, m.heap, r.b, nw), inv.stays, Heap::stays_store(tys, m.heap, r.b, nw), inv.grows))
 }
 
 theorem Inv::store(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>}, inv: Inv(tys, strs, s, e, m, h0, lent),
@@ -6265,7 +6298,7 @@ theorem Inv::rekin(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {ex: Env(tys)},
                 },
             },
         },
-        inv.args, inv.href, inv.made, inv.nbase)
+        inv.args, inv.href, inv.made, inv.nbase, inv.stays)
 }
 
 // The invariant at a write's state.
@@ -9640,7 +9673,7 @@ theorem Inv::drop_view(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys
         λ en mem x y hx hy => inv.uni(en, (dm(en, mem)).left, x, y, hx, hy),
         λ en mem y z hy hz dp dc cy cz => inv.cfit(en, (dm(en, mem)).left, y, z, hy, hz, dp, dc, cy, cz),
         λ e1 e2 m1 m2 => inv.sib(e1, e2, (dm(e1, m1)).left, (dm(e2, m2)).left),
-        inv.args, CSt::href_gone(tys, s.with_views(s.views.filter(λ e => !e.lvl.same(l))), l, b, inv.root, m.env, inv.href), inv.made, inv.nbase)
+        inv.args, CSt::href_gone(tys, s.with_views(s.views.filter(λ e => !e.lvl.same(l))), l, b, inv.root, m.env, inv.href), inv.made, inv.nbase, inv.stays)
 }
 
 // A level with no children is no live entry's parent.
@@ -10101,7 +10134,7 @@ theorem Inv::take_view(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys
                 },
             },
         },
-        inv.args, CSt::href_push(tys, s.moved(l), cv, m.env, REnv::get(tys, m.env, x), inv.root, CSt::href_gone(tys, s.rename(l, nl), l, b, inv.root, m.env, inv.href), λ o a eq => absurd(eq)), inv.made, inv.nbase)
+        inv.args, CSt::href_push(tys, s.moved(l), cv, m.env, REnv::get(tys, m.env, x), inv.root, CSt::href_gone(tys, s.rename(l, nl), l, b, inv.root, m.env, inv.href), λ o a eq => absurd(eq)), inv.made, inv.nbase, inv.stays)
 }
 
 // A view taken: nothing is pending, it has no children; the run pushes the
@@ -10450,7 +10483,7 @@ theorem CSt::gives_hold(self s: CSt, l, i: Nat, h: (match s.role(l) { KHold(o, _
 // its meaning is like the argument (`Like.held`, the holder being the
 // parameter's own, to write: `Like.acc`).
 theorem Inv::ret_written(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>}, inv: Inv(tys, strs, s, e, m, h0, lent),
-    ps: List<Param>, ds: List<Dyn(tys)>, lk: Like(tys, strs, ps, ds, s, e), vs: List<Value(tys)>, ent: REnv::ArgsKept(tys, m.env, REnv(Cell::args(tys, ps, vs), Nil)), is: List<Nat>):
+    ps: List<Param>, ds: List<Dyn(tys)>, lk: Like(tys, strs, ps, ds, s, e), vs: List<Value(tys)>, vl: vs.len() = s.na, ent: REnv::ArgsKept(tys, m.env, REnv(Cell::args(tys, ps, vs), Nil)), is: List<Nat>):
     Param::AllW(ps, s.na, is) → (xs: List<Var>) → (ls: List<Nat>) → s.lvls(xs) = Some(ls) → s.gives_back(ls, is) = True →
     Value::Written(tys, strs, vs, ds, is, xs.map(λ x => (REnv::get(tys, m.env, x)).v), xs.map(λ x => Env::get(tys, e, x)))
 {
@@ -10478,16 +10511,28 @@ theorem Inv::ret_written(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(t
                                     let lkx = lk.held(x, l, i, a.proof.left, hrw);
                                     let fits: Dyn::Fits(tys, strs, Dyn::arg(tys, ds, i), Env::get(tys, e, x)) =
                                         ⟨j(lkx.left, λ c _ => (Env::get(tys, e, x)).code.same(c) = True, Shape::same_self((Env::get(tys, e, x)).code)), lkx.right⟩;
-                                    let rp: (match vs.nth(i).unwrap_or(level2::Plain(Dyn::none(tys))) as λ _ => Type { Refer(r) => (REnv::get(tys, m.env, x)).v = Refer(r), Plain(_) => True }) =
+                                    let rp: (match vs.nth(i).unwrap_or(level2::Plain(Dyn::none(tys))) as λ _ => Type { Refer(r) => (REnv::get(tys, m.env, x)).v = Refer(r), Plain(_) => Value::refers(tys, (REnv::get(tys, m.env, x)).v) = False }) =
                                         (match vs.nth(i) as λ ov => vs.nth(i) = ov →
-                                                (match ov.unwrap_or(level2::Plain(Dyn::none(tys))) as λ _ => Type { Refer(r) => (REnv::get(tys, m.env, x)).v = Refer(r), Plain(_) => True }) {
-                                            None => λ _ => trivial,
-                                            Some(v) => λ hv => (match v as λ u => vs.nth(i) = Some(u) → (match u as λ _ => Type { Refer(r) => (REnv::get(tys, m.env, x)).v = Refer(r), Plain(_) => True }) {
-                                                Plain(_) => λ _ => trivial,
+                                                (match ov.unwrap_or(level2::Plain(Dyn::none(tys))) as λ _ => Type { Refer(r) => (REnv::get(tys, m.env, x)).v = Refer(r), Plain(_) => Value::refers(tys, (REnv::get(tys, m.env, x)).v) = False }) {
+                                            None => λ hn => match List::nth_present(vs, i, omega(lt, vl)) { ⟨v0, pv0⟩ => absurd(trans(sym(hn), pv0)) },
+                                            Some(v) => λ hv => (match v as λ u => vs.nth(i) = Some(u) → (match u as λ _ => Type { Refer(r) => (REnv::get(tys, m.env, x)).v = Refer(r), Plain(_) => Value::refers(tys, (REnv::get(tys, m.env, x)).v) = False }) {
+                                                Plain(d0) => λ hv2 => {
+                                                    // A holder of an argument passed by value: its object has no root, so its cell is a copy.
+                                                    let rn: (inv.root(i) = None<Ref>()) = Inv::arg_root(tys, strs, inv, ps, vs, ent, i, lt, level2::Plain(d0), hv2);
+                                                    (match (REnv::get(tys, m.env, x)).v as λ u => (REnv::get(tys, m.env, x)).v = u → Value::refers(tys, u) = False {
+                                                        Plain(_) => λ _ => refl,
+                                                        Refer(r2) => λ cv => {
+                                                            let rk: (inv.root(i) = Some(r2)) = j(hr, λ q _ => match q { KHold(o2, _) => inv.root(o2) = Some(r2),
+                                                                KView => VEnt::Any(s.ents(l), λ en => (inv.root(en.obj)).map(λ r0 => r0.narrow(Mach::ixs(tys, strs, m), s.unsteps(en.reg))) = Some(r2)), KPlain => False, KGone => True },
+                                                                inv.refs(x, l, a.proof.left, r2, cv));
+                                                            absurd(trans(sym(rn), rk))
+                                                        },
+                                                    })(refl)
+                                                },
                                                 Refer(r) => λ hv2 => inv.href(x, l, i, a0, a.proof.left, hr, r, Inv::arg_root(tys, strs, inv, ps, vs, ent, i, lt, Refer(r), hv2)),
                                             })(hv),
                                         })(refl);
-                                    ⟨rp, ⟨fits, Inv::ret_written(tys, strs, inv, ps, ds, lk, vs, ent, rest, aw.right, xr, lr, pl.left, parts.right)⟩⟩
+                                    ⟨rp, ⟨fits, Inv::ret_written(tys, strs, inv, ps, ds, lk, vs, vl, ent, rest, aw.right, xr, lr, pl.left, parts.right)⟩⟩
                                 },
                             },
                         }
@@ -10888,6 +10933,7 @@ record RetOk(tys: Nat → Type, strs: Strs(tys), sig: Sig, vs: List<Value(tys)>,
     reads: Value::ReadAll(tys, strs, h, h.len(), rv, outs),
     written: Value::Written(tys, strs, vs, ds, sig.written(), rv.drop(sig.results.len()), outs.drop(sig.results.len())),
     frame: Heap::Frame(tys, strs, h0, h, lent),
+    kept: Heap::Kept(tys, h0, h),
     views: Value::Views(tys, strs, h0.len(), vs, Dyn::ixs(tys, ds ++ outs), sig.results, rv),
 }
 
@@ -10906,12 +10952,12 @@ theorem Body::stage_ret(tys: Nat → Type, strs: Strs(tys), sig: Sig, {s: CSt}, 
         j(ee, λ n _ => sig.params.nth(n) = Some(p), h)
     }, omega());
     let aw: Param::AllW(sig.params, s.na, sig.written()) = j(sym(na), λ n _ => Param::AllW(sig.params, n, sig.written()), aw0);
-    let wr = Inv::ret_written(tys, strs, inv, sig.params, ds, lk, vs, ent, sig.written(), aw, xs.drop(nr), ri.ls.drop(nr), s.lvls_drop(xs, ri.ls, nr, ri.lvls), ri.gives);
+    let wr = Inv::ret_written(tys, strs, inv, sig.params, ds, lk, vs, vl, ent, sig.written(), aw, xs.drop(nr), ri.ls.drop(nr), s.lvls_drop(xs, ri.ls, nr, ri.lvls), ri.gives);
     let wr2: Value::Written(tys, strs, vs, ds, sig.written(), (xs.map(λ x => (REnv::get(tys, m.env, x)).v)).drop(nr), (xs.map(λ x => Env::get(tys, e, x))).drop(nr)) =
         j(sym(xs.map_drop(λ x => Env::get(tys, e, x), nr)), λ q _ => Value::Written(tys, strs, vs, ds, sig.written(), (xs.map(λ x => (REnv::get(tys, m.env, x)).v)).drop(nr), q),
             j(sym(xs.map_drop(λ x => (REnv::get(tys, m.env, x)).v, nr)), λ q _ => Value::Written(tys, strs, vs, ds, sig.written(), q, (xs.drop(nr)).map(λ x => Env::get(tys, e, x))), wr));
     let sw = Inv::ret_words(tys, strs, inv, ri.none, sig.params, ds, lk, dl, xs, ri.ls, ri.lvls);
-    RetOk(Sim::read_all(tys, strs, sim, xs, Nil, ri.reads), wr2, inv.frame,
+    RetOk(Sim::read_all(tys, strs, sim, xs, Nil, ri.reads), wr2, inv.frame, ⟨inv.grows, inv.stays⟩,
         Inv::ret_views(tys, strs, inv, sig.params, vs, ent, vl, Dyn::ixs(tys, ds ++ xs.map(λ x => Env::get(tys, e, x))), ri.ls, sw, sig.results, xs, ri.ls, ri.lvls, ri.rets))
 }
 
