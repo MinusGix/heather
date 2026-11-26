@@ -71,7 +71,48 @@ commit before continuing.
   `hown_gone`, `Cell::args_owned`; `push_hold` takes `hwn`).
 
 **Next, in this order:**
-1. **P5, the moved result**: `Inv::bind_param_result` beside
+0. **The coordinating session's run ruling (2026-11-26), its own step,
+   before P6** (it changes what P6 is built on; two other sessions wait to
+   merge it). The principle: **level 2's run is the machine's reading**;
+   where the run transports, stores or allows a store the machine does not,
+   the run changes once and `check_sound` says it of every checked program.
+   For each item: probes by evaluation in `run_tests` first (a program
+   whose run differs before and after, and one whose run does not), then
+   the proof repaired. If any of 1–3 costs more in the proved stages than
+   it reads, stop and tell the coordinating session with counts. Report
+   when landed, with the suite line.
+   1. **A referring written parameter is not transported back**: after a
+      call, the caller's slot for a written parameter whose argument refers
+      is the argument's own cell, whatever the callee's `Ret` listed; a
+      plain one's value comes back as now. `Answer` and `SafeAt`'s `Written`
+      keep their shape. For P6 a simplification: the slot's cell is the
+      argument's by the run.
+   2. **The run's `Back` of a cell that refers is the identity** (the writes
+      went through in place; the meaning does the put). A plain copy's
+      `Back` stores as now. The write-back stage's referring cases lose
+      their store; say which of the four cases change.
+   3. **A store is stuck outside what the activation may change**: a store
+      through a reference is stuck unless the reference is under one of the
+      activation's references lent to change (`Value::lent` of the entry's
+      arguments) or its block was made since the activation's entry. The
+      invariant has both as indices (`lent`, `h0`) and `owned` says a
+      changing object's root is in one or past the other, so each write
+      stage gains one obligation it can meet. Carry the two as parameters of
+      the body's run, not fields of `Mach`, unless a cleaner place shows.
+      (`Heap::Frame` says a block not lent keeps its value, not that it was
+      never stored to; the bytes level needs the second.)
+   4. **A statement reading a place's length as a word** (the body has none;
+      `issues/ownership-branch-on-object-length.md`): checker, meaning, run
+      and stage as for `Read` of a plain part, through the sequence
+      instance's own length. Not necessarily in the commit of 1–3, but
+      before the body induction. **Send the coordinating session its name
+      and shape in one line before building.**
+   Do not edit `lib/lang/ownership/sequences.hthr` until the coordinating
+   session says (the slice session is adding an instance at its end).
+1. **P5, the moved result** (finish P5 first only if it is cheaper than
+   rebuilding it on the changed run; the ruling says "finish the piece of P5
+   you are in, then do this", and the eleventh session stopped at a piece's
+   end): `Inv::bind_param_result` beside
    `bind_fresh_result`, on `CSt::result` at `OParam(i)` (decided by the
    parameter's code since 416d51b):
    - plain code: the argument was passed by value (`Lendable.plain`), so
@@ -156,3 +197,4 @@ commit before continuing.
 - 2026-11-26 (tenth session, after the rulings): native_linked prints a failed compile's exit status (a5405d9, issue closed); the callee's `Ret` answers an owned object once, `twice_param_refused` at the callee (e1f701d); rulings recorded in §23.20 and the handoff. `scripts/test --pr` at dfdc63c, clean tree, nothing else running: `== suite: 4140 passed, 0 failed, 3 ignored ==`.
 - 2026-11-26 (eleventh session): step 0, the four rulings (§23.21): results coded (`Prog::Coded`), owning results apart (`Value::OwnedApart`), `Sig::ok` (modes, codes by origin, the telescope), atoms plain at a view result; `scripts/test --pr` at da2faef: `== suite: 4140 passed, 0 failed, 3 ignored ==` (the run before, at dde16c0, `4138 passed, 2 failed`: `scripts/fmt` on checker_tests, and native_linked's compile killed by signal 9 under the suite's own load, passing on the rerun). Then `Sig::ok`'s code clause and P5's `Inv::bind_fresh_result`: `--pr` at 6af0289: `== suite: 4140 passed, 0 failed, 3 ignored ==`. Merged the coordinating branch (design §24).
 - 2026-11-26 (eleventh session, later): `Inv.hown` at every builder (daa35a1); `sound.hthr` checked whole without the cache. Handoff rewritten.
+- 2026-11-26: `scripts/test --pr` at 66a7bf2 (after `Inv.hown`): `== suite: 4140 passed, 0 failed, 3 ignored ==`. The coordinating session's run ruling recorded as Next item 0.
