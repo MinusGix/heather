@@ -77,3 +77,21 @@ A to D landed with `scripts/linked --check` unchanged and `HEATHER_PR_NATIVE=all
   The contract's comment on `going_least` gives the `n - 1` reason in the coordinator's words.
 
   Verified (tree at the C commit): `scripts/linked --check` exit 0, every export unchanged. `HEATHER_PR_NATIVE=all scripts/test --pr`: `== suite: 4139 passed, 0 failed, 3 ignored ==`. The settle probes were added after it and checked with `heather check --expectations`.
+- 2026-11-26: **D landed** (item 4).
+
+  `Site::MeetsGoing` is restated with the stuck alternative: every world the code reaches in `j` steps before it returns, at fuel `j + 1` with its room, is a prefix of a history the meaning reaches, or the meaning gets stuck. `Site::tracks_meets` proves `Tracks → Meets` once, with three parts: `tracks_done`, `tracks_exited`, and `tracks_going`.
+
+  `tracks_going` rests on:
+  - `Site::steps_meet`: a path and the steps of a claim from alike states.
+  - `Site::performs_reaches`: a claim at Linux reaches its goal on a branch whose world extends the start's.
+  - `Site::goal_meets` and `Site::performs_meet`: the path ends at or before the goal, or passes it, which is more than the claim's lower bound.
+  - `Site::passed_not_reached`: a passed goal is neither a return nor an exit.
+  - `Site::reached_history`.
+
+  Determinism is needed only up to the state's defined components, and it is the Linux instance's facts that supply it (`step_respects_defined`, `syscall_excludes_step`, `asks_meet`, `linux_answered_respects`), in two lemmas. No law was added on `Kernel`. `extends_refl` and `extends_trans` moved from `bytes_level.hthr` to the contract. The contract now imports `linux_x86_64_determinism` and `x86_64_step_forms` (no Rust closure list names it).
+
+  `lower_program_meets` is one line. The recursive probe has the whole contract (`down_meets`). Notes are logged in [[linux-sim-divergence]] (`Tracks` is stronger than `Sim`) and [[call-contract-whole-program]] (how `Tracks` gives `RunsAs`, and what remains). §17.7 is extended.
+
+  Cost: `Site::performs_meet` is the dearest declaration of the round by an order of magnitude over the rest of the contract. It is a case split over the claim's branch and the path's steps, and its cost is the elaboration of the nested motives.
+
+  Verified: `scripts/linked --check` exit 0, every export unchanged. `HEATHER_PR_NATIVE=all scripts/test --pr`: `== suite: 4139 passed, 0 failed, 3 ignored ==`.
