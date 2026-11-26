@@ -428,7 +428,7 @@ theorem sum_going(): Pair(going2(run2(sum_fns(), sum_world(), 3, 0, [word(4)], N
 // placement written by a linear scan over each path (the planner is not yet
 // on the bytes level: §25), so every layout premise is met.
 
-fn nl_places() → List<function_ir_lower::Place> { [Into(Rdi), Into(Rsi), Into(Rdx), Into(Rcx), Into(R8), Into(R9), Into(R10), Into(R11), Into(Rax), Into(R9), Into(Rax), Into(Rcx), Into(R9), Into(Rdi), Into(Rsi), Into(Rdx), Into(Rcx), Into(R8), Into(Rax), Into(R9), Into(Rax), Into(Rcx), Into(R9), Into(Rdi), Into(Rsi), Into(Rdx), Into(Rcx), Into(R8), Into(Rax), Into(Rax), Into(R8), Into(Rax), Into(Rcx), Into(R9), Into(Rdi), Into(Rsi), Into(Rdx), Into(Rcx), Into(R8), Into(Rax), Into(R9), Into(Rdi), Into(Rsi), Into(Rdx), Into(Rcx), Into(R8), Into(Rax), Into(R9), Into(R10), CallSlots(0), Into(Rcx), Spilling(0), Into(Rax)] }
+fn nl_places() → List<function_ir_lower::Place> { [Into(Rdi), Into(Rsi), Into(Rdx), Into(Rcx), Into(R8), Into(R9), Into(R10), Into(R11), Into(Rax), Into(R9), Into(R8), Into(R9), Into(R8), Into(Rax), Into(R8), Into(R8), Into(R8), Into(Rax), Into(Rcx), Into(R9), Into(Rdi), Into(Rsi), Into(Rdx), Into(Rcx), Into(R8), Into(Rax), Into(R9), Into(Rdi), Into(Rsi), Into(Rdx), Into(Rcx), Into(R8), Into(Rax), Into(R9), Into(R10), CallSlots(0), Into(Rcx), Spilling(0), Into(Rax)] }
 
 fn nl_lowered() → Option<x86_64_asm::Prog> { placed(nl_fns()).and_then(λ (q: Program) => q.lower(nl_places())) }
 
@@ -477,3 +477,29 @@ fn in_fragment(fs: List<Func>) → List<Bool> { fs.map(λ (f: Func) => f.fragmen
 // The three programs are in the fragment; so is the written word variable,
 // which `place` refuses today: `PlaceComplete` does not hold yet, by it.
 theorem fragments(): in_fragment(nl_fns()) ++ in_fragment(cw_fns()) ++ in_fragment(sum_fns()) ++ in_fragment([word_write_r()]) = [True, True, True, True, True, True] { refl }
+
+// ---------------------------------------------------------------------------
+// Joins in a row (§25.5): `k` joins each of whose arms yield, the next one
+// reading the last's output, placed as `k` branches with what follows each
+// placed once, so the routine's size is linear in `k` (copying what follows
+// into each arm would read it `2^k` times).
+
+fn packed_from(k: Nat) → body::Body { match k { Zero => Ret([Loc(0)]), Succ(j) => Join(TLt(Loc(0), Arg(0)), Yield([Arg(0)]), Yield([Loc(0)]), packed_from(j)) } }
+
+fn packed_r(k: Nat) → Func { Func(Sig([word_p()], [word_r()]), seq([Stmt::Lit(WBits(64), 0)], packed_from(k))) }
+
+fn code_size(b: bytes_level::Body) → Nat {
+    match b {
+        Leaf(is) => is.len(), Seq(a, r) => code_size(a) + code_size(r), Branch(_, y, n) => code_size(y) + code_size(n) + 1,
+        Call(_, _, _) => 1, Loop(_, _, inner, _, _, _) => code_size(inner) + 1, Sys(_) => 1, Exit(_) => 1,
+    }
+}
+
+fn packed_size(k: Nat) → Nat { match placed([packed_r(k)]) { Some(p) => match p.routines { Cons(r, _) => code_size(r.body), Nil => 0 }, None => 0 } }
+
+theorem packed_checked(): why([packed_r(3)], 0) = None { refl }
+
+fn packed_sizes() → List<Nat> { [packed_size(1), packed_size(2), packed_size(3), packed_size(4), packed_size(8)] }
+
+// Four nodes a join, two to start and end: 2 + 4k.
+theorem packed_linear(): packed_sizes() = [6, 10, 14, 18, 34] { refl }

@@ -40,11 +40,14 @@
 //   narrow words is the unsigned comparison of their 64-bit views, which the
 //   lowering can test (it holds a loaded byte as a word, not at 8 bits).
 //   Narrow arithmetic, which would leave bits above the width, is refused.
-// - **A join** copies what follows it into each arm that reaches its
-//   `Yield` (the surface's own reading of an early return, §22 items 5 and
-//   8), so the bytes level's branch has no join point and every path ends
-//   at a `Ret` or a `Jump`. A test is an unsigned comparison at its words'
-//   width.
+// - **A join both of whose arms yield is the bytes level's branch**: each
+//   arm copies its outputs into one set of ids (fixed by the first `Yield`
+//   placed), and what follows is placed once after the branch, so `k` joins
+//   in a row cost `k` branches (the body's own reason for `Yield`, §20.3).
+//   A join with an arm that leaves (a `Ret` or a `Jump` inside it) copies
+//   what follows into each arm that yields, until the bytes level has
+//   leaves that leave (`issues/bytes-level-loop-exits.md`). A test is an
+//   unsigned comparison at its words' width.
 // - **A `Jump` makes the routine a loop**: the routine's body is one plain
 //   loop whose state is the parameters' slots then the results' slots. A
 //   `Jump` sets the next state to its arguments (the results' slots zero)
@@ -633,9 +636,15 @@ fn PEnv::jump_keeps(self e: PEnv, ps: List<Param>, is: List<Nat>, ss: List<PSlot
 }
 
 // What follows a join, and the environment it starts from.
-record JoinRest { rest: body::Body, env: PEnv }
+// What a `Yield` reaches: a join whose arm leaves, with what follows it,
+// copied into the arm (`JCopy`); or a join both of whose arms yield, its
+// outputs bound in each arm at one set of ids (`JShare`: the ids once the
+// first arm has bound them) and what follows placed once after it.
+inductive JFrame { JCopy(rest: body::Body, env: PEnv), JShare(env: PEnv, outs: Option<List<PSlot>>) }
 
-record BOut { code: bytes_level::Body, next: Nat }
+// A body's code, the next id, and the frames as it leaves them (a shared
+// join's outputs fixed by the first `Yield` that reached it).
+record BOut { code: bytes_level::Body, next: Nat, frames: List<JFrame> }
 
 // A comparison of two words at the first's width: its one-bit word at
 // `next`, and whether the arms swap (`a <= b` is `!(b < a)`).
@@ -660,7 +669,38 @@ fn Test::place(self t: Test, e: PEnv, next: Nat) → Option<Pair<List<Instr>, Bo
 }
 
 // A body's code, at a fuel that bounds the copies of what follows a join.
-fn place_go(fuel: Nat, b: body::Body, tys: Nat → Type, cx: PCx(tys), sig: Sig, tail: Leave, frames: List<JoinRest>, e: PEnv, next: Nat) → Option<BOut> {
+// Fresh slots of the codes of `ss`, for a shared join's outputs.
+fn PSlot::fresh_like(tys: Nat → Type, strs: Strs(tys), ss: List<PSlot>, next: Nat) → Option<Pair<List<PSlot>, Nat>> {
+    match ss {
+        Nil => Some(Pair(Nil, next)),
+        Cons(s, rest) => match PSlot::fresh(tys, strs, s.code, next) {
+            None => None,
+            Some(a) => PSlot::fresh_like(tys, strs, rest, a.next).map(λ b => Pair(Cons(PSlot(s.code, a.ids, PNone, s.w), b.fst), b.snd)),
+        },
+    }
+}
+
+// The outputs `ss` copied into a shared join's ids (fresh where no arm has
+// bound them yet): the leaf, the ids, the next id.
+fn share(tys: Nat → Type, strs: Strs(tys), outs: Option<List<PSlot>>, ss: List<PSlot>, next: Nat) → Option<Pair<bytes_level::Body, Pair<List<PSlot>, Nat>>> {
+    let zero = next;
+    let target: Option<Pair<List<PSlot>, Nat>> = match outs {
+        Some(ts) => Some(Pair(ts.zip(ss).map(λ (q: Pair<PSlot, PSlot>) => PSlot(q.fst.code, q.fst.ids, PNone, q.fst.w && q.snd.w)), next + 1)),
+        None => PSlot::fresh_like(tys, strs, ss, next + 1),
+    };
+    match target {
+        None => None,
+        Some(t) => copies(PSlot::ids_of(t.fst), PSlot::ids_of(ss), zero).map(λ is => Pair(leaf(zero_for(PSlot::ids_of(t.fst), zero) ++ is), Pair(t.fst, t.snd))),
+    }
+}
+
+fn body_exits(b: body::Body) → Bool {
+    match b { Ret(_) => True, Yield(_) => False, Jump(_) => True, Do(_, rest) => body_exits(rest), Join(_, y, n, rest) => body_exits(y) || body_exits(n) || body_exits(rest) }
+}
+
+// A body's code, at a fuel that bounds the copies of what follows a join
+// whose arm leaves.
+fn place_go(fuel: Nat, b: body::Body, tys: Nat → Type, cx: PCx(tys), sig: Sig, tail: Leave, frames: List<JFrame>, e: PEnv, next: Nat) → Option<BOut> {
     match fuel {
         Zero => None,
         Succ(f) => match b {
@@ -668,34 +708,68 @@ fn place_go(fuel: Nat, b: body::Body, tys: Nat → Type, cx: PCx(tys), sig: Sig,
                 None => None,
                 Some(ss) => match e.keeps(sig.params, sig.written(), ss.drop(sig.results.len())) {
                     False => None,
-                    True => tail.ret(ret_values(ss, sig.results.len()), next).map(λ c => BOut(c, next + 1)),
+                    True => tail.ret(ret_values(ss, sig.results.len()), next).map(λ c => BOut(c, next + 1, frames)),
                 },
             },
             Jump(xs) => match e.gets(xs) {
                 None => None,
-                Some(ss) => match e.jump_keeps(sig.params, sig.written(), ss) { False => None, True => tail.jump(PSlot::ids_of(ss), next).map(λ c => BOut(c, next + 1)) },
+                Some(ss) => match e.jump_keeps(sig.params, sig.written(), ss) { False => None, True => tail.jump(PSlot::ids_of(ss), next).map(λ c => BOut(c, next + 1, frames)) },
             },
             Yield(os) => match frames {
                 Nil => None,
                 Cons(fr, outer) => match e.gets(os) {
                     None => None,
-                    Some(ss) => place_go(f, fr.rest, tys, cx, sig, tail, outer, fr.env.push_all(ss.map(λ s => PSlot(s.code, s.ids, PNone, s.w))), next),
+                    Some(ss) => match fr {
+                        JCopy(rest, env) => place_go(f, rest, tys, cx, sig, tail, outer, env.push_all(ss.map(λ s => PSlot(s.code, s.ids, PNone, s.w))), next),
+                        JShare(env, outs) => share(tys, cx.strs, outs, ss, next).map(λ sh => BOut(sh.fst, sh.snd.snd, Cons(JShare(env, Some(sh.snd.fst)), outer))),
+                    },
                 },
             },
             Do(s, rest) => match s.place(tys, cx, e, next) {
                 None => None,
-                Some(o) => place_go(f, rest, tys, cx, sig, tail, frames, o.env, o.next).map(λ r => BOut(bytes_level::Seq(o.code, r.code), r.next)),
+                Some(o) => place_go(f, rest, tys, cx, sig, tail, frames, o.env, o.next).map(λ r => BOut(bytes_level::Seq(o.code, r.code), r.next, r.frames)),
             },
             Join(t, yes, no, rest) => match t.place(e, next) {
                 None => None,
                 Some(tested) => {
-                    let fs = Cons(JoinRest(rest, e), frames);
-                    match place_go(f, yes, tys, cx, sig, tail, fs, e, next + 1) {
-                        None => None,
-                        Some(y) => place_go(f, no, tys, cx, sig, tail, fs, e, y.next).map(λ n => {
-                            let br = match tested.snd { False => Branch(next, y.code, n.code), True => Branch(next, n.code, y.code) };
-                            BOut(bytes_level::Seq(leaf(tested.fst), br), n.next)
-                        }),
+                    let branch = λ (y: bytes_level::Body) (n: bytes_level::Body) => bytes_level::Seq(leaf(tested.fst), match tested.snd { False => Branch(next, y, n), True => Branch(next, n, y) });
+                    match body_exits(yes) || body_exits(no) {
+                        // An arm leaves: what follows is copied into each arm.
+                        True => match place_go(f, yes, tys, cx, sig, tail, Cons(JCopy(rest, e), frames), e, next + 1) {
+                            None => None,
+                            Some(y) => match y.frames {
+                                Nil => None,
+                                Cons(_, fy) => place_go(f, no, tys, cx, sig, tail, Cons(JCopy(rest, e), fy), e, y.next).and_then(λ n => match n.frames {
+                                    Nil => None,
+                                    Cons(_, fn2) => Some(BOut(branch(y.code, n.code), n.next, fn2)),
+                                }),
+                            },
+                        },
+                        // Both arms yield: the outputs at one set of ids,
+                        // what follows once after the branch.
+                        False => match place_go(f, yes, tys, cx, sig, tail, Cons(JShare(e, None), frames), e, next + 1) {
+                            None => None,
+                            Some(y) => match y.frames {
+                                Nil => None,
+                                Cons(fry, fy) => match fry {
+                                    JCopy(_, _) => None,
+                                    JShare(_, oy) => match place_go(f, no, tys, cx, sig, tail, Cons(JShare(e, oy), fy), e, y.next) {
+                                        None => None,
+                                        Some(n) => match n.frames {
+                                            Nil => None,
+                                            Cons(frn, fn2) => match frn {
+                                                JCopy(_, _) => None,
+                                                JShare(_, on) => match on {
+                                                    None => None,
+                                                    Some(outs) => place_go(f, rest, tys, cx, sig, tail, fn2, e.push_all(outs), n.next).map(λ r =>
+                                                        BOut(bytes_level::Seq(branch(y.code, n.code), r.code), r.next, r.frames)),
+                                                },
+                                            },
+                                        },
+                                    },
+                                },
+                            },
+                        },
                     }
                 },
             },

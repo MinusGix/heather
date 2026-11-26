@@ -5303,9 +5303,10 @@ nothing is proved over `place`. Three modules:
   parameter's own slot there and every `Jump` passes it on as itself.
 - **A store goes only through a slot reaching a parameter lent to write or
   given** (`PSlot.w`); otherwise refused.
-- **A join copies what follows it into each arm** that reaches its `Yield`
-  (the surface's reading of an early return), so every path ends at a `Ret`
-  or a `Jump`.
+- **A join** both of whose arms yield is the bytes level's branch, its
+  outputs at one set of ids, what follows once after it (25.7). A join with
+  an arm that leaves copies what follows into each arm that yields (the
+  surface's reading of an early return).
 - **A `Jump` makes the routine one plain loop.** The state is the
   parameters' slots, then a results part unless every `Ret` answers
   parameters at fixed positions (both loops here), in which case the
@@ -5375,7 +5376,7 @@ certificates, the old code against the slice's, routine by routine):
 
 | Row | Routine | Old | Slice |
 |---|---|---|---|
-| `count_newlines` | the loop | 273 | 219 |
+| `count_newlines` | the loop | 273 | 219, then 171 with joins placed once (25.7) |
 | | the caller | 18 | 15 |
 | `copy_window` | `copy_span` | 217 | 123 |
 | | `copy_window` | 96 | 39 |
@@ -5547,3 +5548,24 @@ level's own claim for the form `place` emits:
 copied `rest` is the stage of the arm's `Yield` frame) inside one on fuel
 (`CallsLower` at the fuel below). Not proved until the run's three changes
 land and are read.
+
+### 25.7 Joins placed once, and the composed theorem's reach
+
+- **The defect**: `place` copied what follows a join into both arms, so `k`
+  joins in a row read what follows `2^k` times, the doubling §20.3 removed
+  from the meaning. Now a join both of whose arms yield is placed as the
+  bytes level's branch: each arm copies its outputs into one set of ids
+  (`JShare`, fixed by the first `Yield` placed), and what follows is placed
+  once after the branch. The bytes level expresses it as it stands (both
+  arms of a branch may bind one id; the lowering's meet keeps an id held in
+  one register by both arms), so it is no finding about the bytes level.
+  `packed_linear`: `k` joins in a row place to `2 + 4k` nodes, by
+  evaluation. A join with an arm that leaves (a `Ret` or a `Jump` inside
+  it) still copies what follows into each arm that yields; that case waits
+  on the bytes level's leaves that leave (`issues/bytes-level-loop-exits.md`).
+  `count_newlines`' loop is 171 bytes (219 with the copies, 273 old).
+- **The composed theorem's reach is programs without primitives**:
+  `prog_checked` asks no index a primitive, since `Safety` is relative to
+  every function's `SafeAt` and a primitive's has no statement until placing
+  one does (a table of bytes-level routines, each proved to compute its
+  world entry).
