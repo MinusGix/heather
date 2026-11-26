@@ -5071,3 +5071,67 @@ Two things are needed:
 - **Nested written arguments excluded.** The checker refuses them:
   `apart_args` on related levels asks `Steps::apart(p, p ++ t)`, which is
   `None`.
+
+## 24. How the build is organised (2026-11-26, the coordinating session)
+
+Written after Minus asked that the work be organised to get it right rather
+than arrive there by slow iteration. Read against §16: its packages were to
+run beside each other after the interfaces, and since the interfaces landed
+the build has run in one line, the soundness proof, with the back half
+polished beside it. Three things were wrong with that, and each has a rule.
+
+**Defects are found by search before they are met by proof.** The proof of
+`check_sound` has found about twenty defects in the checker and its
+interface, each where the proof happened to arrive, each costing a stage
+its footing. The checker, the run and the meaning are functions, so
+`SafeAt` can be evaluated at closed instances, and a checked program that
+breaks a clause can be searched for among all small programs, joins and
+`Jump` included, before a stage is proved over them
+(`issues/ownership-soundness-oracle.md`). The search is calibrated by
+putting each known defect back as a mutant. The proof stays the only thing
+that establishes the theorem; it stops being the way the statement is
+debugged.
+
+**The layers meet early.** The checker and its run, the bytes level and the
+lowering have each been built against their own interface, and no program
+has passed through all of them. The seam between level 2 and the bytes
+level (§16's package 6) has no statement, and it is the one that says
+whether `SafeAt` concludes what the back half needs. So its statement is
+written now, the composed end-to-end theorem is stated with that seam as
+its one hypothesis, and three programs are carried through every layer by
+evaluation (`issues/ownership-end-to-end-slice.md`). A mismatch found there
+costs a statement; found after the proofs it costs the proofs.
+
+**A piece starts with its statement and a test of it by evaluation, reported
+before anything is proved over it.** §17.9's design was corrected four
+times in its first two hours by exactly this (§17.10), and §17.8's rule
+(an emitter form is not landed until a program using it lowers by
+evaluation) is the same rule for code. It holds for every new piece.
+
+Three rules of working follow from what went wrong in practice:
+
+- *A defect of the kind "two things that must be one" is fixed on the side
+  at fault*, which is asked before fixing the side the proof was standing
+  on (the function that answers one owned object twice, not its caller).
+- *A static rule about a signature is one predicate* (`Sig::ok`), tested
+  where the signature is written and where it is called, since `Safety` is
+  relative to an arbitrary table of signatures; a caller's stage reads it
+  from its own verdict or from the callee's `SafeAt`, never from a third
+  test.
+- *One session at a time on a branch, and a question is answered before a
+  handoff is written.* A ruling that arrives after a session stops is lost
+  to its successor.
+
+**The threads, and what each waits on.**
+
+| Thread | Branch | Waits on |
+|---|---|---|
+| `check_sound`: the call, the consolidation, the body induction, joins, `Jump`, fuel | `claude/ownership-checker-sound` | nothing; takes the search's findings as they come |
+| The search over small programs | `claude/ownership-oracle` | nothing |
+| The seam's statement and three programs end to end | `claude/ownership-slice` | nothing; its findings are ruled on before any proof |
+| The out-of-room stop | `claude/bytes-level-out-of-room` | nothing |
+| The surface and the reflector (§16's packages 9 and 10) | not started | the slice's report, and Minus on the surface's words |
+| Objects with holes | not started | `check_sound` for this fragment, and the search extended to holes first |
+
+Every branch is merged into the coordinating branch only through the gated
+verification, as before.
