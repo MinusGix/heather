@@ -31,3 +31,7 @@ Dropping a guard under a proved depth bound (a pass, [[bytes-level-passes]]); th
 ## Done when
 
 A routine that calls itself lowers with a guard and a theorem whose premise does not mention the run, the unguarded theorem is its corollary, and a program with no cycle lowers to the same bytes as before.
+
+## Log
+
+- 2026-11-26: Step 1 (statement and §17.9's test by evaluation): Spent, Entered (floor RBP premise), TracksSpent, TracksAt and the corollary tracks_at_of_spent in the contract; call graph, program_guards, routine_rooms (checked by rooms_settled), the guard's code, stop_rooms (lawful, over routine_rooms) and LowerProgramSpends in the routines; guarded emission and an Asm-level machine as probes (bytes_level_guard_tests). Findings: floor in RBP (no data-word load in the model); guard after the argument moves, so every call counts 24 bytes in the table; no-guard-fires is false at depth_rooms (downh), true at stop_rooms. §17.10.

@@ -2647,6 +2647,108 @@ the meaning makes before that depth. A two-routine cycle whose frames
 differ shows the guard checks the callee's room, not the caller's. A
 program with no cycle lowers to the bytes it lowers to today.
 
+### 17.10 Out of room as built (2026-11-26, issues/bytes-level-out-of-room.md)
+
+**Step 1: the statement, and §17.9's test by evaluation.** Written before
+anything is proved over it. The statement is in the contract
+(`x86_64_call_contract`: `Site::Entered`, `Site::Spent`,
+`Site::TracksSpent`, `Site::TracksAt`, `Site::tracks_at_of_spent`) and the
+routines (`bytes_level_routines`: the call graph, `program_guards`,
+`routine_rooms`, `rooms_settled`, the guard's code, `stop_rooms` with
+`stop_rooms_lawful` and `stop_rooms_over`, the theorem's type
+`LowerProgramSpends` and its corollary `lower_spends_tracks_at`). The
+guarded emission and a machine that runs the lowered items by evaluation
+are probes for now (`bytes_level_guard_tests`: `Program::lower_guarded`,
+`mach_run`, the model's `execute_register` over the stack as words, CALL,
+RET, JCC by label, Linux's exit and write, a store below the floor a
+fault). Step 3 makes the guarded emission `Program::lower` itself.
+
+What the test found, and where the statement differs from §17.9:
+
+- **The floor is RBP**, not a data word. The machine model has no load a
+  data word could use: `WordLoad` reads `[base]` and `StackLoad`
+  `[RSP + disp8]`; there is no RIP-relative or absolute form, and the code
+  is proved at any origin. A data word would need its address in a
+  register already (a second free register at the CALL, where only RAX is
+  free), or a `MOVABS` of a link-time address (a new site parameter) and a
+  memory-clause fact that the word is outside every lending and stack
+  write, carried through every claim. Counted: the register's guard is 4
+  instructions, 19 bytes (`MOV RAX, RSP; SUB RAX, RBP; CMP RAX, imm32;
+  JB stop`); the data word's would be 5, 28 bytes (`MOVABS RAX, addr; MOV
+  RAX, [RAX]; ADD RAX, imm32; CMP RSP, RAX; JB stop`) plus the word and the
+  clause. RBP is the last register a placement saves (`kept_order`), so a
+  program that guards refuses only placements saving all six
+  (`downh_six_refused`), and a program with no guard places as before.
+  `Site::Entered` asks `floored → RBP = stack.low`; `callee_kept` already
+  returns it.
+- **Where the guard sits, and the table's 24.** The only point of a call
+  with a free register is after its argument moves, before the CALL (RAX:
+  the call clobbers it and every argument is in place). By then the words
+  past the sixth are stored below the frame. So the table counts a call's
+  24 bytes at every call, guarded or not: `routine_rooms(f)` = the largest
+  frame + the largest over `f`'s calls of `24`, plus `routine_rooms(g)`
+  where the call is unguarded (§17.9: only over unguarded calls). The
+  guard tests `8 + routine_rooms(g)` against the room left at the CALL,
+  which is exactly the callee's `Site::Entered` premise `rooms(g) <= i`.
+  The table is computed in as many rounds as routines and checked by the
+  lowering (`rooms_settled`), so its law is a verdict, not a lemma.
+- **"No guard fires where `room(f, peak) <= i`" is false at `depth_rooms`**
+  (`downh`, a self call after a call to a leaf). The guard asks the
+  callee's room by routine, which holds every unguarded callee's room; the
+  table by depth gives a callee entered at depth zero only its frame and a
+  call's bytes. From one, `downh`'s run is one call deep, `depth_rooms`
+  gives it 272 bytes, and at a placement saving five the guard fires there
+  (`downh_spent_in_depth_room`). It holds at every lawful table that is at
+  least the table by routine at every depth. `stop_rooms(f, p)` =
+  `routine_rooms(f)` max the depth table's step is one (`stop_rooms_lawful`,
+  `stop_rooms_over`); `downh` returns at its 320 (`downh_returns_in_stop_room`).
+  So today's theorem comes back as `TracksAt` at `stop_rooms`, not as
+  `Tracks` at `depth_rooms`, and the restated clause reads the stop against
+  `stop_rooms`.
+- **The corollary is proved now** (`Site::tracks_at_of_spent`), from the
+  statement alone: where `stop_rooms` is there, `routine_rooms` is too, and
+  the stop's `¬(room <= i)` is closed.
+- **The stop's world** is a fact at the same fuel `n`, not "some" fuel:
+  at a firing guard the caller's run at `n` is at the call node in the
+  stop's world, and its outcome there has a history extending it or is
+  stuck, by `HistoryGrows` (`program_grows`) up the chain of callers.
+  `Spent` keeps §17.9's "some fuel" (`MeetsGoing`'s conclusion, word for
+  word); the proof gives `n`.
+- **The stop's label** is one past the routines' (`bound + 1`), the
+  branches' names start after it, and the stop (`MOVABS RDI, 139; MOVABS
+  RAX, 60; SYSCALL`, 22 bytes, once per program) is laid out after the
+  routines, so every guard's JCC lands forward. A program with no guard
+  numbers its labels as today.
+
+The test, by evaluation (each a closed verdict by `refl`):
+
+- `down` guarded lowers. At `stop_rooms(down)(0, 2)` = 408 it returns 0 from
+  two with nothing stored below the floor; one table frame short (272) it
+  stops with 139 at its second call. Its code's frames (64) are smaller than
+  the table's largest (112), so the exact edge is lower: 280 returns, 279
+  stops.
+- `shout`, a recursion that writes a byte at every depth: its meaning from
+  three writes four bytes three calls deep; at its 544 the code writes four
+  and returns; at 272 and 136 it stops with 139 after two and one, a prefix
+  of the meaning's writes.
+- A two-routine cycle whose rooms differ (`ping`, `pong`, `pong` also
+  calling a leaf): ping's guard compares against 192 (8 + pong's 184),
+  pong's against 144 (8 + ping's 136).
+- No cycle, no guard: `lend`, `both`, `countdown`, `exits_nested` and `echo`
+  lower to the same bytes as today (`acyclic_same`). The export rows are
+  step 3's witness (`scripts/bytes-level-compare`, `scripts/linked --check`).
+
+**What step 3 costs, as the statement shows it.** The code no longer only
+returns or stops short where the meaning does: at any call into a cycle it
+may stop spent. So every region's claim takes the stop as an absorbing
+alternative (`post ∨ spent`, composed by a bind in which the stop's state
+performs anything that admits it), on the done side (`EmitsClaim`,
+`program_returns`) and the going side (`Body::emit_stops`,
+`program_stops`). The alternative carries `¬(stop_rooms(f, peak) <= i)`,
+from the guard's test by `RoomLaw` at depth and a call reached raising the
+peak by one. These are the existing inductions with a wider goal, not new
+ones.
+
 ## 18. The world, termination, and level 2 fixed (2026-11-25)
 
 Round six of the design review. Where this section and §15.4, §15.5 or §17

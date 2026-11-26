@@ -261,6 +261,203 @@ theorem depth_rooms_lawful(routines: List<Routine>): RoomLaw(routines, depth_roo
 }
 
 // ---------------------------------------------------------------------------
+// Out of room: guards at the calls into a cycle
+// (docs/language/ownership-design.md §17.9, issues/bytes-level-out-of-room.md)
+//
+// A call is guarded where its callee can reach the caller in the call graph
+// (the two share a strongly connected component; a call to itself is the
+// least case); every other call goes to a strictly lower component. The
+// room a routine asks below its return address is then a table by routine
+// alone (`routine_rooms`): its largest frame, a call's 24 bytes where it
+// calls at all, and below them the room of each callee it calls unguarded.
+// A guarded call tests, after its argument moves and before its CALL, that
+// the callee's room and the return address fit above the stack's floor,
+// which RBP holds, and otherwise jumps to the program's one stop (exit 139,
+// laid out after the routines, so every guard's JCC lands forward).
+
+// The routines a region calls, in order.
+fn Body::callees(self body: Body) → List<Nat> {
+    match body {
+        Leaf(_) => [],
+        Seq(first, rest) => first.callees() ++ rest.callees(),
+        Branch(_, yes, no) => yes.callees() ++ no.callees(),
+        Call(callee, _, _) => [callee],
+        Loop(_, _, inner, _, _, _) => inner.callees(),
+        Sys(_) => [],
+        Exit(_) => [],
+    }
+}
+
+fn callees_of(routines: List<Routine>, f: Nat) → List<Nat> { match routines.nth(f) { None => [], Some(r) => r.body.callees() } }
+
+// `set` with each of `more` it does not list.
+fn add_new(set, more: List<Nat>) → List<Nat> {
+    match more { Nil => set, Cons(x, rest) => match listed(set, x) { True => add_new(set, rest), False => add_new(Cons(x, set), rest) } }
+}
+
+// One round of calls from every routine of `set`, and `k` of them.
+fn reach_round(routines: List<Routine>, set: List<Nat>) → List<Nat> {
+    set.foldl(λ (acc: List<Nat>) (g: Nat) => add_new(acc, callees_of(routines, g)), set)
+}
+
+fn reach_rounds(routines: List<Routine>, k: Nat, set: List<Nat>) → List<Nat> {
+    match k { Zero => set, Succ(j) => reach_rounds(routines, j, reach_round(routines, set)) }
+}
+
+// The routines `g` reaches, itself included: as many rounds as routines.
+fn reaching(routines: List<Routine>, g: Nat) → List<Nat> { reach_rounds(routines, routines.len(), [g]) }
+
+// The callees routine `f` calls guarded: those that reach it.
+fn guards_of(routines: List<Routine>, f: Nat) → List<Nat> {
+    callees_of(routines, f).foldl(λ (acc: List<Nat>) (g: Nat) => match listed(reaching(routines, g), f) {
+        False => acc,
+        True => add_new(acc, [g]),
+    }, [])
+}
+
+fn guards_from(routines: List<Routine>, k: Nat, rest: List<Routine>) → List<List<Nat>> {
+    match rest { Nil => [], Cons(_, more) => Cons(guards_of(routines, k), guards_from(routines, k + 1, more)) }
+}
+
+// Each routine's guarded callees, by routine.
+fn program_guards(routines: List<Routine>) → List<List<Nat>> { guards_from(routines, 0, routines) }
+
+fn guards_at(guards: List<List<Nat>>, f: Nat) → List<Nat> { match guards.nth(f) { None => [], Some(gs) => gs } }
+
+// Whether the program calls into a cycle anywhere: then every routine
+// keeps RBP, the floor (no placement saves six).
+fn any_guard(guards: List<List<Nat>>) → Bool { match guards { Nil => False, Cons(gs, rest) => match gs { Nil => any_guard(rest), Cons(_, _) => True } } }
+
+// The room a region's calls ask below a frame: a call's 24 bytes, and the
+// callee's room where the call is not guarded (its guard checks the
+// callee's room when it runs).
+fn Body::stop_room(self body: Body, guards: List<Nat>, rooms: Nat → Nat) → Nat {
+    match body {
+        Leaf(_) => 0,
+        Seq(first, rest) => first.stop_room(guards, rooms).max(rest.stop_room(guards, rooms)),
+        Branch(_, yes, no) => yes.stop_room(guards, rooms).max(no.stop_room(guards, rooms)),
+        Call(callee, _, _) => match listed(guards, callee) { True => 24, False => rooms(callee) + 24 },
+        Loop(_, _, inner, _, _, _) => inner.stop_room(guards, rooms),
+        Sys(_) => 0,
+        Exit(_) => 0,
+    }
+}
+
+fn room_table(rooms: List<Nat>) → Nat → Nat { λ (g: Nat) => match rooms.nth(g) { None => 0, Some(x) => x } }
+
+fn rooms_round(rest: List<Routine>, k: Nat, guards: List<List<Nat>>, rooms: Nat → Nat) → List<Nat> {
+    match rest {
+        Nil => [],
+        Cons(r, more) => Cons(r.frame(8, 6) + r.body.stop_room(guards_at(guards, k), rooms), rooms_round(more, k + 1, guards, rooms)),
+    }
+}
+
+fn rooms_rounds(routines: List<Routine>, guards: List<List<Nat>>, k: Nat) → List<Nat> {
+    match k { Zero => [], Succ(j) => rooms_round(routines, 0, guards, room_table(rooms_rounds(routines, guards, j))) }
+}
+
+// The constant table: the unguarded calls go to strictly lower
+// components, so as many rounds as routines settle it. That it settled is
+// the lowering's check (`rooms_settled`), not a lemma.
+fn routine_rooms(routines: List<Routine>) → Nat → Nat {
+    room_table(rooms_rounds(routines, program_guards(routines), routines.len() + 1))
+}
+
+// The table's law, as the lowering checks it: each routine's room holds
+// its largest frame, a call's 24 bytes and its unguarded callees' rooms.
+fn settled_from(needs: List<Nat>, k: Nat, rooms: Nat → Nat) → Bool {
+    match needs { Nil => True, Cons(need, rest) => need.leb(rooms(k)) && settled_from(rest, k + 1, rooms) }
+}
+
+fn rooms_settled(routines: List<Routine>, guards: List<List<Nat>>, rooms: Nat → Nat) → Bool {
+    settled_from(rooms_round(routines, 0, guards, rooms), 0, rooms)
+}
+
+// The guard's test before a guarded CALL: RAX (free there: the call
+// clobbers it, and every argument is in its register or slot) gets the
+// room left above the floor in RBP; below the callee's room and its return
+// address, the JCC goes to the stop.
+fn guard_need(rooms: Nat → Nat, callee: Nat) → Nat { 8 + rooms(callee) }
+
+fn guard_code() → List<Instruction> { [MovRR(Rax, Rsp), SubRR(Rax, floor_register())] }
+
+fn guard_test(need: Nat) → Test { Compare(B, Rax, RightImm32(BitVec::ofNat(need))) }
+
+fn Prog::guarded(self prog: Prog, need, stop: Nat) → Prog { At(At(At(prog, 0, Block(guard_code())), 0, Block([guard_test(need).instruction()])), 0, Jcc(B, stop)) }
+
+// The stop: the reserved status (the contract's), Linux's exit.
+fn stop_code() → List<Instruction> { [MovRI(Rdi, BitVec::ofNat(spent_status())), MovRI(Rax, BitVec::ofNat(60))] }
+
+fn Prog::stopped_at(self prog: Prog, stop: Nat) → Prog { At(At(prog, stop, Block(stop_code())), 0, Syscall) }
+
+// The table by depth the stop is read against: at every depth at least the
+// constant table, and lawful (`RoomLaw`) as the depth table is. Where its
+// room is there, no guard fires: a guarded call's callee is entered at a
+// depth whose room, at least the constant one, is below the call's 24
+// bytes.
+fn stop_rooms_at(routines: List<Routine>, p: Nat) → Nat → Nat {
+    match p {
+        Zero => λ (f: Nat) => routine_rooms(routines)(f).max(depth_room(routines, λ (g: Nat) => 0, f)),
+        Succ(q) => λ (f: Nat) => routine_rooms(routines)(f).max(depth_room(routines, stop_rooms_at(routines, q), f)),
+    }
+}
+
+fn stop_rooms(routines: List<Routine>) → Nat → Nat → Nat { λ (f: Nat) (p: Nat) => stop_rooms_at(routines, p)(f) }
+
+theorem stop_rooms_unfold(routines: List<Routine>, f, p: Nat):
+    stop_rooms(routines)(f, p) = routine_rooms(routines)(f).max(depth_room(routines, rooms_below(stop_rooms(routines), p), f)) {
+    match p { Zero => refl, Succ(q) => refl }
+}
+
+// At least the constant table, at every depth.
+theorem stop_rooms_over(routines: List<Routine>, f, p: Nat): routine_rooms(routines)(f) <= stop_rooms(routines)(f, p) {
+    j(sym(stop_rooms_unfold(routines, f, p)), λ x _ => routine_rooms(routines)(f) <= x,
+        routine_rooms(routines)(f).le_max_l(depth_room(routines, rooms_below(stop_rooms(routines), p), f)))
+}
+
+// And lawful, for every program.
+theorem stop_rooms_lawful(routines: List<Routine>): RoomLaw(routines, stop_rooms(routines)) {
+    λ f r nth p => {
+        let rooms = rooms_below(stop_rooms(routines), p);
+        let frame = r.frame(8, 6);
+        let asks = r.body.callee_room(rooms);
+        let base = routine_rooms(routines)(f);
+        let own = stop_rooms(routines)(f, p);
+        let unfolded: (own = base.max(frame + asks)) =
+            trans(stop_rooms_unfold(routines, f, p), cong_fn<Nat, Nat>(λ x => base.max(x), depth_room_nth(routines, rooms, f, r, nth)));
+        let above: (frame + asks <= own) = j(sym(unfolded), λ x _ => frame + asks <= x, base.le_max_r(frame + asks));
+        ⟨{ omega }, ⟨λ c => { let enough = r.body.callee_room_calls(rooms, c); omega },
+            r.body.fits_more(rooms, routines.len(), asks, own - frame, { omega }, r.body.callee_fits(rooms, routines.len()))⟩⟩
+    }
+}
+
+// The lowering's theorem, restated (stated here; proved in
+// issues/bytes-level-out-of-room.md's step 3): a program `Program::lower`
+// returns, entered with its room by routine, tracks its meaning at every
+// fuel or stops spent where its run's room by depth is not there.
+fn LowerProgramSpends<M>(p: Program, program: Prog, fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64),
+    stack: Stack<M>(fetch, data), top: Nat, spans: Spans, blocks: Blocks) → Type {
+    Site<M>(fetch, data, program, last, origin).TracksSpent(stack, spans, top, blocks.Lent(spans), routine_rooms(p.routines),
+        any_guard(program_guards(p.routines)), stop_rooms(p.routines),
+        λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run_peak(p, blocks, n, f, args, heap, io), p.routines.len(),
+        λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run(p, blocks, n, f, args, heap, io))
+}
+
+// Today's theorem is its corollary at the table by depth.
+theorem lower_spends_tracks_at<M>(p: Program, program: Prog, fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>,
+    origin: BitVec(64), stack: Stack<M>(fetch, data), top: Nat, spans: Spans, blocks: Blocks,
+    spends: LowerProgramSpends<M>(p, program, fetch, data, last, origin, stack, top, spans, blocks)):
+    Site<M>(fetch, data, program, last, origin).TracksAt(stack, spans, top, blocks.Lent(spans), any_guard(program_guards(p.routines)),
+        stop_rooms(p.routines), λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run_peak(p, blocks, n, f, args, heap, io),
+        p.routines.len(), λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run(p, blocks, n, f, args, heap, io)) {
+    Site<M>(fetch, data, program, last, origin).tracks_at_of_spent(stack, spans, top, blocks.Lent(spans), routine_rooms(p.routines),
+        any_guard(program_guards(p.routines)), stop_rooms(p.routines),
+        λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run_peak(p, blocks, n, f, args, heap, io), p.routines.len(),
+        λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run(p, blocks, n, f, args, heap, io),
+        λ f q => stop_rooms_over(p.routines, f, q), spends)
+}
+
+// ---------------------------------------------------------------------------
 // A routine's code
 
 // Its answer's words into their registers, refused where the moves lose

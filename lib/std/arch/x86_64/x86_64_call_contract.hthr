@@ -325,6 +325,85 @@ fn Site::Tracks<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), s
         site.Tracked(stack, spans, s, i, ret, io, n, meaning(n, f, args, heap, io)))
 }
 
+// ---------------------------------------------------------------------------
+// Out of room: one resource stop (docs/language/ownership-design.md §17.9)
+//
+// The meaning does not learn of room. The code may instead stop: exit with
+// one reserved status, having done a prefix of what the meaning does. The
+// room premise is then a table by routine alone, and the run's depth moves
+// into the clause, where it closes the stop.
+
+// The reserved status, and the register a program that guards its calls
+// keeps the stack's floor in (the last a placement saves, so a program
+// with no guard places as before).
+fn spent_status() → Nat { 139 }
+
+fn floor_register() → Gpr { Rbp }
+
+// Routine `f` entered as `Site::Entering` says, without its premise on
+// room; where the code reads a floor (`floored`), the floor register holds
+// the stack's lowest address.
+fn Site::Entered<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), spans: Spans, top: Nat, lent: Type, floored: Bool, bound: Nat,
+    clause: Nat → List<Value> → Heap → Io → MachineState<M> → Nat → BitVec(64) → Type) → Type {
+    Loan<M>(site.fetch, site.data, stack, top, spans) → lent →
+    (f: Nat) → f + 1 <= bound → (args: List<Value>) → (heap: Heap) → (io: Io) →
+    (s: MachineState<M>) → s.rip = next_rip(site.origin, asm_labels(site.program)(f + 1)) → site.Resident(s.memory) →
+    (i: Nat) → read_gpr(Rsp, s.gprs) = stack.at(i) → i + 8 <= stack.size →
+    stack.Passed(lower_values(spans, args), i, s) → i + 8 <= top → Injected<M>(site.data, spans, heap, s.memory) →
+    (ret: BitVec(64)) → read_word(site.data, s.memory, stack.at(i)) = Some(ret) →
+    (floored.IsTrue() → read_gpr(floor_register(), s.gprs) = stack.low) → clause(f, args, heap, io, s, i, ret)
+}
+
+// Spent: from the entry the code exits with the reserved status, in a
+// world whose past is a prefix of a history the meaning reaches at some
+// fuel, or the meaning is stuck at some fuel (`MeetsGoing`'s conclusion):
+// a run out of room, like one out of fuel, did a prefix of what the meaning
+// does and nothing else.
+fn Site::Spent<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), s: MachineState<M>, io: Io, meaning: Nat → Calls(), f: Nat,
+    args: List<Value>, heap: Heap) → Type {
+    Exists<Nat>(λ calls => site.LinuxPerforms(stack, λ (r: Running<M, Io>) =>
+        (LinuxSyscallAt(site.linux(stack), r.state) ∧ LinuxExits(r.state, BitVec::ofNat(spent_status()))) ∧
+        (Exists<Nat>(λ m => Exists<List<Exchange>>(λ h => (history(meaning(m, f, args, heap, io)) = Some(h)) ∧ Extends(h, r.io.past))) ∨
+            Exists<Nat>(λ m => Exists<Io>(λ o => meaning(m, f, args, heap, io) = Stuck(o)))), calls, 0, Running(s, io)))
+}
+
+// The one clause, restated: entered with its room by routine (`rooms(f)
+// <= i`), at every fuel the code tracks the meaning, or the run's deepest
+// chain of calls has not its room by depth (`room`, `peak`) and the code
+// stopped spent.
+fn Site::TracksSpent<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), spans: Spans, top: Nat, lent: Type, rooms: Nat → Nat,
+    floored: Bool, room: Nat → Nat → Nat, peak: Nat → Nat → List<Value> → Heap → Io → Nat, bound: Nat, meaning: Nat → Calls()) → Type {
+    site.Entered(stack, spans, top, lent, floored, bound, λ f args heap io s i ret => rooms(f) <= i → (n: Nat) → io.Answerable() →
+        site.Tracked(stack, spans, s, i, ret, io, n, meaning(n, f, args, heap, io)) ∨
+        (¬(room(f, peak(n, f, args, heap, io)) <= i) ∧ site.Spent(stack, s, io, meaning, f, args, heap)))
+}
+
+// Today's clause over the floor: where the room by depth is there, the
+// code tracks the meaning.
+fn Site::TracksAt<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), spans: Spans, top: Nat, lent: Type, floored: Bool,
+    room: Nat → Nat → Nat, peak: Nat → Nat → List<Value> → Heap → Io → Nat, bound: Nat, meaning: Nat → Calls()) → Type {
+    site.Entered(stack, spans, top, lent, floored, bound, λ f args heap io s i ret => (n: Nat) → room(f, peak(n, f, args, heap, io)) <= i →
+        io.Answerable() → site.Tracked(stack, spans, s, i, ret, io, n, meaning(n, f, args, heap, io)))
+}
+
+// It is the restated clause's corollary at every table by depth at least
+// the table by routine: there the stop is closed.
+theorem Site::tracks_at_of_spent<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), spans: Spans, top: Nat, lent: Type,
+    rooms: Nat → Nat, floored: Bool, room: Nat → Nat → Nat, peak: Nat → Nat → List<Value> → Heap → Io → Nat, bound: Nat, meaning: Nat → Calls(),
+    over: (f: Nat) → (p: Nat) → rooms(f) <= room(f, p),
+    spends: site.TracksSpent(stack, spans, top, lent, rooms, floored, room, peak, bound, meaning)):
+    site.TracksAt(stack, spans, top, lent, floored, room, peak, bound, meaning) {
+    λ loan law f below args heap io s here resident i rsp inside passed high injected ret saved floor n roomy answerable => {
+        let q = peak(n, f, args, heap, io);
+        let least: (rooms(f) <= i) = Nat::le_trans(rooms(f), room(f, q), i, over(f, q), roomy);
+        match spends(loan, law, f, below, args, heap, io, s, here, resident, i, rsp, inside, passed, high, injected, ret, saved, floor, least, n,
+            answerable) {
+            Inl(tracked) => tracked,
+            Inr(spent) => false_elim(spent.left(roomy)),
+        }
+    }
+}
+
 // Done: `Tracks` read where the meaning is done.
 fn Site::MeetsDone<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), spans: Spans, top: Nat, lent: Type, room: Nat → Nat → Nat,
     peak: Nat → Nat → List<Value> → Heap → Io → Nat, bound: Nat, meaning: Nat → Calls()) → Type {
