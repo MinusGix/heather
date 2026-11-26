@@ -231,3 +231,65 @@ fn Site::Meets<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), sp
     site.MeetsDone(stack, spans, top, rooms, bound, meaning) ∧
         (site.MeetsExited(stack, spans, top, rooms, bound, meaning) ∧ site.MeetsGoing(stack, spans, top, rooms, bound, meaning))
 }
+
+// ---------------------------------------------------------------------------
+// The kernel's writes, from the loan (§17.7)
+//
+// What a claim's end conclusions need across a system call: the code stays
+// resident through the kernel's store of a read into a lent window, and the
+// process resumes past the SYSCALL. Not a law of the memory clause: a
+// system call's region re-establishes its own clause.
+
+// The window a call stores into: a read's, inside a written span at RSI;
+// a write's, none. Nothing else is asked yet.
+fn Spans::Window<M>(self spans: Spans, at: MachineState<M>, c: LinuxCmd<Nat>) → Type {
+    match c {
+        ReadCmd(_, max) => Exists<Nat>(λ b => Exists<Nat>(λ k => (spans.written(b) = True) ∧ ((k < spans.size(b)) ∧ ((k + max <= spans.size(b)) ∧
+            (read_gpr(Rsi, at.gprs) = spans.byte(b, k)))))),
+        WriteCmd(_, _) => True,
+        OpenCmd(_) => False,
+        CloseCmd(_) => False,
+        StatCmd(_) => False,
+    }
+}
+
+// Bytes the kernel stores into a lent window, no more than it holds, keep
+// the code resident.
+theorem Site::window_keeps_code<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), top: Nat, spans: Spans,
+    loan: Loan<M>(site.fetch, site.data, stack, top, spans), memory: M, b, k, max: Nat, written: spans.written(b) = True, inside: k < spans.size(b),
+    fits: k + max <= spans.size(b), bytes: List<BitVec(8)>, few: bytes.len() <= max, resident: site.Resident(memory)):
+    site.Resident(stack.writes.store(memory, spans.byte(b, k), bytes)) {
+    loan.keeps_code(memory, b, k, written, inside, bytes, { omega }, assemble(no_fills(), site.program, site.last), next_rip(site.origin, 0), resident)
+}
+
+// Every resumption of a call into its window: past the SYSCALL, the code
+// still resident.
+theorem Site::resumes_resident<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), top: Nat, spans: Spans,
+    loan: Loan<M>(site.fetch, site.data, stack, top, spans), at: MachineState<M>, c: LinuxCmd<Nat>, a: c.Resp(), answers: c.Answers(a),
+    window: spans.Window(at, c), resident: site.Resident(at.memory)):
+    LinuxResumes(site.linux(stack), at, c, a, λ u => (u.rip = next_rip(at.rip, 2)) ∧ site.Resident(u.memory)) {
+    (match c as λ c0 => (a0: c0.Resp()) → c0.Answers(a0) → spans.Window(at, c0) →
+        LinuxResumes(site.linux(stack), at, c0, a0, λ u => (u.rip = next_rip(at.rip, 2)) ∧ site.Resident(u.memory)) {
+        ReadCmd(fd, max) => λ r answered win junk leaves rcx r11 => {
+            let b = win.witness;
+            let k = win.proof.witness;
+            let w = win.proof.proof;
+            let stored = λ (bytes: List<BitVec(8)>) (few: bytes.len() <= max) =>
+                j(sym(w.right.right.right), λ address _ => site.Resident(stack.writes.store(at.memory, address, bytes)),
+                    site.window_keeps_code(stack, top, spans, loan, at.memory, b, k, max, w.left, w.right.left, w.right.right.left, bytes, few, resident));
+            (match r as λ r0 => (ReadCmd(fd, max)).Answers(r0) → LinuxLeaves(ReadCmd(fd, max), r0, junk) →
+                (linux_answered(site.linux(stack), at, ReadCmd(fd, max), r0, junk, rcx, r11).rip = next_rip(at.rip, 2)) ∧
+                site.Resident(linux_answered(site.linux(stack), at, ReadCmd(fd, max), r0, junk, rcx, r11).memory) {
+                ReadBytes(bytes) => λ few _ => ⟨refl, stored(bytes, few)⟩,
+                ReadFailed(errno) => λ _ few => ⟨refl, stored(junk, few)⟩,
+            })(answered, leaves)
+        },
+        WriteCmd(fd, bytes) => λ r answered win junk leaves rcx r11 => match r {
+            Wrote(count) => ⟨refl, resident⟩,
+            WriteFailed(errno) => ⟨refl, resident⟩,
+        },
+        OpenCmd(_) => λ r answered never => false_elim(never),
+        CloseCmd(_) => λ r answered never => false_elim(never),
+        StatCmd(_) => λ r answered never => false_elim(never),
+    })(a, answers, window)
+}

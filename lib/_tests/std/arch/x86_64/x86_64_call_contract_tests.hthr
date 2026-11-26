@@ -83,3 +83,21 @@ theorem stuck_where(io: Io): stuck_after(Stuck<Answer>(io)) = Some(io.past) { re
 
 // Control: a run that is going is not stuck.
 theorem going_not_stuck(io: Io): stuck_after(Going<Answer>(io)) = None { refl }
+
+// ---------------------------------------------------------------------------
+// Claims at Linux (§17.7): the bind of two claims at the contract's kernel,
+// their calls and bounds added,
+theorem linux_bind<M>(site: Site<M>, stack: Stack<M>(site.fetch, site.data), goal, after: Running<M, Io> → Type, calls, least, calls2, least2: Nat,
+    from: Running<M, Io>, first: site.LinuxPerforms(stack, goal, calls, least, from),
+    then: (r: Running<M, Io>) → goal(r) → site.LinuxPerforms(stack, after, calls2, least2, r)):
+    site.LinuxPerforms(stack, after, calls2 + calls, least + least2, from) {
+    site.performs_bind(stack.writes, site.linux_kernel(stack), goal, after, calls2, least2, then, calls, least, from, first)
+}
+
+// and its control: steps proved without counting have bound zero, not one.
+// expect-error(mismatch)
+theorem steps_not_counted<M>(site: Site<M>, stack: Stack<M>(site.fetch, site.data), goal: Running<M, Io> → Type, from: Running<M, Io>, t: MachineState<M>,
+    steps: MachineSteps(site.fetch, site.data, stack.writes, from.state, t), reached: goal(Running(t, from.io))):
+    site.LinuxPerforms(stack, goal, 0, 1, from) {
+    site.performs_steps(stack.writes, site.linux_kernel(stack), goal, from, t, steps, reached)
+}
