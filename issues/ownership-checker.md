@@ -34,10 +34,10 @@ Items 1 and 2 are definitions and evaluation; item 3 waits for the coordinating 
 Continue on branch `claude/ownership-checker-sound`. Read design §23.21
 (this session) after §23.17–§23.20. The call's parts are at the end of
 `lib/lang/ownership/sound.hthr`, after `LentFrame::call`. The coordinating
-session's notes: put new §23 subsections **before the line `## 24.`** once
-its branch (`origin/claude/focused-darwin-it31c1`) has been merged in, which
-it will announce; findings from its soundness search arrive batched, each
-to be landed as its own commit before continuing.
+session's branch (`origin/claude/focused-darwin-it31c1`, design §24) is
+merged in: put new §23 subsections **before the line `## 24.`**. Findings
+from its soundness search arrive batched, each to be landed as its own
+commit before continuing.
 
 **Done this session:**
 - **Step 0, the four rulings** (§23.21; suite green at da2faef):
