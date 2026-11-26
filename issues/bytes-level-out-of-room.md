@@ -41,34 +41,49 @@ A routine that calls itself lowers with a guard and a theorem whose premise does
 - 2026-11-26: Step 1 (statement and §17.9's test by evaluation): Spent, Entered (floor RBP premise), TracksSpent, TracksAt and the corollary tracks_at_of_spent in the contract; call graph, program_guards, routine_rooms (checked by rooms_settled), the guard's code, stop_rooms (lawful, over routine_rooms) and LowerProgramSpends in the routines; guarded emission and an Asm-level machine as probes (bytes_level_guard_tests). Findings: floor in RBP (no data-word load in the model); guard after the argument moves, so every call counts 24 bytes in the table; no-guard-fires is false at depth_rooms (downh), true at stop_rooms. §17.10.
 - 2026-11-26: Step 1 verified at 509e585: HEATHER_PR_NATIVE=all scripts/test --pr (no merge base, every file) '== suite: 4140 passed, 0 failed, 3 ignored =='; scripts/linked --check unchanged; scripts/lib-closures clean. Reported to the coordinating session; step 2 waits on its answer.
 - 2026-11-26: Step 2 at 20eb5ff: the contract restated (Entering with the floor premise; Tracks = rooms(f) <= i → Tracked ∨ (¬(room(f, peak) <= i) ∧ Spent); Spent = the exited reading at 139 with MeaningPrefix of its world; TracksAt and tracks_at; MeetsDone/Exited with the stop, MeetsGoing with no room by depth via tracked_prefix; RunsAsMeaning with the stop). depth_rooms deleted for stop_rooms. Until step 3 the lowering proves TracksAt (lower_program_tracks_at) and its readings take LowerProgramSpends as hypothesis. HEATHER_PR_NATIVE=all scripts/test --pr: '== suite: 4140 passed, 0 failed, 3 ignored =='; linked --check unchanged.
+- 2026-11-26: Handoff after step 2 at 460af9f (suite at 20eb5ff: '== suite: 4140 passed, 0 failed, 3 ignored =='). Condition 1 analysed: the stop is a plain goal disjunct on the done side and at StopExited (bound zero) but not at StopGoing (bound = fuel; a guard fires after fewer counted steps). Proposed one generalisation of Performs with an unbounded escape; reported to the coordinating session.
 
-## Handoff (2026-11-26, after step 2)
+## Handoff (2026-11-26, second session, after step 3 parts 1–2)
 
-**Done.** Step 1 (the statement, §17.9's test by evaluation; findings ruled on, §17.10) and step 2 (the contract restated: `Site::Entering` with the floor, `Site::Tracks` with the spent stop, `Site::Spent` as the exited reading at 139 with `MeaningPrefix`, `Site::TracksAt`/`tracks_at`, the readings, `RunsAsMeaning`; `depth_rooms` deleted for `stop_rooms`). Suite at both: `== suite: 4140 passed, 0 failed, 3 ignored ==`.
+**Done.**
+- **Step 3.1, the root generalised** (d0733aa). `Site::PerformsOr` and `ClaimsOr` (and `EntersClaimOr`, `ReturnsClaimOr`) carry an absorbing escape. Every claim lemma is proved once over it (`performs_or_*`, `claims_or_*`, `performs_or_escape`, `reach_or_map`, `reach_goal`). The old names are instances at `False`, with statements unchanged. FunctionIR and the certificates needed nothing.
+- **Step 3.2, the guarded emission** (ca4885a, 1b29c8b).
+  - `Body::emit_by(g: CallGuards, …)`, with `Body::emit` its instance at none.
+  - The guard is at the call's start: `SUB RSP, RBP; CMP RSP, need; JB stop; ADD RSP, RBP`, with `need = 8·count + 8 + rooms(callee)`, ruled by the coordinating session.
+  - `Routine::emit_by` refuses six saves.
+  - `Program::lower` = `rooms_settled` → acyclic: `lower_plain` (today's bytes); cyclic: `lower_guarded` (labels from `bound + 1`, the stop after the routines).
+  - The probe copy is deleted; the guard probes run `Program::lower`.
+  - `lower_plain_tracks_at` is the plain lowering's theorem. `lower_program_tracks_at` reads it under the **interim hypothesis** `any_guard(…) = False`.
+  - §17.10 has both parts.
 
-**Next, in order (step 3).**
-1. Settle with the coordinating session how the stop composes with the claims (condition 1, below); then generalise once at the root.
-2. The guarded emission into `Body::emit` (the probe copy in `bytes_level_guard_tests`: `call_prog_guarded`, `File::emit_call_guarded`, the `listed(guards, callee)` case, `Routine::emit_guarded`'s saves ≤ 5 check, `Program::lower_guarded`'s labels from `bound + 1` and `stopped_at`), deleting the probe copy; `rooms_settled` checked in `Program::lower`.
-3. Re-prove the region claims with the stop as the escape (done side `Body::emit_emits`/`program_returns`, stop side `Body::emit_stops`/`program_stops`, the call lemmas `call_now_step`/`call_heap_stops` with the guard's code: its block, the `CMP`, the not-taken `JCC`, or the taken one to the stop); `¬(stop_rooms(f, peak) <= i)` from the guard's test by `RoomLaw` at depth.
-4. `lower_program_tracks` (discharging `LowerProgramSpends`), `lower_program_tracks_at` its corollary, the readings' hypotheses dropped (`lower_program_meets`, the probes' `*_meets*`, `echo_runs_as`).
-5. The floor established (`bytes_level_whole`, `_start` sets RBP from RSP and the budget; the static refusal where `routine_rooms(entry)` exceeds it; a whole-program probe). Export prologue stated, built only if a linked row has a cycle.
-6. Witnesses: `scripts/linked --check`, `scripts/bytes-level-compare` (acyclic rows the same bytes; the reach and table computations' cost on scan_token is unmeasured).
+**The coordinating session's rulings this round** (to build on, not to reopen):
+- **Restate the contract with the escape inside the claim.** `Tracks`: `rooms(f) <= i → n → Answerable → ∃ calls, LinuxPerformsOr(Reached(meaning_n), λ r => ¬(stop_rooms(f, peak_n) <= i) ∧ SpentAt(r), calls, going_least(n, meaning_n), Running(s, io))`.
+  - `Tracked` takes the escape as a parameter; today's is its instance at no escape.
+  - `SpentAt(r)` = the exit at 139 ∧ `MeaningPrefix(…, r.io.past)`, with no `∃ o` outside.
+  - `TracksAt` by closing the escape under the room.
+  - `MeetsDone`/`MeetsExited` at their outcome with the escape; `MeetsGoing`'s prefix straight from `SpentAt`.
+  - `RunsAsMeaning`: the alternative sits at the trace's end (the outcome's end, or TRet(139) at a meaning-prefix world). No determinism lemma is owed.
+  - Amend §17.9's displayed clause in place, pointing to §17.10. Say in §17.10 why the escape is inside: `shout`'s write before the guarded call, and that the conservative table means `¬room` does not decide which end is reached.
+- Guard placement and form: as built (above). The table keeps 24 at every call (§17.10 says why it could change and why it is not changed).
 
-**Condition 1, the finding (reported to the coordinating session, no answer yet).** The claims' step lower bound does not let the stop be a plain goal disjunct on the going side:
-
-    Performs(writes, kernel, goal, calls, least)(from) :=
-      calls = 0:    ∃ t n, runs(n, from, t) ∧ (least <= n ∧ goal(t))
-      calls = k+1:  ∃ t n, runs(n, from, t) ∧ ((least <= n ∧ goal(t)) ∨ kernel.resumes(t, Performs(…, k, least - n)))
-
-    needed, the going stop:  reach `r.io = o` with at least the fuel's count of steps,
-                             or reach `Spent`'s exit state with any number of steps.
-
-On the done side and at `StopExited` the bound is zero, so `goal ∨ spent-exit` through the existing `performs_bind` works there. At `StopGoing` the bound is the fuel, and a guard can fire after fewer counted steps (`down` from two, one table frame short: one CALL counted before the guard fires, at fuel three). The kernel trick (`into_callee`'s: the spent exit as a resumption that admits anything) avoids the bound but spends a call with no exchange, which breaks the counts read off the worlds (`linux_performs_exact`, `claims_exact`, `claims_stop_exact`). Proposed: one generalisation at the root, `Performs` with an escape `esc: Running → Type`, its reach disjunct `(least <= n ∧ goal(t)) ∨ esc(t)` (no bound on the escape), today's `Performs` its instance at `esc = False` by a one-line definition, the generic lemmas (`performs_less/up/more/weaken/prefix/after/steps/bind/then_steps`, `Claims`, the claim lemmas) stated once over `esc`. Then the exited stop and the spent stop are both escapes with different facts about the exit state, through one bind.
+**Next, in order.**
+1. The contract restated, as ruled (`x86_64_call_contract`: `Tracked` with the escape, `SpentAt`, `Tracks`, `tracks_at`, the readings and `tracked_prefix` over the escape; `bytes_level_whole`: `linux_runs_as` and `RunsAsMeaning` with the alternative end). Then `LowerProgramSpends` and `lower_spends_tracks_at` follow it.
+2. The guard's claim, a stage lemma.
+   - From the call node's start, with RBP = `stack.low` (the floored premise) and RSP = `stack.at(d)`: if `need <= d`, arrive after `ADD RSP, RBP` with gprs and memory unchanged; else the escape, reached at the stop's SYSCALL with RDI = 139, RAX = 60 and the world unchanged.
+   - The arithmetic: `stack.at(d) − stack.low = d` as a word (`Stack::canonical` gives `low + d < 2^47`); `CMP` with imm32 `need < 2^31`; B ⇔ `d < need`.
+   - The guarded call = this then FunctionIR's call claim lifted by `claims_or_weaken` (escape `False` → any).
+3. Re-prove the region claims over the escape at `Body::emit_by` (done side `Body::emit_emits`/`program_returns`, stop side `Body::emit_stops`/`program_stops`).
+   - The ruling: the existing exit (`StopExited`) becomes an escape with its own facts, through the one bind, not a second path.
+   - `¬(stop_rooms(f, peak) <= i)` comes from the guard's `d < need` by `RoomLaw` at depth.
+   - The escape is mapped at each call boundary by `performs_or_weaken`'s escape map (the callee's `SpentAt` → the caller's, via `program_grows`).
+4. `lower_program_tracks` discharging `LowerProgramSpends`. Drop the interim `acyclic` hypothesis of `lower_program_tracks_at`, and the readings' hypotheses (`lower_program_meets`, the probes' `*_meets*`, `echo_runs_as`).
+5. The floor at `_start` (`bytes_level_whole`): RBP from RSP and the budget; the static refusal where `routine_rooms(entry)` exceeds it; a whole-program probe. The export prologue stated, built only if a linked row has a cycle.
+6. Witnesses: `scripts/linked --check` and `scripts/bytes-level-compare`, and the cost of the reach and table computations on `scan_token`, as a shape. Then report step 3 whole; the coordinating session merges only then.
 
 **Traps.**
-- `heather eval` cannot print a value holding `BitVec`s or a large record (it runs out of fuel reading it): read through `halt_code`-style `List<Nat>` encoders.
-- A probe whose word is live across a system call must not sit in RDI/RSI/RDX/RAX/RCX/R11 (the moves clobber it): `shout` copies it to R8 first.
-- Guarded programs' `Short` label names shift by one (labels from `bound + 1`); acyclic programs' do not.
-- `scripts/test --pr` on this branch has no merge base with `origin/master` and runs every file.
-- Another session works in `lib/lang/ownership/`: do not edit there.
-- 2026-11-26: Handoff after step 2 at 460af9f (suite at 20eb5ff: '== suite: 4140 passed, 0 failed, 3 ignored =='). Condition 1 analysed: the stop is a plain goal disjunct on the done side and at StopExited (bound zero) but not at StopGoing (bound = fuel; a guard fires after fewer counted steps). Proposed one generalisation of Performs with an unbounded escape; reported to the coordinating session. See ## Handoff.
+- `heather eval` needs the file to check first: comment out a failing `refl` verdict to evaluate its subject (`halt_code(...)`).
+- A `Performs` proof's reach is now `(… ∧ goal) ∨ esc` (at the instance, `∨ False`). A proof that takes one apart reads the goal with `reach_goal`, or matches `Inl(reach) => match reach { Inl(..) .. Inr(never) .. }`; a constructed one is `Inl(⟨…⟩)`.
+- `Guards` is FunctionIR's name (`function_ir_lower`): the bytes level's record is `CallGuards`. `bytes_level_lower` cannot import `bytes_level_scope` (it imports lower), hence `among` beside `listed`.
+- The probe machine's `low` is the lowest address *stored*. A stop now stores nothing for the call that stops, so the stop verdicts' `low` rose. Statuses and writes are unchanged.
+- Run the suite only on a committed tree. Work in a worktree (`git worktree add`) while it runs; `heather check` there reads the worktree's `lib/`.
+- Earlier traps still hold: `heather eval` cannot print `BitVec`-holding values; a word live across a system call must not sit in RDI/RSI/RDX/RAX/RCX/R11; on this branch `scripts/test --pr` has no merge base and runs every file; another session works in `lib/lang/ownership/`.
