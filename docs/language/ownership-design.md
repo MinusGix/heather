@@ -5733,3 +5733,46 @@ body induction and the theorem.
 The risk is that the restatement misses something the 28 clauses caught
 by accretion (the copy chains, a join's meet). Step 2 is the guard: it is
 cheap, and it runs before step 3 costs anything.
+
+### 26.5 The run is stuck wherever the meaning takes a fallback
+
+From the seam's proof (§25, its finding on code mismatches). The meaning is
+total, so where a body is ill coded it answers junk; the run shares those
+functions, so an unchecked program runs to an answer the machine would not
+give (`1u64 + 2u8`: level 2 answers 1, the bytes level 3), and the
+translation is then false of it. The run already is stuck at an unfit
+selection where the meaning reads the pad. The rule extends that: **where
+the meaning takes a fallback, the run is stuck.** `check_sound`'s "not
+stuck" then covers checked programs through the invariant's codes, and the
+translation needs no comparison of its own (the ones in `place` today are
+an interim, to be deleted with this).
+
+The fallbacks, as the seam's session found them (function: case, what it
+answers today):
+
+- `Dyn::words` (body): a second operand not of the first's code is read as
+  the word 0 at the first's width; a first operand that is not a word as
+  `WNat` 0. Feeds `Op` and a test.
+- `Dyn::back` through `Dyn::over_in` (shape): a value written whose code is
+  not the part's leaves the old value. Feeds `Write`, `Sel::put`,
+  `Obj::fill`.
+- `Dyn::at_in` answering nothing: a selection with no part at the code reads
+  `Dyn::none`; `Dyn::over_in` there leaves the value unchanged.
+- `Dyn::ix`, `Dyn::index` (shape): a value that is not a word indexes as 0.
+  Every atom reads its variable through these.
+- `REnv::ixs` (run): a variable whose value cannot be read is `Dyn::none`,
+  so its atom reads 0. `Atom::ix` (steps): an atom past the environment
+  reads 0. `REnv::get` (run): a variable past the arguments or locals is
+  `Cell::none`.
+- `Cell::pass_all`, `Cell::args`, `Origin::owns` (run): a parameter missing
+  for an argument or a result is taken to be a word read.
+  `Cell::results` (run): fewer values than the call binds are padded with
+  `Cell::none`.
+- `Kind::len`, `Dyn::len_at` (shape): an opaque type, a record or a word
+  has length 0.
+
+Each becomes a stuck case of the run where the run reaches it (the shared
+functions keep their total form for the meaning; the run asks first whether
+the fallback would be taken). It is done with the restated stages, each of
+which then owes "not stuck by codes" from the code check and the
+invariant's codes.
