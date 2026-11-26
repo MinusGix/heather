@@ -326,3 +326,185 @@ theorem stage_death(tys: Nat → Type, strs: Strs(tys), sigs: Nat → Sig, prim:
     λ p e next o hp => j(Option::some_inj(SOut(leaf(Nil), e, next), o, hp), λ o2 _ => LeafGoal(tys, strs, fns, call, blocks, Death(p), e, next, o2),
         death_goal(tys, strs, fns, call, blocks, p, e, next))
 }
+
+// ---------------------------------------------------------------------------
+// Inverting `place`: each statement kind's placing is an `and_then` chain
+
+theorem Option::bind_some<A, B>({x: Option<A>}, {f: A → Option<B>}, {o: B}, h: x.and_then(f) = Some(o)): Exists<A>(λ a => (x = Some(a)) ∧ (f(a) = Some(o))) {
+    (match x as λ x2 => x2.and_then(f) = Some(o) → Exists<A>(λ a => (x2 = Some(a)) ∧ (f(a) = Some(o))) {
+        None => λ no => absurd(no),
+        Some(a) => λ e2 => Exists(a, ⟨refl, e2⟩),
+    })(h)
+}
+
+theorem Bool::guard_some<B>({b: Bool}, {x: Option<B>}, {o: B}, h: Bool::guard(b, x) = Some(o)): (b = True) ∧ (x = Some(o)) {
+    (match b as λ b2 => Bool::guard(b2, x) = Some(o) → (b2 = True) ∧ (x = Some(o)) { True => λ e2 => ⟨refl, e2⟩, False => λ no => absurd(no) })(h)
+}
+
+// ---------------------------------------------------------------------------
+// A variable's slot, by level, and the cell level 2 holds there
+
+theorem nth_unwrap<A>(xs: List<A>): (i: Nat) → (d: A) → i < xs.len() → xs.nth(i) = Some(xs.nth(i).unwrap_or(d)) {
+    match xs {
+        Nil => λ i d lt => false_elim({ omega }),
+        Cons(h, t) => λ i d => (match i as λ i2 => i2 < Succ(t.len()) → (Cons(h, t)).nth(i2) = Some((Cons(h, t)).nth(i2).unwrap_or(d)) {
+            Zero => λ _ => refl,
+            Succ(k) => λ lt => nth_unwrap(t, k, d, omega(lt)),
+        }),
+    }
+}
+
+theorem holds_nth(tys: Nat → Type, strs: Strs(tys), inj: Nat → Nat, h: level2::Heap(tys), l: Locals, ss: List<PSlot>):
+    (cs: List<Cell(tys)>) → SlotsHold(tys, strs, inj, h, ss, cs, l) → (k: Nat) → (s: PSlot) → (c: Cell(tys)) → ss.nth(k) = Some(s) → cs.nth(k) = Some(c) →
+    SlotHolds(tys, strs, inj, h, s, c, l)
+{
+    match ss {
+        Nil => λ cs hs k s c no => absurd(no),
+        Cons(s0, sr) => λ cs => (match cs as λ c2 => SlotsHold(tys, strs, inj, h, Cons(s0, sr), c2, l) → (k: Nat) → (s: PSlot) → (c: Cell(tys)) →
+                (Cons(s0, sr)).nth(k) = Some(s) → c2.nth(k) = Some(c) → SlotHolds(tys, strs, inj, h, s, c, l) {
+            Nil => λ f => false_elim(f),
+            Cons(c0, cr) => λ hs k => (match k as λ k2 => (s: PSlot) → (c: Cell(tys)) → (Cons(s0, sr)).nth(k2) = Some(s) → (Cons(c0, cr)).nth(k2) = Some(c) →
+                    SlotHolds(tys, strs, inj, h, s, c, l) {
+                Zero => λ s c es ec => j(Option::some_inj(c0, c, ec), λ cc _ => SlotHolds(tys, strs, inj, h, s, cc, l),
+                    j(Option::some_inj(s0, s, es), λ sx _ => SlotHolds(tys, strs, inj, h, sx, c0, l), hs.left)),
+                Succ(k1) => λ s c es ec => holds_nth(tys, strs, inj, h, l, sr, cr, hs.right, k1, s, c, es, ec),
+            }),
+        }),
+    }
+}
+
+// The environment by level holds, at a variable's level, the cell level 2
+// reads the variable at.
+theorem cells_at(tys: Nat → Type, e: PEnv, env: REnv(tys), na: e.na = env.args.len(), len: e.vars.len() = (env.args ++ env.locs.rev()).len()):
+    (x: Var) → (l: Nat) → e.level(x) = Some(l) → (env.args ++ env.locs.rev()).nth(l) = Some(REnv::get(tys, env, x))
+{
+    λ x => match x {
+        Arg(i) => λ l lv => (match q: (i + 1).leb(e.na) as λ bq => (match bq { True => Some(i), False => None }) = Some(l) →
+                (env.args ++ env.locs.rev()).nth(l) = Some(REnv::get(tys, env, Arg(i))) {
+            True => λ e2 => {
+                let lt: (i < env.args.len()) = omega(q, na);
+                j(Option::some_inj(i, l, e2), λ ll _ => (env.args ++ env.locs.rev()).nth(ll) = Some(REnv::get(tys, env, Arg(i))),
+                    trans(List::nth_append_below(env.args, env.locs.rev(), i, lt), nth_unwrap(env.args, i, Cell::none(tys), lt)))
+            },
+            False => λ no => absurd(no),
+        })(lv),
+        Loc(jj) => λ l lv => (match q: (e.na + jj + 1).leb(e.vars.len()) as λ bq => (match bq { True => Some(e.vars.len() - 1 - jj), False => None }) = Some(l) →
+                (env.args ++ env.locs.rev()).nth(l) = Some(REnv::get(tys, env, Loc(jj))) {
+            True => λ e2 => {
+                let la = List::len_append(env.args, env.locs.rev());
+                let lr = List::rev_len(env.locs);
+                let lt: (jj < env.locs.len()) = omega(q, na, len, la, lr);
+                let cut: (e.vars.len() - 1 - jj = (env.locs.len() - 1 - jj) + env.args.len()) = omega(q, na, len, la, lr);
+                let at: ((env.args ++ env.locs.rev()).nth((env.locs.len() - 1 - jj) + env.args.len()) = env.locs.nth(jj)) =
+                    trans(List::nth_append_r(env.args, env.locs.rev(), env.locs.len() - 1 - jj), List::nth_rev(env.locs, env.locs.len() - 1 - jj, jj, { omega }));
+                j(trans(sym(cut), Option::some_inj(e.vars.len() - 1 - jj, l, e2)), λ ll _ => (env.args ++ env.locs.rev()).nth(ll) = Some(REnv::get(tys, env, Loc(jj))),
+                    trans(at, nth_unwrap(env.locs, jj, Cell::none(tys), lt)))
+            },
+            False => λ no => absurd(no),
+        })(lv),
+    }
+}
+
+// A variable placed: its slot holds the cell level 2 reads it at, its ids
+// below `next`.
+theorem slot_of(tys: Nat → Type, strs: Strs(tys), inj: Nat → Nat, blocks: Blocks, act: Act, e: PEnv, m: Mach(tys), c: Config, next: Nat,
+    rel: StageRel(tys, strs, inj, blocks, act, e, m, c, next), x: Var, s: PSlot, eg: e.get(x) = Some(s)):
+    SlotHolds(tys, strs, inj, m.heap, s, REnv::get(tys, m.env, x), c.locals) ∧ ((t: Typed) → Mem(t, s.ids) → t.id < next)
+{
+    let lv = Option::bind_some(eg);
+    let cs = m.env.args ++ m.env.locs.rev();
+    let len = holds_len(tys, strs, inj, m.heap, c.locals, e.vars, cs, rel.right.right.left);
+    let at = cells_at(tys, e, m.env, rel.right.left, len, x, lv.witness, lv.proof.left);
+    ⟨holds_nth(tys, strs, inj, m.heap, c.locals, e.vars, cs, rel.right.right.left, lv.witness, s, REnv::get(tys, m.env, x), lv.proof.right, at),
+        rel.right.right.right.right.right(lv.witness, s, lv.proof.right)⟩
+}
+
+// ---------------------------------------------------------------------------
+// A word slot: level 2's value there is a plain word, its 64-bit view the
+// slot's word (or level 2 reads nothing there and is stuck)
+
+theorem one_word_is(ids: List<Typed>, t: Typed): Typed::one_word(ids) = Some(t) → (ids = [t]) ∧ (t.kind = WordKind) {
+    match ids {
+        Nil => λ no => absurd(no),
+        Cons(t0, rest) => match rest {
+            Cons(_, _) => λ no => absurd(no),
+            Nil => (match k: t0.kind as λ kd => (match kd { WordKind => Some(t0), RefKind => None }) = Some(t) → (Cons(t0, Nil) = Cons(t, Nil)) ∧ (t.kind = WordKind) {
+                WordKind => λ e2 => {
+                    let tt = Option::some_inj(t0, t, e2);
+                    ⟨cong_fn(λ (y: Typed) => Cons(y, Nil), tt), j(tt, λ y _ => y.kind = WordKind, k)⟩
+                },
+                RefKind => λ no => absurd(no),
+            }),
+        },
+    }
+}
+
+theorem read_word(t: Typed, l: Locals, k: t.kind = WordKind): read_values([t], l) = Some([x86_64_call_contract::Word(l.word(t.id))]) {
+    cong_fn(λ (kd: ValueKind) => (match kd { WordKind => Some(x86_64_call_contract::Word(l.words(64, t.id))), RefKind => l.refs(t.id).map(λ (loc: x86_64_memory_contract::Loc) => x86_64_call_contract::Ref(loc)) })
+        .and_then(λ (y: x86_64_call_contract::Value) => Some([y])), k)
+}
+
+fn first_word(o: Option<List<x86_64_call_contract::Value>>) → BitVec(64) {
+    match o { Some(vs) => match vs { Cons(v, _) => match v { Word(w) => w, Ref(_) => BitVec::ofNat(0) }, Nil => BitVec::ofNat(0) }, None => BitVec::ofNat(0) }
+}
+
+fn heads_word(o: Option<List<x86_64_call_contract::Value>>) → Bool {
+    match o { Some(vs) => match vs { Cons(v, _) => match v { Word(_) => True, Ref(_) => False }, Nil => False }, None => False }
+}
+
+// A reference lowers to a reference first, or to nothing.
+theorem ref_lower_not_word(tys: Nat → Type, strs: Strs(tys), inj: Nat → Nat, r: level2::Ref, o: Obj(tys)): heads_word(Ref::lower(tys, strs, inj, r, Some(o))) = False {
+    match Sel::locate(tys, strs, o.val, r.sels, 0) as λ lo => heads_word(match lo {
+            None => None,
+            Some(at) => match Shape::layout(tys, strs, at.snd.code) {
+                LSeq(_, _, _) => Some([x86_64_call_contract::Ref(Loc(inj(r.b), at.fst)), x86_64_call_contract::Word(BitVec::ofNat(Dyn::len(tys, strs, at.snd)))]),
+                LRecord(_) => Some([x86_64_call_contract::Ref(Loc(inj(r.b), at.fst))]),
+                LNone => None,
+            },
+        }) = False {
+        None => refl,
+        Some(at) => match Shape::layout(tys, strs, at.snd.code) as λ ly => heads_word(match ly {
+                LSeq(_, _, _) => Some([x86_64_call_contract::Ref(Loc(inj(r.b), at.fst)), x86_64_call_contract::Word(BitVec::ofNat(Dyn::len(tys, strs, at.snd)))]),
+                LRecord(_) => Some([x86_64_call_contract::Ref(Loc(inj(r.b), at.fst))]),
+                LNone => None,
+            }) = False {
+            LSeq(_, _, _) => refl, LRecord(_) => refl, LNone => refl,
+        },
+    }
+}
+
+fn WordAt(tys: Nat → Type, strs: Strs(tys), h: level2::Heap(tys), v: level2::Value(tys), s: PSlot, w: BitVec(64)) → Type {
+    (Value::get(tys, strs, h, v, Nil) = None) ∨
+        Exists<Dyn(tys)>(λ d => (v = Plain(d)) ∧ ((d.code = s.code) ∧ (w = BitVec::ofNat(Dyn::index(tys, d)))))
+}
+
+theorem word_slot(tys: Nat → Type, strs: Strs(tys), inj: Nat → Nat, h: level2::Heap(tys), s: PSlot, cell: Cell(tys), l: Locals,
+    hs: SlotHolds(tys, strs, inj, h, s, cell, l), t: Typed, sw: s.word() = Some(t)): WordAt(tys, strs, h, cell.v, s, l.word(t.id))
+{
+    let wi = one_word_is(s.ids, t, sw);
+    let rd: (read_values(s.ids, l) = Some([x86_64_call_contract::Word(l.word(t.id))])) =
+        trans(cong_fn(λ (ids: List<Typed>) => read_values(ids, l), wi.left), read_word(t, l, wi.right));
+    (match cell.v as λ v => (value_live(tys, h, v) = True → (read_values(s.ids, l) = value_lower(tys, strs, inj, h, v)) ∧
+            ((Value::get(tys, strs, h, v, Nil)).map(λ (d: Dyn(tys)) => d.code) = Some(s.code))) → WordAt(tys, strs, h, v, s, l.word(t.id)) {
+        Plain(d) => λ p => {
+            let q = p(refl);
+            let low: (Some([x86_64_call_contract::Word(l.word(t.id))]) = value_lower(tys, strs, inj, h, Plain(d))) = trans(sym(rd), q.left);
+            let w: (l.word(t.id) = BitVec::ofNat(Dyn::index(tys, d))) = (match d.code.word_size() as λ z =>
+                    Some(Cons(x86_64_call_contract::Word(l.word(t.id)), Nil)) = (match z as λ _ => Option<List<x86_64_call_contract::Value>> { Some(_) => Some(Cons(x86_64_call_contract::Word(BitVec::ofNat(Dyn::index(tys, d))), Nil)), None => None }) →
+                    l.word(t.id) = BitVec::ofNat(Dyn::index(tys, d)) {
+                Some(_) => λ e2 => cong_fn(λ (o: Option<List<x86_64_call_contract::Value>>) => first_word(o), e2),
+                None => λ no => absurd(no),
+            })(low);
+            Inr(Exists(d, ⟨refl, ⟨Option::some_inj(d.code, s.code, q.right), w⟩⟩))
+        },
+        Refer(r) => λ p => (match ob: level2::Heap::obj(tys, h, r.b) as λ o2 => (o2.is_some() = True → (read_values(s.ids, l) = Ref::lower(tys, strs, inj, r, o2)) ∧
+                ((Value::get(tys, strs, h, Refer(r), Nil)).map(λ (d: Dyn(tys)) => d.code) = Some(s.code))) → WordAt(tys, strs, h, Refer(r), s, l.word(t.id)) {
+            None => λ _ => Inl(cong_fn(λ (z: Option<Obj(tys)>) => match match z as λ _ => Option<Dyn(tys)> { Some(o) => Obj::read(tys, strs, h, h.len(), o), None => None } as λ _ => Option<Dyn(tys)> {
+                    Some(d) => run::Sel::get(tys, strs, r.sels ++ Nil, d), None => None }, ob)),
+            Some(o) => λ p2 => {
+                let bad = cong_fn(λ (z: Option<List<x86_64_call_contract::Value>>) => heads_word(z), trans(sym(rd), (p2(refl)).left));
+                false_elim(absurd(trans(bad, ref_lower_not_word(tys, strs, inj, r, o))))
+            },
+        })(p),
+    })(hs)
+}
