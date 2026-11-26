@@ -1092,18 +1092,18 @@ fn CSt::HRef(tys: Nat → Type, s: CSt, root: Nat → Option<Ref>, env: REnv(tys
     (x: Var) → (l, o: Nat) → (a: Acc) → s.lvl(x) = Some(l) → s.role(l) = KHold(o, a) → (r: Ref) → root(o) = Some(r) → (REnv::get(tys, env, x)).v = Refer(r)
 }
 
-record Inv(tys: Nat → Type, strs: Strs(tys), s: CSt, e: Env(tys), m: Mach(tys), h0: Heap(tys), lent: Nat → Bool) {
+record Inv(tys: Nat → Type, strs: Strs(tys), s: CSt, e: Env(tys), m: Mach(tys), h0: Heap(tys), lent: List<Ref>) {
     sim: Sim(tys, strs, s, s.patched(tys, strs, e, m), m),
     root: Nat → Option<Ref>,
     refs: (x: Var) → (l: Nat) → s.lvl(x) = Some(l) → (r: Ref) → (REnv::get(tys, m.env, x)).v = Refer(r) → s.RefOk(root, Mach::ixs(tys, strs, m), l, r),
     apart: (o1, o2: Nat) → ¬(o1 = o2) → s.Changes(o1) → (r1, r2: Ref) → root(o1) = Some(r1) → root(o2) = Some(r2) → Ref::Apart(tys, strs, r1, r2),
     inheap: (o: Nat) → (r: Ref) → root(o) = Some(r) → r.b < m.heap.len(),
-    owned: (o: Nat) → s.Changes(o) → (r: Ref) → root(o) = Some(r) → (lent(r.b) = True) ∨ (h0.len() <= r.b),
+    owned: (o: Nat) → s.Changes(o) → (r: Ref) → root(o) = Some(r) → Mem(r, lent) ∨ (h0.len() <= r.b),
     own: (x: Var) → (l: Nat) → s.lvl(x) = Some(l) → ¬((s.role(l)).same(KGone) = True) → (REnv::get(tys, m.env, x)).own = True → (r: Ref) → (REnv::get(tys, m.env, x)).v = Refer(r) →
         Exists<Nat>(λ o => (s.role(l) = KHold(o, AcOwn)) ∧ ((root(o) = Some(r)) ∧ ((r.sels = Nil) ∧ ((o2: Nat) → ¬(o2 = o) → (r2: Ref) → root(o2) = Some(r2) → ¬(r2.b = r.b))))),
     one: (l1, l2, o: Nat) → (a1, a2: Acc) → l1 < s.na + s.nd → l2 < s.na + s.nd → ¬(l1 = l2) → s.role(l1) = KHold(o, a1) → s.role(l2) = KHold(o, a2) → False,
     words: (l: Nat) → s.in_regions(l) = True → (l < s.na + s.nd) ∧ ((s.role(l)).plain() = True),
-    frame: Heap::Frame(tys, h0, m.heap, lent),
+    frame: Heap::Frame(tys, strs, h0, m.heap, lent),
     grows: h0.len() <= m.heap.len(),
     young: (o: Nat) → s.nobj <= o → root(o) = None,
     held: (l, o: Nat) → (a: Acc) → l < s.na + s.nd → s.role(l) = KHold(o, a) → o < s.nobj,
@@ -1125,7 +1125,7 @@ record Inv(tys: Nat → Type, strs: Strs(tys), s: CSt, e: Env(tys), m: Mach(tys)
 }
 
 // Where nothing is pending, the invariant's first part is `Sim` itself.
-theorem Inv::sim_now(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: Nat → Bool}, inv: Inv(tys, strs, s, e, m, h0, lent),
+theorem Inv::sim_now(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>}, inv: Inv(tys, strs, s, e, m, h0, lent),
     none: s.pending() = False): Sim(tys, strs, s, e, m)
 {
     j(s.patched_none(tys, strs, e, m, none), λ q _ => Sim(tys, strs, s, q, m), inv.sim)
@@ -1430,8 +1430,8 @@ theorem CSt::role_of_changes(tys: Nat → Type, strs: Strs(tys), p: Param, l, o:
     })(h)
 }
 
-theorem Value::lends_nth(tys: Nat → Type, vs: List<Value(tys)>): (ps: List<Param>) → (i: Nat) → (p: Param) → (r: Ref) → ps.nth(i) = Some(p) → p.mode.changes() = True →
-    vs.nth(i) = Some(Refer(r)) → Value::lends(tys, ps, vs, r.b) = True
+theorem Value::lent_nth(tys: Nat → Type, vs: List<Value(tys)>): (ps: List<Param>) → (i: Nat) → (p: Param) → (r: Ref) → ps.nth(i) = Some(p) → p.mode.changes() = True →
+    vs.nth(i) = Some(Refer(r)) → Mem(r, Value::lent(tys, ps, vs))
 {
     match vs {
         Nil => λ ps i p r _ _ no => absurd(no),
@@ -1442,14 +1442,18 @@ theorem Value::lends_nth(tys: Nat → Type, vs: List<Value(tys)>): (ps: List<Par
                     let qp: (q = p) = Option::some_inj(q, p, ep);
                     let vr: (v = Refer(r)) = Option::some_inj(v, Refer(r), e);
                     let ch2: (q.mode.changes() = True) = j(sym(qp), λ u _ => u.mode.changes() = True, ch);
-                    let hit: ((match v { Refer(r2) => r2.b.same(r.b), Plain(_) => False }) = True) =
-                        j(sym(vr), λ u _ => (match u { Refer(r2) => r2.b.same(r.b), Plain(_) => False }) = True, r.b.same_self());
-                    j(sym(Bool::and_of(q.mode.changes(), match v { Refer(r2) => r2.b.same(r.b), Plain(_) => False }, ch2, hit)),
-                        λ bb _ => (bb || Value::lends(tys, pr, rest, r.b)) = True, refl)
+                    j(sym(vr), λ u _ => Mem(r, Value::lent(tys, Cons(q, pr), Cons(u, rest))),
+                        j(sym(ch2), λ c _ => Mem(r, match c { True => Cons(r, Value::lent(tys, pr, rest)), False => Value::lent(tys, pr, rest) }), Inl(refl)))
                 },
                 Succ(k) => λ p r ep ch e => {
-                    let ih = Value::lends_nth(tys, rest, pr, k, p, r, ep, ch, e);
-                    match (q.mode.changes() && match v { Refer(r2) => r2.b.same(r.b), Plain(_) => False }) { True => refl, False => ih }
+                    let ih = Value::lent_nth(tys, rest, pr, k, p, r, ep, ch, e);
+                    (match v as λ u => Mem(r, Value::lent(tys, Cons(q, pr), Cons(u, rest))) {
+                        Plain(_) => ih,
+                        Refer(r2) => (match q.mode.changes() as λ c => Mem(r, match c { True => Cons(r2, Value::lent(tys, pr, rest)), False => Value::lent(tys, pr, rest) }) {
+                            True => Inr(ih),
+                            False => ih,
+                        }),
+                    })
                 },
             },
         },
@@ -1590,7 +1594,7 @@ theorem CSt::start_root_past(tys: Nat → Type, vs: List<Value(tys)>, o: Nat, ge
 
 theorem Inv::start(tys: Nat → Type, strs: Strs(tys), sig: Sig, vs: List<Value(tys)>, h: Heap(tys), io: Io, ds: List<Dyn(tys)>, ra: Value::ReadAll(tys, strs, h, h.len(), vs, ds),
     coded: Dyn::Coded(tys, ds, sig.params), ld: Lendable(tys, strs, sig.params, h, vs)):
-    Inv(tys, strs, CSt::start(tys, strs, sig), Env::start(tys, ds), Mach(h, REnv(Cell::args(tys, sig.params, vs), Nil), io), h, λ b => Value::lends(tys, sig.params, vs, b))
+    Inv(tys, strs, CSt::start(tys, strs, sig), Env::start(tys, ds), Mach(h, REnv(Cell::args(tys, sig.params, vs), Nil), io), h, Value::lent(tys, sig.params, vs))
 {
     let s = CSt::start(tys, strs, sig);
     let m = Mach(h, REnv(Cell::args(tys, sig.params, vs), Nil), io);
@@ -1612,7 +1616,7 @@ theorem Inv::start(tys: Nat → Type, strs: Strs(tys), sig: Sig, vs: List<Value(
         },
         λ o r hr => match ld.live(o, r, CSt::start_root_is(tys, vs, o, r, hr)) { ⟨d1, pr⟩ => Heap::obj_below(tys, h, r.b, Obj(d1, Nil), pr.left) },
         λ o ch r hr => match CSt::start_changes(tys, strs, sig, o, ch) {
-            ⟨p, pp⟩ => Inl(Value::lends_nth(tys, vs, sig.params, o, p, r, pp.left, pp.right, CSt::start_root_is(tys, vs, o, r, hr))),
+            ⟨p, pp⟩ => Inl(Value::lent_nth(tys, vs, sig.params, o, p, r, pp.left, pp.right, CSt::start_root_is(tys, vs, o, r, hr))),
         },
         λ x l hl _ co r cr => {
             let st = CSt::start_lvl(tys, strs, sig, x, l, hl);
@@ -1620,7 +1624,7 @@ theorem Inv::start(tys: Nat → Type, strs: Strs(tys), sig: Sig, vs: List<Value(
         },
         λ l1 l2 o a1 a2 b1 b2 ne h1 h2 => Inv::start_one(tys, strs, sig, l1, l2, o, a1, a2, b1, b2, ne, h1, h2),
         λ l no => absurd(no),
-        λ b _ _ => refl,
+        λ b _ _ q _ => refl,
         omega(),
         λ o ge => {
             let ge2: (sig.params.len() <= o) = ge;
@@ -2095,7 +2099,7 @@ theorem CSt::href_sub(tys: Nat → Type, s, s2: CSt, root: Nat → Option<Ref>, 
 
 // The invariant after a binding of a plain value, nothing pending (its
 // cell's ownership flag is any: a plain value owns no block).
-theorem Inv::push_plain(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: Nat → Bool}, inv: Inv(tys, strs, s, e, m, h0, lent),
+theorem Inv::push_plain(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>}, inv: Inv(tys, strs, s, e, m, h0, lent),
     none: s.pending() = False, code: Shape, d: Dyn(tys), ow: Bool, okc: d.code = code):
     Inv(tys, strs, s.push(CVar(code, KPlain)), Env::push(tys, e, d), Mach::push(tys, m, Cell(level2::Plain(d), ow)), h0, lent)
 {
@@ -2192,14 +2196,14 @@ theorem Inv::push_plain(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(ty
 // names the roots the start gave.
 fn REnv::ArgsKept(tys: Nat → Type, e2, e: REnv(tys)) → Type { (i: Nat) → Value::ref_of(tys, (REnv::get(tys, e2, Arg(i))).v) = Value::ref_of(tys, (REnv::get(tys, e, Arg(i))).v) }
 
-record Stepped(tys: Nat → Type, strs: Strs(tys), fns: Nat → Func, call: Caller(tys), st: Stmt, s2: CSt, e2: Env(tys), m: Mach(tys), h0: Heap(tys), lent: Nat → Bool) {
+record Stepped(tys: Nat → Type, strs: Strs(tys), fns: Nat → Func, call: Caller(tys), st: Stmt, s2: CSt, e2: Env(tys), m: Mach(tys), h0: Heap(tys), lent: List<Ref>) {
     m2: Mach(tys),
     runs: Stmt::Continues(tys, strs, fns, call, st, m, m2),
     inv: Inv(tys, strs, s2, e2, m2, h0, lent),
     kept: REnv::ArgsKept(tys, m2.env, m.env),
 }
 
-theorem Stmt::stage_lit(tys: Nat → Type, strs: Strs(tys), fns: Nat → Func, call: Caller(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: Nat → Bool},
+theorem Stmt::stage_lit(tys: Nat → Type, strs: Strs(tys), fns: Nat → Func, call: Caller(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>},
     inv: Inv(tys, strs, s, e, m, h0, lent), none: s.pending() = False, w: Width, n: Nat):
     Stepped(tys, strs, fns, call, Lit(w, n), s.push(CVar(SWord(w), KPlain)), Env::push(tys, e, Dyn(SWord(w), Width::of_nat(w, n))), m, h0, lent)
 {
@@ -2207,7 +2211,7 @@ theorem Stmt::stage_lit(tys: Nat → Type, strs: Strs(tys), fns: Nat → Func, c
     Stepped(Mach::push(tys, m, Cell::plain(tys, d)), λ k => refl, Inv::push_plain(tys, strs, inv, none, SWord(w), d, False, refl), λ _ => refl)
 }
 
-theorem Stmt::stage_op(tys: Nat → Type, strs: Strs(tys), fns: Nat → Func, call: Caller(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: Nat → Bool},
+theorem Stmt::stage_op(tys: Nat → Type, strs: Strs(tys), fns: Nat → Func, call: Caller(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>},
     inv: Inv(tys, strs, s, e, m, h0, lent), none: s.pending() = False, op: Prim, a, b: Var,
     ga, gb: Got, oka: s.read_var(tys, strs, a) = Some(ga), okb: s.read_var(tys, strs, b) = Some(gb), isw: ga.code.is_word() = True):
     Stepped(tys, strs, fns, call, Op(op, a, b), s.push(CVar(ga.code, KPlain)),
@@ -2222,7 +2226,7 @@ theorem Stmt::stage_op(tys: Nat → Type, strs: Strs(tys), fns: Nat → Func, ca
         Inv::push_plain(tys, strs, inv, none, ga.code, d, False, Dyn::words_code(tys, Env::get(tys, e, a), Env::get(tys, e, b), op, ga.code, Sim::read_code(tys, strs, sim, a, ga, oka), isw)), λ _ => refl)
 }
 
-theorem Stmt::stage_read(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(tys, cx.strs), fns: Nat → Func, call: Caller(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: Nat → Bool},
+theorem Stmt::stage_read(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(tys, cx.strs), fns: Nat → Func, call: Caller(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>},
     inv: Inv(tys, cx.strs, s, e, m, h0, lent), none: s.pending() = False, p: Place, g: Got, ok: s.read(tys, cx.strs, p) = Some(g), tail: Type, res: Residual::All(g.rs, tys, cx, e, tail)):
     Stepped(tys, cx.strs, fns, call, Read(p), s.push(CVar(g.code, KPlain)), Env::push(tys, e, p.val(tys, cx.strs, e)), m, h0, lent)
 {
@@ -2247,6 +2251,17 @@ theorem List::nth_snoc_below<A>(self xs: List<A>, x: A): (i: Nat) → i < xs.len
 theorem List::nth_snoc_at<A>(self xs: List<A>, x: A): (xs ++ [x]).nth(xs.len()) = Some(x) { match xs { Nil => refl, Cons(_, rest) => rest.nth_snoc_at(x) } }
 
 theorem List::len_snoc<A>(self xs: List<A>, x: A): (xs ++ [x]).len() = xs.len() + 1 { match xs { Nil => refl, Cons(_, rest) => Nat::cong_succ(rest.len_snoc(x)) } }
+
+// What a block holds at a path, where its object is the same.
+theorem Heap::at_obj(tys: Nat → Type, strs: Strs(tys), h1, h2: Heap(tys), b: Nat, q: List<Sel>, e: Heap::obj(tys, h1, b) = Heap::obj(tys, h2, b)): Heap::at(tys, strs, h1, b, q) = Heap::at(tys, strs, h2, b, q) {
+    cong_fn(λ (z: Option<Obj(tys)>) => z.and_then(λ o => Sel::get(tys, strs, q, o.val)), e)
+}
+
+// A block with no holes reads as its object's value.
+theorem Heap::val_bare(tys: Nat → Type, strs: Strs(tys), h: Heap(tys), b: Nat, ob: Obj(tys), ho: Heap::obj(tys, h, b) = Some(ob), hn: ob.holes = Nil): Heap::val(tys, strs, h, b) = Some(ob.val) {
+    j(sym(ho), λ z _ => (match z as λ _ => Option<Dyn(tys)> { Some(o) => Obj::read(tys, strs, h, h.len(), o), None => None }) = Some(ob.val),
+        j(sym(hn), λ hs _ => Obj::fill(tys, strs, h, h.len(), ob.val, hs) = Some(ob.val), Obj::fill_nil(tys, strs, h, h.len(), ob.val)))
+}
 
 theorem Heap::obj_grow(tys: Nat → Type, h: Heap(tys), x: Block(tys), b: Nat, below: b < h.len()): Heap::obj(tys, h ++ [x], b) = Heap::obj(tys, h, b) {
     cong_fn(λ (q: Option<Block(tys)>) => match q { Some(bl) => match bl { Live(o) => Some(o), Dead => None<Obj(tys)>() }, None => None<Obj(tys)>() }, h.nth_snoc_below(x, b, below))
@@ -2326,7 +2341,7 @@ theorem Cell::agrees_grow(tys: Nat → Type, strs: Strs(tys), h: Heap(tys), x: B
 }
 
 // `Sim` on a heap one block longer.
-theorem Sim::grow(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: Nat → Bool}, inv: Inv(tys, strs, s, e, m, h0, lent),
+theorem Sim::grow(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>}, inv: Inv(tys, strs, s, e, m, h0, lent),
     sim: Sim(tys, strs, s, e, m), x: Block(tys)): Sim(tys, strs, s, e, Mach(m.heap ++ [x], m.env, m.io))
 {
     Sim(sim.eargs, sim.margs, sim.elocs, sim.mlocs,
@@ -2383,7 +2398,7 @@ theorem Sim::lvl_ix(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)},
 }
 
 // The invariant after a fresh object `d` of code `c`, nothing pending.
-theorem Inv::fresh(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: Nat → Bool}, inv: Inv(tys, strs, s, e, m, h0, lent),
+theorem Inv::fresh(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>}, inv: Inv(tys, strs, s, e, m, h0, lent),
     none: s.pending() = False, c: Shape, d: Dyn(tys), okc: d.code = c):
     Inv(tys, strs, s.push(CVar(c, KHold(s.nobj, AcOwn))).fresh_obj(), Env::push(tys, e, d),
         Mach(m.heap ++ [Live(Obj(d, Nil))], REnv::push(tys, m.env, Cell(Refer(Ref(m.heap.len(), Nil)), True)), m.io), h0, lent)
@@ -2523,7 +2538,7 @@ theorem Inv::fresh(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, 
             let ww = inv.words(l, w);
             ⟨omega(ww.left), trans(cong_fn(λ (q: Role) => q.plain(), s.role_push(cv, l, ww.left)), ww.right)⟩
         },
-        λ b bl nl => trans(m.heap.nth_snoc_below(x, b, omega(bl, inv.grows)), inv.frame(b, bl, nl)),
+        λ b bl nn q ap => trans(Heap::at_obj(tys, strs, h2, m.heap, b, q, Heap::obj_grow(tys, m.heap, x, b, omega(bl, inv.grows))), inv.frame(b, bl, nn, q, ap)),
         omega(inv.grows, lenh),
         λ o ge => trans(s.fresh_root_other(inv.root, hb, o, λ eq => omega(ge, eq)), inv.young(o, omega(ge))),
         λ l o a b hr => match Nat::below_succ(l, s.na + s.nd, b) {
@@ -2626,7 +2641,7 @@ theorem Stmt::fresh_runs(tys: Nat → Type, strs: Strs(tys), fns: Nat → Func, 
         j(sym(vv), λ o _ => (match o { Some(xd) => fin(dn, xd), None => Stuck }) = fin(dn, dv), refl))
 }
 
-theorem Stmt::stage_fresh(tys: Nat → Type, strs: Strs(tys), fns: Nat → Func, call: Caller(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: Nat → Bool},
+theorem Stmt::stage_fresh(tys: Nat → Type, strs: Strs(tys), fns: Nat → Func, call: Caller(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>},
     inv: Inv(tys, strs, s, e, m, h0, lent), none: s.pending() = False, k: Nat, n, v: Var, gn, gv: Got,
     okn: s.read_var(tys, strs, n) = Some(gn), okv: s.read_var(tys, strs, v) = Some(gv),
     kok: (match strs(k).kind { Sequence(q) => s.code(n).is_word() && s.code(v).same(q.elem), Opaque => False, Record(_) => False }) = True):
@@ -2741,7 +2756,7 @@ theorem CSt::href_gone(tys: Nat → Type, s: CSt, l: Nat, b: l < s.na + s.nd, ro
 
 // The invariant with a level set gone that no live region reads, no entry
 // is of, and no entry is opened on.
-theorem Inv::gone(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: Nat → Bool}, inv: Inv(tys, strs, s, e, m, h0, lent),
+theorem Inv::gone(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>}, inv: Inv(tys, strs, s, e, m, h0, lent),
     l: Nat, b: l < s.na + s.nd, notreg: s.in_regions(l) = False, nolvl: (en: VEnt) → Mem(en, s.views) → ¬(en.lvl = l), nopar: (en: VEnt) → Mem(en, s.views) → ¬(en.par = l)):
     Inv(tys, strs, s.set(l, KGone), e, m, h0, lent)
 {
@@ -2848,7 +2863,7 @@ theorem CSt::obj_views(self s: CSt, en: VEnt, m: Mem(en, s.views), o: Nat, eo: e
 
 // `Sim` after the death of a held object's whole block, which only its
 // holder reads.
-theorem Sim::kill(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: Nat → Bool}, inv: Inv(tys, strs, s, e, m, h0, lent),
+theorem Sim::kill(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>}, inv: Inv(tys, strs, s, e, m, h0, lent),
     sim: Sim(tys, strs, s, e, m), l, o: Nat, r: Ref, b: l < s.na + s.nd, hr: s.role(l) = KHold(o, AcOwn), rt: inv.root(o) = Some(r),
     ex: (o2: Nat) → ¬(o2 = o) → (r2: Ref) → inv.root(o2) = Some(r2) → ¬(r2.b = r.b), nov: s.has_obj_views(o) = False):
     Sim(tys, strs, s.set(l, KGone), e, Mach(Heap::kill(tys, m.heap, r.b), m.env, m.io))
@@ -2898,7 +2913,7 @@ theorem Sim::kill(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {
 
 // No entry is of a holder, and none is opened on a holder of an object with
 // no live views; no live region reads a holder.
-theorem Inv::hold_facts(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: Nat → Bool}, inv: Inv(tys, strs, s, e, m, h0, lent),
+theorem Inv::hold_facts(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>}, inv: Inv(tys, strs, s, e, m, h0, lent),
     l, o: Nat, a: Acc, hr: s.role(l) = KHold(o, a), nov: s.has_obj_views(o) = False):
     (s.in_regions(l) = False) ∧ (((en: VEnt) → Mem(en, s.views) → ¬(en.lvl = l)) ∧ ((en: VEnt) → Mem(en, s.views) → ¬(en.par = l)))
 {
@@ -2916,8 +2931,8 @@ theorem Inv::hold_facts(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(ty
 }
 
 // The invariant after the death of a held object's whole block.
-theorem Inv::kill(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: Nat → Bool}, inv: Inv(tys, strs, s, e, m, h0, lent),
-    none: s.pending() = False, l, o: Nat, r: Ref, b: l < s.na + s.nd, hr: s.role(l) = KHold(o, AcOwn), rt: inv.root(o) = Some(r),
+theorem Inv::kill(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>}, inv: Inv(tys, strs, s, e, m, h0, lent),
+    none: s.pending() = False, l, o: Nat, r: Ref, b: l < s.na + s.nd, hr: s.role(l) = KHold(o, AcOwn), rt: inv.root(o) = Some(r), rn: r.sels = Nil,
     ex: (o2: Nat) → ¬(o2 = o) → (r2: Ref) → inv.root(o2) = Some(r2) → ¬(r2.b = r.b), nov: s.has_obj_views(o) = False):
     Inv(tys, strs, s.set(l, KGone), e, Mach(Heap::kill(tys, m.heap, r.b), m.env, m.io), h0, lent)
 {
@@ -2968,12 +2983,12 @@ theorem Inv::kill(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {
         ig.own,
         ig.one,
         ig.words,
-        λ b2 bl nl => match Nat::eq_or_ne(b2, r.b) {
+        λ b2 bl nn q ap => match Nat::eq_or_ne(b2, r.b) {
             Inl(eq) => match inv.owned(o, chg, r, rt) {
-                Inl(lt) => absurd(trans(sym(nl), j(sym(eq), λ q _ => lent(q) = True, lt))),
+                Inl(mr) => false_elim(nn(r, mr, sym(eq), rn)),
                 Inr(ge) => false_elim(Nat::lt_irrefl(b2, omega(bl, ge, eq))),
             },
-            Inr(ne) => trans(m.heap.nth_update_other(r.b, λ _ => Dead, b2, ne), inv.frame(b2, bl, nl)),
+            Inr(ne) => trans(Heap::at_obj(tys, strs, h2, m.heap, b2, q, Heap::obj_kill_other(tys, m.heap, r.b, b2, ne)), inv.frame(b2, bl, nn, q, ap)),
         },
         j(sym(lenh), λ n _ => h0.len() <= n, inv.grows),
         ig.young,
@@ -2992,7 +3007,7 @@ theorem Inv::kill(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {
 // ---------------------------------------------------------------------------
 // The death stages: of a part (nothing), of a plain variable, of a holder
 
-theorem Stmt::stage_death_part(tys: Nat → Type, strs: Strs(tys), fns: Nat → Func, call: Caller(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: Nat → Bool},
+theorem Stmt::stage_death_part(tys: Nat → Type, strs: Strs(tys), fns: Nat → Func, call: Caller(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>},
     inv: Inv(tys, strs, s, e, m, h0, lent), x: Var, a: Step, rest: List<Step>): Stepped(tys, strs, fns, call, Death(Place(x, Cons(a, rest))), s, e, m, h0, lent)
 {
     Stepped(m, λ k => refl, inv, λ _ => refl)
@@ -3037,7 +3052,7 @@ theorem Stmt::death_kills(tys: Nat → Type, strs: Strs(tys), fns: Nat → Func,
             j(sym(live), λ q _ => (match q { Some(_) => fin, None => Stuck }) = fin, refl)))
 }
 
-theorem Stmt::stage_death_plain(tys: Nat → Type, strs: Strs(tys), fns: Nat → Func, call: Caller(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: Nat → Bool},
+theorem Stmt::stage_death_plain(tys: Nat → Type, strs: Strs(tys), fns: Nat → Func, call: Caller(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>},
     inv: Inv(tys, strs, s, e, m, h0, lent), none: s.pending() = False, x: Var, l: Nat, hl: s.lvl(x) = Some(l), hp: s.role(l) = KPlain, notreg: s.in_regions(l) = False):
     Stepped(tys, strs, fns, call, Death(Place(x, Nil)), s.set(l, KGone), e, m, h0, lent)
 {
@@ -3055,7 +3070,7 @@ theorem Stmt::stage_death_plain(tys: Nat → Type, strs: Strs(tys), fns: Nat →
         Inv::gone(tys, strs, inv, l, s.lvl_below(x, l, hl), notreg, nolvl, nopar), λ _ => refl)
 }
 
-theorem Stmt::stage_death_hold(tys: Nat → Type, strs: Strs(tys), fns: Nat → Func, call: Caller(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: Nat → Bool},
+theorem Stmt::stage_death_hold(tys: Nat → Type, strs: Strs(tys), fns: Nat → Func, call: Caller(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>},
     inv: Inv(tys, strs, s, e, m, h0, lent), none: s.pending() = False, x: Var, l, o: Nat, a: Acc, hl: s.lvl(x) = Some(l), hr: s.role(l) = KHold(o, a), nov: s.has_obj_views(o) = False):
     Stepped(tys, strs, fns, call, Death(Place(x, Nil)), s.set(l, KGone), e, m, h0, lent)
 {
@@ -3079,7 +3094,7 @@ theorem Stmt::stage_death_hold(tys: Nat → Type, strs: Strs(tys), fns: Nat → 
                         j(cr, λ v _ => Value::Reads(tys, strs, m.heap, v, Env::get(tys, e, x)), Cell::agrees_val(tys, strs, m.heap, s.role(l), c, Env::get(tys, e, x), sim.vars(x, l, hl), live));
                     match Value::reads_live(tys, strs, m.heap, r, Env::get(tys, e, x), rd) {
                         ⟨ob, pob⟩ => Stepped(Mach(Heap::kill(tys, m.heap, r.b), m.env, m.io), λ k => Stmt::death_kills(tys, strs, fns, call, m, x, r, k, co, cr, ob, pob),
-                            Inv::kill(tys, strs, inv, none, l, o, r, b, hr1, rt, ex, nov), λ _ => refl),
+                            Inv::kill(tys, strs, inv, none, l, o, r, b, hr1, rt, po.right.right.left, ex, nov), λ _ => refl),
                     }
                 },
             },
@@ -3110,14 +3125,14 @@ theorem CSt::changes_push_hold(self s: CSt, code: Shape, o: Nat, a: Acc, o1: Nat
     }
 }
 
-theorem Inv::push_hold(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: Nat → Bool}, inv: Inv(tys, strs, s, e, m, h0, lent),
+theorem Inv::push_hold(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>}, inv: Inv(tys, strs, s, e, m, h0, lent),
     none: s.pending() = False, code: Shape, o: Nat, a: Acc, c: Cell(tys), d: Dyn(tys), rd: Value::Reads(tys, strs, m.heap, c.v, d), okc: d.code = code,
     rf: (r: Ref) → c.v = Refer(r) → inv.root(o) = Some(r),
     hrf: (r: Ref) → inv.root(o) = Some(r) → c.v = Refer(r),
     ow: c.own = True → (r: Ref) → c.v = Refer(r) → (a = AcOwn) ∧ ((r.sels = Nil) ∧ ((o2: Nat) → ¬(o2 = o) → (r2: Ref) → inv.root(o2) = Some(r2) → ¬(r2.b = r.b))),
     noh: (l: Nat) → (a2: Acc) → l < s.na + s.nd → s.role(l) = KHold(o, a2) → False,
     ho: o < s.nobj,
-    wr: a.writes() = True → ((r: Ref) → inv.root(o) = Some(r) → (lent(r.b) = True) ∨ (h0.len() <= r.b)) ∧
+    wr: a.writes() = True → ((r: Ref) → inv.root(o) = Some(r) → Mem(r, lent) ∨ (h0.len() <= r.b)) ∧
         ((o2: Nat) → ¬(o2 = o) → (r1, r2: Ref) → inv.root(o) = Some(r1) → inv.root(o2) = Some(r2) → Ref::Apart(tys, strs, r1, r2))):
     Inv(tys, strs, s.push(CVar(code, KHold(o, a))), Env::push(tys, e, d), Mach::push(tys, m, c), h0, lent)
 {
@@ -3226,7 +3241,7 @@ theorem Inv::push_hold(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys
 // ---------------------------------------------------------------------------
 // The take stages: of a part (a copy), of a plain variable, of a holder
 
-theorem Stmt::stage_take_part(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(tys, cx.strs), fns: Nat → Func, call: Caller(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: Nat → Bool},
+theorem Stmt::stage_take_part(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(tys, cx.strs), fns: Nat → Func, call: Caller(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>},
     inv: Inv(tys, cx.strs, s, e, m, h0, lent), none: s.pending() = False, x: Var, a: Step, rest: List<Step>, g: Got, ok: s.read(tys, cx.strs, Place(x, Cons(a, rest))) = Some(g),
     tail: Type, res: Residual::All(g.rs, tys, cx, e, tail)):
     Stepped(tys, cx.strs, fns, call, Take(Place(x, Cons(a, rest))), s.push(CVar(g.code, KPlain)), Env::push(tys, e, (Place(x, Cons(a, rest))).val(tys, cx.strs, e)), m, h0, lent)
@@ -3247,7 +3262,7 @@ theorem Stmt::take_runs(tys: Nat → Type, strs: Strs(tys), fns: Nat → Func, c
     j(sym(v), λ o _ => (match o { Some(_) => k(Mach::push(tys, m, REnv::get(tys, m.env, x))), None => Stuck }) = k(Mach::push(tys, m, REnv::get(tys, m.env, x))), refl)
 }
 
-theorem Stmt::stage_take_plain(tys: Nat → Type, strs: Strs(tys), fns: Nat → Func, call: Caller(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: Nat → Bool},
+theorem Stmt::stage_take_plain(tys: Nat → Type, strs: Strs(tys), fns: Nat → Func, call: Caller(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>},
     inv: Inv(tys, strs, s, e, m, h0, lent), none: s.pending() = False, x: Var, g: Got, ok: s.read_var(tys, strs, x) = Some(g), hp: s.role(g.root) = KPlain):
     Stepped(tys, strs, fns, call, Take(Place(x, Nil)), s.push(CVar(g.code, KPlain)), Env::push(tys, e, Env::get(tys, e, x)), m, h0, lent)
 {
@@ -3261,7 +3276,7 @@ theorem Stmt::stage_take_plain(tys: Nat → Type, strs: Strs(tys), fns: Nat → 
         j(sym(pv), λ v _ => Inv(tys, strs, s.push(CVar(g.code, KPlain)), Env::push(tys, e, d), Mach::push(tys, m, Cell(v, c.own)), h0, lent), iv), λ _ => refl)
 }
 
-theorem Stmt::stage_take_hold(tys: Nat → Type, strs: Strs(tys), fns: Nat → Func, call: Caller(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: Nat → Bool},
+theorem Stmt::stage_take_hold(tys: Nat → Type, strs: Strs(tys), fns: Nat → Func, call: Caller(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>},
     inv: Inv(tys, strs, s, e, m, h0, lent), none: s.pending() = False, x: Var, g: Got, ok: s.read_var(tys, strs, x) = Some(g), o: Nat, a: Acc,
     hr: s.role(g.root) = KHold(o, a), nov: s.has_obj_views(o) = False):
     Stepped(tys, strs, fns, call, Take(Place(x, Nil)), (s.set(g.root, KGone)).push(CVar(g.code, KHold(o, a))), Env::push(tys, e, Env::get(tys, e, x)), m, h0, lent)
@@ -3294,7 +3309,7 @@ theorem Stmt::stage_take_hold(tys: Nat → Type, strs: Strs(tys), fns: Nat → F
         Inl(eq) => absurd(trans(sym(h2), j(sym(eq), λ q _ => s1.role(q) = KGone, s.set_gone_role(l)))),
         Inr(ne) => inv.one(l2, l, o, a2, a, b2, b, ne, trans(sym(s.role_set_other(l, l2, KGone, ne, b, b2)), h2), hr),
     };
-    let wr: (a.writes() = True → ((r: Ref) → inv.root(o) = Some(r) → (lent(r.b) = True) ∨ (h0.len() <= r.b)) ∧
+    let wr: (a.writes() = True → ((r: Ref) → inv.root(o) = Some(r) → Mem(r, lent) ∨ (h0.len() <= r.b)) ∧
             ((o2: Nat) → ¬(o2 = o) → (r1, r2: Ref) → inv.root(o) = Some(r1) → inv.root(o2) = Some(r2) → Ref::Apart(tys, strs, r1, r2))) = λ w => {
         let chg: s.Changes(o) = Inl(Exists(l, ⟨b, Exists(a, ⟨hr, w⟩)⟩));
         ⟨λ r rt => inv.owned(o, chg, r, rt), λ o2 ne r1 r2 e1 e2 => inv.apart(o, o2, λ eq => ne(sym(eq)), chg, r1, r2, e1, e2)⟩
@@ -3758,7 +3773,7 @@ theorem CSt::anc_one(self f: Nat, s: CSt, lt: (en: VEnt) → Mem(en, s.views) �
     }
 }
 
-theorem Inv::push_view(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: Nat → Bool}, inv: Inv(tys, strs, s, e, m, h0, lent),
+theorem Inv::push_view(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>}, inv: Inv(tys, strs, s, e, m, h0, lent),
     none: s.pending() = False, code: Shape, ne: List<VEnt>, c: Cell(tys), d: Dyn(tys), rd: Value::Reads(tys, strs, m.heap, c.v, d), okc: d.code = code, nown: c.own = False,
     nlvl: (en: VEnt) → Mem(en, ne) → en.lvl = s.na + s.nd,
     nobj: (en: VEnt) → Mem(en, ne) → en.obj < s.nobj,
@@ -4239,7 +4254,7 @@ theorem Stmt::view_cfit(tys: Nat → Type, strs: Strs(tys), h: Heap(tys), v: Val
 // The view stage, once the new entries' facts are in hand: the run binds the
 // root's reference narrowed (or a copy of a plain root's value), and the
 // invariant holds with the new entries.
-theorem Stmt::stage_view_core(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(tys, cx.strs), fns: Nat → Func, call: Caller(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: Nat → Bool},
+theorem Stmt::stage_view_core(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(tys, cx.strs), fns: Nat → Func, call: Caller(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>},
     inv: Inv(tys, cx.strs, s, e, m, h0, lent), none: s.pending() = False, p: Place, md: Mode, g: Got, ok: s.read(tys, cx.strs, p) = Some(g), tail: Type, res: Residual::All(g.rs, tys, cx, e, tail),
     ne: List<VEnt>,
     npar: (en: VEnt) → Mem(en, ne) → en.par = g.root,
@@ -4330,7 +4345,7 @@ theorem CSt::read_lic_view(self s: CSt, l: Nat, xs: List<Step>, rl: List<Residua
 
 // What the licence's verdict gives at the run's words, after a prefix the
 // entry's region and the place share.
-theorem Inv::lic_suffix(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(tys, cx.strs), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: Nat → Bool}, inv: Inv(tys, cx.strs, s, e, m, h0, lent),
+theorem Inv::lic_suffix(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(tys, cx.strs), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>}, inv: Inv(tys, cx.strs, s, e, m, h0, lent),
     none: s.pending() = False, md: Mode, l: Nat, ps: List<Pl>, rs: List<Residual>, ok: s.license(s.views, md, l, ps) = Some(rs), hold: Residual::All(rs, tys, cx, e, True),
     en: VEnt, mem: Mem(en, s.views), mt: s.meets(l, md, en) = True, pl: Pl, mp: Mem(pl, ps), same: en.obj = pl.obj, pre, xa, xb: List<Step>, ea: en.reg = pre ++ xa, eb: pl.at = pre ++ xb,
     ra: s.InRange(Steps::lvls(xa)), pa: (l2: Nat) → l2.member(Steps::lvls(xa)) = True → (s.role(l2)).plain() = True,
@@ -4344,7 +4359,7 @@ theorem Inv::lic_suffix(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(tys, cx.st
 }
 
 // The same with no prefix: the entry's whole region against the place.
-theorem Inv::lic_apart(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(tys, cx.strs), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: Nat → Bool}, inv: Inv(tys, cx.strs, s, e, m, h0, lent),
+theorem Inv::lic_apart(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(tys, cx.strs), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>}, inv: Inv(tys, cx.strs, s, e, m, h0, lent),
     none: s.pending() = False, md: Mode, l: Nat, ps: List<Pl>, rs: List<Residual>, ok: s.license(s.views, md, l, ps) = Some(rs), hold: Residual::All(rs, tys, cx, e, True),
     en: VEnt, mem: Mem(en, s.views), mt: s.meets(l, md, en) = True, pl: Pl, mp: Mem(pl, ps), same: en.obj = pl.obj,
     rp: s.InRange(Steps::lvls(pl.at)), pp: (l2: Nat) → l2.member(Steps::lvls(pl.at)) = True → (s.role(l2)).plain() = True):
@@ -4430,7 +4445,7 @@ theorem CSt::anc_par(self s: CSt, en: VEnt, lt: en.par < en.lvl, lv: en.lvl < s.
 
 // The licence's verdict against a live entry whose region is a prefix then
 // its place, at a place of the same prefix: their places apart.
-theorem Inv::sib_lic(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(tys, cx.strs), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: Nat → Bool}, inv: Inv(tys, cx.strs, s, e, m, h0, lent),
+theorem Inv::sib_lic(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(tys, cx.strs), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>}, inv: Inv(tys, cx.strs, s, e, m, h0, lent),
     none: s.pending() = False, md: Mode, l: Nat, ps: List<Pl>, rs: List<Residual>, ok: s.license(s.views, md, l, ps) = Some(rs), hold: Residual::All(rs, tys, cx, e, True),
     en: VEnt, mem: Mem(en, s.views), mt: s.meets(l, md, en) = True, pl: Pl, mp: Mem(pl, ps), same: en.obj = pl.obj, pre, xb: List<Step>, ea: en.reg = pre ++ en.at, eb: pl.at = pre ++ xb,
     rb: s.InRange(Steps::lvls(xb)), pb: (l2: Nat) → l2.member(Steps::lvls(xb)) = True → (s.role(l2)).plain() = True):
@@ -4441,7 +4456,7 @@ theorem Inv::sib_lic(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(tys, cx.strs)
 }
 
 // A view to read of a holder.
-theorem Stmt::stage_view_hold_read(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(tys, cx.strs), fns: Nat → Func, call: Caller(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: Nat → Bool},
+theorem Stmt::stage_view_hold_read(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(tys, cx.strs), fns: Nat → Func, call: Caller(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>},
     inv: Inv(tys, cx.strs, s, e, m, h0, lent), none: s.pending() = False, p: Place, g: Got, ok: s.read(tys, cx.strs, p) = Some(g), o: Nat, a: Acc, hr: s.role(g.root) = KHold(o, a),
     tail: Type, res: Residual::All(g.rs, tys, cx, e, tail)):
     Stepped(tys, cx.strs, fns, call, View(p, Reading), s.with_view([VEnt(s.na + s.nd, o, g.at, Reading, g.root, g.at, True)], g.code), Env::push(tys, e, p.val(tys, cx.strs, e)), m, h0, lent)
@@ -4499,7 +4514,7 @@ theorem Stmt::stage_view_hold_read(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws
 }
 
 // A view to read of a view: an entry through each of the view's.
-theorem Stmt::stage_view_view_read(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(tys, cx.strs), fns: Nat → Func, call: Caller(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: Nat → Bool},
+theorem Stmt::stage_view_view_read(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(tys, cx.strs), fns: Nat → Func, call: Caller(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>},
     inv: Inv(tys, cx.strs, s, e, m, h0, lent), none: s.pending() = False, p: Place, g: Got, ok: s.read(tys, cx.strs, p) = Some(g), hr: s.role(g.root) = KView,
     tail: Type, res: Residual::All(g.rs, tys, cx, e, tail)):
     Stepped(tys, cx.strs, fns, call, View(p, Reading), s.with_view((s.ents(g.root)).map(λ e2 => VEnt(s.na + s.nd, e2.obj, e2.reg ++ g.at, Reading, g.root, g.at, True)), g.code),
@@ -4633,7 +4648,7 @@ theorem CSt::write_lic_view(self s: CSt, l: Nat, xs: List<Step>, rw: List<Residu
 }
 
 // A view to write of a holder.
-theorem Stmt::stage_view_hold_write(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(tys, cx.strs), fns: Nat → Func, call: Caller(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: Nat → Bool},
+theorem Stmt::stage_view_hold_write(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(tys, cx.strs), fns: Nat → Func, call: Caller(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>},
     inv: Inv(tys, cx.strs, s, e, m, h0, lent), none: s.pending() = False, p: Place, g: Got, ok: s.read(tys, cx.strs, p) = Some(g), o: Nat, a: Acc, hr: s.role(g.root) = KHold(o, a),
     rw: List<Residual>, okw: s.write_at(g.root, g.at) = Some(rw), tail: Type, res: Residual::All(g.rs ++ rw, tys, cx, e, tail)):
     Stepped(tys, cx.strs, fns, call, View(p, Writing), s.with_view([VEnt(s.na + s.nd, o, g.at, Writing, g.root, g.at, True)], g.code), Env::push(tys, e, p.val(tys, cx.strs, e)), m, h0, lent)
@@ -4708,7 +4723,7 @@ theorem Stmt::stage_view_hold_write(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaw
 }
 
 // A view to write of a view to write: through its one entry.
-theorem Stmt::stage_view_view_write(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(tys, cx.strs), fns: Nat → Func, call: Caller(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: Nat → Bool},
+theorem Stmt::stage_view_view_write(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(tys, cx.strs), fns: Nat → Func, call: Caller(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>},
     inv: Inv(tys, cx.strs, s, e, m, h0, lent), none: s.pending() = False, p: Place, g: Got, ok: s.read(tys, cx.strs, p) = Some(g), hr: s.role(g.root) = KView,
     rw: List<Residual>, okw: s.write_at(g.root, g.at) = Some(rw), pe1: VEnt, eone: s.ents(g.root) = [pe1], tail: Type, res: Residual::All(g.rs ++ rw, tys, cx, e, tail)):
     Stepped(tys, cx.strs, fns, call, View(p, Writing), s.with_view([VEnt(s.na + s.nd, pe1.obj, pe1.reg ++ g.at, Writing, g.root, g.at, True)], g.code), Env::push(tys, e, p.val(tys, cx.strs, e)), m, h0, lent)
@@ -4841,7 +4856,7 @@ theorem Stmt::stage_view_view_write(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaw
 }
 
 // A view of a plain variable: a copy.
-theorem Stmt::stage_view_plain(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(tys, cx.strs), fns: Nat → Func, call: Caller(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: Nat → Bool},
+theorem Stmt::stage_view_plain(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(tys, cx.strs), fns: Nat → Func, call: Caller(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>},
     inv: Inv(tys, cx.strs, s, e, m, h0, lent), none: s.pending() = False, p: Place, md: Mode, g: Got, ok: s.read(tys, cx.strs, p) = Some(g), hp: s.role(g.root) = KPlain,
     tail: Type, res: Residual::All(g.rs, tys, cx, e, tail)):
     Stepped(tys, cx.strs, fns, call, View(p, md), s.push(CVar(g.code, KPlain)), Env::push(tys, e, p.val(tys, cx.strs, e)), m, h0, lent)
@@ -5334,7 +5349,7 @@ theorem Sel::get_under(tys: Nat → Type, strs: Strs(tys), sl: StrsLaws(tys, str
 // The invariant at a state with other `touched` and `wrote` lists: it reads
 // neither, and every function of the state it reads converts between the
 // two (the state's other fields are the same projections).
-theorem Inv::touch(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: Nat → Bool}, inv: Inv(tys, strs, s, e, m, h0, lent),
+theorem Inv::touch(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>}, inv: Inv(tys, strs, s, e, m, h0, lent),
     t, w: List<Nat>): Inv(tys, strs, CSt(s.args, s.locs, s.na, s.nd, s.views, s.nobj, t, w), e, m, h0, lent)
 {
     inv
@@ -5437,7 +5452,7 @@ theorem Cell::agrees_store(tys: Nat → Type, strs: Strs(tys), h, h2: Heap(tys),
 
 // The words regions read, after a write to a variable no region reads that
 // changes no other variable's meaning.
-theorem Inv::words_after(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: Nat → Bool}, inv: Inv(tys, strs, s, e, m, h0, lent),
+theorem Inv::words_after(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>}, inv: Inv(tys, strs, s, e, m, h0, lent),
     sim: Sim(tys, strs, s, e, m), {e2: Env(tys)}, {m2: Mach(tys)}, sim2: Sim(tys, strs, s, e2, m2),
     ecw: (k: Nat) → s.in_regions(k) = True → Env::get(tys, e2, s.var_at(k)) = Env::get(tys, e, s.var_at(k))):
     (l2: Nat) → s.in_regions(l2) = True → (Mach::ixs(tys, strs, m2)).nth(s.ix_of(l2)) = (Mach::ixs(tys, strs, m)).nth(s.ix_of(l2))
@@ -5466,7 +5481,7 @@ theorem CSt::regions_other(self s: CSt, tys: Nat → Type, e, e2: Env(tys), x: V
 
 // One variable's cell set to a value that refers nowhere, agreeing with its
 // new meaning; no region reads it, and the heap is as it was.
-theorem Inv::set_cell(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: Nat → Bool}, inv: Inv(tys, strs, s, e, m, h0, lent),
+theorem Inv::set_cell(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>}, inv: Inv(tys, strs, s, e, m, h0, lent),
     x: Var, l: Nat, hl: s.lvl(x) = Some(l), nrf: s.in_regions(l) = False, f: Dyn(tys) → Dyn(tys), c: Cell(tys),
     pn: s.patched(tys, strs, e, m) = e, pn2: s.patched(tys, strs, Env::set(tys, e, x, f), Mach(m.heap, REnv::set(tys, m.env, x, c), m.io)) = Env::set(tys, e, x, f),
     agr: Cell::Agrees(tys, strs, m.heap, s.role(l), c, f(Env::get(tys, e, x))), code: (f(Env::get(tys, e, x))).code = (s.var(l)).code, nref: (r: Ref) → c.v = Refer(r) → False,
@@ -5590,8 +5605,9 @@ theorem Inv::set_cell(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)
 // from the written path under the root (`under`, by the licence `lic`).
 // A root's block stored, with a meaning every variable agrees with and that
 // keeps the words regions read: the invariant's other clauses.
-theorem Inv::store_rest(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: Nat → Bool}, inv: Inv(tys, strs, s, e, m, h0, lent),
-    none: s.pending() = False, o: Nat, r: Ref, rt: inv.root(o) = Some(r), ch: s.Changes(o), nw: Dyn(tys), ex: Env(tys),
+theorem Inv::store_rest(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>}, inv: Inv(tys, strs, s, e, m, h0, lent),
+    none: s.pending() = False, o: Nat, r: Ref, rt: inv.root(o) = Some(r), ch: s.Changes(o), nw: Dyn(tys), old: Dyn(tys), hv: Heap::val(tys, strs, m.heap, r.b) = Some(old),
+    away: (q: List<Sel>) → Sel::Apart(tys, strs, r.sels, q) → Sel::get(tys, strs, q, nw) = Sel::get(tys, strs, q, old), ex: Env(tys),
     sim2: Sim(tys, strs, s, ex, Mach(Heap::store(tys, m.heap, r.b, nw), m.env, m.io)),
     ecw: (k: Nat) → s.in_regions(k) = True → Env::get(tys, ex, s.var_at(k)) = Env::get(tys, e, s.var_at(k))):
     Inv(tys, strs, s, ex, Mach(Heap::store(tys, m.heap, r.b, nw), m.env, m.io), h0, lent)
@@ -5613,12 +5629,22 @@ theorem Inv::store_rest(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(ty
         inv.apart,
         λ o3 r3 h3 => j(sym(lenh), λ n _ => r3.b < n, inv.inheap(o3, r3, h3)),
         inv.owned, inv.own, inv.one, inv.words,
-        λ bb bl nl => match Nat::eq_or_ne(bb, r.b) {
+        λ bb bl nn q ap => match Nat::eq_or_ne(bb, r.b) {
             Inl(eq) => match inv.owned(o, ch, r, rt) {
-                Inl(lt) => absurd(trans(sym(nl), j(sym(eq), λ q _ => lent(q) = True, lt))),
+                Inl(mr) => match Heap::obj_of_val(tys, strs, m.heap, r.b, old, hv) {
+                    ⟨ob, pob⟩ => {
+                        let ov: (ob.val = old) = Option::some_inj(ob.val, old, trans(sym(Heap::val_bare(tys, strs, m.heap, r.b, ob, pob, inv.bare(o, r, rt, ob, pob))), hv));
+                        let a2: (Heap::at(tys, strs, h2, r.b, q) = Sel::get(tys, strs, q, nw)) =
+                            cong_fn(λ (z: Option<Obj(tys)>) => z.and_then(λ o2 => Sel::get(tys, strs, q, o2.val)), Heap::obj_store_here(tys, m.heap, r.b, nw, ob, pob));
+                        let a1: (Heap::at(tys, strs, m.heap, r.b, q) = Sel::get(tys, strs, q, old)) =
+                            trans(cong_fn(λ (z: Option<Obj(tys)>) => z.and_then(λ o2 => Sel::get(tys, strs, q, o2.val)), pob), cong_fn(λ (d: Dyn(tys)) => Sel::get(tys, strs, q, d), ov));
+                        j(sym(eq), λ z _ => Heap::at(tys, strs, h2, z, q) = Heap::at(tys, strs, h0, z, q),
+                            trans(a2, trans(away(q, ap(r, mr, sym(eq))), trans(sym(a1), inv.frame(r.b, j(eq, λ z _ => z < h0.len(), bl), λ r2 m2 e2 => nn(r2, m2, trans(e2, sym(eq))), q, λ r2 m2 e2 => ap(r2, m2, trans(e2, sym(eq))))))))
+                    },
+                },
                 Inr(ge) => false_elim(Nat::lt_irrefl(bb, omega(bl, ge, eq))),
             },
-            Inr(ne) => trans(m.heap.nth_update_other(r.b, λ bl0 => match bl0 { Live(ob) => Live(Obj(nw, ob.holes)), Dead => Dead }, bb, ne), inv.frame(bb, bl, nl)),
+            Inr(ne) => trans(Heap::at_obj(tys, strs, h2, m.heap, bb, q, Heap::obj_store_other(tys, m.heap, r.b, bb, nw, ne)), inv.frame(bb, bl, nn, q, ap)),
         },
         j(sym(lenh), λ n _ => h0.len() <= n, inv.grows),
         inv.young, inv.held, inv.vents,
@@ -5629,7 +5655,7 @@ theorem Inv::store_rest(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(ty
         inv.args, inv.href, inv.made, inv.nbase)
 }
 
-theorem Inv::store(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: Nat → Bool}, inv: Inv(tys, strs, s, e, m, h0, lent),
+theorem Inv::store(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>}, inv: Inv(tys, strs, s, e, m, h0, lent),
     none: s.pending() = False, x: Var, l: Nat, hl: s.lvl(x) = Some(l), nrf: s.in_regions(l) = False, o: Nat, a: Acc, hr: s.role(l) = KHold(o, a), aw: a.writes() = True,
     r: Ref, cr: (REnv::get(tys, m.env, x)).v = Refer(r), old: Dyn(tys), hv: Heap::val(tys, strs, m.heap, r.b) = Some(old), ss: List<Sel>, nw: Dyn(tys), f: Dyn(tys) → Dyn(tys),
     agr: Sel::get(tys, strs, r.sels, nw) = Some(f(Env::get(tys, e, x))), code: (f(Env::get(tys, e, x))).code = (s.var(l)).code,
@@ -5718,7 +5744,7 @@ theorem Inv::store(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, 
             Inr(ne) => trans(cong_fn(λ (d: Dyn(tys)) => d.code, ecell(y, other(y, l2, hy, ne))), sim.codes(y, l2, hy)),
         };
     let sim2: Sim(tys, strs, s, e2, m2) = Sim(trans(Env::set_args(tys, e, x, f), sim.eargs), sim.margs, trans(Env::set_locs(tys, e, x, f), sim.elocs), sim.mlocs, vars2, codes2);
-    Inv::store_rest(tys, strs, inv, none, o, r, rt, ch, nw, e2, sim2, s.regions_other(tys, e, e2, x, l, hl, nrf, λ k ir => (inv.words(k, ir)).left, ecell))
+    Inv::store_rest(tys, strs, inv, none, o, r, rt, ch, nw, old, hv, away, e2, sim2, s.regions_other(tys, e, e2, x, l, hl, nrf, λ k ir => (inv.words(k, ir)).left, ecell))
 }
 
 // ---------------------------------------------------------------------------
@@ -5813,7 +5839,7 @@ theorem REnv::kept_set(tys: Nat → Type, e: REnv(tys), x: Var, c: Cell(tys), ol
 
 // A write to a plain variable: its cell holds the new value; no block, no
 // region and no other cell changes.
-theorem Stmt::stage_write_plain(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(tys, cx.strs), fns: Nat → Func, call: Caller(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: Nat → Bool},
+theorem Stmt::stage_write_plain(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(tys, cx.strs), fns: Nat → Func, call: Caller(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>},
     inv: Inv(tys, cx.strs, s, e, m, h0, lent), none: s.pending() = False, p: Place, v: Var, n: Next, ok: s.write(tys, cx.strs, p, v) = Some(n),
     cok: (match Shape::steps_ok(tys, cx.strs, p.steps, s.code(p.root)) as λ _ => Bool { Some(c) => s.code(v).same(c), None => False }) = True,
     l: Nat, hl: s.lvl(p.root) = Some(l), hp: s.role(l) = KPlain,
@@ -5853,7 +5879,7 @@ theorem Stmt::stage_write_plain(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(ty
 // A write through a holder: into its cell where it holds its object by
 // value, into its object's block where it refers to it. No entry is the
 // holder's, so the state after is the same but for what it touched.
-theorem Stmt::stage_write_hold(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(tys, cx.strs), fns: Nat → Func, call: Caller(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: Nat → Bool},
+theorem Stmt::stage_write_hold(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(tys, cx.strs), fns: Nat → Func, call: Caller(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>},
     inv: Inv(tys, cx.strs, s, e, m, h0, lent), none: s.pending() = False, p: Place, v: Var, n: Next, ok: s.write(tys, cx.strs, p, v) = Some(n),
     cok: (match Shape::steps_ok(tys, cx.strs, p.steps, s.code(p.root)) as λ _ => Bool { Some(c) => s.code(v).same(c), None => False }) = True,
     l: Nat, hl: s.lvl(p.root) = Some(l), o: Nat, a: Acc, hr: s.role(l) = KHold(o, a),
@@ -6122,7 +6148,7 @@ theorem CSt::pend_unback(self s: CSt, l: Nat, none: s.pending() = False, x: VEnt
 // it),  against the new patch, and its pending entries at one level.
 // Formerly at a write's state only:
 // (any meaning: they do not read it) and `Sim` against the new patch.
-theorem Inv::rekin(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {ex: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: Nat → Bool}, inv: Inv(tys, strs, s, ex, m, h0, lent),
+theorem Inv::rekin(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {ex: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>}, inv: Inv(tys, strs, s, ex, m, h0, lent),
     f: VEnt → VEnt, kf: (x: VEnt) → Kin(f(x), x), tl, wl: List<Nat>, e2: Env(tys), pone: (s.rekin(f, tl, wl)).POne(), sim1: Sim(tys, strs, s.rekin(f, tl, wl), s.rekin(f, tl, wl).patched(tys, strs, e2, m), m)):
     Inv(tys, strs, s.rekin(f, tl, wl), e2, m, h0, lent)
 {
@@ -6199,7 +6225,7 @@ theorem Inv::rekin(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {ex: Env(tys)},
 }
 
 // The invariant at a write's state.
-theorem Inv::unback(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {ex: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: Nat → Bool}, inv: Inv(tys, strs, s, ex, m, h0, lent),
+theorem Inv::unback(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {ex: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>}, inv: Inv(tys, strs, s, ex, m, h0, lent),
     none: s.pending() = False, l: Nat, e2: Env(tys), sim1: Sim(tys, strs, s.written(l).unback(l), (s.written(l).unback(l)).patched(tys, strs, e2, m), m)):
     Inv(tys, strs, s.written(l).unback(l), e2, m, h0, lent)
 {
@@ -6513,7 +6539,7 @@ theorem CSt::up_core(tys: Nat → Type, strs: Strs(tys), sl: StrsLaws(tys, strs)
 
 // The words an entry's place reads, in a meaning that agrees with `e` at
 // every level a region reads: the run's.
-theorem CSt::at_words(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: Nat → Bool}, inv: Inv(tys, strs, s, e, m, h0, lent),
+theorem CSt::at_words(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>}, inv: Inv(tys, strs, s, e, m, h0, lent),
     none: s.pending() = False, ee: Env(tys), hwd: (k: Nat) → s.in_regions(k) = True → Env::get(tys, ee, s.var_at(k)) = Env::get(tys, e, s.var_at(k)),
     hla: ee.args.len() = s.na, hlo: ee.locs.len() = s.nd, en: VEnt, mem: Mem(en, s.views)):
     Steps::sels(s.unsteps(en.at), Env::ixs(tys, ee)) = Steps::sels(s.unsteps(en.at), Mach::ixs(tys, strs, m))
@@ -6531,7 +6557,7 @@ theorem CSt::at_words(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)
 
 // The walk's step at a parent: what its reference reads after the write is
 // the meaning the walk writes into it.
-theorem CSt::up_parent(tys: Nat → Type, strs: Strs(tys), sl: StrsLaws(tys, strs), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: Nat → Bool}, inv: Inv(tys, strs, s, e, m, h0, lent),
+theorem CSt::up_parent(tys: Nat → Type, strs: Strs(tys), sl: StrsLaws(tys, strs), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>}, inv: Inv(tys, strs, s, e, m, h0, lent),
     none: s.pending() = False, h2: Heap(tys), blk: Nat, ob, b2: Dyn(tys), g: Dyn(tys) → Dyn(tys),
     hv: Heap::val(tys, strs, m.heap, blk) = Some(ob), hv2: Heap::val(tys, strs, h2, blk) = Some(b2),
     c: Nat, ee: Env(tys), en: VEnt, mem: Mem(en, s.views), qc, qp: Ref, t: List<Sel>, qb: qc.b = blk, qf: Sel::fit(tys, strs, qc.sels, ob) = True,
@@ -6591,7 +6617,7 @@ theorem UpAt::lvl(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {
 }
 
 // The view itself reads its meaning so far.
-theorem UpAt::agc(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: Nat → Bool}, inv: Inv(tys, strs, s, e, m, h0, lent),
+theorem UpAt::agc(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>}, inv: Inv(tys, strs, s, e, m, h0, lent),
     {h2: Heap(tys)}, {blk: Nat}, {ob, b2: Dyn(tys)}, {g: Dyn(tys) → Dyn(tys)}, {c: Nat}, {ee: Env(tys)}, {en: VEnt}, {qc: Ref}, {t: List<Sel>},
     u: UpAt(tys, strs, s, e, m, h2, blk, ob, b2, g, c, ee, en, qc, t)): Value::Reads(tys, strs, h2, Refer(qc), Env::get(tys, ee, s.var_at(c)))
 {
@@ -6608,7 +6634,7 @@ theorem UpAt::agc(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {
 }
 
 // The view's reference: its object's root narrowed by its entry's region.
-theorem UpAt::qroot(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: Nat → Bool}, inv: Inv(tys, strs, s, e, m, h0, lent),
+theorem UpAt::qroot(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>}, inv: Inv(tys, strs, s, e, m, h0, lent),
     {h2: Heap(tys)}, {blk: Nat}, {ob, b2: Dyn(tys)}, {g: Dyn(tys) → Dyn(tys)}, {c: Nat}, {ee: Env(tys)}, {en: VEnt}, {qc: Ref}, {t: List<Sel>},
     u: UpAt(tys, strs, s, e, m, h2, blk, ob, b2, g, c, ee, en, qc, t)):
     Exists<Ref>(λ r0 => (inv.root(en.obj) = Some(r0)) ∧ (r0.narrow(Mach::ixs(tys, strs, m), s.unsteps(en.reg)) = qc))
@@ -6630,7 +6656,7 @@ theorem UpAt::qroot(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)},
 }
 
 // The parent's cell refers: the chain refers throughout.
-theorem UpAt::par_ref(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: Nat → Bool}, inv: Inv(tys, strs, s, e, m, h0, lent),
+theorem UpAt::par_ref(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>}, inv: Inv(tys, strs, s, e, m, h0, lent),
     {h2: Heap(tys)}, {blk: Nat}, {ob, b2: Dyn(tys)}, {g: Dyn(tys) → Dyn(tys)}, {c: Nat}, {ee: Env(tys)}, {en: VEnt}, {qc: Ref}, {t: List<Sel>},
     u: UpAt(tys, strs, s, e, m, h2, blk, ob, b2, g, c, ee, en, qc, t)): Exists<Ref>(λ qp => (REnv::get(tys, m.env, s.var_at(en.par))).v = Refer(qp))
 {
@@ -6645,7 +6671,7 @@ theorem UpAt::par_ref(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)
 }
 
 // The walk's last step, at the chain's holder: every variable agrees.
-theorem CSt::up_last(tys: Nat → Type, strs: Strs(tys), sl: StrsLaws(tys, strs), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: Nat → Bool}, inv: Inv(tys, strs, s, e, m, h0, lent),
+theorem CSt::up_last(tys: Nat → Type, strs: Strs(tys), sl: StrsLaws(tys, strs), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>}, inv: Inv(tys, strs, s, e, m, h0, lent),
     none: s.pending() = False, h2: Heap(tys), blk: Nat, ob, b2: Dyn(tys), g: Dyn(tys) → Dyn(tys),
     hv: Heap::val(tys, strs, m.heap, blk) = Some(ob), hv2: Heap::val(tys, strs, h2, blk) = Some(b2),
     c: Nat, ee: Env(tys), en: VEnt, qc: Ref, t: List<Sel>, u: UpAt(tys, strs, s, e, m, h2, blk, ob, b2, g, c, ee, en, qc, t), o2: Nat, a2: Acc, rh: s.role(en.par) = KHold(o2, a2)):
@@ -6706,7 +6732,7 @@ theorem CSt::up_last(tys: Nat → Type, strs: Strs(tys), sl: StrsLaws(tys, strs)
 }
 
 // The walk's step to a parent that is a view: what it knows there.
-theorem CSt::up_next(tys: Nat → Type, strs: Strs(tys), sl: StrsLaws(tys, strs), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: Nat → Bool}, inv: Inv(tys, strs, s, e, m, h0, lent),
+theorem CSt::up_next(tys: Nat → Type, strs: Strs(tys), sl: StrsLaws(tys, strs), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>}, inv: Inv(tys, strs, s, e, m, h0, lent),
     none: s.pending() = False, h2: Heap(tys), blk: Nat, ob, b2: Dyn(tys), g: Dyn(tys) → Dyn(tys),
     hv: Heap::val(tys, strs, m.heap, blk) = Some(ob), hv2: Heap::val(tys, strs, h2, blk) = Some(b2),
     c: Nat, ee: Env(tys), en: VEnt, qc: Ref, t: List<Sel>, u: UpAt(tys, strs, s, e, m, h2, blk, ob, b2, g, c, ee, en, qc, t), rv: s.role(en.par) = KView):
@@ -6811,7 +6837,7 @@ theorem CSt::up_next(tys: Nat → Type, strs: Strs(tys), sl: StrsLaws(tys, strs)
 
 // The walk: from a view of the pending chain up to its holder, every
 // variable agrees with the meaning written up.
-theorem CSt::up_sim(self f: Nat, tys: Nat → Type, strs: Strs(tys), sl: StrsLaws(tys, strs), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: Nat → Bool}, inv: Inv(tys, strs, s, e, m, h0, lent),
+theorem CSt::up_sim(self f: Nat, tys: Nat → Type, strs: Strs(tys), sl: StrsLaws(tys, strs), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>}, inv: Inv(tys, strs, s, e, m, h0, lent),
     none: s.pending() = False, l: Nat, h2: Heap(tys), blk: Nat, ob, b2: Dyn(tys), g: Dyn(tys) → Dyn(tys),
     hv: Heap::val(tys, strs, m.heap, blk) = Some(ob), hv2: Heap::val(tys, strs, h2, blk) = Some(b2)):
     (c: Nat) → (ee: Env(tys)) → (en: VEnt) → (qc: Ref) → (t: List<Sel>) → c < f → UpAt(tys, strs, s, e, m, h2, blk, ob, b2, g, c, ee, en, qc, t) →
@@ -6878,7 +6904,7 @@ theorem Sim::plain_same(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e1, e2: E
 // same object is a descendant of `l`, which the licence found apart, or
 // neither, which `excl` says is apart; a holder of the object is the chain's
 // top, an ancestor.
-theorem Inv::view_off(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(tys, cx.strs), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: Nat → Bool}, inv: Inv(tys, cx.strs, s, e, m, h0, lent),
+theorem Inv::view_off(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(tys, cx.strs), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>}, inv: Inv(tys, cx.strs, s, e, m, h0, lent),
     none: s.pending() = False, l: Nat, hr: s.role(l) = KView, pe: VEnt, hents: s.ents(l) = [pe], pw: pe.mode.writes() = True, xs: List<Step>, rl: List<Residual>,
     lic: s.license(s.views, Writing, l, [Pl(pe.obj, pe.reg ++ xs)]) = Some(rl), resl: Residual::All(rl, tys, cx, e, True),
     rpw: s.InRange(Steps::lvls(pe.reg ++ xs)), ppw: (k: Nat) → k.member(Steps::lvls(pe.reg ++ xs)) = True → (s.role(k)).plain() = True,
@@ -6984,7 +7010,7 @@ theorem Inv::view_off(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(tys, cx.strs
 // The walk's start at a write through a view whose cell refers, `qq` its
 // reference: the view reads its new meaning, every other variable that is not
 // an ancestor reads what it read (`Inv::view_off`).
-theorem Stmt::write_view_upat(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(tys, cx.strs), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: Nat → Bool}, inv: Inv(tys, cx.strs, s, e, m, h0, lent),
+theorem Stmt::write_view_upat(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(tys, cx.strs), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>}, inv: Inv(tys, cx.strs, s, e, m, h0, lent),
     none: s.pending() = False, {p: Place}, {v: Var}, {n: Next}, wi: WriteInv(tys, cx.strs, s, p, v, n), wf: WriteFacts(tys, cx, s, e, m, p, v, n, wi), hr2: s.role(wi.l) = KView,
     pe: VEnt, hents: s.ents(wi.l) = [pe], pw: pe.mode.writes() = True, lic: s.license(s.views, Writing, wi.l, [Pl(pe.obj, pe.reg ++ wi.xs)]) = Some(wf.rl),
     r0: Ref, rt0: inv.root(pe.obj) = Some(r0), ob: Dyn(tys), hv: Heap::val(tys, cx.strs, m.heap, r0.b) = Some(ob),
@@ -7074,7 +7100,7 @@ theorem Stmt::write_view_upat(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(tys,
 // The invariant after a write through a view whose cell refers: the chain
 // walked up (`CSt::up_sim`), the store's clauses, the view's entry no longer
 // written back.
-theorem Stmt::write_view_inv(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(tys, cx.strs), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: Nat → Bool}, inv: Inv(tys, cx.strs, s, e, m, h0, lent),
+theorem Stmt::write_view_inv(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(tys, cx.strs), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>}, inv: Inv(tys, cx.strs, s, e, m, h0, lent),
     none: s.pending() = False, {p: Place}, {v: Var}, {n: Next}, wi: WriteInv(tys, cx.strs, s, p, v, n),
     pe: VEnt, hents: s.ents(wi.l) = [pe], pw: pe.mode.writes() = True, r0: Ref, rt0: inv.root(pe.obj) = Some(r0), ob: Dyn(tys), hv: Heap::val(tys, cx.strs, m.heap, r0.b) = Some(ob),
     cv2: (REnv::get(tys, m.env, p.root)).v = Refer(r0.narrow(Mach::ixs(tys, cx.strs, m), s.unsteps(pe.reg))),
@@ -7107,7 +7133,11 @@ theorem Stmt::write_view_inv(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(tys, 
     let pmem: Mem(pe, s.views) = s.views.mem_filter(pe, λ q => q.lvl.same(wi.l), mpe);
     let us: Sim(tys, strs, s, s1.up(tys, strs, e2, wi.l, nl), m2) =
         CSt::up_sim(nl, tys, strs, sl, inv, none, wi.l, h2, r0.b, ob, nwb, g, hv, hv2, wi.l, e2, pe, qq, ss, s.lvl_below(p.root, wi.l, wi.hl), u);
-    let ivp = Inv::store_rest(tys, strs, inv, none, pe.obj, r0, rt0, Inr(Exists(pe, ⟨pmem, ⟨refl, pw⟩⟩)), nwb, s1.up(tys, strs, e2, wi.l, nl), us,
+    let away0 = λ (q: List<Sel>) (ap: Sel::Apart(tys, strs, r0.sels, q)) =>
+        trans(cong_fn(λ (z: Dyn(tys)) => Sel::get(tys, strs, q, z), trans(cong_fn(λ (t: List<Sel>) => Sel::write_at(tys, strs, t, g, ob), r0.sels.append_assoc(Steps::sels(s.unsteps(pe.reg), wsm), ss)),
+            Sel::write_append(tys, strs, r0.sels, Steps::sels(s.unsteps(pe.reg), wsm) ++ ss, g, ob))),
+            Sel::get_apart(tys, strs, r0.sels, q, ap, λ x => Sel::write_at(tys, strs, Steps::sels(s.unsteps(pe.reg), wsm) ++ ss, g, x), ob));
+    let ivp = Inv::store_rest(tys, strs, inv, none, pe.obj, r0, rt0, Inr(Exists(pe, ⟨pmem, ⟨refl, pw⟩⟩)), nwb, ob, hv, away0, s1.up(tys, strs, e2, wi.l, nl), us,
         λ k ir => Sim::plain_same(tys, strs, sim, us, refl, k, (inv.words(k, ir)).left, (inv.words(k, ir)).right));
     let cl: ((REnv::get(tys, m2.env, s.var_at(wi.l))).v = Refer(qq)) = trans(cong_fn(λ (x: Var) => (REnv::get(tys, m.env, x)).v, s.lvl_var(p.root, wi.l, wi.hl)), cv2);
     let pe2: (s1.patched(tys, strs, e2, m2) = s1.up(tys, strs, e2, wi.l, nl)) =
@@ -7117,7 +7147,7 @@ theorem Stmt::write_view_inv(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(tys, 
 
 // The referring case of a write through a view: its reference is its
 // entry's object's root narrowed; the run stores into that block.
-theorem Stmt::write_view_ref(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(tys, cx.strs), fns: Nat → Func, call: Caller(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: Nat → Bool},
+theorem Stmt::write_view_ref(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(tys, cx.strs), fns: Nat → Func, call: Caller(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>},
     inv: Inv(tys, cx.strs, s, e, m, h0, lent), none: s.pending() = False, p: Place, v: Var, n: Next, wi: WriteInv(tys, cx.strs, s, p, v, n), wf: WriteFacts(tys, cx, s, e, m, p, v, n, wi),
     hr2: s.role(wi.l) = KView, pe: VEnt, hents: s.ents(wi.l) = [pe], pw: pe.mode.writes() = True, lic: s.license(s.views, Writing, wi.l, [Pl(pe.obj, pe.reg ++ wi.xs)]) = Some(wf.rl),
     nst: s.written(wi.l).unback(wi.l) = n.st, q: Ref, cv: (REnv::get(tys, m.env, p.root)).v = Refer(q), rdr: Value::Reads(tys, cx.strs, m.heap, Refer(q), Env::get(tys, e, p.root))):
@@ -7166,7 +7196,7 @@ theorem Stmt::write_view_ref(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(tys, 
 // its object's block where it refers. Its entry is then not written back; the
 // invariant's meaning is the chain written up where the view refers, the
 // meaning itself where it is a copy.
-theorem Stmt::stage_write_view(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(tys, cx.strs), fns: Nat → Func, call: Caller(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: Nat → Bool},
+theorem Stmt::stage_write_view(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(tys, cx.strs), fns: Nat → Func, call: Caller(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>},
     inv: Inv(tys, cx.strs, s, e, m, h0, lent), none: s.pending() = False, p: Place, v: Var, n: Next, ok: s.write(tys, cx.strs, p, v) = Some(n),
     cok: (match Shape::steps_ok(tys, cx.strs, p.steps, s.code(p.root)) as λ _ => Bool { Some(c) => s.code(v).same(c), None => False }) = True,
     l: Nat, hl: s.lvl(p.root) = Some(l), hr: s.role(l) = KView,
@@ -7575,7 +7605,7 @@ theorem Heap::store_val(tys: Nat → Type, strs: Strs(tys), h: Heap(tys), b: Nat
 
 // A child's reference, where the chain refers: its parent's, narrowed by its
 // place.
-theorem Inv::ref_child(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: Nat → Bool}, inv: Inv(tys, strs, s, e, m, h0, lent),
+theorem Inv::ref_child(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>}, inv: Inv(tys, strs, s, e, m, h0, lent),
     l, lv: Nat, ce: VEnt, he: s.ents(lv) = [ce], cw: ce.mode.writes() = True, cpar: ce.par = l, lvb: lv < s.na + s.nd, qp, qc: Ref,
     hp: (REnv::get(tys, m.env, s.var_at(l))).v = Refer(qp), hc: (REnv::get(tys, m.env, s.var_at(lv))).v = Refer(qc)):
     qc = qp.narrow(Mach::ixs(tys, strs, m), s.unsteps(ce.at))
@@ -7684,7 +7714,7 @@ theorem VEnt::any_ex(self es: List<VEnt>, P: VEnt → Type): VEnt::Any(es, P) �
 }
 
 // Every live reference is into a block with no holes.
-theorem Inv::ref_bare(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: Nat → Bool}, inv: Inv(tys, strs, s, e, m, h0, lent),
+theorem Inv::ref_bare(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>}, inv: Inv(tys, strs, s, e, m, h0, lent),
     x: Var, l: Nat, hx: s.lvl(x) = Some(l), ng: ¬(s.role(l) = KGone), r: Ref, cr: (REnv::get(tys, m.env, x)).v = Refer(r)):
     (ob: Obj(tys)) → Heap::obj(tys, m.heap, r.b) = Some(ob) → ob.holes = Nil
 {
@@ -7746,7 +7776,7 @@ theorem CSt::back_patched_view(self s: CSt, tys: Nat → Type, strs: Strs(tys), 
 
 // The invariant at the state a write-back leaves, given the meaning's
 // agreement there.
-theorem Inv::back_finish(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {ex: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: Nat → Bool}, inv: Inv(tys, strs, s, ex, m, h0, lent),
+theorem Inv::back_finish(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {ex: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>}, inv: Inv(tys, strs, s, ex, m, h0, lent),
     lv, l: Nat, np: ¬(s.role(l) = KPlain), at0: (x: VEnt) → Mem(x, s.views) → (x.mode.writes() && !x.back) = True → x.lvl = lv, e2: Env(tys),
     sim1: Sim(tys, strs, s.rekin(λ (y: VEnt) => y.reback(lv, l), Cons(l, s.touched), Cons(l, s.wrote)),
         (s.rekin(λ (y: VEnt) => y.reback(lv, l), Cons(l, s.touched), Cons(l, s.wrote))).patched(tys, strs, e2, m), m)):
@@ -7759,7 +7789,7 @@ theorem Inv::back_finish(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {ex: Env(
 
 // A write-back's parent is neither plain nor gone; where the parent refers,
 // so does the child.
-theorem Stmt::back_roles(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: Nat → Bool}, inv: Inv(tys, strs, s, e, m, h0, lent),
+theorem Stmt::back_roles(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>}, inv: Inv(tys, strs, s, e, m, h0, lent),
     {p: Place}, {v: Var}, {n: Next}, wi: WriteInv(tys, strs, s, p, v, n), bf: BackFacts(tys, strs, s, p, v, n, wi)):
     (¬(s.role(wi.l) = KPlain)) ∧ (¬(s.role(wi.l) = KGone))
 {
@@ -7772,7 +7802,7 @@ theorem Stmt::back_roles(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(t
      λ eq => absurd(trans(sym(j(sym(eq), λ q _ => q.same(KGone) = True, refl)), nf))⟩
 }
 
-theorem Stmt::back_child_refers(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: Nat → Bool}, inv: Inv(tys, strs, s, e, m, h0, lent),
+theorem Stmt::back_child_refers(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>}, inv: Inv(tys, strs, s, e, m, h0, lent),
     {p: Place}, {v: Var}, {n: Next}, wi: WriteInv(tys, strs, s, p, v, n), bf: BackFacts(tys, strs, s, p, v, n, wi), qp: Ref, hp: (REnv::get(tys, m.env, p.root)).v = Refer(qp)):
     Exists<Ref>(λ qc => (REnv::get(tys, m.env, v)).v = Refer(qc))
 {
@@ -7801,7 +7831,7 @@ record BackRun(tys: Nat → Type, strs: Strs(tys), fns: Nat → Func, call: Call
     fa: Sel::fit(tys, strs, Steps::sels(p.steps, Mach::ixs(tys, strs, m)), dp) = True,
 }
 
-theorem Stmt::back_ref_run(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(tys, cx.strs), fns: Nat → Func, call: Caller(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: Nat → Bool},
+theorem Stmt::back_ref_run(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(tys, cx.strs), fns: Nat → Func, call: Caller(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>},
     inv: Inv(tys, cx.strs, s, e, m, h0, lent), ee: Env(tys), sim: Sim(tys, cx.strs, s, ee, m), {p: Place}, {v: Var}, {n: Next}, wi: WriteInv(tys, cx.strs, s, p, v, n),
     bf: BackFacts(tys, cx.strs, s, p, v, n, wi), qp: Ref, hp: (REnv::get(tys, m.env, p.root)).v = Refer(qp)):
     BackRun(tys, cx.strs, fns, call, m, p, v, Env::get(tys, ee, p.root), Env::get(tys, ee, v))
@@ -7841,7 +7871,7 @@ theorem Stmt::back_ref_run(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(tys, cx
 // A write-back where the chain refers and nothing is pending: the run
 // changes nothing and so does the meaning; the parent, if a view, is now
 // pending, its walk writing up what its ancestors already hold.
-theorem Stmt::stage_back_ref_none(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(tys, cx.strs), fns: Nat → Func, call: Caller(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: Nat → Bool},
+theorem Stmt::stage_back_ref_none(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(tys, cx.strs), fns: Nat → Func, call: Caller(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>},
     inv: Inv(tys, cx.strs, s, e, m, h0, lent), none: s.pending() = False, {p: Place}, {v: Var}, {n: Next}, wi: WriteInv(tys, cx.strs, s, p, v, n), bf: BackFacts(tys, cx.strs, s, p, v, n, wi),
     qp: Ref, hp: (REnv::get(tys, m.env, p.root)).v = Refer(qp)):
     Stepped(tys, cx.strs, fns, call, Write(p, v), n.st, Env::set(tys, e, p.root, λ d => Dyn::write(tys, cx.strs, Env::ixs(tys, e), p.steps, λ _ => Env::get(tys, e, v), d)), m, h0, lent)
@@ -7906,7 +7936,7 @@ theorem Stmt::stage_back_ref_none(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(
 // A write-back where the chain refers and the child is pending: the run
 // changes nothing, the heap holding the walk already; the meaning takes the
 // walk's first step, and what is pending after is the walk's rest.
-theorem Stmt::stage_back_ref_pend(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(tys, cx.strs), fns: Nat → Func, call: Caller(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: Nat → Bool},
+theorem Stmt::stage_back_ref_pend(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(tys, cx.strs), fns: Nat → Func, call: Caller(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>},
     inv: Inv(tys, cx.strs, s, e, m, h0, lent), {p: Place}, {v: Var}, {n: Next}, wi: WriteInv(tys, cx.strs, s, p, v, n), bf: BackFacts(tys, cx.strs, s, p, v, n, wi), cb: bf.ce.back = False,
     qp: Ref, hp: (REnv::get(tys, m.env, p.root)).v = Refer(qp)):
     Stepped(tys, cx.strs, fns, call, Write(p, v), n.st, Env::set(tys, e, p.root, λ d => Dyn::write(tys, cx.strs, Env::ixs(tys, e), p.steps, λ _ => Env::get(tys, e, v), d)), m, h0, lent)
@@ -7985,7 +8015,7 @@ theorem Cell::reads_agrees(tys: Nat → Type, strs: Strs(tys), h: Heap(tys), r: 
 }
 
 // Where everything pending is at the child's level: nothing, or the child.
-theorem Stmt::back_at0(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: Nat → Bool}, inv: Inv(tys, strs, s, e, m, h0, lent),
+theorem Stmt::back_at0(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>}, inv: Inv(tys, strs, s, e, m, h0, lent),
     {p: Place}, {v: Var}, {n: Next}, wi: WriteInv(tys, strs, s, p, v, n), bf: BackFacts(tys, strs, s, p, v, n, wi), wb: s.pending() = True → bf.ce.back = False):
     (x: VEnt) → Mem(x, s.views) → (x.mode.writes() && !x.back) = True → x.lvl = wi.lv
 {
@@ -8003,7 +8033,7 @@ theorem Stmt::back_at0(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys
 // A write-back where the chain is copies: the parent's copy takes the
 // child's at the place, which `cfit` says fits; nothing is patched before
 // or after.
-theorem Stmt::stage_back_copy(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(tys, cx.strs), fns: Nat → Func, call: Caller(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: Nat → Bool},
+theorem Stmt::stage_back_copy(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(tys, cx.strs), fns: Nat → Func, call: Caller(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>},
     inv: Inv(tys, cx.strs, s, e, m, h0, lent), {p: Place}, {v: Var}, {n: Next}, wi: WriteInv(tys, cx.strs, s, p, v, n), bf: BackFacts(tys, cx.strs, s, p, v, n, wi),
     at0: (x: VEnt) → Mem(x, s.views) → (x.mode.writes() && !x.back) = True → x.lvl = wi.lv, dp: Dyn(tys), hp: (REnv::get(tys, m.env, p.root)).v = level2::Plain(dp)):
     Stepped(tys, cx.strs, fns, call, Write(p, v), n.st, Env::set(tys, e, p.root, λ d => Dyn::write(tys, cx.strs, Env::ixs(tys, e), p.steps, λ _ => Env::get(tys, e, v), d)), m, h0, lent)
@@ -8109,7 +8139,7 @@ theorem Stmt::stage_back_copy(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(tys,
 // its own place. While something is pending the checker allows it only of
 // the pending child (`writes_back`). Four cases: the chain refers, the child
 // pending or not; the chain is copies; the parent a holder or a view in each.
-theorem Stmt::stage_back(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(tys, cx.strs), fns: Nat → Func, call: Caller(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: Nat → Bool},
+theorem Stmt::stage_back(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(tys, cx.strs), fns: Nat → Func, call: Caller(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>},
     inv: Inv(tys, cx.strs, s, e, m, h0, lent), p: Place, v: Var, n: Next, ok: s.write(tys, cx.strs, p, v) = Some(n), wb: s.pending() = True → s.writes_back(Write(p, v)) = True,
     l: Nat, hl: s.lvl(p.root) = Some(l), bk: (xs: List<Step>) → s.steps(p.steps) = Some(xs) → (lv: Nat) → s.lvl(v) = Some(lv) → s.is_back(l, xs, lv) = True):
     Stepped(tys, cx.strs, fns, call, Write(p, v), n.st, Env::set(tys, e, p.root, λ d => Dyn::write(tys, cx.strs, Env::ixs(tys, e), p.steps, λ _ => Env::get(tys, e, v), d)), m, h0, lent)
@@ -8318,7 +8348,7 @@ theorem CSt::changes_drop(self s: CSt, l: Nat, b: l < s.na + s.nd, o: Nat, h: (s
 
 // A view without children and with nothing pending dropped: the invariant
 // at the state it leaves, the patch the same.
-theorem Inv::drop_view(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: Nat → Bool}, inv: Inv(tys, strs, s, e, m, h0, lent),
+theorem Inv::drop_view(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>}, inv: Inv(tys, strs, s, e, m, h0, lent),
     l: Nat, b: l < s.na + s.nd, hr: s.role(l) = KView, noch: (en: VEnt) → Mem(en, s.views) → ¬(en.par = l),
     nwp: (en: VEnt) → Mem(en, s.views) → en.lvl = l → (en.mode.writes() && !en.back) = False):
     Inv(tys, strs, s.drop(l), e, m, h0, lent)
@@ -8392,7 +8422,7 @@ theorem Inv::drop_view(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys
 }
 
 // A level with no children is no live entry's parent.
-theorem Inv::noch(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: Nat → Bool}, inv: Inv(tys, strs, s, e, m, h0, lent),
+theorem Inv::noch(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>}, inv: Inv(tys, strs, s, e, m, h0, lent),
     l: Nat, nch: s.has_children(l) = False): (en: VEnt) → Mem(en, s.views) → ¬(en.par = l)
 {
     λ en mem eq => {
@@ -8405,7 +8435,7 @@ theorem Inv::noch(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {
 
 // The death of a view: it has no children, and is not pending; the run
 // changes nothing (a view's cell does not own).
-theorem Stmt::stage_death_view(tys: Nat → Type, strs: Strs(tys), fns: Nat → Func, call: Caller(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: Nat → Bool},
+theorem Stmt::stage_death_view(tys: Nat → Type, strs: Strs(tys), fns: Nat → Func, call: Caller(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>},
     inv: Inv(tys, strs, s, e, m, h0, lent), x: Var, l: Nat, hl: s.lvl(x) = Some(l), hr: s.role(l) = KView, nch: s.has_children(l) = False,
     allb: (s.ents(l)).all_bit(λ e => !e.mode.writes() || e.back) = True):
     Stepped(tys, strs, fns, call, Death(Place(x, Nil)), s.with_views(s.views.filter(λ e => !e.lvl.same(l))).set(l, KGone), e, m, h0, lent)
@@ -8608,7 +8638,7 @@ theorem CSt::anc_moved(self f: Nat, s: CSt, l: Nat, cv: CVar, noch: (en: VEnt) �
 
 // A view without children taken, nothing pending: the new variable holds
 // the same cell and has the old one's entries; the old is gone.
-theorem Inv::take_view(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: Nat → Bool}, inv: Inv(tys, strs, s, e, m, h0, lent),
+theorem Inv::take_view(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>}, inv: Inv(tys, strs, s, e, m, h0, lent),
     none: s.pending() = False, x: Var, l: Nat, hx: s.lvl(x) = Some(l), hr: s.role(l) = KView, noch: (en: VEnt) → Mem(en, s.views) → ¬(en.par = l), code: Shape, okc: (Env::get(tys, e, x)).code = code):
     Inv(tys, strs, (s.moved(l)).push(CVar(code, KView)), Env::push(tys, e, Env::get(tys, e, x)), Mach::push(tys, m, REnv::get(tys, m.env, x)), h0, lent)
 {
@@ -8890,7 +8920,7 @@ theorem Inv::take_view(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys
 
 // A view taken: nothing is pending, it has no children; the run pushes the
 // same cell.
-theorem Stmt::stage_take_view(tys: Nat → Type, strs: Strs(tys), fns: Nat → Func, call: Caller(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: Nat → Bool},
+theorem Stmt::stage_take_view(tys: Nat → Type, strs: Strs(tys), fns: Nat → Func, call: Caller(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>},
     inv: Inv(tys, strs, s, e, m, h0, lent), none: s.pending() = False, x: Var, g: Got, ok: s.read_var(tys, strs, x) = Some(g), hr: s.role(g.root) = KView, nch: s.has_children(g.root) = False):
     Stepped(tys, strs, fns, call, Take(Place(x, Nil)), ((s.rename(g.root, s.next())).set(g.root, KGone)).push(CVar(g.code, KView)), Env::push(tys, e, Env::get(tys, e, x)), m, h0, lent)
 {
@@ -8941,7 +8971,7 @@ theorem Sim::read_all(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)
 
 // An argument object's root is the argument as passed: the start gave it,
 // and no stage changed the argument's cell's reference (`Stepped.kept`).
-theorem Inv::arg_root(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: Nat → Bool}, inv: Inv(tys, strs, s, e, m, h0, lent),
+theorem Inv::arg_root(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>}, inv: Inv(tys, strs, s, e, m, h0, lent),
     ps: List<Param>, vs: List<Value(tys)>, ent: REnv::ArgsKept(tys, m.env, REnv(Cell::args(tys, ps, vs), Nil)), i: Nat, lt: i < s.na, v: Value(tys), hv: vs.nth(i) = Some(v)):
     inv.root(i) = Value::ref_of(tys, v)
 {
@@ -8949,7 +8979,7 @@ theorem Inv::arg_root(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)
 }
 
 // A holder of an object with a root: what the root reads is its meaning.
-theorem Inv::hold_reads(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: Nat → Bool}, inv: Inv(tys, strs, s, e, m, h0, lent),
+theorem Inv::hold_reads(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>}, inv: Inv(tys, strs, s, e, m, h0, lent),
     none: s.pending() = False, x: Var, l, o: Nat, a: Acc, hl: s.lvl(x) = Some(l), hr: s.role(l) = KHold(o, a), r: Ref, rt: inv.root(o) = Some(r)):
     Value::read(tys, Refer(r), strs, m.heap, m.heap.len()) = Some(Env::get(tys, e, x))
 {
@@ -8964,7 +8994,7 @@ theorem Bool::false_of_not_true(b: Bool, h: !b = True): b = False { (match b as 
 
 // A fresh result, as `CSt::returns` checks it: plain, or an object past the
 // arguments, whose root is a block the call made (`made`).
-theorem Inv::ret_fresh(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: Nat → Bool}, inv: Inv(tys, strs, s, e, m, h0, lent),
+theorem Inv::ret_fresh(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>}, inv: Inv(tys, strs, s, e, m, h0, lent),
     ls: List<Nat>, vs: List<Value(tys)>, ws: List<Ix>, x: Var, l: Nat, hl: s.lvl(x) = Some(l), code: Shape, ok: s.returns(tys, strs, ls, l, Result(code, OFresh)) = True):
     Value::ViewIs(tys, strs, h0.len(), vs, ws, code, OFresh, (REnv::get(tys, m.env, x)).v)
 {
@@ -9144,7 +9174,7 @@ theorem CSt::gives_hold(self s: CSt, l, i: Nat, h: (match s.role(l) { KHold(o, _
 // the argument as passed where that referred (`href`, `Inv::arg_root`), and
 // its meaning is like the argument (`Like.held`, the holder being the
 // parameter's own, to write: `Like.acc`).
-theorem Inv::ret_written(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: Nat → Bool}, inv: Inv(tys, strs, s, e, m, h0, lent),
+theorem Inv::ret_written(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>}, inv: Inv(tys, strs, s, e, m, h0, lent),
     ps: List<Param>, ds: List<Dyn(tys)>, lk: Like(tys, strs, ps, ds, s, e), vs: List<Value(tys)>, ent: REnv::ArgsKept(tys, m.env, REnv(Cell::args(tys, ps, vs), Nil)), is: List<Nat>):
     Param::AllW(ps, s.na, is) → (xs: List<Var>) → (ls: List<Nat>) → s.lvls(xs) = Some(ls) → s.gives_back(ls, is) = True →
     Value::Written(tys, strs, vs, ds, is, xs.map(λ x => (REnv::get(tys, m.env, x)).v), xs.map(λ x => Env::get(tys, e, x)))
@@ -9196,7 +9226,7 @@ theorem Inv::ret_written(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(t
 // A live view of an object with a root refers: up its chain of parents
 // (`chain`, each at a lower level) to the holder, which refers (`href`),
 // each cell referring as its parent's does (`uni`).
-theorem Inv::ent_refers(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: Nat → Bool}, inv: Inv(tys, strs, s, e, m, h0, lent), f: Nat):
+theorem Inv::ent_refers(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>}, inv: Inv(tys, strs, s, e, m, h0, lent), f: Nat):
     (en: VEnt) → Mem(en, s.views) → en.lvl < f → (r: Ref) → inv.root(en.obj) = Some(r) → Value::refers(tys, (REnv::get(tys, m.env, s.var_at(en.lvl))).v) = True
 {
     match f {
@@ -9389,7 +9419,7 @@ theorem CSt::lvls_nth(self s: CSt, xs: List<Var>): (ls: List<Nat>) → s.lvls(xs
 // The words a returned view's signature names, at `Ret`: an argument never
 // written is its entry value (`Like.keep`), a result the plain variable the
 // `Ret` lists there.
-theorem Inv::ret_words(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: Nat → Bool}, inv: Inv(tys, strs, s, e, m, h0, lent),
+theorem Inv::ret_words(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>}, inv: Inv(tys, strs, s, e, m, h0, lent),
     none: s.pending() = False, ps: List<Param>, ds: List<Dyn(tys)>, lk: Like(tys, strs, ps, ds, s, e), dl: ds.len() = s.na, xs: List<Var>, ls: List<Nat>, hl: s.lvls(xs) = Some(ls)):
     CSt::SigWords(s, ls, Dyn::ixs(tys, ds ++ xs.map(λ x => Env::get(tys, e, x))), Mach::ixs(tys, strs, m))
 {
@@ -9431,7 +9461,7 @@ theorem Inv::ret_words(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys
 }
 
 // One result at `Ret`, as `CSt::returns` checked it: `Value::ViewIs`.
-theorem Inv::ret_one(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: Nat → Bool}, inv: Inv(tys, strs, s, e, m, h0, lent),
+theorem Inv::ret_one(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>}, inv: Inv(tys, strs, s, e, m, h0, lent),
     ps: List<Param>, vs: List<Value(tys)>, ent: REnv::ArgsKept(tys, m.env, REnv(Cell::args(tys, ps, vs), Nil)), vl: vs.len() = s.na,
     ws: List<Ix>, all: List<Nat>, sw: CSt::SigWords(s, all, ws, Mach::ixs(tys, strs, m)), x: Var, l: Nat, hl: s.lvl(x) = Some(l), code: Shape, og: Origin,
     ok: s.returns(tys, strs, all, l, Result(code, og)) = True): Value::ViewIs(tys, strs, h0.len(), vs, ws, code, og, (REnv::get(tys, m.env, x)).v)
@@ -9552,7 +9582,7 @@ theorem Inv::ret_one(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}
     })(ok)
 }
 
-theorem Inv::ret_views(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: Nat → Bool}, inv: Inv(tys, strs, s, e, m, h0, lent),
+theorem Inv::ret_views(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>}, inv: Inv(tys, strs, s, e, m, h0, lent),
     ps: List<Param>, vs: List<Value(tys)>, ent: REnv::ArgsKept(tys, m.env, REnv(Cell::args(tys, ps, vs), Nil)), vl: vs.len() = s.na,
     ws: List<Ix>, all: List<Nat>, sw: CSt::SigWords(s, all, ws, Mach::ixs(tys, strs, m)), rs: List<Result>):
     (xs: List<Var>) → (ls: List<Nat>) → s.lvls(xs) = Some(ls) → s.returns_all(tys, strs, all, ls, rs) = True →
@@ -9579,16 +9609,16 @@ theorem Inv::ret_views(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys
 
 // What `SafeAt` asks of a `Done` answer, at the answer's values `rv`, the
 // heap `h` it leaves and the meaning's answer `outs`.
-record RetOk(tys: Nat → Type, strs: Strs(tys), sig: Sig, vs: List<Value(tys)>, ds: List<Dyn(tys)>, h0: Heap(tys), lent: Nat → Bool, rv: List<Value(tys)>, h: Heap(tys), outs: List<Dyn(tys)>) {
+record RetOk(tys: Nat → Type, strs: Strs(tys), sig: Sig, vs: List<Value(tys)>, ds: List<Dyn(tys)>, h0: Heap(tys), lent: List<Ref>, rv: List<Value(tys)>, h: Heap(tys), outs: List<Dyn(tys)>) {
     reads: Value::ReadAll(tys, strs, h, h.len(), rv, outs),
     written: Value::Written(tys, strs, vs, ds, sig.written(), rv.drop(sig.results.len()), outs.drop(sig.results.len())),
-    frame: Heap::Frame(tys, h0, h, lent),
+    frame: Heap::Frame(tys, strs, h0, h, lent),
     views: Value::Views(tys, strs, h0.len(), vs, Dyn::ixs(tys, ds ++ outs), sig.results, rv),
 }
 
 // The `Ret` stage: from the invariant, `Like`, and the argument cells as
 // passed, what `SafeAt` asks of the answer the run gives there.
-theorem Body::stage_ret(tys: Nat → Type, strs: Strs(tys), sig: Sig, {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: Nat → Bool}, inv: Inv(tys, strs, s, e, m, h0, lent),
+theorem Body::stage_ret(tys: Nat → Type, strs: Strs(tys), sig: Sig, {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>}, inv: Inv(tys, strs, s, e, m, h0, lent),
     ds: List<Dyn(tys)>, lk: Like(tys, strs, sig.params, ds, s, e), vs: List<Value(tys)>, ent: REnv::ArgsKept(tys, m.env, REnv(Cell::args(tys, sig.params, vs), Nil)),
     na: s.na = sig.params.len(), vl: vs.len() = s.na, dl: ds.len() = s.na, xs: List<Var>, ok: s.ret(tys, strs, sig, xs) = True):
     RetOk(tys, strs, sig, vs, ds, h0, lent, xs.map(λ x => (REnv::get(tys, m.env, x)).v), m.heap, xs.map(λ x => Env::get(tys, e, x)))
@@ -9728,4 +9758,11 @@ theorem Like::write(tys: Nat → Type, strs: Strs(tys), {ps: List<Param>}, {ds: 
             trans(Env::get_set_other(tys, e, x, Arg(k), f, ne), lk.keep(k, lt, p.right))
         },
         pp)
+}
+
+// The frame at a block lent to nothing: its whole object reads as before.
+theorem Heap::frame_whole(tys: Nat → Type, strs: Strs(tys), before, after: Heap(tys), rs: List<Ref>, fr: Heap::Frame(tys, strs, before, after, rs), b: Nat, bl: b < before.len(),
+    none: (r: Ref) → Mem(r, rs) → ¬(r.b = b)): Heap::at(tys, strs, after, b, Nil) = Heap::at(tys, strs, before, b, Nil)
+{
+    fr(b, bl, λ r mr eb _ => none(r, mr, eb), Nil, λ r mr eb => false_elim(none(r, mr, eb)))
 }

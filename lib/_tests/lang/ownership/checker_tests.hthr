@@ -1072,6 +1072,20 @@ theorem calls_wprim_refused(): verdict_in([wprim(), calls_wprim()], prim0(), 1) 
 
 theorem calls_wprim_bodied(): verdict([wprim(), calls_wprim()], 1).is_some() = True { refl }
 
+// Two written parameters, one lent on to a callee to write: checked. At two
+// fields of one block (which `Lendable` allows) the callee's frame by block
+// said nothing of the other field, the block being lent; the frame by place
+// (`Heap::Frame`, §23.14) says the field apart from what was lent reads as
+// before, which the caller's read of `b.y` after the call needs.
+fn lends_one() → Func {
+    Func(Sig([Param(pt_s(), ByWrite), Param(pt_s(), ByWrite)], Nil),
+        seq([Call(0, [Arg(0)], 1), Write(whole(Arg(0)), Loc(0)), Death(whole(Loc(0))), Read(Place(Arg(1), [SField(1)]))], Ret([Arg(0), Arg(1)])))
+}
+
+fn writes_one() → Func { Func(Sig([Param(pt_s(), ByWrite)], Nil), Ret([Arg(0)])) }
+
+theorem lends_one_checked(): verdict([writes_one(), lends_one()], 1).is_some() = True { refl }
+
 // ---------------------------------------------------------------------------
 // 16. `RMeasure` at a call outside any recursion costs nothing: a
 //     generator gives a function that is not in a recursion the need one

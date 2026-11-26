@@ -278,18 +278,31 @@ fn Value::Views(tys: Nat → Type, strs: Strs(tys), n: Nat, vs: List<Value(tys)>
     }
 }
 
-// The heap after is the heap before at every block that existed before and
-// that nothing was lent; a block made by the call is not the frame's.
-fn Heap::Frame(tys: Nat → Type, before, after: Heap(tys), lent: Nat → Bool) → Type { (b: Nat) → b < before.len() → lent(b) = False → after.nth(b) = before.nth(b) }
+// What a block holds at a selection path: its object's value read there,
+// where the path fits (holes are not read: the fragment has none).
+fn Heap::at(tys: Nat → Type, strs: Strs(tys), h: Heap(tys), b: Nat, q: List<Sel>) → Option<Dyn(tys)> { Heap::obj(tys, h, b).and_then(λ o => Sel::get(tys, strs, q, o.val)) }
 
-// The blocks lent to a parameter that may change them: what a call may
-// write or kill. A block lent only to read is the frame's, unchanged.
-fn Value::lends(tys: Nat → Type, ps: List<Param>, vs: List<Value(tys)>, b: Nat) → Bool {
+// The heap after is the heap before at every place nothing lent to change
+// reaches (§18.3, by place): at every block that existed before, every
+// selection path apart from every reference lent to change into that block
+// reads, and fits, as before. A block lent to nothing has nothing to be apart
+// from, so its empty path, its whole object, reads as before; a block lent
+// to change whole (a reference with no selections, as a taken object is) is
+// the callee's, no path being apart from all of it; a block made by the call
+// is not spoken of.
+fn Heap::Frame(tys: Nat → Type, strs: Strs(tys), before, after: Heap(tys), rs: List<Ref>) → Type {
+    (b: Nat) → b < before.len() → ((r: Ref) → Mem(r, rs) → r.b = b → ¬(r.sels = Nil)) →
+        (q: List<Sel>) → ((r: Ref) → Mem(r, rs) → r.b = b → Sel::Apart(tys, strs, r.sels, q)) → Heap::at(tys, strs, after, b, q) = Heap::at(tys, strs, before, b, q)
+}
+
+// The references lent to a parameter that may change them: what a call may
+// write or kill. One lent only to read is the frame's, unchanged.
+fn Value::lent(tys: Nat → Type, ps: List<Param>, vs: List<Value(tys)>) → List<Ref> {
     match vs {
-        Nil => False,
+        Nil => Nil,
         Cons(v, rest) => match ps {
-            Nil => False,
-            Cons(p, pr) => (p.mode.changes() && match v { Refer(r) => r.b.same(b), Plain(_) => False }) || Value::lends(tys, pr, rest, b),
+            Nil => Nil,
+            Cons(p, pr) => match v { Refer(r) => match p.mode.changes() { True => Cons(r, Value::lent(tys, pr, rest)), False => Value::lent(tys, pr, rest) }, Plain(_) => Value::lent(tys, pr, rest) },
         },
     }
 }
@@ -306,7 +319,7 @@ fn SafeAt(tys: Nat → Type, p: Prog(tys), g: Nat, fuel: Nat) → Type {
         (((a: Answer(tys)) → p.run(tys, fuel, g, vs, h, io) = Done(a) →
             Value::ReadAll(tys, p.strs, a.heap, a.heap.len(), a.results, p.w(g, ds)) ∧
             Value::Written(tys, p.strs, vs, ds, (p.fns(g)).sig.written(), a.results.drop((p.fns(g)).sig.results.len()), (p.w(g, ds)).drop((p.fns(g)).sig.results.len())) ∧
-            Heap::Frame(tys, h, a.heap, λ b => Value::lends(tys, (p.fns(g)).sig.params, vs, b)) ∧
+            Heap::Frame(tys, p.strs, h, a.heap, Value::lent(tys, (p.fns(g)).sig.params, vs)) ∧
             Value::Views(tys, p.strs, h.len(), vs, Dyn::ixs(tys, ds ++ p.w(g, ds)), (p.fns(g)).sig.results, a.results)) ∧
         (match p.need(g) as λ _ => Type { Some(_) => True, None => (io2: Io) → p.run(tys, fuel, g, vs, h, io) = Going(io2) → p.reaches(g, ds, io2.past) })))
 }
