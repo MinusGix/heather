@@ -372,8 +372,8 @@ fn compare_report(functions: List<Function>, counts: List<Nat>, placement: List<
 fn instr_shown(instr: Instr) → List<Nat> {
     match instr {
         Compute(node) => Cons(0, Cons(node_output(node).id, node_reads(node))),
-        Load(bytes, output, place) => [1, bytes, output, place],
-        Store(bytes, place, value) => [2, bytes, place, value],
+        Load(bytes, view, output, place) => [1, bytes, view, output, place],
+        Store(bytes, view, place, value) => [2, bytes, view, place, value],
         LoadRef(output, place) => [3, output, place],
         StoreRef(place, value) => [4, place, value],
         Offset(output, place, amount) => [5, output, place, amount],

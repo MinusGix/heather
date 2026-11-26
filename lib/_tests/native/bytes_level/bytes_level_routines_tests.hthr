@@ -52,7 +52,7 @@ fn lowers(p: Program, placement: List<Place>) → Bool { p.lower(placement).is_s
 // nothing, so its code answers zero in RAX.
 fn fill() → Routine {
     Routine([ref_id(0), word_id(1)],
-        Leaf([Compute(Const(64, 2, 42)), Store(1, 0, 2), Compute(Const(64, 3, 1)), Compute(Sub(64, 4, 1, 3)), Offset(5, 0, 4), Store(1, 5, 2)]),
+        Leaf([Compute(Const(64, 2, 42)), Store(1, 64, 0, 2), Compute(Const(64, 3, 1)), Compute(Sub(64, 4, 1, 3)), Offset(5, 0, 4), Store(1, 64, 5, 2)]),
         [])
 }
 
@@ -62,8 +62,8 @@ fn lend(length: Nat) → Routine {
     Routine([ref_id(0)],
         Seq(Leaf([Compute(Const(64, 1, 4)), Offset(2, 0, 1), Compute(Const(64, 3, length))]),
             Seq(Call(0, [ref_id(2), word_id(3)], []),
-                Leaf([Load(1, 4, 2), Compute(Const(64, 5, 1)), Offset(6, 2, 5), Load(1, 7, 6), Compute(Const(64, 8, 2)), Offset(9, 2, 8),
-                    Load(1, 10, 9)]))),
+                Leaf([Load(1, 64, 4, 2), Compute(Const(64, 5, 1)), Offset(6, 2, 5), Load(1, 64, 7, 6), Compute(Const(64, 8, 2)), Offset(9, 2, 8),
+                    Load(1, 64, 10, 9)]))),
         [word_id(4), word_id(7), word_id(10)])
 }
 
@@ -101,12 +101,12 @@ theorem lend_rooms_grow(): depth_rooms(lend_program(3).routines)(1, 0) < depth_r
 // Two windows of one block written by one callee
 
 fn two() → Routine {
-    Routine([ref_id(0), ref_id(1)], Leaf([Compute(Const(64, 2, 1)), Store(1, 0, 2), Compute(Const(64, 3, 2)), Store(1, 1, 3)]), [])
+    Routine([ref_id(0), ref_id(1)], Leaf([Compute(Const(64, 2, 1)), Store(1, 64, 0, 2), Compute(Const(64, 3, 2)), Store(1, 64, 1, 3)]), [])
 }
 
 fn both(apart: Nat) → Routine {
     Routine([ref_id(0)],
-        Seq(Leaf([Compute(Const(64, 1, apart)), Offset(2, 0, 1)]), Seq(Call(0, [ref_id(0), ref_id(2)], []), Leaf([Load(1, 3, 0), Load(1, 4, 2)]))),
+        Seq(Leaf([Compute(Const(64, 1, apart)), Offset(2, 0, 1)]), Seq(Call(0, [ref_id(0), ref_id(2)], []), Leaf([Load(1, 64, 3, 0), Load(1, 64, 4, 2)]))),
         [word_id(3), word_id(4)])
 }
 
@@ -166,6 +166,23 @@ theorem countdown_meets_done<M>(program: Prog, lowered: countdown_program().lowe
         λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run_peak(countdown_program(), blocks, n, f, args, heap, io), 1,
         λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run(countdown_program(), blocks, n, f, args, heap, io)) {
     lower_program_meets_done<M>(countdown_program(), countdown_places(), program, lowered, fetch, data, last, origin, stack, top, spans, blocks)
+}
+
+// The same loop with the next state placed in the state's register, so the
+// pass's end moves nothing (every export's loop): the exit bit's test and a
+// jump forward out where it is set, else the one jump back to the head.
+fn countdown_straight_places() → List<Place> { into([Rcx, Rax, Rcx, Rax, Rsi]) }
+
+theorem countdown_straight_lowers(): lowers(countdown_program(), countdown_straight_places()) = True { refl }
+
+theorem countdown_straight_meets_done<M>(program: Prog, lowered: countdown_program().lower(countdown_straight_places()) = Some(program),
+    fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64), stack: Stack<M>(fetch, data), top: Nat, spans: Spans,
+    blocks: Blocks):
+    Site<M>(fetch, data, program, last, origin).MeetsDone(stack, spans, top, blocks.Lent(spans), depth_rooms(countdown_program().routines),
+        λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run_peak(countdown_program(), blocks, n, f, args, heap, io), 1,
+        λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run(countdown_program(), blocks, n, f, args, heap, io)) {
+    lower_program_meets_done<M>(countdown_program(), countdown_straight_places(), program, lowered, fetch, data, last, origin, stack, top, spans,
+        blocks)
 }
 
 // Control: an id a pass bound, bound again after the loop, is refused: the
@@ -399,7 +416,7 @@ fn echo(asked, back: Nat) → Routine {
     Routine([ref_id(0)],
         Seq(Leaf([Compute(Const(64, 1, 0)), Compute(Const(64, 2, asked))]),
             Seq(Sys(Read(1, 0, 2, 3)),
-                Seq(Leaf([Compute(Const(64, 4, 1)), Compute(Const(64, 5, back))]), Seq(Sys(Write(4, 0, 5, 6)), Leaf([Load(1, 7, 0)]))))),
+                Seq(Leaf([Compute(Const(64, 4, 1)), Compute(Const(64, 5, back))]), Seq(Sys(Write(4, 0, 5, 6)), Leaf([Load(1, 64, 7, 0)]))))),
         [word_id(3), word_id(7)])
 }
 
@@ -438,7 +455,7 @@ theorem echo_meets<M>(back: Nat, program: Prog, lowered: echo_program(back).lowe
 // bytes_level_tests' `read_then_load`: read into block 0, load its first
 // byte.
 fn read_then_load() → Routine {
-    Routine([ref_id(0)], Seq(Leaf([Compute(Const(64, 1, 0)), Compute(Const(64, 2, 4))]), Seq(Sys(Read(1, 0, 2, 3)), Leaf([Load(1, 4, 0)]))),
+    Routine([ref_id(0)], Seq(Leaf([Compute(Const(64, 1, 0)), Compute(Const(64, 2, 4))]), Seq(Sys(Read(1, 0, 2, 3)), Leaf([Load(1, 64, 4, 0)]))),
         [word_id(3), word_id(4)])
 }
 
@@ -540,3 +557,20 @@ theorem empty_read_meets<M>(program: Prog, lowered: empty_program().lower(empty_
         λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run(empty_program(), blocks, n, f, args, heap, io)) {
     lower_program_meets<M>(empty_program(), empty_places(), program, lowered, fetch, data, last, origin, stack, top, spans, blocks)
 }
+
+// ---------------------------------------------------------------------------
+// Every memory node lowered by evaluation through `Program::lower` (each
+// layout premise met): a reference stored and loaded back, a word stored and
+// loaded at eight bytes and a doubleword at four, both from and at the
+// 64-bit view, and a doubleword loaded at the 32-bit view, byte-swapped and
+// stored from that view (issues/bytes-level-access-view.md).
+fn accesses() → Routine {
+    Routine([ref_id(0), ref_id(1), word_id(2)],
+        Leaf([StoreRef(0, 1), LoadRef(3, 0), Store(8, 64, 1, 2), Load(8, 64, 4, 1), Store(4, 64, 1, 4), Load(4, 64, 5, 1), Load(1, 64, 6, 1),
+            Load(4, 32, 7, 1), Compute(ByteSwap(32, 8, 7)), Store(4, 32, 1, 8)]),
+        [word_id(5)])
+}
+
+fn accesses_places() → List<Place> { into([Rax, Rax, Rax, Rax, Rax, Rax, Rcx, Rcx, Rdx, Rax, Rax]) }
+
+theorem accesses_lowers(): lowers(Program([accesses()]), accesses_places()) = True { refl }

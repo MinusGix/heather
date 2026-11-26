@@ -16,7 +16,10 @@
 //   a run answers.
 // - Nodes (`Instr`): a FunctionIR node that touches no buffer (`Compute`),
 //   and through a reference a load and a store of 1, 2, 4 or 8 bytes, a
-//   load and a store of a reference, an offset, and a typed range copy. No
+//   load and a store of a reference, an offset, and a typed range copy. A
+//   word id has a view at every width (FunctionIR's valuation), and the
+//   views are independent in general, so a word's load and store each name
+//   the view they use (`view_word`, `view_ok`). No
 //   node names a buffer by number. Each memory node is one of
 //   bytes_memory's operations, so where it answers is that operation's
 //   site fact.
@@ -83,6 +86,23 @@ fn Locals::empty() → Locals { Locals(Valuation::zero(), λ (_: Nat) => None) }
 
 fn Locals::word(self l: Locals, id: Nat) → BitVec(64) { l.words(64, id) }
 
+// A word id's view at width `view`, as a word: its low `view` bits
+// zero-extended, itself at 64.
+fn view_word(words: Valuation(), view, id: Nat) → BitVec(64) {
+    match view.same(64) { True => words(64, id), False => words(view, id).resize(64) }
+}
+
+fn Locals::view(self l: Locals, view, id: Nat) → BitVec(64) { view_word(l.words, view, id) }
+
+// Valuations that agree at an id at every width agree on its views.
+theorem view_word_agrees(a, b: Valuation(), view, id: Nat, at: (w: Nat) → a(w, id) = b(w, id)): view_word(a, view, id) = view_word(b, view, id) {
+    match view.same(64) as λ s => (match s { True => a(64, id), False => a(view, id).resize(64) }) =
+        (match s { True => b(64, id), False => b(view, id).resize(64) }) {
+        True => at(64),
+        False => cong_fn<BitVec(view), BitVec(64)>(λ x => x.resize(64), at(view)),
+    }
+}
+
 fn Locals::set_word(self l: Locals, id: Nat, value: (w: Nat) → BitVec(w)) → Locals { Locals(Valuation::set(l.words, id, value), l.refs) }
 
 fn Locals::set_ref(self l: Locals, id: Nat, loc: Loc) → Locals {
@@ -135,11 +155,13 @@ inductive Instr {
     // requirement (a divisor not zero).
     Compute(node: Node),
     // The `bytes` bytes at `place`, holding no reference and none undefined,
-    // as a word: the first the least significant.
-    Load(bytes: Nat, output: Nat, place: Nat),
-    // The low `bytes` bytes of the word `value` stored at `place`, as the
-    // machine's stores write a register's.
-    Store(bytes: Nat, place: Nat, value: Nat),
+    // as a word: the first the least significant. `output` is bound at
+    // every width as that word resized, so its views agree by construction;
+    // `view` is the width it is held at (the lowering's kind for it).
+    Load(bytes: Nat, view: Nat, output: Nat, place: Nat),
+    // The low `bytes` bytes of `value`'s view at width `view` stored at
+    // `place`, as the machine's stores write a register's.
+    Store(bytes: Nat, view: Nat, place: Nat, value: Nat),
     LoadRef(output: Nat, place: Nat),
     StoreRef(place: Nat, value: Nat),
     // The reference `amount` bytes past `place`.
@@ -157,10 +179,10 @@ fn Instr::step(self instr: Instr, blocks: Blocks, c: Config) → Option<Config> 
             False => None,
             True => Some(Config(Locals(node.step(c.locals.words), c.locals.refs), c.memory, c.io)),
         },
-        Load(bytes, output, place) => c.locals.refs(place).and_then(λ (loc: Loc) =>
+        Load(bytes, _, output, place) => c.locals.refs(place).and_then(λ (loc: Loc) =>
             c.memory.load(loc, bytes).and_then(λ (x: BitVec(64)) => Some(Config(c.locals.set_word(output, word_value(x)), c.memory, c.io)))),
-        Store(bytes, place, value) => c.locals.refs(place).and_then(λ (loc: Loc) =>
-            c.memory.put(blocks.written, loc, Piece::plain(low_bytes(bytes, c.locals.word(value)))).and_then(λ (m: Heap) => Some(Config(c.locals, m, c.io)))),
+        Store(bytes, view, place, value) => c.locals.refs(place).and_then(λ (loc: Loc) =>
+            c.memory.put(blocks.written, loc, Piece::plain(low_bytes(bytes, c.locals.view(view, value)))).and_then(λ (m: Heap) => Some(Config(c.locals, m, c.io)))),
         LoadRef(output, place) => c.locals.refs(place).and_then(λ (loc: Loc) =>
             c.memory.load_ref(loc).and_then(λ (target: Loc) => Some(Config(c.locals.set_ref(output, target), c.memory, c.io)))),
         StoreRef(place, value) => c.locals.refs(place).and_then(λ (loc: Loc) => c.locals.refs(value).and_then(λ (target: Loc) =>
@@ -579,6 +601,15 @@ fn same_kinds(a, b: List<ValueKind>) → Bool {
 // A load's or a store's width.
 fn width_ok(bytes: Nat) → Bool { bytes.same(1) || (bytes.same(2) || (bytes.same(4) || bytes.same(8))) }
 
+// An access's view: the 64-bit one at any width, or the 32-bit one at four
+// bytes or fewer. These are the widths the lowering holds a word at for an
+// access (`Word`, `Narrow(32)`). A store from a view narrower than its
+// bytes would write bits the view does not have, and a load held narrower
+// than its bytes would not hold what it read, so both are refused here.
+fn view_ok(bytes, view: Nat) → Bool { match view.same(64) { True => True, False => view.same(32) && bytes.leb(4) } }
+
+fn access_ok(bytes, view: Nat) → Bool { width_ok(bytes) && view_ok(bytes, view) }
+
 fn when_ok(ok: Bool, kinds: List<Typed>) → Option<List<Typed>> { match ok { False => None, True => Some(kinds) } }
 
 // What a node needs of the kinds bound before it, and what it binds.
@@ -588,11 +619,11 @@ fn Instr::check(self instr: Instr, kinds: List<Typed>) → Option<List<Typed>> {
             False => None,
             True => bind_kind(kinds, word_id(node_output(node).id)),
         },
-        Load(bytes, output, place) => match width_ok(bytes) && has_kind(kinds, place, RefKind) {
+        Load(bytes, view, output, place) => match access_ok(bytes, view) && has_kind(kinds, place, RefKind) {
             False => None,
             True => bind_kind(kinds, word_id(output)),
         },
-        Store(bytes, place, value) => when_ok(width_ok(bytes) && (has_kind(kinds, place, RefKind) && has_kind(kinds, value, WordKind)), kinds),
+        Store(bytes, view, place, value) => when_ok(access_ok(bytes, view) && (has_kind(kinds, place, RefKind) && has_kind(kinds, value, WordKind)), kinds),
         LoadRef(output, place) => match has_kind(kinds, place, RefKind) { False => None, True => bind_kind(kinds, ref_id(output)) },
         StoreRef(place, value) => when_ok(has_kind(kinds, place, RefKind) && has_kind(kinds, value, RefKind), kinds),
         Offset(output, place, amount) => match has_kind(kinds, place, RefKind) && has_kind(kinds, amount, WordKind) {

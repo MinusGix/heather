@@ -886,6 +886,43 @@ theorem Test::jcc_reads<M>(self test: Test, s: MachineState<M>):
     }
 }
 
+// The condition a JCC tests, negated: taken exactly where the original is
+// not.
+fn ConditionCode::negate(self cc: ConditionCode) → ConditionCode {
+    match cc { O => NO, NO => O, B => AE, AE => B, E => NE, NE => E, BE => A, A => BE, S => NS, NS => S, P => NP, NP => P, L => GE, GE => L, LE => G, G => LE }
+}
+
+theorem ConditionCode::negate_holds(self cc: ConditionCode, f: Flags): condition_holds(cc.negate(), f) = !condition_holds(cc, f) {
+    match cc {
+        O => refl, NO => sym(Bool::not_not(f.of)),
+        B => refl, AE => sym(Bool::not_not(f.cf)),
+        E => refl, NE => sym(Bool::not_not(f.zf)),
+        BE => refl, A => sym(Bool::not_not(f.cf || f.zf)),
+        S => refl, NS => sym(Bool::not_not(f.sf)),
+        P => refl, NP => sym(Bool::not_not(f.pf)),
+        L => refl, GE => sym(Bool::not_not(f.sf.xor(f.of))),
+        LE => refl, G => sym(Bool::not_not(f.zf || f.sf.xor(f.of))),
+    }
+}
+
+// A test whose JCC is taken exactly where `test`'s is not: a comparison's
+// condition negated, and a bit's TEST as a comparison with zero (`Test` has
+// no TEST taken where the bit is set).
+fn Test::negated(self test: Test) → Test {
+    match test { Nonzero(register) => Compare(NE, register, RightImm8(BitVec::zero(n := 8))), Compare(cc, left, right) => Compare(cc.negate(), left, right) }
+}
+
+theorem Test::negated_taken(self test: Test, gprs: Gprs): test.negated().taken(gprs) = !test.taken(gprs) {
+    match test {
+        Nonzero(register) => {
+            let x = read_gpr(register, gprs);
+            let same: (x.sub(BitVec::zero(n := 8).sign_extend(56)) = x.band(x)) = trans(BitVec::sub_zero(64, x), sym(BitVec::band_self(64, x)));
+            cong_fn<BitVec(64), Bool>(λ y => !is_zero_bits(64, y), same)
+        },
+        Compare(cc, left, right) => cc.negate_holds(sub_flags(read_gpr(left, gprs), right.read(gprs))),
+    }
+}
+
 fn Prog::tested(self start: Prog, test: Test) → Prog { At(start, 0, Block([test.instruction()])) }
 fn Prog::branched(self start: Prog, test: Test, else_name: Nat) → Prog { At(start.tested(test), 0, Jcc(test.cc(), else_name)) }
 // The same with the JCC (and the first arm's JMP) in the form a hint chose.

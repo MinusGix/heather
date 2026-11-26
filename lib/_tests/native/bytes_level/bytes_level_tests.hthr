@@ -65,7 +65,7 @@ fn word(x: Nat) → Value { Word(BitVec::ofNat(x)) }
 // a byte read through it.
 
 fn cells() → Routine {
-    Routine([ref_id(0), ref_id(1)], Leaf([StoreRef(0, 1), LoadRef(2, 0), Load(1, 3, 2)]), [word_id(3)])
+    Routine([ref_id(0), ref_id(1)], Leaf([StoreRef(0, 1), LoadRef(2, 0), Load(1, 64, 3, 2)]), [word_id(3)])
 }
 
 fn cells_program() → Program { Program([cells()]) }
@@ -104,12 +104,12 @@ theorem cells_past_end(): stuck(go(cells_program(), 0, [Ref(Loc(0, 9)), Ref(Loc(
 
 // a word load of a reference's eight bytes has no meaning, and its control,
 // the word stored over the whole of the reference, reads back;
-fn word_of_reference() → Program { Program([Routine([ref_id(0), ref_id(1)], Leaf([StoreRef(0, 1), Load(8, 2, 0)]), [word_id(2)])]) }
+fn word_of_reference() → Program { Program([Routine([ref_id(0), ref_id(1)], Leaf([StoreRef(0, 1), Load(8, 64, 2, 0)]), [word_id(2)])]) }
 
 theorem word_of_reference_stuck(): stuck(go(word_of_reference(), 0, cells_args())) = True { refl }
 
 fn replacing() → Program {
-    Program([Routine([ref_id(0), ref_id(1)], Leaf([StoreRef(0, 1), Compute(Const(64, 2, 5)), Store(8, 0, 2), Load(8, 3, 0)]), [word_id(3)])])
+    Program([Routine([ref_id(0), ref_id(1)], Leaf([StoreRef(0, 1), Compute(Const(64, 2, 5)), Store(8, 64, 0, 2), Load(8, 64, 3, 0)]), [word_id(3)])])
 }
 
 theorem replaced_reads_word(): answer_word(go(replacing(), 0, cells_args()), 0) = Some(5) { refl }
@@ -125,7 +125,7 @@ theorem reference_of_bytes_stuck(): stuck(go(reference_of_bytes(), 0, [Ref(Loc(0
 // Routine 0: 42 at the window's first byte and at its last.
 fn fill() → Routine {
     Routine([ref_id(0), word_id(1)],
-        Leaf([Compute(Const(64, 2, 42)), Store(1, 0, 2), Compute(Const(64, 3, 1)), Compute(Sub(64, 4, 1, 3)), Offset(5, 0, 4), Store(1, 5, 2)]),
+        Leaf([Compute(Const(64, 2, 42)), Store(1, 64, 0, 2), Compute(Const(64, 3, 1)), Compute(Sub(64, 4, 1, 3)), Offset(5, 0, 4), Store(1, 64, 5, 2)]),
         [])
 }
 
@@ -135,8 +135,8 @@ fn lend(length: Nat) → Routine {
     Routine([ref_id(0)],
         Seq(Leaf([Compute(Const(64, 1, 4)), Offset(2, 0, 1), Compute(Const(64, 3, length))]),
             Seq(Call(0, [ref_id(2), word_id(3)], []),
-                Leaf([Load(1, 4, 2), Compute(Const(64, 5, 1)), Offset(6, 2, 5), Load(1, 7, 6), Compute(Const(64, 8, 2)), Offset(9, 2, 8),
-                    Load(1, 10, 9)]))),
+                Leaf([Load(1, 64, 4, 2), Compute(Const(64, 5, 1)), Offset(6, 2, 5), Load(1, 64, 7, 6), Compute(Const(64, 8, 2)), Offset(9, 2, 8),
+                    Load(1, 64, 10, 9)]))),
         [word_id(4), word_id(7), word_id(10)])
 }
 
@@ -162,14 +162,14 @@ theorem lend_to_end(): answer_word(go(lend_program(12), 1, [Ref(Loc(0, 0))]), 0)
 
 // Routine 0: 1 at its first window, then 2 at its second.
 fn two() → Routine {
-    Routine([ref_id(0), ref_id(1)], Leaf([Compute(Const(64, 2, 1)), Store(1, 0, 2), Compute(Const(64, 3, 2)), Store(1, 1, 3)]), [])
+    Routine([ref_id(0), ref_id(1)], Leaf([Compute(Const(64, 2, 1)), Store(1, 64, 0, 2), Compute(Const(64, 3, 2)), Store(1, 64, 1, 3)]), [])
 }
 
 // Routine 1: windows at bytes 0 and `apart` of its block lent to `two`,
 // then bytes 0 and `apart` read back.
 fn both(apart: Nat) → Routine {
     Routine([ref_id(0)],
-        Seq(Leaf([Compute(Const(64, 1, apart)), Offset(2, 0, 1)]), Seq(Call(0, [ref_id(0), ref_id(2)], []), Leaf([Load(1, 3, 0), Load(1, 4, 2)]))),
+        Seq(Leaf([Compute(Const(64, 1, apart)), Offset(2, 0, 1)]), Seq(Call(0, [ref_id(0), ref_id(2)], []), Leaf([Load(1, 64, 3, 0), Load(1, 64, 4, 2)]))),
         [word_id(3), word_id(4)])
 }
 
@@ -215,6 +215,34 @@ theorem write_reference_fd_invalid(): Program([writes_through(ref_id(0))]).valid
 
 theorem write_word_fd_valid(): Program([writes_through(word_id(0))]).valid() = True { refl }
 
+// An access names the view it uses (issues/bytes-level-access-view.md):
+// the 64-bit view at any width, the 32-bit one at four bytes or fewer.
+fn stores_from(bytes, view: Nat) → Routine {
+    Routine([ref_id(0), word_id(1)], Leaf([Store(bytes, view, 0, 1)]), [])
+}
+
+fn loads_at(bytes, view: Nat) → Routine {
+    Routine([ref_id(0)], Leaf([Load(bytes, view, 1, 0)]), [word_id(1)])
+}
+
+theorem store_views_valid(): Program([stores_from(8, 64)]).valid() && (Program([stores_from(4, 32)]).valid() &&
+    (Program([stores_from(1, 32)]).valid() && (Program([loads_at(4, 32)]).valid() && Program([loads_at(1, 32)]).valid()))) = True { refl }
+
+// A store from a view narrower than its bytes would write bits the view
+// does not have,
+theorem store_past_view_invalid(): Program([stores_from(8, 32)]).valid() = False { refl }
+
+// a load held narrower than its bytes would not hold what it read,
+theorem load_past_view_invalid(): Program([loads_at(8, 32)]).valid() = False { refl }
+
+// and no width but 64 and 32 is a kind the lowering holds an access's word
+// at.
+theorem store_other_view_invalid(): Program([stores_from(2, 16)]).valid() = False { refl }
+
+// Every view of a loaded word agrees: a four-byte load held at 32 bits
+// answers, at 64, the bytes 7, 8, 9, 10 as a word.
+theorem load_held_narrow_answers(): answer_word(go(Program([loads_at(4, 32)]), 0, [Ref(Loc(1, 0))]), 0) = Some(168364039) { refl }
+
 // ---------------------------------------------------------------------------
 // A store that cuts a reference
 
@@ -223,7 +251,7 @@ theorem write_word_fd_valid(): Program([writes_through(word_id(0))]).valid() = T
 fn cutting(bytes, at: Nat) → Routine {
     Routine([ref_id(0), ref_id(1)],
         Leaf([Compute(Const(64, 2, 4)), Offset(3, 0, 2), StoreRef(3, 1), Compute(Const(64, 4, at)), Offset(5, 0, 4), Compute(Const(64, 6, 5)),
-            Store(bytes, 5, 6), LoadRef(7, 3), Load(1, 8, 7)]),
+            Store(bytes, 64, 5, 6), LoadRef(7, 3), Load(1, 64, 8, 7)]),
         [word_id(8)])
 }
 
@@ -246,7 +274,7 @@ theorem whole_store_replaces(): stuck(cut_run(8, 4)) = True { refl }
 // copied to 8 reads through as the original does.
 fn copying(length: Nat) → Routine {
     Routine([ref_id(0), ref_id(1)],
-        Leaf([StoreRef(0, 1), Compute(Const(64, 2, 8)), Offset(3, 0, 2), Compute(Const(64, 4, length)), Copy(3, 0, 4), LoadRef(5, 3), Load(1, 6, 5)]),
+        Leaf([StoreRef(0, 1), Compute(Const(64, 2, 8)), Offset(3, 0, 2), Compute(Const(64, 4, length)), Copy(3, 0, 4), LoadRef(5, 3), Load(1, 64, 6, 5)]),
         [word_id(6)])
 }
 
@@ -263,7 +291,7 @@ theorem copy_cut_refused(): stuck(copy_run(4)) = True { refl }
 // A byte of block 2 loaded, after a store there when `store` is set.
 fn fresh(store: Bool) → Routine {
     Routine([ref_id(0)],
-        Leaf(match store { True => [Compute(Const(64, 1, 6)), Store(1, 0, 1), Load(1, 2, 0)], False => [Load(1, 2, 0)] }), [word_id(2)])
+        Leaf(match store { True => [Compute(Const(64, 1, 6)), Store(1, 64, 0, 1), Load(1, 64, 2, 0)], False => [Load(1, 64, 2, 0)] }), [word_id(2)])
 }
 
 // A load of an undefined byte has no meaning,
@@ -281,7 +309,7 @@ fn echo(asked, back: Nat) → Routine {
     Routine([ref_id(0)],
         Seq(Leaf([Compute(Const(64, 1, 0)), Compute(Const(64, 2, asked))]),
             Seq(Sys(Read(1, 0, 2, 3)),
-                Seq(Leaf([Compute(Const(64, 4, 1)), Compute(Const(64, 5, back))]), Seq(Sys(Write(4, 0, 5, 6)), Leaf([Load(1, 7, 0)]))))),
+                Seq(Leaf([Compute(Const(64, 4, 1)), Compute(Const(64, 5, back))]), Seq(Sys(Write(4, 0, 5, 6)), Leaf([Load(1, 64, 7, 0)]))))),
         [word_id(3), word_id(7)])
 }
 
@@ -313,7 +341,7 @@ fn failing() → World() {
 
 // Read into block 0 (defined zeros), then load its first byte.
 fn read_then_load() → Routine {
-    Routine([ref_id(0)], Seq(Leaf([Compute(Const(64, 1, 0)), Compute(Const(64, 2, 4))]), Seq(Sys(Read(1, 0, 2, 3)), Leaf([Load(1, 4, 0)]))),
+    Routine([ref_id(0)], Seq(Leaf([Compute(Const(64, 1, 0)), Compute(Const(64, 2, 4))]), Seq(Sys(Read(1, 0, 2, 3)), Leaf([Load(1, 64, 4, 0)]))),
         [word_id(3), word_id(4)])
 }
 

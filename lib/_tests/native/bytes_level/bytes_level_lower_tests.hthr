@@ -50,7 +50,7 @@ fn lowers(body: Body, placement: List<Place>) → Bool { lowered(body, placement
 // The experiment's program: a reference stored, loaded back, a byte read
 // through it (bytes_level_tests' `cells`).
 
-fn cells_body() → Body { Leaf([StoreRef(0, 1), LoadRef(2, 0), Load(1, 3, 2)]) }
+fn cells_body() → Body { Leaf([StoreRef(0, 1), LoadRef(2, 0), Load(1, 64, 3, 2)]) }
 
 // `MOV [RDI], RSI`, `MOV RAX, [RDI]`, `MOVZX RCX, byte [RAX]`.
 theorem cells_lowers(): lowers(cells_body(), into([Rax, Rax, Rcx])) = True { refl }
@@ -67,7 +67,7 @@ theorem cells_code<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), sta
 
 // Control: the reference's load put where the reference it reads through
 // lies, and the byte's load then finds no register holding it.
-fn overwrites_body() → Body { Leaf([LoadRef(2, 0), Load(1, 3, 0)]) }
+fn overwrites_body() → Body { Leaf([LoadRef(2, 0), Load(1, 64, 3, 0)]) }
 
 theorem overwrites_refused(): lowers(overwrites_body(), into([Rdi, Rax])) = False { refl }
 
@@ -78,7 +78,7 @@ theorem overwrites_beside(): lowers(overwrites_body(), into([Rax, Rcx])) = True 
 // first byte and its last, through an offset.
 
 fn fill_body() → Body {
-    Leaf([Compute(Const(64, 2, 42)), Store(1, 0, 2), Compute(Const(64, 3, 1)), Compute(Sub(64, 4, 1, 3)), Offset(5, 0, 4), Store(1, 5, 2)])
+    Leaf([Compute(Const(64, 2, 42)), Store(1, 64, 0, 2), Compute(Const(64, 3, 1)), Compute(Sub(64, 4, 1, 3)), Offset(5, 0, 4), Store(1, 64, 5, 2)])
 }
 
 theorem fill_lowers(): lowers(fill_body(), into([Rax, Rax, Rcx, Rdx, R8, R8])) = True { refl }
@@ -98,21 +98,90 @@ theorem fill_code<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), stac
 // (bytes_level_tests' `replacing`), and a doubleword.
 
 fn widths_body() → Body {
-    Seq(Leaf([StoreRef(0, 1), Compute(Const(64, 2, 5)), Store(8, 0, 2), Load(8, 3, 0)]),
-        Leaf([Compute(Const(64, 4, 7)), Store(4, 0, 4), Load(4, 5, 0)]))
+    Seq(Leaf([StoreRef(0, 1), Compute(Const(64, 2, 5)), Store(8, 64, 0, 2), Load(8, 64, 3, 0)]),
+        Leaf([Compute(Const(64, 4, 7)), Store(4, 64, 0, 4), Load(4, 64, 5, 0)]))
 }
 
 theorem widths_lowers(): lowers(widths_body(), into([Rax, Rax, Rax, Rcx, Rdx, Rdx, Rdx])) = True { refl }
 
 // Control: a two-byte load has no instruction yet, and is refused.
-theorem two_bytes_refused(): lowers(Leaf([Load(2, 2, 0)]), into([Rax])) = False { refl }
+theorem two_bytes_refused(): lowers(Leaf([Load(2, 64, 2, 0)]), into([Rax])) = False { refl }
+
+// ---------------------------------------------------------------------------
+// The view an access uses (issues/bytes-level-access-view.md): the two
+// smallest programs the hash's buffer rows were refused on before a load
+// and a store named their view. A 32-bit byte swap's result, held at
+// `Narrow(32)`, stored by a four-byte store from the 32-bit view; and a
+// four-byte load held at the 32-bit view feeding a 32-bit byte swap, with
+// no move between them.
+
+// A region entered with a reference in RDI, a word held at its 32-bit view
+// in RSI (as a 32-bit node leaves one) and a word in RDX.
+fn ref_words_in() → File {
+    File::empty().write(Rdi, Some(Held(0, Word))).write(Rsi, Some(Held(1, Narrow(32)))).write(Rdx, Some(Held(2, Word)))
+}
+
+fn lowered_in(body: Body, placement: List<Place>) → Option<Emitted> { body.emit(0, 0, [], 0, 0, Start, ref_words_in(), placement, 0) }
+
+fn lowers_in(body: Body, placement: List<Place>) → Bool { lowered_in(body, placement).is_some() }
+
+fn swap_store_body() → Body { Leaf([Compute(ByteSwap(32, 3, 1)), Offset(4, 0, 2), Store(4, 32, 4, 3)]) }
+
+theorem swap_store_valid(): check_instrs([Compute(ByteSwap(32, 3, 1)), Offset(4, 0, 2), Store(4, 32, 4, 3)],
+    [ref_id(0), word_id(1), word_id(2)]).is_some() = True { refl }
+
+// `MOV EAX, ESI; BSWAP EAX`, `MOV RCX, RDI; ADD RCX, RDX`, `MOV dword [RCX], EAX`.
+theorem swap_store_lowers(): lowers_in(swap_store_body(), into([Rax, Rcx, Rcx])) = True { refl }
+
+theorem swap_store_code<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data), top: Nat, spans: Spans,
+    loan: Loan<M>(site.fetch, site.data, stack, top, spans), blocks: Blocks, lent: blocks.Lent(spans), values: Valuation(), d: Nat,
+    s0: MachineState<M>, before, after: Now):
+    MayEmitNow<M>(0, site, stack, spans, values, d, s0, Start, ref_words_in(), swap_store_body().Holds(spans, blocks, values, no_answers(), 0, before, after),
+        before, after, lowered_in(swap_store_body(), into([Rax, Rcx, Rcx]))) {
+    swap_store_body().emit_emits<M>(0, 0, site, laid, stack, top, spans, loan, blocks, lent, λ (_: Nat) => 0, 0, 0, no_answers(),
+        no_callees<M>(site, stack, spans, top), values, 0, d, d, s0, λ c => false_elim(c), [], trivial, Start, ref_words_in(), into([Rax, Rcx, Rcx]), 0,
+        before, after)
+}
+
+fn load_swap_body() → Body { Leaf([Offset(3, 0, 2), Load(4, 32, 4, 3), Compute(ByteSwap(32, 5, 4))]) }
+
+theorem load_swap_valid(): check_instrs([Offset(3, 0, 2), Load(4, 32, 4, 3), Compute(ByteSwap(32, 5, 4))],
+    [ref_id(0), word_id(1), word_id(2)]).is_some() = True { refl }
+
+// `MOV RCX, RDI; ADD RCX, RDX`, `MOV EAX, dword [RCX]`, `BSWAP EAX`.
+theorem load_swap_lowers(): lowers_in(load_swap_body(), into([Rcx, Rax, Rax])) = True { refl }
+
+theorem load_swap_code<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data), top: Nat, spans: Spans,
+    loan: Loan<M>(site.fetch, site.data, stack, top, spans), blocks: Blocks, lent: blocks.Lent(spans), values: Valuation(), d: Nat,
+    s0: MachineState<M>, before, after: Now):
+    MayEmitNow<M>(0, site, stack, spans, values, d, s0, Start, ref_words_in(), load_swap_body().Holds(spans, blocks, values, no_answers(), 0, before, after),
+        before, after, lowered_in(load_swap_body(), into([Rcx, Rax, Rax]))) {
+    load_swap_body().emit_emits<M>(0, 0, site, laid, stack, top, spans, loan, blocks, lent, λ (_: Nat) => 0, 0, 0, no_answers(),
+        no_callees<M>(site, stack, spans, top), values, 0, d, d, s0, λ c => false_elim(c), [], trivial, Start, ref_words_in(), into([Rcx, Rax, Rax]), 0,
+        before, after)
+}
+
+// Control: the same store from the 64-bit view. The swap's result is held
+// at `Narrow(32)` only and nothing holds its 64-bit view, so the lowering
+// finds no register for the store's value and refuses it. Validity accepts
+// it: the language means the 64-bit view's low four bytes, which no
+// register here holds.
+fn swap_store_wide_body() → Body { Leaf([Compute(ByteSwap(32, 3, 1)), Offset(4, 0, 2), Store(4, 64, 4, 3)]) }
+
+theorem swap_store_wide_valid(): check_instrs([Compute(ByteSwap(32, 3, 1)), Offset(4, 0, 2), Store(4, 64, 4, 3)],
+    [ref_id(0), word_id(1), word_id(2)]).is_some() = True { refl }
+
+theorem swap_store_wide_refused(): lowers_in(swap_store_wide_body(), into([Rax, Rcx, Rcx])) = False { refl }
+
+// The 64-bit view stored where the value is held as a word: accepted.
+theorem word_store_wide_lowers(): lowers_in(Leaf([Offset(4, 0, 2), Store(4, 64, 4, 2)]), into([Rcx, Rcx])) = True { refl }
 
 // ---------------------------------------------------------------------------
 // A branch on a comparison: the larger of two bytes stored back.
 
 fn larger_body() → Body {
-    Seq(Leaf([Load(1, 2, 0), Load(1, 3, 1), Compute(UnsignedLessThan(64, 4, 2, 3))]),
-        Branch(4, Leaf([Store(1, 0, 3)]), Leaf([Store(1, 1, 2)])))
+    Seq(Leaf([Load(1, 64, 2, 0), Load(1, 64, 3, 1), Compute(UnsignedLessThan(64, 4, 2, 3))]),
+        Branch(4, Leaf([Store(1, 64, 0, 3)]), Leaf([Store(1, 64, 1, 2)])))
 }
 
 theorem larger_lowers(): lowers(larger_body(), into([Rax, Rcx, Rdx, Rax, Rax])) = True { refl }
@@ -145,7 +214,7 @@ theorem cut_put_none(): holding().put(writable().written, Loc(0, 8), Piece::plai
 
 theorem cut_store_unprovable(spans: Spans, values: Valuation(), after: Heap, address: values(64, 0) = Loc(0, 8).address(spans),
     word: values(64, 1) = BitVec::ofNat(5), injective: (loc: Loc) → loc.address(spans) = Loc(0, 8).address(spans) → loc = Loc(0, 8)):
-    ¬Stores(spans, values, writable(), holding(), after, 8, 0, 1) {
+    ¬Stores(spans, values, writable(), holding(), after, 8, 64, 0, 1) {
     λ stores => {
         let same: (stores.witness = Loc(0, 8)) = injective(stores.witness, trans(sym(stores.proof.left), address));
         let put = j(same, λ l _ => holding().put(writable().written, l, Piece::plain(low_bytes(8, values(64, 1)))) = Some(after), stores.proof.right);

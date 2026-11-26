@@ -5,7 +5,7 @@ labels: [native,x86,proofs]
 area: heather-in-heather
 milestone: [hih-pl-wp]
 created: 2026-10-21
-updated: 2026-10-24
+updated: 2026-11-26
 ---
 
 `Prog::laid_out` (`lib/std/arch/x86_64/x86_64_asm_runs.hthr`) asks every
@@ -30,3 +30,15 @@ this in after it merges, so there is one landing notion for jumps and calls.
 ## Log
 
 - 2026-10-24: 2026-10-24: `wp_reaches` now also lands `CallTo` on its label, both ways ([[wp-stack-items]]); the one landing check this issue makes covers calls too.
+- 2026-11-26: From [[bytes-level-access-view]]: a JCC still lands only forward.
+  - JMP and CALL land both ways: `item_lands` takes `asm_item_lands || asm_item_lands_back`.
+  - JCC and JCC-short take `asm_item_lands`/`asm_short_lands` alone, and `JccLands` is `JumpsForward`/`ShortForward` only.
+  - So `Prog::laid_out` refuses a loop whose back edge is a conditional jump (one jump per continuing pass, no second instruction). The bytes level's loop tail therefore jumps forward out and takes one JMP back.
+
+  To allow it:
+  - Add the back alternatives for `Jcc`/`JccShort` to `item_lands`, a backward `JccLands`, and its step lemma.
+  - Every consumer that derives `JumpsForward` from `laid_out` then needs either direction:
+    - `jcc_lands`, `jcc_item_lands` and `Site::jcc_item_steps`;
+    - `test_by_steps`, `moves_test_by`, `claims_test_by` and `runs_branch_on` (std);
+    - the structured lowering's branch and loop proofs (`function_ir_lower_structured`, `function_ir_lower_calls`), `native_compile_steps`, and bytes_level_lower.
+  - An improvement for after the switch to the bytes level: it changes a model the old pipeline's proofs lean on.

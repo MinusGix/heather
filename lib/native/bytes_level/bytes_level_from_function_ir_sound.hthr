@@ -105,13 +105,13 @@ fn load_end(c: Config, buffers: Buffers(), k, index, output, t: Nat) → Config 
 
 theorem byte_load_runs(blocks: Blocks, c: Config, buffers: Buffers(), k, base, index, output, t: Nat, at: c.locals.refs(base) = Some(Loc(k, 0)),
     same: c.memory.bytes(k) = buffer_bytes(buffers, k), after: Config,
-    ran: run_instrs(blocks, [bytes_level::Offset(t, base, index), bytes_level::Load(1, output, t)], c) = Some(after)): after = load_end(c, buffers, k, index, output, t) {
+    ran: run_instrs(blocks, [bytes_level::Offset(t, base, index), bytes_level::Load(1, 64, output, t)], c) = Some(after)): after = load_end(c, buffers, k, index, output, t) {
     let loc = Loc(k, 0 + c.locals.word(index).toNat());
     let mid = Config(c.locals.set_ref(t, loc), c.memory, c.io);
     let first = offset_ref(c, t, base, index, Loc(k, 0), at, blocks);
     let here: (mid.locals.refs(t) = Some(loc)) = j(sym(t.same_self()), λ b _ => (match b { True => Some(loc), False => c.locals.refs(t) }) = Some(loc), refl);
-    let rest: (run_instrs(blocks, [bytes_level::Load(1, output, t)], mid) = Some(after)) =
-        j(first, λ o _ => o.and_then(λ (m: Config) => run_instrs(blocks, [bytes_level::Load(1, output, t)], m)) = Some(after), ran);
+    let rest: (run_instrs(blocks, [bytes_level::Load(1, 64, output, t)], mid) = Some(after)) =
+        j(first, λ o _ => o.and_then(λ (m: Config) => run_instrs(blocks, [bytes_level::Load(1, 64, output, t)], m)) = Some(after), ran);
     let loaded = λ (m: Heap) (x: Option<BitVec(64)>) => x.and_then(λ (y: BitVec(64)) =>
         Some(Config(mid.locals.set_word(output, word_value(y)), m, mid.io)));
     let step: (loaded(c.memory, c.memory.load(loc, 1)).and_then(λ (m: Config) => run_instrs(blocks, [], m)) = Some(after)) =
@@ -160,7 +160,7 @@ theorem byte_placed_other(heap: Heap, k, i: Nat, b: BitVec(8), fits: i + 1 <= he
 // What a store's run leaves, where it answers: the heap with its byte
 // placed, inside its block.
 theorem store_step(blocks: Blocks, c: Config, place, value: Nat, loc: Loc, at: c.locals.refs(place) = Some(loc), after: Config,
-    stepped: bytes_level::Store(1, place, value).step(blocks, c) = Some(after)):
+    stepped: bytes_level::Store(1, 64, place, value).step(blocks, c) = Some(after)):
     (after.locals = c.locals) ∧ ((after.memory = c.memory.placed(loc, Piece::plain(low_bytes(1, c.locals.word(value))))) ∧
         (loc.offset + 1 <= c.memory.bytes(loc.block).len())) {
     let piece = Piece::plain(low_bytes(1, c.locals.word(value)));
@@ -185,7 +185,7 @@ theorem store_step(blocks: Blocks, c: Config, place, value: Nat, loc: Loc, at: c
 // what the old node gives it, at every width.
 theorem byte_store_runs(blocks: Blocks, c: Config, buffers: Buffers(), k, base, index, value, output, t: Nat, at: c.locals.refs(base) = Some(Loc(k, 0)),
     same: c.memory.bytes(k) = buffer_bytes(buffers, k), after: Config,
-    ran: run_instrs(blocks, [bytes_level::Offset(t, base, index), bytes_level::Store(1, t, value), bytes_level::Load(1, output, t)], c) = Some(after)):
+    ran: run_instrs(blocks, [bytes_level::Offset(t, base, index), bytes_level::Store(1, 64, t, value), bytes_level::Load(1, 64, output, t)], c) = Some(after)):
     (after.memory.bytes(k) = buffer_bytes(store_byte(buffers, k, c.locals.words(64, index).toNat(), low_byte(c.locals.words(64, value))), k)) ∧
         (((other: Nat) → other ≠ k → after.memory.bytes(other) = c.memory.bytes(other)) ∧
             (after.locals = c.locals.set_ref(t, Loc(k, 0 + c.locals.word(index).toNat())).set_word(output,
@@ -195,10 +195,10 @@ theorem byte_store_runs(blocks: Blocks, c: Config, buffers: Buffers(), k, base, 
     let mid = Config(c.locals.set_ref(t, loc), c.memory, c.io);
     let first = offset_ref(c, t, base, index, Loc(k, 0), at, blocks);
     let here: (mid.locals.refs(t) = Some(loc)) = j(sym(t.same_self()), λ b _ => (match b { True => Some(loc), False => c.locals.refs(t) }) = Some(loc), refl);
-    let rest: (run_instrs(blocks, [bytes_level::Store(1, t, value), bytes_level::Load(1, output, t)], mid) = Some(after)) =
-        j(first, λ o _ => o.and_then(λ (m: Config) => run_instrs(blocks, [bytes_level::Store(1, t, value), bytes_level::Load(1, output, t)], m)) = Some(after), ran);
-    (match bytes_level::Store(1, t, value).step(blocks, mid) as λ o => bytes_level::Store(1, t, value).step(blocks, mid) = o →
-            o.and_then(λ (m: Config) => run_instrs(blocks, [bytes_level::Load(1, output, t)], m)) = Some(after) →
+    let rest: (run_instrs(blocks, [bytes_level::Store(1, 64, t, value), bytes_level::Load(1, 64, output, t)], mid) = Some(after)) =
+        j(first, λ o _ => o.and_then(λ (m: Config) => run_instrs(blocks, [bytes_level::Store(1, 64, t, value), bytes_level::Load(1, 64, output, t)], m)) = Some(after), ran);
+    (match bytes_level::Store(1, 64, t, value).step(blocks, mid) as λ o => bytes_level::Store(1, 64, t, value).step(blocks, mid) = o →
+            o.and_then(λ (m: Config) => run_instrs(blocks, [bytes_level::Load(1, 64, output, t)], m)) = Some(after) →
             (after.memory.bytes(k) = buffer_bytes(store_byte(buffers, k, c.locals.words(64, index).toNat(), low_byte(c.locals.words(64, value))), k)) ∧
             (((other: Nat) → other ≠ k → after.memory.bytes(other) = c.memory.bytes(other)) ∧
                 (after.locals = c.locals.set_ref(t, Loc(k, 0 + c.locals.word(index).toNat())).set_word(output,
@@ -319,7 +319,8 @@ theorem pure_form(s: Scope, node: Node, t: Nat, reads: List<Nat>, words: (id: Na
         Const(_, _, _) => λ _ _ => refl,
         Move(w, o, source) => λ ws _ => j(sym(ws(source, Inl(refl))), λ b _ =>
             (match (match b { True => RefKind, False => WordKind }) { WordKind => Plain([Compute(Move(w, o, source))]),
-                RefKind => Plain([Compute(Const(64, t, 0)), bytes_level::Offset(o, source, t)]) }) = Plain([Compute(Move(w, o, source))]), refl),
+                RefKind => match mem_nat(o, reads) { True => Plain([Compute(Const(64, t, 0)), bytes_level::Offset(o, source, t)]), False => Plain([]) } }) =
+                Plain([Compute(Move(w, o, source))]), refl),
         Add(_, _, _, _) => λ _ _ => refl,
         Sub(_, _, _, _) => λ _ _ => refl,
         BitAnd(_, _, _, _) => λ _ _ => refl,
@@ -463,17 +464,17 @@ theorem load_agrees(blocks: Blocks, s: Scope, output, k, index: Nat, rest: List<
             (match o {
                 None => Refused,
                 Some(h) => match s.inside(index, h, 0) {
-                    True => Plain([bytes_level::Offset(t, h.base, index), bytes_level::Load(1, output, t)]),
-                    False => Guarded(t + 1, [bytes_level::Offset(t, h.base, index), bytes_level::Load(1, output, t)]),
+                    True => Plain([bytes_level::Offset(t, h.base, index), bytes_level::Load(1, 64, output, t)]),
+                    False => Guarded(t + 1, [bytes_level::Offset(t, h.base, index), bytes_level::Load(1, 64, output, t)]),
                 },
             }) = Plain(instrs) → goal {
         None => λ _ never => absurd(never),
         Some(h) => λ found shaped => (match s.inside(index, h, 0) as λ b =>
-                (match b { True => Plain([bytes_level::Offset(t, h.base, index), bytes_level::Load(1, output, t)]), False => Guarded(t + 1, [bytes_level::Offset(t, h.base, index), bytes_level::Load(1, output, t)]) }) =
+                (match b { True => Plain([bytes_level::Offset(t, h.base, index), bytes_level::Load(1, 64, output, t)]), False => Guarded(t + 1, [bytes_level::Offset(t, h.base, index), bytes_level::Load(1, 64, output, t)]) }) =
                     Plain(instrs) → goal {
             False => λ never => absurd(never),
             True => λ plain => {
-                let is: (instrs = [bytes_level::Offset(t, h.base, index), bytes_level::Load(1, output, t)]) = sym(memory_plain_inj([bytes_level::Offset(t, h.base, index), bytes_level::Load(1, output, t)], instrs, plain));
+                let is: (instrs = [bytes_level::Offset(t, h.base, index), bytes_level::Load(1, 64, output, t)]) = sym(memory_plain_inj([bytes_level::Offset(t, h.base, index), bytes_level::Load(1, 64, output, t)], instrs, plain));
                 let where = home_of_found(s.homes, k, h, found);
                 let at: (c.locals.refs(h.base) = Some(Loc(k, 0))) = j(where.left, λ b _ => c.locals.refs(h.base) = Some(Loc(b, 0)), held.left(h, where.right));
                 let same: (c.memory.bytes(k) = buffer_bytes(buffers, k)) = held.right(k);
@@ -522,16 +523,16 @@ theorem store_agrees(blocks: Blocks, s: Scope, output, k, index, value: Nat, res
                 None => Refused,
                 Some(h) => match s.inside(index, h, 0) {
                     False => Refused,
-                    True => Plain([bytes_level::Offset(t, h.base, index), bytes_level::Store(1, t, value), bytes_level::Load(1, output, t)]),
+                    True => Plain([bytes_level::Offset(t, h.base, index), bytes_level::Store(1, 64, t, value), bytes_level::Load(1, 64, output, t)]),
                 },
             }) = Plain(instrs) → goal {
         None => λ _ never => absurd(never),
         Some(h) => λ found shaped => (match s.inside(index, h, 0) as λ b =>
-                (match b { False => Refused, True => Plain([bytes_level::Offset(t, h.base, index), bytes_level::Store(1, t, value), bytes_level::Load(1, output, t)]) }) = Plain(instrs) → goal {
+                (match b { False => Refused, True => Plain([bytes_level::Offset(t, h.base, index), bytes_level::Store(1, 64, t, value), bytes_level::Load(1, 64, output, t)]) }) = Plain(instrs) → goal {
             False => λ never => absurd(never),
             True => λ plain => {
-                let is: (instrs = [bytes_level::Offset(t, h.base, index), bytes_level::Store(1, t, value), bytes_level::Load(1, output, t)]) =
-                    sym(memory_plain_inj([bytes_level::Offset(t, h.base, index), bytes_level::Store(1, t, value), bytes_level::Load(1, output, t)], instrs, plain));
+                let is: (instrs = [bytes_level::Offset(t, h.base, index), bytes_level::Store(1, 64, t, value), bytes_level::Load(1, 64, output, t)]) =
+                    sym(memory_plain_inj([bytes_level::Offset(t, h.base, index), bytes_level::Store(1, 64, t, value), bytes_level::Load(1, 64, output, t)], instrs, plain));
                 let where = home_of_found(s.homes, k, h, found);
                 let at: (c.locals.refs(h.base) = Some(Loc(k, 0))) = j(where.left, λ b _ => c.locals.refs(h.base) = Some(Loc(b, 0)), held.left(h, where.right));
                 let same: (c.memory.bytes(k) = buffer_bytes(buffers, k)) = held.right(k);
