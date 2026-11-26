@@ -1,6 +1,6 @@
 ---
 title: native_linked's export gate fails under load: compiles killed with empty stderr
-status: closed
+status: open
 labels: [native,testing]
 area: infrastructure
 created: 2026-11-26
@@ -38,3 +38,4 @@ Not a nondeterminism in the compiler: nothing was emitted that differed from the
 ## Log
 
 - 2026-11-26: The test now prints each failed compile's exit status beside its stderr (crates/cli/tests/native_linked.rs), so a kill at the shared memory limit reads as a signal. The run that showed it was not a clean one (an edited tree, a whole-file check beside the suite): suite runs are on a clean committed tree with nothing else heavy running.
+- 2026-11-26: Reopened by the coordinating session. The exit-status fix (a5405d9) made the failure legible, and the next occurrence confirmed the cause without a second process beside it: on the eleventh soundness session's clean tree, with only the suite running, `Sha256::compress`'s compile was killed (`signal: 9`) and passed alone on the rerun. So the PR lane's own load is enough in a session container: the gate runs four compilers at once beside the library gate. The diagnosis is done; what is open is the cause. Candidates: the gate takes its width from the memory available rather than a constant four; the runner does not start the linked gate beside the library gate; a killed compile is retried once alone before the gate fails. The coordinating session's verification worktree has not shown it in over thirty runs, so the threshold is the container's memory.
