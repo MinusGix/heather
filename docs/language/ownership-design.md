@@ -2311,6 +2311,15 @@ The probes found one completeness gap in the emission: the call's
 RCX or R11, so `echo`'s read count, which is live across its write, made it
 unlowerable. Such values now move to a free R8 to R10 first (`sys_kept`),
 judged by the same `outputs_check`.
+The limit: there are three spares, and a spare counts as free only if
+the file holds nothing in it. When fewer are free than there are values to
+keep, the keep and argument moves no longer pair with their registers.
+`outputs_check` then fails, `emit_sys` answers `None`, and the program is
+refused (`Program::lower` returns nothing; there is no refusal message for
+it yet). A value of a narrow or low kind is not kept either. Any later use
+of it then fails to find a register, and the program is refused the same
+way. Soundness never depends on the keep: only the moves the checks pass
+are emitted.
 
 The language's `echo`, `read_then_load` and `exits`, and a pass that writes
 forever, are compiled and meet the whole contract. Each is read where it

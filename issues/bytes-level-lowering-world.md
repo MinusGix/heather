@@ -1,11 +1,11 @@
 ---
 title: The bytes level's system calls and exit lowered: the going and exited clauses of Site::Meets
-status: open
+status: closed
 labels: [native,x86,linux,ownership]
 area: heather-in-heather
 milestone: [nh-ownership]
 created: 2026-11-25
-updated: 2026-11-25
+updated: 2026-11-26
 ---
 
 Item 7 of [[bytes-level-lowering]]: the world. The `Sys` node's step lemma for `read` and `write` (for every answer and resumption the Linux model allows; a failed read leaves its window undefined, which `Injected::undefined_change` absorbs), `Exit`, and the going and exited clauses of `Site::Meets` (`lib/std/arch/x86_64/x86_64_call_contract.hthr`). `EmitsBy` is a claim about machine steps (`Site::Moves`); a system call needs the claim form `Site::Performs`, so a region holding one is proved in that form, the regions without one lifted into it.
@@ -105,3 +105,5 @@ Item 7 of [[bytes-level-lowering]]: the world. The `Sys` node's step lemma for `
     2. **`Sim`.** `Sim(io, t, state)` quantifies over every trace of an itree `t` (`IsTrace`). The bytes level's meaning is fuel-indexed `Ran`, not an itree. Reading it as one, or stating `Sim` over the family of fuel-indexed traces, is the step from `RunsAs` at each fuel to `Sim`.
     3. **`Trace::LinuxValid`** of the trace. Each answer in it is the world's, and `Io::Answerable` says Linux may give it, but the lemma is not written.
     4. The `EmptyEnds` hypothesis, until [[byte-writes-empty-range]] lands.
+  - Verified (tree at the items 4 and 5 commit ddda1a8): `scripts/linked --check` exit 0, every export unchanged; `HEATHER_PR_NATIVE=all scripts/test --pr`: `== suite: 4139 passed, 0 failed, 3 ignored ==`.
+- 2026-11-26: Done-when met: `Site::Meets` in all three clauses for every program the lowering returns, under the one named premise `EmptyEnds`, which [[byte-writes-empty-range]] discharges. The world probes are compiled with their theorems. Closed. What remains of the whole-program statement is in [[call-contract-whole-program]].
