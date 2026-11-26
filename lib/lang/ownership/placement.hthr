@@ -346,51 +346,50 @@ fn scaled(i: Word1, size: Nat) → Word1 {
     }
 }
 
-fn PEnv::walk(tys: Nat → Type, strs: Strs(tys), self e: PEnv, xs: List<Step>, at: Walk) → Option<Walk> {
-    match xs {
-        Nil => Some(at),
-        Cons(x, rest) => match x {
-            SElem(a) => match Shape::layout(tys, strs, at.code) {
-                LSeq(el, size, _) => match e.atom(a, at.next) {
-                    None => None,
-                    Some(i) => {
-                        let s = scaled(i, size);
-                        e.walk(tys, strs, rest, Walk(at.instrs ++ s.instrs ++ [bytes_level::Offset(s.next, at.place, s.id)], s.next, None, el, s.next + 1))
-                    },
-                },
-                _ => None,
-            },
-            SWindow(lo, n) => match Shape::layout(tys, strs, at.code) {
-                LSeq(_, size, win) => match win {
-                    None => None,
-                    Some(wc) => match e.atom(lo, at.next) {
-                        None => None,
-                        Some(l) => match e.atom(n, l.next) {
-                            None => None,
-                            Some(k) => {
-                                let s = scaled(Word1(l.instrs ++ k.instrs, l.id, k.next), size);
-                                e.walk(tys, strs, rest, Walk(at.instrs ++ s.instrs ++ [bytes_level::Offset(s.next, at.place, s.id)], s.next, Some(k.id), wc, s.next + 1))
-                            },
-                        },
-                    },
-                },
-                _ => None,
-            },
-            SField(i) => match Shape::layout(tys, strs, at.code) {
-                LRecord(fs) => match fields_offset(fs, i) {
-                    None => None,
-                    Some(off) => match fields_nth(fs, i) {
-                        None => None,
-                        Some(fc) => e.walk(tys, strs, rest,
-                            Walk(at.instrs ++ [Compute(Const(64, at.next, off)), bytes_level::Offset(at.next + 1, at.place, at.next)], at.next + 1, None, fc, at.next + 2)),
-                    },
-                },
-                _ => None,
-            },
-            SKey(_, _) => None,
-            SVariant(_) => None,
-        },
+// One step of a walk, by its kind and the layout of the code reached; each
+// a named function so a proof inverts a step with one match.
+fn elem_walk(at: Walk, el: Shape, size: Nat, i: Word1) → Walk {
+    let s = scaled(i, size);
+    Walk(at.instrs ++ s.instrs ++ [bytes_level::Offset(s.next, at.place, s.id)], s.next, None, el, s.next + 1)
+}
+
+fn PEnv::elem_at(self e: PEnv, a: Atom, at: Walk, l: Layout) → Option<Walk> {
+    match l { LSeq(el, size, _) => e.atom(a, at.next).map(λ i => elem_walk(at, el, size, i)), LRecord(_) => None, LNone => None }
+}
+
+fn win_walk(at: Walk, size: Nat, wc: Shape, l, k: Word1) → Walk {
+    let s = scaled(Word1(l.instrs ++ k.instrs, l.id, k.next), size);
+    Walk(at.instrs ++ s.instrs ++ [bytes_level::Offset(s.next, at.place, s.id)], s.next, Some(k.id), wc, s.next + 1)
+}
+
+fn PEnv::win_at(self e: PEnv, lo, n: Atom, at: Walk, l: Layout) → Option<Walk> {
+    match l {
+        LSeq(_, size, win) => match win { None => None, Some(wc) => e.atom(lo, at.next).and_then(λ la => e.atom(n, la.next).map(λ ka => win_walk(at, size, wc, la, ka))) },
+        LRecord(_) => None,
+        LNone => None,
     }
+}
+
+fn field_walk(at: Walk, off: Nat, fc: Shape) → Walk {
+    Walk(at.instrs ++ [Compute(Const(64, at.next, off)), bytes_level::Offset(at.next + 1, at.place, at.next)], at.next + 1, None, fc, at.next + 2)
+}
+
+fn field_at(i: Nat, at: Walk, l: Layout) → Option<Walk> {
+    match l { LRecord(fs) => fields_offset(fs, i).and_then(λ off => fields_nth(fs, i).map(λ fc => field_walk(at, off, fc))), LSeq(_, _, _) => None, LNone => None }
+}
+
+fn PEnv::walk_step(tys: Nat → Type, strs: Strs(tys), self e: PEnv, x: Step, at: Walk) → Option<Walk> {
+    match x {
+        SElem(a) => e.elem_at(a, at, Shape::layout(tys, strs, at.code)),
+        SWindow(lo, n) => e.win_at(lo, n, at, Shape::layout(tys, strs, at.code)),
+        SField(i) => field_at(i, at, Shape::layout(tys, strs, at.code)),
+        SKey(_, _) => None,
+        SVariant(_) => None,
+    }
+}
+
+fn PEnv::walk(tys: Nat → Type, strs: Strs(tys), self e: PEnv, xs: List<Step>, at: Walk) → Option<Walk> {
+    match xs { Nil => Some(at), Cons(x, rest) => e.walk_step(tys, strs, x, at).and_then(λ at2 => e.walk(tys, strs, rest, at2)) }
 }
 
 // A place's code, from a root that holds a reference.
