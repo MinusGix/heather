@@ -262,3 +262,35 @@ theorem overlapping_not_injected<M>(data: ByteReadAccess<M>, base: BitVec(64), m
     overlap_not_injected(data, overlapping(base), zeros_ones(), memory, 0, 8, 1, 0, trivial, trivial, refl, refl, refl, refl, refl,
         λ same => absurd(cong_fn<Option<BitVec(8)>, Nat>(λ o => match o { None => 0, Some(byte) => byte.toNat() }, same)))
 }
+
+// ---------------------------------------------------------------------------
+// Empty ranges (issues/byte-writes-empty-range.md)
+
+// What the lowering of system calls assumed of each span's end, at any
+// address, from a loan and nothing else: the buffer of a zero-byte read is
+// writable for zero bytes, and storing no bytes there is the memory.
+theorem loan_empty_range<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, {stack: Stack<M>(fetch, data)}, {top: Nat}, {spans: Spans},
+    loan: Loan<M>(fetch, data, stack, top, spans)):
+    (m: M) → (a: BitVec(64)) → stack.writes.writable(m, a, 0) ∧ (stack.writes.store(m, a, []) = m) {
+    λ m a => ⟨loan.empty_writable(m, a), loan.empty_store(m, a)⟩
+}
+
+// The region's loan, one past the written span's last byte: no `k < size`
+// to give, and a zero-byte store there is the memory.
+theorem pair_end_empty(r: DataRegion, top: Nat, fits: top + 32 <= r.size, m: X86Memory(r.profile)):
+    r.profile.store(m, pair_spans(r, top).byte(0, 16), []) = m {
+    pair_loan(r, top, fits).empty_store(m, pair_spans(r, top).byte(0, 16))
+}
+
+// The control: writes whose store of no bytes moves the memory do not keep
+// the law, so it says something.
+fn counting_writes() → ByteWrites<Nat> {
+    ByteWrites(λ (m: Nat) (a: BitVec(64)) (k: Nat) => True, λ (m: Nat) (a: BitVec(64)) (bytes: List<BitVec(8)>) => m + 1)
+}
+
+theorem counting_not_empty(): ¬counting_writes().EmptyRange() {
+    λ law => {
+        let moved: (0 + 1 = 0) = law(0, BitVec::zero()).right;
+        false_elim(omega(moved))
+    }
+}
