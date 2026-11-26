@@ -21,12 +21,15 @@
 //   theorem holds under every lawful table; `depth_rooms` is one, for every
 //   program (`depth_rooms_lawful`).
 // - The clause: `Site::Tracks` (docs/language/ownership-design.md §17.7),
-//   by two inductions on fuel: a run done is returned (`program_returns`);
-//   one stopped short (`Stop`: still going, or exited) performs the stop's
-//   state (`program_stops`, from the regions' `Body::emit_stops`): going, at
+//   by two inductions on fuel, at Linux, in the meaning's world: a run done
+//   is returned, as many system calls made as its world gained
+//   (`program_returns`, each routine's code an `EmitsClaim` at `Now`, the
+//   heap and the world); one stopped short (`Stop`: still going, or
+//   exited) performs the stop's state in the stop's world
+//   (`program_stops`, from the regions' `Body::emit_stops`): going, at
 //   least `n - 1` machine steps; exited, at the exit call with its status.
-//   A stuck one asks nothing. No system call is lowered yet, so the world
-//   is the entry's (`program_quiet`, `program_stop_quiet`).
+//   A stuck one asks nothing. A run's history only grows
+//   (`program_grows`), which a sequence's count needs.
 import bytes_memory;
 import bytes_level;
 import bytes_level_lower;
@@ -354,9 +357,9 @@ theorem routine_checked(r: Routine, sigs: Nat → Option<Signature>, valid: r.va
 }
 
 // The facts its code is proved under, at the valuation its run determines.
-record RoutineFacts(r: Routine, blocks: Blocks, answers: RoutineAnswers(), spans: Spans, spare: Nat, args: List<Value>, heap: Heap, a: Answer) {
+record RoutineFacts(r: Routine, blocks: Blocks, answers: RoutineAnswers(), spans: Spans, spare: Nat, args: List<Value>, heap: Heap, io: Io, a: Answer) {
     values: Valuation(),
-    holds: r.whole(spare).Holds(spans, blocks, values, answers, spare, heap, a.heap),
+    holds: r.whole(spare).Holds(spans, blocks, values, answers, spare, Now(heap, io), Now(a.heap, a.io)),
     passed: lower_values(spans, args) = words_of(values, typed_ids(r.parameters)),
     head: answer_head(lower_values(spans, a.words)) = values(64, call_result(r.results, spare)),
     tail: answer_tail(lower_values(spans, a.words)) = words_of(values, call_also(r.results)),
@@ -369,8 +372,9 @@ theorem answer_holds(results: List<Typed>, spans: Spans, blocks: Blocks, values:
 
 theorem Routine::facts(self r: Routine, blocks: Blocks, calls: Calls(), fuel: Nat, sigs: Nat → Option<Signature>, spans: Spans, args: List<Value>,
     heap: Heap, io: Io, a: Answer, used: List<Nat>, valid: r.valid(sigs) = True, scope: r.scope() = Some(used),
-    peaks: Peaks(), cap: Nat, ran: r.call(blocks, calls, fuel, args, heap, io) = Done(a), peaked: r.peak(blocks, calls, peaks, fuel, args, heap, io) <= cap):
-    RoutineFacts(r, blocks, peak_answers(calls, peaks, cap), spans, ids_past(used), args, heap, a) {
+    peaks: Peaks(), cap: Nat, grows: HistoryGrows(calls), ran: r.call(blocks, calls, fuel, args, heap, io) = Done(a),
+    peaked: r.peak(blocks, calls, peaks, fuel, args, heap, io) <= cap):
+    RoutineFacts(r, blocks, peak_answers(calls, peaks, cap), spans, ids_past(used), args, heap, io, a) {
     let spare = ids_past(used);
     let absent: (Mem(spare, used) → False) = unlisted_absent(used, spare, unlisted_above(used, spare, spare.le_refl()));
     let run = routine_ran(r, blocks, calls, fuel, args, heap, io, a, ran);
@@ -387,7 +391,7 @@ theorem Routine::facts(self r: Routine, blocks: Blocks, calls: Calls(), fuel: Na
     let zero = spare_zero(run.start, run.after.locals, spans, u0, used, spare, absent, entered.left.right, body.right);
     let body_peaked: (r.body.peak(blocks, calls, peaks, fuel, c0) <= cap) =
         j(run.bound, λ x _ => (match x { None => 0, Some(l) => r.body.peak(blocks, calls, peaks, fuel, Config(l, heap, io)) }) <= cap, peaked);
-    let held = r.body.holds_of(blocks, calls, fuel, sigs, spans, values, spare, zero, peaks, cap, checked.start, checked.end, u0, used, c0, run.after,
+    let held = r.body.holds_of(blocks, calls, fuel, sigs, spans, values, spare, zero, peaks, cap, grows, checked.start, checked.end, u0, used, c0, run.after,
         checked.body, fresh.proof.right, run.ran, body_peaked, entered.left.left, shows, absent);
     let start_agrees = run.start.agrees_of(spans, values, u0, shows_back(run.start, run.after.locals, spans, values, u0, used, body.right, shows),
         checked.start, entered.left.left.left);
@@ -395,8 +399,9 @@ theorem Routine::facts(self r: Routine, blocks: Blocks, calls: Calls(), fuel: Na
     let words = read_values_lower(spans, values, run.after.locals, checked.end, end_agrees, r.results, checked.answers, a.words, run.read);
     let lands = lands_words(r.results, spare, values, zero);
     RoutineFacts(values := values,
-        holds := Exists(run.after.memory, ⟨held, j(sym(run.heaped), λ h _ => InstrsHold(spans, blocks, values, answer_instrs(r.results, spare),
-            run.after.memory, h), answer_holds(r.results, spans, blocks, values, spare, zero, run.after.memory))⟩),
+        holds := Exists(Now(run.after.memory, run.after.io), ⟨⟨held, ⟨j(sym(run.heaped), λ h _ => InstrsHold(spans, blocks, values,
+            answer_instrs(r.results, spare), run.after.memory, h), answer_holds(r.results, spans, blocks, values, spare, zero, run.after.memory)), run.world⟩⟩,
+            ⟨r.body.run_grows(blocks, calls, grows, fuel, u0, used, c0, run.after, fresh.proof.right, run.ran), io_len_same(run.after.io, a.io, run.world)⟩⟩),
         passed := read_values_lower(spans, values, run.start, checked.start, start_agrees, r.parameters,
             bind_kinds_has(r.parameters, [], checked.start, checked.params), args, entered.right),
         head := trans(cong_fn<List<BitVec(64)>, BitVec(64)>(λ ws => answer_head(ws), words), lands.left),
@@ -408,7 +413,7 @@ theorem Routine::facts(self r: Routine, blocks: Blocks, calls: Calls(), fuel: Na
 
 theorem or_false_true(b: Bool, set: (b || False).IsTrue()): b.IsTrue() { match b { True => trivial, False => false_elim(set) } }
 
-// The frame and the body: `function_runs_by` at the heap's clause, its
+// The frame and the body: `function_runs_claim` at `Now` and Linux, its
 // body's emission `Body::emit_emits`.
 theorem routine_runs<M>(r: Routine, spare, asked, saves: Nat, short: List<Nat>, site: Site<M>, laid: site.program.laid_out().IsTrue(),
     stack: Stack<M>(site.fetch, site.data), top: Nat, spans: Spans, loan: Loan<M>(site.fetch, site.data, stack, top, spans), blocks: Blocks,
@@ -423,24 +428,25 @@ theorem routine_runs<M>(r: Routine, spare, asked, saves: Nat, short: List<Nat>, 
     few: r.loads() <= 2, shallow: r.body.Fits(rooms, bound, avail), within: function_closed(body.prog, moves.code, r.slots(asked), saves).Within(site.program),
     values: Valuation(), s0: MachineState<M>, d: Nat, rsp: read_gpr(Rsp, s0.gprs) = stack.at(d + r.frame(asked, saves)), room: avail <= d,
     deep: r.body.calls().IsTrue() → 24 <= d, fits: d + r.frame(asked, saves) <= stack.size, under: (d + r.frame(asked, saves)) + 8 <= top,
-    before, after: Heap, in_memory: Injected<M>(site.data, spans, before, s0.memory),
+    before, after: Now, in_memory: Injected<M>(site.data, spans, before.heap, s0.memory),
     passed: stack.Passes(words_of(values, typed_ids(r.parameters)), argument_registers(), (d + r.frame(asked, saves)) + 8, s0.gprs, s0.memory),
     holds: r.whole(spare).Holds(spans, blocks, values, answers, spare, before, after)):
-    site.Moves(stack.writes, prog_len(prog), prog_len(function_closed(body.prog, moves.code, r.slots(asked), saves)),
-        λ (x: MachineState<M>) => (x.gprs = s0.gprs) ∧ (x.memory = s0.memory),
-        λ (t: MachineState<M>) => stack.ClosedBy(spans, heap_in<M>(site.data, spans), d + r.frame(asked, saves), s0, after,
-            values(64, call_result(r.results, spare)), words_of(values, call_also(r.results)), t)) {
+    site.Claims(stack.writes, site.linux_kernel(stack), calls_between(before, after), 0, prog_len(prog),
+        λ (x: Running<M, Io>) => ((x.state.gprs = s0.gprs) ∧ (x.state.memory = s0.memory)) ∧ NowWorld()(before, x.io),
+        site.Arrived(prog_len(function_closed(body.prog, moves.code, r.slots(asked), saves)), λ (t: Running<M, Io>) =>
+            stack.ClosedBy(spans, now_in<M>(site.data, spans), d + r.frame(asked, saves), s0, after, values(64, call_result(r.results, spare)),
+                words_of(values, call_also(r.results)), t.state) ∧ NowWorld()(after, t.io))) {
     let slots = r.slots(asked);
     let opened = function_opened(prog, k, r.loads(), slots, saves);
     let facts = r.whole(spare).Holds(spans, blocks, values, answers, spare, before, after);
     let unfold: (r.frame(asked, saves) = 8 * (slots + function_saves(saves).len())) = refl;
     let fits_body: (d + 8 * slots <= stack.size) = { omega };
     let under_slots: ((d + 8 * slots) + 8 <= top) = { omega };
-    function_runs_by<M, Heap>(slots, saves, r.slots_few(asked), site, laid, stack, top, spans, heap_in<M>(site.data, spans), loan,
-        heap_in_stable<M>(stack, top, spans, loan), k, prog, file, typed_ids(r.parameters), call_result(r.results, spare), call_also(r.results), body, facts,
-        values, d, before, after,
+    function_runs_claim<M, Now, Io>(slots, saves, r.slots_few(asked), site, laid, stack, top, spans, now_in<M>(site.data, spans), NowWorld(),
+        site.linux_kernel(stack), calls_between(before, after), 0, loan, now_in_stable<M>(stack, top, spans, loan), k, prog, file, typed_ids(r.parameters),
+        call_result(r.results, spare), call_also(r.results), body, facts, values, d, before, after,
         λ x1 rsp_x1 => r.whole(spare).emit(saves, slots, short, bound, spare, opened, file, placement, names).all_some(
-            λ (e: Emitted) => EmitsHeap<M>(saves, site, stack, spans, values, d + 8 * slots, x1, opened, file, facts, before, after, e), body, emitted,
+            λ (e: Emitted) => EmitsNow<M>(saves, site, stack, spans, values, d + 8 * slots, x1, opened, file, facts, before, after, e), body, emitted,
             r.whole(spare).emit_emits<M>(saves, slots, site, laid, stack, top, spans, loan, blocks, lent, rooms, bound, avail, answers, callees, values, spare, d,
                 d + 8 * slots, x1, λ c => ⟨rsp_x1, ⟨room, ⟨deep(or_false_true(r.body.calls(), c)), ⟨refl, ⟨fits_body, under_slots⟩⟩⟩⟩⟩, short,
                 ⟨shallow, trivial⟩, opened, file, placement, names, before, after)),
@@ -454,11 +460,11 @@ theorem routine_closes<M>(site: Site<M>, stack: Stack<M>(site.fetch, site.data),
     d, size, i: Nat, ret: BitVec(64), back: d + size = i, under: (d + size) + 8 <= top,
     saved: read_word(site.data, s0.memory, stack.at(i)) = Some(ret),
     head: answer_head(lower_values(spans, a.words)) = values(64, result), tail: answer_tail(lower_values(spans, a.words)) = words_of(values, also),
-    done: stack.ClosedBy(spans, heap_in<M>(site.data, spans), d + size, s0, a.heap, values(64, result), words_of(values, also), t)):
+    done: stack.ClosedBy(spans, now_in<M>(site.data, spans), d + size, s0, Now(a.heap, a.io), values(64, result), words_of(values, also), t)):
     (read_gpr(Rsp, t.gprs) = stack.at(i)) ∧ ((read_word(site.data, t.memory, stack.at(i)) = Some(ret)) ∧
         RoutinePost<M>(site, stack, spans, a)(i, s0, return_near_after(ret, t))) {
     let popped = read_gpr(Rsp, t.gprs).add(BitVec::ofNat(8));
-    let trail: stack.TrailBy(spans, heap_in<M>(site.data, spans), d + size, s0.memory, a.heap, t.memory) = done.right.right.right;
+    let trail: stack.TrailBy(spans, now_in<M>(site.data, spans), d + size, s0.memory, Now(a.heap, a.io), t.memory) = done.right.right.right;
     let at_back: (stack.at(d + size) = stack.at(i)) = cong_fn<Nat, BitVec(64)>(λ n => stack.at(n), back);
     let unchanged_top: (read_word(site.data, t.memory, stack.at(d + size)) = read_word(site.data, s0.memory, stack.at(d + size))) =
         loan.unchanged(d + size, s0.memory, t.memory, trail.left)(d + size, (d + size).le_refl(), under);
@@ -475,7 +481,8 @@ theorem routine_closes<M>(site: Site<M>, stack: Stack<M>(site.fetch, site.data),
 // facts a run answering `a` determines: from its label to its RET, the
 // stack pointer back at its return address, which its stores and the
 // lending's left in place, and its answer as the contract's post says
-// after the RET.
+// after the RET, in the answer's world, as many system calls as that
+// world gained.
 theorem routine_body<M>(r: Routine, spare, asked, saves: Nat, short: List<Nat>, site: Site<M>, laid: site.program.laid_out().IsTrue(),
     stack: Stack<M>(site.fetch, site.data), top: Nat, spans: Spans, loan: Loan<M>(site.fetch, site.data, stack, top, spans), blocks: Blocks,
     lent: blocks.Lent(spans), rooms, own: Nat → Nat, k, bound: Nat, roomy: r.Roomy(rooms, own(k), bound, asked, saves), prog: Prog, file: File,
@@ -486,20 +493,21 @@ theorem routine_body<M>(r: Routine, spare, asked, saves: Nat, short: List<Nat>, 
     placed: moves.file.outputs_check(r.outs(spare), result_registers()).IsTrue(), leaves: leaves_all(moves.code, body_kept(saves)).IsTrue(),
     entered: (values: Valuation()) → (g: Gprs) → PortsAt(values, word_ports(typed_ids(r.parameters)), parameter_registers(), g) → file.Represents(values, g),
     few: r.loads() <= 2, within: function_closed(body.prog, moves.code, r.slots(asked), saves).Within(site.program),
-    answers: RoutineAnswers(), callees: CalleesReturn<M>(site, stack, spans, rooms, top, bound, answers), args: List<Value>, heap: Heap, a: Answer,
-    facts: RoutineFacts(r, blocks, answers, spans, spare, args, heap, a), s0: MachineState<M>, i: Nat, ret: BitVec(64)):
-    site.Moves(stack.writes, prog_len(prog), prog_len(function_closed(body.prog, moves.code, r.slots(asked), saves)),
-        λ (s: MachineState<M>) => (s = s0) ∧ ((read_gpr(Rsp, s0.gprs) = stack.at(i)) ∧ ((i + 8 <= stack.size) ∧
-            (RoutinePre<M>(site, stack, spans, own, top, k, args, heap)(i, s0) ∧ read_word(site.data, s0.memory, stack.at(i)) = Some(ret)))),
-        λ (t: MachineState<M>) => (read_gpr(Rsp, t.gprs) = stack.at(i)) ∧ ((read_word(site.data, t.memory, stack.at(i)) = Some(ret)) ∧
-            RoutinePost<M>(site, stack, spans, a)(i, s0, return_near_after(ret, t)))) {
+    answers: RoutineAnswers(), callees: CalleesReturn<M>(site, stack, spans, rooms, top, bound, answers), args: List<Value>, heap: Heap, io: Io, a: Answer,
+    facts: RoutineFacts(r, blocks, answers, spans, spare, args, heap, io, a), s0: Running<M, Io>, i: Nat, ret: BitVec(64)):
+    site.Claims(stack.writes, site.linux_kernel(stack), calls_between(Now(heap, io), Now(a.heap, a.io)), 0, prog_len(prog),
+        λ (s: Running<M, Io>) => (s = s0) ∧ ((read_gpr(Rsp, s0.state.gprs) = stack.at(i)) ∧ ((i + 8 <= stack.size) ∧
+            (RoutinePreNow<M>(site, stack, spans, own, top, k, args, heap, io)(i, s0) ∧ read_word(site.data, s0.state.memory, stack.at(i)) = Some(ret)))),
+        site.Arrived(prog_len(function_closed(body.prog, moves.code, r.slots(asked), saves)), λ (t: Running<M, Io>) =>
+            (read_gpr(Rsp, t.state.gprs) = stack.at(i)) ∧ ((read_word(site.data, t.state.memory, stack.at(i)) = Some(ret)) ∧
+                RoutinePostNow<M>(site, stack, spans, a)(i, s0, Running(return_near_after(ret, t.state), t.io))))) {
     λ s here resident held => {
-        let pre = held.right.right.right.left;
+        let pre = held.right.right.right.left.left;
+        let world: (s0.io = io) = held.right.right.right.left.right;
         let size = r.frame(asked, saves);
         let d = i - size;
         let entry: (own(k) <= i) = pre.left.right;
         let back: (d + size = i) = Nat::sub_add_cancel(size, i, Nat::le_trans(size, own(k), i, roomy.left, entry));
-        let inside: (i + 8 <= stack.size) = held.right.right.left;
         let below: (i + 8 <= top) = pre.right.left;
         let room: (own(k) - size <= d) = { omega };
         let fits: (d + size <= stack.size) = { omega };
@@ -508,28 +516,42 @@ theorem routine_body<M>(r: Routine, spare, asked, saves: Nat, short: List<Nat>, 
         let above: (i + 8 = (d + size) + 8) = { omega };
         let ran_code = routine_runs<M>(r, spare, asked, saves, short, site, laid, stack, top, spans, loan, blocks, lent, rooms, k, bound, own(k) - size,
             answers, callees, prog, file, placement, names, body, emitted, moves, keeps, placed, leaves, entered, few, roomy.right.right, within,
-            facts.values, s0, d, trans(held.right.left, sym(at_back)), room, λ c => { let enough = roomy.right.left(c); omega }, fits, under, heap, a.heap,
-            pre.right.right,
-            j(facts.passed, λ w _ => stack.Passes(w, argument_registers(), (d + size) + 8, s0.gprs, s0.memory),
-                j(above, λ n _ => stack.Passes(lower_values(spans, args), argument_registers(), n, s0.gprs, s0.memory), pre.left.left)),
+            facts.values, s0.state, d, trans(held.right.left, sym(at_back)), room, λ c => { let enough = roomy.right.left(c); omega }, fits, under,
+            Now(heap, io), Now(a.heap, a.io), pre.right.right,
+            j(facts.passed, λ w _ => stack.Passes(w, argument_registers(), (d + size) + 8, s0.state.gprs, s0.state.memory),
+                j(above, λ n _ => stack.Passes(lower_values(spans, args), argument_registers(), n, s0.state.gprs, s0.state.memory), pre.left.left)),
             facts.holds);
-        let got = ran_code(s, here, resident, ⟨cong_fn<MachineState<M>, Gprs>(λ x => x.gprs, held.left), cong_fn<MachineState<M>, M>(λ x => x.memory, held.left)⟩);
-        Exists(got.witness, ⟨got.proof.left, ⟨got.proof.right.left, ⟨got.proof.right.right.left,
-            routine_closes<M>(site, stack, top, spans, loan, a, facts.values, call_result(r.results, spare), call_also(r.results), s0, got.witness, d, size, i,
-                ret, back, under, held.right.right.right.right, facts.head, facts.tail, got.proof.right.right.right)⟩⟩⟩)
+        let same = held.left;
+        let p = ran_code(s, here, resident, ⟨⟨cong_fn<Running<M, Io>, Gprs>(λ y => y.state.gprs, same),
+            cong_fn<Running<M, Io>, M>(λ y => y.state.memory, same)⟩, trans(cong_fn<Running<M, Io>, Io>(λ y => y.io, same), world)⟩);
+        site.performs_weaken(stack.writes, site.linux_kernel(stack),
+            site.Arrived(prog_len(function_closed(body.prog, moves.code, r.slots(asked), saves)), λ (t: Running<M, Io>) =>
+                stack.ClosedBy(spans, now_in<M>(site.data, spans), d + r.frame(asked, saves), s0.state, Now(a.heap, a.io),
+                    facts.values(64, call_result(r.results, spare)), words_of(facts.values, call_also(r.results)), t.state) ∧ NowWorld()(Now(a.heap, a.io), t.io)),
+            site.Arrived(prog_len(function_closed(body.prog, moves.code, r.slots(asked), saves)), λ (t: Running<M, Io>) =>
+                (read_gpr(Rsp, t.state.gprs) = stack.at(i)) ∧ ((read_word(site.data, t.state.memory, stack.at(i)) = Some(ret)) ∧
+                    RoutinePostNow<M>(site, stack, spans, a)(i, s0, Running(return_near_after(ret, t.state), t.io)))),
+            λ t arrived => {
+                let closed = routine_closes<M>(site, stack, top, spans, loan, a, facts.values, call_result(r.results, spare), call_also(r.results), s0.state,
+                    t.state, d, size, i, ret, back, under, held.right.right.right.right, facts.head, facts.tail, arrived.right.left);
+                ⟨arrived.left, ⟨closed.left, ⟨closed.right.left, ⟨closed.right.right, arrived.right.right⟩⟩⟩⟩
+            },
+            calls_between(Now(heap, io), Now(a.heap, a.io)), 0, s, p)
     }
 }
 
 // What routine `k`'s code meets at its entry: on every run of it that
 // answers, at a depth its chain of calls stays within, with the routines it
 // calls meeting theirs one depth below on the runs the answer's calls made,
-// it returns that answer.
+// their histories only growing, it returns that answer, at Linux, in the
+// answer's world.
 fn RoutineAt<M>(site: Site<M>, stack: Stack<M>(site.fetch, site.data), spans: Spans, room: Nat → Nat → Nat, top: Nat, blocks: Blocks, bound, k: Nat,
     r: Routine, entry: Nat) → Type {
     (calls: Calls()) → (peaks: Peaks()) → (fuel: Nat) → (cap: Nat) →
-        CalleesReturn<M>(site, stack, spans, rooms_below(room, cap), top, bound, peak_answers(calls, peaks, cap)) → (args: List<Value>) → (heap: Heap) →
-        (io: Io) → (a: Answer) → r.call(blocks, calls, fuel, args, heap, io) = Done(a) → r.peak(blocks, calls, peaks, fuel, args, heap, io) <= cap →
-        site.Returns(stack, entry, RoutinePre<M>(site, stack, spans, λ (g: Nat) => room(g, cap), top, k, args, heap), RoutinePost<M>(site, stack, spans, a))
+        CalleesReturn<M>(site, stack, spans, rooms_below(room, cap), top, bound, peak_answers(calls, peaks, cap)) → HistoryGrows(calls) → (args: List<Value>) →
+        (heap: Heap) → (io: Io) → (a: Answer) → r.call(blocks, calls, fuel, args, heap, io) = Done(a) → r.peak(blocks, calls, peaks, fuel, args, heap, io) <= cap →
+        site.ReturnsClaim(stack, site.linux_kernel(stack), calls_between(Now(heap, io), Now(a.heap, a.io)), 0, entry,
+            RoutinePreNow<M>(site, stack, spans, λ (g: Nat) => room(g, cap), top, k, args, heap, io), RoutinePostNow<M>(site, stack, spans, a))
 }
 
 theorem routine_returns<M>(r: Routine, sigs: Nat → Option<Signature>, used: List<Nat>, valid: r.valid(sigs) = True, scope: r.scope() = Some(used),
@@ -545,12 +567,13 @@ theorem routine_returns<M>(r: Routine, sigs: Nat → Option<Signature>, used: Li
     few: r.loads() <= 2, within: At(function_closed(body.prog, moves.code, r.slots(asked), saves), 0, Ret).Within(site.program)):
     RoutineAt<M>(site, stack, spans, room, top, blocks, bound, k, r, prog_len(prog)) {
     let closed = function_closed(body.prog, moves.code, r.slots(asked), saves);
-    λ calls peaks fuel cap callees args heap io a ran peaked => site.returns_by(stack, site.program.laid_out_fits(laid), prog_len(prog), within.witness,
-        closed, 0, within.proof, RoutinePre<M>(site, stack, spans, λ (g: Nat) => room(g, cap), top, k, args, heap), RoutinePost<M>(site, stack, spans, a),
+    λ calls peaks fuel cap callees grows args heap io a ran peaked => site.returns_by_claim(stack, site.linux_kernel(stack), site.program.laid_out_fits(laid),
+        prog_len(prog), within.witness, closed, 0, within.proof, calls_between(Now(heap, io), Now(a.heap, a.io)), 0,
+        RoutinePreNow<M>(site, stack, spans, λ (g: Nat) => room(g, cap), top, k, args, heap, io), RoutinePostNow<M>(site, stack, spans, a),
         λ s0 i ret => routine_body<M>(r, ids_past(used), asked, saves, short, site, laid, stack, top, spans, loan, blocks, lent, rooms_below(room, cap),
             λ (g: Nat) => room(g, cap), k, bound, roomy(cap), prog, file, placement, names, body, emitted, moves, keeps, placed, leaves, entered, few,
-            closed.within_before(0, Ret, site.program, within), peak_answers(calls, peaks, cap), callees, args, heap, a,
-            r.facts(blocks, calls, fuel, sigs, spans, args, heap, io, a, used, valid, scope, peaks, cap, ran, peaked), s0, i, ret))
+            closed.within_before(0, Ret, site.program, within), peak_answers(calls, peaks, cap), callees, args, heap, io, a,
+            r.facts(blocks, calls, fuel, sigs, spans, args, heap, io, a, used, valid, scope, peaks, cap, grows, ran, peaked), s0, i, ret))
 }
 
 // What is read off a value and then done is never going.
@@ -586,9 +609,11 @@ theorem routine_stopped(r: Routine, blocks: Blocks, calls: Calls(), fuel: Nat, a
 // show where its body went on.
 theorem Routine::stops_facts(self r: Routine, blocks: Blocks, calls: Calls(), fuel: Nat, sigs: Nat → Option<Signature>, spans: Spans, args: List<Value>,
     heap: Heap, io: Io, x: Stop, used: List<Nat>, valid: r.valid(sigs) = True, scope: r.scope() = Some(used), peaks: Peaks(), cap: Nat,
-    ran: r.call(blocks, calls, fuel, args, heap, io).stopped() = Some(x), peaked: r.peak(blocks, calls, peaks, fuel, args, heap, io) <= cap):
+    grows: HistoryGrows(calls), ran: r.call(blocks, calls, fuel, args, heap, io).stopped() = Some(x),
+    peaked: r.peak(blocks, calls, peaks, fuel, args, heap, io) <= cap):
     Exists<Valuation()>(λ v => (lower_values(spans, args) = words_of(v, typed_ids(r.parameters))) ∧
-        r.whole(ids_past(used)).Stops(spans, blocks, v, peak_answers(calls, peaks, cap), peak_stops(x, calls, peaks, cap), x, ids_past(used), fuel, heap)) {
+        r.whole(ids_past(used)).Stops(spans, blocks, v, peak_answers(calls, peaks, cap), peak_stops(x, calls, peaks, cap), x, ids_past(used), fuel,
+            Now(heap, io))) {
     let spare = ids_past(used);
     let absent: (Mem(spare, used) → False) = unlisted_absent(used, spare, unlisted_above(used, spare, spare.le_refl()));
     let going = routine_stopped(r, blocks, calls, fuel, args, heap, io, x, ran);
@@ -600,7 +625,7 @@ theorem Routine::stops_facts(self r: Routine, blocks: Blocks, calls: Calls(), fu
         checked.params, empty_scoped());
     let body_peaked: (r.body.peak(blocks, calls, peaks, fuel, Config(start, heap, io)) <= cap) =
         j(going.proof.left, λ x _ => (match x { None => 0, Some(l) => r.body.peak(blocks, calls, peaks, fuel, Config(l, heap, io)) }) <= cap, peaked);
-    let got = r.body.stops_of(blocks, calls, fuel, sigs, spans, spare, peaks, cap, checked.start, checked.end, u0, used, Config(start, heap, io), x,
+    let got = r.body.stops_of(blocks, calls, fuel, sigs, spans, spare, peaks, cap, grows, checked.start, checked.end, u0, used, Config(start, heap, io), x,
         checked.body, fresh.proof.right, going.proof.right, body_peaked, entered.left.left, entered.left.right, absent);
     let v = got.witness;
     let start_agrees = start.agrees_of(spans, v, u0, got.proof.left, checked.start, entered.left.left.left);
@@ -624,10 +649,10 @@ theorem routine_stops<M>(x: Stop, r: Routine, spare, asked, saves: Nat, short: L
     answers: RoutineAnswers(), callees: CalleesReturn<M>(site, stack, spans, rooms, top, bound, answers), goes: RoutineStops(), least: Nat,
     callees_stop: CalleesStop<M>(x, site, stack, spans, rooms, top, bound, goes, least), fuel: Nat, covered: x.least(fuel) <= 1 + least, args: List<Value>, heap: Heap,
     values: Valuation(), passed: lower_values(spans, args) = words_of(values, typed_ids(r.parameters)),
-    going: r.whole(spare).Stops(spans, blocks, values, answers, goes, x, spare, fuel, heap)):
-    site.EntersClaim(stack, Kernel::none<M, True>(), 0, x.least(fuel), prog_len(prog),
-        λ (i: Nat) (s: Running<M, True>) => RoutinePre<M>(site, stack, spans, own, top, k, args, heap)(i, s.state) ∧ True,
-        λ (_: Nat) (_: Running<M, True>) (_: BitVec(64)) (t: Running<M, True>) => x.Reached(site, stack)(t)) {
+    io: Io, going: r.whole(spare).Stops(spans, blocks, values, answers, goes, x, spare, fuel, Now(heap, io))):
+    site.EntersClaim(stack, site.linux_kernel(stack), x.calls_from(Now(heap, io)), x.least(fuel), prog_len(prog),
+        RoutinePreNow<M>(site, stack, spans, own, top, k, args, heap, io),
+        λ (_: Nat) (_: Running<M, Io>) (_: BitVec(64)) (t: Running<M, Io>) => x.Reached(site, stack)(t)) {
     let slots = r.slots(asked);
     let size = r.frame(asked, saves);
     let opened = function_opened(prog, k, r.loads(), slots, saves);
@@ -636,9 +661,10 @@ theorem routine_stops<M>(x: Stop, r: Routine, spare, asked, saves: Nat, short: L
     let restored_in = restored.within_before(0, Block(frame_closing(frame_size(slots, saves))), site.program, within);
     let returned_in = Prog::within_trans(Prog::within_reloads(function_saves(saves), returned, slots), restored_in);
     let body_in = body.prog.within_before(0, Block(moves.code), site.program, returned_in);
-    let facts = r.whole(spare).Stops(spans, blocks, values, answers, goes, x, spare, fuel, heap);
+    let facts = r.whole(spare).Stops(spans, blocks, values, answers, goes, x, spare, fuel, Now(heap, io));
     λ s here resident i rsp inside held ret saved => {
         let pre = held.left;
+        let world: (s.io = io) = held.right;
         let d = i - size;
         let entry: (own(k) <= i) = pre.left.right;
         let back: (d + size = i) = Nat::sub_add_cancel(size, i, Nat::le_trans(size, own(k), i, roomy.left, entry));
@@ -654,18 +680,18 @@ theorem routine_stops<M>(x: Stop, r: Routine, spare, asked, saves: Nat, short: L
         let deep: (r.body.calls().IsTrue() → 24 <= d) = λ c => { let enough = roomy.right.left(c); omega };
         let body_claims = λ (x1: MachineState<M>) (rsp_x1: read_gpr(Rsp, x1.gprs) = stack.at(d)) =>
             r.whole(spare).emit(saves, slots, short, bound, spare, opened, file, placement, names).all_some(
-                λ (e: Emitted) => StopsHeap<M>(x, saves, site, stack, spans, values, d + 8 * slots, x1, opened, file, facts, heap, x.least(fuel), e), body, emitted,
+                λ (e: Emitted) => StopsHeap<M>(x, saves, site, stack, spans, values, d + 8 * slots, x1, opened, file, facts, Now(heap, io), x.least(fuel), e), body, emitted,
                 r.whole(spare).emit_stops<M>(x, saves, slots, site, laid, stack, top, spans, loan, blocks, lent, rooms, bound, own(k) - size, answers, callees,
                     goes, least, callees_stop, fuel, covered, values, spare, d, d + 8 * slots, x1,
                     λ c => ⟨rsp_x1, ⟨room, ⟨deep(or_false_true(r.body.calls(), c)), ⟨refl, ⟨fits_body, under_slots⟩⟩⟩⟩⟩, short,
-                    ⟨roomy.right.right, trivial⟩, opened, file, placement, names, fuel, fuel.le_refl(), heap)).right(body_in);
-        function_enters_claim<M, Heap, True>(slots, saves, r.slots_few(asked), site, laid, stack, top, spans, heap_in<M>(site.data, spans),
-            λ (_: Heap) (_: True) => True, Kernel::none<M, True>(), 0, x.least(fuel), heap_in_stable<M>(stack, top, spans, loan), k, prog, file,
-            typed_ids(r.parameters), facts, values, d, heap, x.Reached(site, stack), body_claims, Prog::within_trans(grew, body_in),
+                    ⟨roomy.right.right, trivial⟩, opened, file, placement, names, fuel, fuel.le_refl(), Now(heap, io))).right(body_in);
+        function_enters_claim<M, Now, Io>(slots, saves, r.slots_few(asked), site, laid, stack, top, spans, now_in<M>(site.data, spans),
+            NowWorld(), site.linux_kernel(stack), x.calls_from(Now(heap, io)), x.least(fuel), now_in_stable<M>(stack, top, spans, loan), k, prog, file,
+            typed_ids(r.parameters), facts, values, d, Now(heap, io), x.Reached(site, stack), body_claims, Prog::within_trans(grew, body_in),
             entered(values), few, s.state, trans(rsp, sym(at_back)), fits, under, pre.right.right,
             j(passed, λ w _ => stack.Passes(w, argument_registers(), (d + size) + 8, s.state.gprs, s.state.memory),
                 j(above, λ n _ => stack.Passes(lower_values(spans, args), argument_registers(), n, s.state.gprs, s.state.memory), pre.left.left)),
-            going)(s, here, resident, ⟨⟨refl, refl⟩, trivial⟩)
+            going)(s, here, resident, ⟨⟨refl, refl⟩, world⟩)
     }
 }
 
@@ -675,13 +701,14 @@ theorem routine_stops<M>(x: Stop, r: Routine, spare, asked, saves: Nat, short: L
 fn RoutineStopsAt<M>(site: Site<M>, stack: Stack<M>(site.fetch, site.data), spans: Spans, room: Nat → Nat → Nat, top: Nat, blocks: Blocks, bound, k: Nat,
     r: Routine, entry: Nat) → Type {
     (calls: Calls()) → (peaks: Peaks()) → (fuel: Nat) → (cap: Nat) →
-        CalleesReturn<M>(site, stack, spans, rooms_below(room, cap), top, bound, peak_answers(calls, peaks, cap)) → (x: Stop) → (least: Nat) →
+        CalleesReturn<M>(site, stack, spans, rooms_below(room, cap), top, bound, peak_answers(calls, peaks, cap)) → HistoryGrows(calls) → (x: Stop) →
+        (least: Nat) →
         CalleesStop<M>(x, site, stack, spans, rooms_below(room, cap), top, bound, peak_stops(x, calls, peaks, cap), least) → x.least(fuel) <= 1 + least →
         (args: List<Value>) → (heap: Heap) → (io: Io) → r.call(blocks, calls, fuel, args, heap, io).stopped() = Some(x) →
         r.peak(blocks, calls, peaks, fuel, args, heap, io) <= cap →
-        site.EntersClaim(stack, Kernel::none<M, True>(), 0, x.least(fuel), entry,
-            λ (i: Nat) (s: Running<M, True>) => RoutinePre<M>(site, stack, spans, λ (g: Nat) => room(g, cap), top, k, args, heap)(i, s.state) ∧ True,
-            λ (_: Nat) (_: Running<M, True>) (_: BitVec(64)) (t: Running<M, True>) => x.Reached(site, stack)(t))
+        site.EntersClaim(stack, site.linux_kernel(stack), x.calls_from(Now(heap, io)), x.least(fuel), entry,
+            RoutinePreNow<M>(site, stack, spans, λ (g: Nat) => room(g, cap), top, k, args, heap, io),
+            λ (_: Nat) (_: Running<M, Io>) (_: BitVec(64)) (t: Running<M, Io>) => x.Reached(site, stack)(t))
 }
 
 theorem routine_stops_at<M>(r: Routine, sigs: Nat → Option<Signature>, used: List<Nat>, valid: r.valid(sigs) = True, scope: r.scope() = Some(used),
@@ -696,12 +723,12 @@ theorem routine_stops_at<M>(r: Routine, sigs: Nat → Option<Signature>, used: L
     few: r.loads() <= 2, within: At(function_closed(body.prog, moves.code, r.slots(asked), saves), 0, Ret).Within(site.program)):
     RoutineStopsAt<M>(site, stack, spans, room, top, blocks, bound, k, r, prog_len(prog)) {
     let closed = function_closed(body.prog, moves.code, r.slots(asked), saves);
-    λ calls peaks fuel cap callees x least callees_stop covered args heap io ran peaked => {
-        let got = r.stops_facts(blocks, calls, fuel, sigs, spans, args, heap, io, x, used, valid, scope, peaks, cap, ran, peaked);
+    λ calls peaks fuel cap callees grows x least callees_stop covered args heap io ran peaked => {
+        let got = r.stops_facts(blocks, calls, fuel, sigs, spans, args, heap, io, x, used, valid, scope, peaks, cap, grows, ran, peaked);
         routine_stops<M>(x, r, ids_past(used), asked, saves, short, site, laid, stack, top, spans, loan, blocks, lent, rooms_below(room, cap),
             λ (g: Nat) => room(g, cap), k, bound, roomy(cap), prog, file, placement, names, body, emitted, grew, moves, entered, few,
             closed.within_before(0, Ret, site.program, within), peak_answers(calls, peaks, cap), callees, peak_stops(x, calls, peaks, cap), least, callees_stop,
-            fuel, covered, args, heap, got.witness, got.proof.left, got.proof.right)
+            fuel, covered, args, heap, got.witness, got.proof.left, io, got.proof.right)
     }
 }
 
@@ -1051,186 +1078,6 @@ theorem Routine::emit_returns<M>(self r: Routine, sigs: Nat → Option<Signature
 // ---------------------------------------------------------------------------
 // A run that makes no system call leaves the world as it found it
 
-theorem Instr::step_io(self instr: Instr, blocks: Blocks, c, after: Config, stepped: instr.step(blocks, c) = Some(after)): after.io = c.io {
-    match instr {
-        Compute(node) => {
-            let made = Some(Config(Locals(node.step(c.locals.words), c.locals.refs), c.memory, c.io));
-            match def: node.pure() && node.defined(c.locals.words) {
-                False => absurd(j(def, λ v _ => (match v { False => None, True => made }) = Some(after), stepped)),
-                True => sym(cong_fn<Config, Io>(λ y => y.io, Option::some_inj(Config(Locals(node.step(c.locals.words), c.locals.refs), c.memory, c.io), after,
-                    j(def, λ v _ => (match v { False => None, True => made }) = Some(after), stepped)))),
-            }
-        },
-        Load(bytes, output, place) => {
-            let first = Option::and_then_some(c.locals.refs(place), λ (loc: Loc) =>
-                c.memory.load(loc, bytes).and_then(λ (x: BitVec(64)) => Some(Config(c.locals.set_word(output, word_value(x)), c.memory, c.io))), after,
-                stepped);
-            let second = Option::and_then_some(c.memory.load(first.witness, bytes), λ (x: BitVec(64)) =>
-                Some(Config(c.locals.set_word(output, word_value(x)), c.memory, c.io)), after, first.proof.right);
-            sym(cong_fn<Config, Io>(λ y => y.io, Option::some_inj(Config(c.locals.set_word(output, word_value(second.witness)), c.memory, c.io), after,
-                second.proof.right)))
-        },
-        Store(bytes, place, value) => {
-            let piece = λ (w: BitVec(64)) => Piece::plain(low_bytes(bytes, w));
-            let first = Option::and_then_some(c.locals.refs(place), λ (loc: Loc) =>
-                c.memory.put(blocks.written, loc, piece(c.locals.word(value))).and_then(λ (m: Heap) => Some(Config(c.locals, m, c.io))), after, stepped);
-            let second = Option::and_then_some(c.memory.put(blocks.written, first.witness, piece(c.locals.word(value))),
-                λ (m: Heap) => Some(Config(c.locals, m, c.io)), after, first.proof.right);
-            sym(cong_fn<Config, Io>(λ y => y.io, Option::some_inj(Config(c.locals, second.witness, c.io), after, second.proof.right)))
-        },
-        LoadRef(output, place) => {
-            let first = Option::and_then_some(c.locals.refs(place), λ (loc: Loc) =>
-                c.memory.load_ref(loc).and_then(λ (target: Loc) => Some(Config(c.locals.set_ref(output, target), c.memory, c.io))), after, stepped);
-            let second = Option::and_then_some(c.memory.load_ref(first.witness), λ (target: Loc) =>
-                Some(Config(c.locals.set_ref(output, target), c.memory, c.io)), after, first.proof.right);
-            sym(cong_fn<Config, Io>(λ y => y.io, Option::some_inj(Config(c.locals.set_ref(output, second.witness), c.memory, c.io), after, second.proof.right)))
-        },
-        StoreRef(place, value) => {
-            let first = Option::and_then_some(c.locals.refs(place), λ (loc: Loc) => c.locals.refs(value).and_then(λ (target: Loc) =>
-                c.memory.put(blocks.written, loc, Piece::reference(target)).and_then(λ (m: Heap) => Some(Config(c.locals, m, c.io)))), after, stepped);
-            let second = Option::and_then_some(c.locals.refs(value), λ (target: Loc) =>
-                c.memory.put(blocks.written, first.witness, Piece::reference(target)).and_then(λ (m: Heap) => Some(Config(c.locals, m, c.io))), after,
-                first.proof.right);
-            let third = Option::and_then_some(c.memory.put(blocks.written, first.witness, Piece::reference(second.witness)),
-                λ (m: Heap) => Some(Config(c.locals, m, c.io)), after, second.proof.right);
-            sym(cong_fn<Config, Io>(λ y => y.io, Option::some_inj(Config(c.locals, third.witness, c.io), after, third.proof.right)))
-        },
-        Offset(output, place, amount) => {
-            let moved = λ (loc: Loc) => Loc(loc.block, loc.offset + c.locals.word(amount).toNat());
-            let first = Option::and_then_some(c.locals.refs(place), λ (loc: Loc) =>
-                Some(Config(c.locals.set_ref(output, moved(loc)), c.memory, c.io)), after, stepped);
-            sym(cong_fn<Config, Io>(λ y => y.io, Option::some_inj(Config(c.locals.set_ref(output, moved(first.witness)), c.memory, c.io), after,
-                first.proof.right)))
-        },
-        Copy(target, source, length) => {
-            let n = c.locals.word(length).toNat();
-            let first = Option::and_then_some(c.locals.refs(target), λ (to: Loc) => c.locals.refs(source).and_then(λ (from: Loc) =>
-                c.memory.copy(blocks.written, to, from, n).and_then(λ (m: Heap) => Some(Config(c.locals, m, c.io)))), after, stepped);
-            let second = Option::and_then_some(c.locals.refs(source), λ (from: Loc) =>
-                c.memory.copy(blocks.written, first.witness, from, n).and_then(λ (m: Heap) => Some(Config(c.locals, m, c.io))), after, first.proof.right);
-            let third = Option::and_then_some(c.memory.copy(blocks.written, first.witness, second.witness, n),
-                λ (m: Heap) => Some(Config(c.locals, m, c.io)), after, second.proof.right);
-            sym(cong_fn<Config, Io>(λ y => y.io, Option::some_inj(Config(c.locals, third.witness, c.io), after, third.proof.right)))
-        },
-    }
-}
-
-theorem run_instrs_io(blocks: Blocks, instrs: List<Instr>): (c, after: Config) → run_instrs(blocks, instrs, c) = Some(after) → after.io = c.io {
-    match instrs {
-        Nil => λ c after ran => cong_fn<Config, Io>(λ y => y.io, sym(Option::some_inj(c, after, ran))),
-        Cons(instr, rest) => λ c after ran => {
-            let first = Option::and_then_some(instr.step(blocks, c), λ (m: Config) => run_instrs(blocks, rest, m), after, ran);
-            trans(run_instrs_io(blocks, rest, first.witness, after, first.proof.right), instr.step_io(blocks, c, first.witness, first.proof.left))
-        },
-    }
-}
-
-// Calls that leave the world as they found it.
-fn Quiet(calls: Calls()) → Type { (f: Nat) → (args: List<Value>) → (heap: Heap) → (io: Io) → (a: Answer) → calls(f, args, heap, io) = Done(a) → a.io = io }
-
-theorem loop_pass_io(blocks: Blocks, calls: Calls(), inner: Body, parameters: List<Typed>, exit: Nat, next: List<Typed>,
-    passes: (rest: Nat) → (state: List<Value>) → (m: Heap) → (io: Io) → (l: Locals) → (after: Config) → pass_locals(parameters, state) = Some(l) →
-        inner.run(blocks, calls, rest, Config(l, m, io)) = Done(after) → after.io = io,
-    fuel: Nat, later: List<Value> → Heap → Io → Ran<Ended>,
-    each: (state: List<Value>) → (m: Heap) → (io: Io) → (end: Ended) → later(state, m, io) = Done(end) → end.io = io):
-    (state: List<Value>) → (m: Heap) → (io: Io) → (end: Ended) →
-    bytes_level::loop_pass(λ (n: Nat) (pass: Config) => inner.run(blocks, calls, n, pass), parameters, exit, next, fuel, later, state, m, io) = Done(end) → end.io = io {
-    λ state m io end ran => {
-        let after_pass = λ (after: Config) => Ran::of(read_values(next, after.locals), after.io).then(λ (more: List<Value>) =>
-            match after.locals.words(1, exit).head_bit() {
-                False => later(more, after.memory, after.io),
-                True => Done(Ended(more, after.memory, after.io)),
-            });
-        let one = Ran::then_done<Locals, Ended>(Ran::of(pass_locals(parameters, state), io), λ (l: Locals) =>
-            inner.run(blocks, calls, fuel, Config(l, m, io)).then(after_pass), end, ran);
-        let l = one.witness;
-        let two = Ran::then_done<Config, Ended>(inner.run(blocks, calls, fuel, Config(l, m, io)), after_pass, end, one.proof.right);
-        let after = two.witness;
-        let three = Ran::then_done<List<Value>, Ended>(Ran::of(read_values(next, after.locals), after.io), λ (more: List<Value>) =>
-            match after.locals.words(1, exit).head_bit() {
-                False => later(more, after.memory, after.io),
-                True => Done(Ended(more, after.memory, after.io)),
-            }, end, two.proof.right);
-        let more = three.witness;
-        let pass_io: (after.io = io) = passes(fuel, state, m, io, l, after, Ran::of_done<Locals>(pass_locals(parameters, state), io, l, one.proof.left),
-            two.proof.left);
-        trans((match after.locals.words(1, exit).head_bit() as λ b => (match b {
-                False => later(more, after.memory, after.io),
-                True => Done(Ended(more, after.memory, after.io)),
-            }) = Done(end) → end.io = after.io {
-            True => λ e => cong_fn<Ended, Io>(λ x => x.io, sym(Ran::done_inj<Ended>(Ended(more, after.memory, after.io), end, e))),
-            False => λ e => each(more, after.memory, after.io, end, e),
-        })(three.proof.right), pass_io)
-    }
-}
-
-theorem loop_later_io(blocks: Blocks, calls: Calls(), inner: Body, parameters: List<Typed>, exit: Nat, next: List<Typed>,
-    passes: (rest: Nat) → (state: List<Value>) → (m: Heap) → (io: Io) → (l: Locals) → (after: Config) → pass_locals(parameters, state) = Some(l) →
-        inner.run(blocks, calls, rest, Config(l, m, io)) = Done(after) → after.io = io,
-    fuel: Nat):
-    (state: List<Value>) → (m: Heap) → (io: Io) → (end: Ended) →
-    bytes_level::loop_later(λ (n: Nat) (pass: Config) => inner.run(blocks, calls, n, pass), parameters, exit, next, fuel, state, m, io) = Done(end) → end.io = io {
-    match fuel {
-        Zero => λ state m io end never => absurd(never),
-        Succ(rest) => loop_pass_io(blocks, calls, inner, parameters, exit, next, passes, rest,
-            bytes_level::loop_later(λ (n: Nat) (pass: Config) => inner.run(blocks, calls, n, pass), parameters, exit, next, rest), loop_later_io(blocks, calls, inner, parameters, exit, next, passes, rest)),
-    }
-}
-
-theorem loop_run_io(blocks: Blocks, calls: Calls(), inner: Body, parameters: List<Typed>, exit: Nat, next: List<Typed>,
-    passes: (rest: Nat) → (state: List<Value>) → (m: Heap) → (io: Io) → (l: Locals) → (after: Config) → pass_locals(parameters, state) = Some(l) →
-        inner.run(blocks, calls, rest, Config(l, m, io)) = Done(after) → after.io = io,
-    fuel: Nat):
-    (state: List<Value>) → (m: Heap) → (io: Io) → (end: Ended) →
-    bytes_level::loop_run(λ (n: Nat) (pass: Config) => inner.run(blocks, calls, n, pass), parameters, exit, next, fuel, state, m, io) = Done(end) → end.io = io {
-    loop_pass_io(blocks, calls, inner, parameters, exit, next, passes, fuel,
-        bytes_level::loop_later(λ (n: Nat) (pass: Config) => inner.run(blocks, calls, n, pass), parameters, exit, next, fuel), loop_later_io(blocks, calls, inner, parameters, exit, next, passes, fuel))
-}
-
-theorem Body::run_io(self body: Body, blocks: Blocks, calls: Calls(), quiet: Quiet(calls), fuel: Nat): (used, used2: List<Nat>) → (c, after: Config) →
-    body.fresh(used) = Some(used2) → body.run(blocks, calls, fuel, c) = Done(after) → after.io = c.io {
-    match body {
-        Leaf(instrs) => λ used used2 c after fresh ran =>
-            run_instrs_io(blocks, instrs, c, after, Ran::of_done<Config>(run_instrs(blocks, instrs, c), c.io, after, ran)),
-        Seq(first, rest) => λ used used2 c after fresh ran => {
-            let fresh_first = Option::and_then_some(first.fresh(used), λ (u: List<Nat>) => rest.fresh(u), used2, fresh);
-            let ran_first = Ran::then_done<Config, Config>(first.run(blocks, calls, fuel, c), λ (mid: Config) => rest.run(blocks, calls, fuel, mid), after, ran);
-            trans(rest.run_io(blocks, calls, quiet, fuel, fresh_first.witness, used2, ran_first.witness, after, fresh_first.proof.right, ran_first.proof.right),
-                first.run_io(blocks, calls, quiet, fuel, used, fresh_first.witness, c, ran_first.witness, fresh_first.proof.left, ran_first.proof.left))
-        },
-        Branch(condition, yes, no) => λ used used2 c after fresh ran => {
-            let fresh_yes = Option::and_then_some(yes.fresh(used), λ (uy: List<Nat>) => no.fresh(used).and_then(λ (un: List<Nat>) => Some(uy ++ un)),
-                used2, fresh);
-            let fresh_no = Option::and_then_some(no.fresh(used), λ (un: List<Nat>) => Some(fresh_yes.witness ++ un), used2, fresh_yes.proof.right);
-            (match c.locals.words(1, condition).head_bit() as λ bit =>
-                (match bit { True => yes.run(blocks, calls, fuel, c), False => no.run(blocks, calls, fuel, c) }) = Done(after) → after.io = c.io {
-                True => λ r => yes.run_io(blocks, calls, quiet, fuel, used, fresh_yes.witness, c, after, fresh_yes.proof.left, r),
-                False => λ r => no.run_io(blocks, calls, quiet, fuel, used, fresh_no.witness, c, after, fresh_no.proof.left, r),
-            })(ran)
-        },
-        Call(callee, arguments, results) => λ used used2 c after fresh ran => {
-            let r = call_ran(blocks, calls, fuel, callee, arguments, results, c, after, ran);
-            trans(cong_fn<Config, Io>(λ y => y.io, r.lands), quiet(callee, r.args, c.memory, c.io, r.answer, r.answered))
-        },
-        Loop(inputs, parameters, inner, exit, next, outputs) => λ used used2 c after fresh ran => {
-            let r = loop_ran(blocks, calls, fuel, inputs, parameters, inner, exit, next, outputs, c, after, ran);
-            let fr = loop_fresh(used, used2, inputs, parameters, inner, exit, next, outputs, fresh);
-            trans(cong_fn<Config, Io>(λ y => y.io, r.lands), loop_run_io(blocks, calls, inner, parameters, exit, next,
-                λ rest st m io l aft _ rn => inner.run_io(blocks, calls, quiet, rest, fr.start, fr.inside, Config(l, m, io), aft, fr.body, rn),
-                fuel, r.state, c.memory, c.io, r.end, r.looped))
-        },
-        Sys(_) => λ used used2 c after never => absurd(never),
-        Exit(_) => λ used used2 c after fresh never => absurd(never),
-    }
-}
-
-theorem Routine::call_io(self r: Routine, used: List<Nat>, scope: r.scope() = Some(used), blocks: Blocks, calls: Calls(), quiet: Quiet(calls), fuel: Nat,
-    args: List<Value>, heap: Heap, io: Io, a: Answer, ran: r.call(blocks, calls, fuel, args, heap, io) = Done(a)): a.io = io {
-    let run = routine_ran(r, blocks, calls, fuel, args, heap, io, a, ran);
-    let fresh = Option::and_then_some(fresh_ids([], typed_ids(r.parameters)), λ (u: List<Nat>) => r.body.fresh(u), used, scope);
-    trans(run.world, r.body.run_io(blocks, calls, quiet, fuel, fresh.witness, used, Config(run.start, heap, io), run.after, fresh.proof.right, run.ran))
-}
-
 // Every routine of the list scoped.
 fn Scoped::all(routines: List<Routine>) → Type {
     match routines { Nil => True, Cons(r, rest) => Exists<List<Nat>>(λ used => r.scope() = Some(used)) ∧ Scoped::all(rest) }
@@ -1248,196 +1095,26 @@ theorem scoped_nth(routines: List<Routine>): (f: Nat) → (r: Routine) → routi
 }
 
 // The program's runs leave the world alone, fuel by fuel.
-theorem program_quiet(routines: List<Routine>, blocks: Blocks, scoped: Scoped::all(routines), fuel: Nat): Quiet(program_calls(routines, blocks, fuel)) {
+theorem Routine::call_grows(self r: Routine, used: List<Nat>, scope: r.scope() = Some(used), blocks: Blocks, calls: Calls(), grows: HistoryGrows(calls),
+    fuel: Nat, args: List<Value>, heap: Heap, io: Io, a: Answer, ran: r.call(blocks, calls, fuel, args, heap, io) = Done(a)): io.past.len() <= a.io.past.len() {
+    let run = routine_ran(r, blocks, calls, fuel, args, heap, io, a, ran);
+    let fresh = Option::and_then_some(fresh_ids([], typed_ids(r.parameters)), λ (u: List<Nat>) => r.body.fresh(u), used, scope);
+    Nat::le_trans(io.past.len(), run.after.io.past.len(), a.io.past.len(),
+        r.body.run_grows(blocks, calls, grows, fuel, fresh.witness, used, Config(run.start, heap, io), run.after, fresh.proof.right, run.ran),
+        io_len_same(run.after.io, a.io, run.world))
+}
+
+// A program's routines' histories only grow.
+theorem program_grows(routines: List<Routine>, blocks: Blocks, scoped: Scoped::all(routines), fuel: Nat): HistoryGrows(program_calls(routines, blocks, fuel)) {
     match fuel {
         Zero => λ f args heap io a never => absurd(never),
         Succ(n) => λ f args heap io a => (match routines.nth(f) as λ o => routines.nth(f) = o →
-            (match o { None => Stuck(io), Some(r) => r.call(blocks, program_calls(routines, blocks, n), n, args, heap, io) }) = Done(a) → a.io = io {
+            (match o { None => Stuck(io), Some(r) => r.call(blocks, program_calls(routines, blocks, n), n, args, heap, io) }) = Done(a) →
+            io.past.len() <= a.io.past.len() {
             None => λ _ never => absurd(never),
             Some(r) => λ nth ran => {
                 let s = scoped_nth(routines, f, r, nth, scoped);
-                r.call_io(s.witness, s.proof, blocks, program_calls(routines, blocks, n), program_quiet(routines, blocks, scoped, n), n, args, heap, io, a, ran)
-            },
-        })(refl),
-    }
-}
-
-// Calls stopped short leave the world as they found it.
-fn QuietStop(calls: Calls()) → Type {
-    (f: Nat) → (args: List<Value>) → (heap: Heap) → (io: Io) → (x: Stop) → calls(f, args, heap, io).stopped() = Some(x) → x.world() = io
-}
-
-theorem loop_pass_stopped_io(blocks: Blocks, calls: Calls(), inner: Body, parameters: List<Typed>, exit: Nat, next: List<Typed>,
-    passes: (rest: Nat) → (state: List<Value>) → (m: Heap) → (io: Io) → (l: Locals) → (after: Config) → pass_locals(parameters, state) = Some(l) →
-        inner.run(blocks, calls, rest, Config(l, m, io)) = Done(after) → after.io = io,
-    goes: (rest: Nat) → (state: List<Value>) → (m: Heap) → (io: Io) → (l: Locals) → (x: Stop) → pass_locals(parameters, state) = Some(l) →
-        inner.run(blocks, calls, rest, Config(l, m, io)).stopped() = Some(x) → x.world() = io,
-    fuel: Nat, later: List<Value> → Heap → Io → Ran<Ended>,
-    each: (state: List<Value>) → (m: Heap) → (io: Io) → (x: Stop) → later(state, m, io).stopped() = Some(x) → x.world() = io):
-    (state: List<Value>) → (m: Heap) → (io: Io) → (x: Stop) →
-    bytes_level::loop_pass(λ (n: Nat) (pass: Config) => inner.run(blocks, calls, n, pass), parameters, exit, next, fuel, later, state, m, io).stopped() = Some(x) →
-    x.world() = io {
-    λ state m io x ran => {
-        let after_pass = λ (after: Config) => Ran::of(read_values(next, after.locals), after.io).then(λ (more: List<Value>) =>
-            match after.locals.words(1, exit).head_bit() {
-                False => later(more, after.memory, after.io),
-                True => Done(Ended(more, after.memory, after.io)),
-            });
-        match Ran::then_stopped<Locals, Ended>(Ran::of(pass_locals(parameters, state), io), λ (l: Locals) =>
-            inner.run(blocks, calls, fuel, Config(l, m, io)).then(after_pass), x, ran) {
-            Inl(never) => false_elim(Ran::of_stopped<Locals>(pass_locals(parameters, state), io, x, never)),
-            Inr(bound) => {
-                let l = bound.witness;
-                let locals = Ran::of_done<Locals>(pass_locals(parameters, state), io, l, bound.proof.left);
-                match Ran::then_stopped<Config, Ended>(inner.run(blocks, calls, fuel, Config(l, m, io)), after_pass, x, bound.proof.right) {
-                    Inl(going) => goes(fuel, state, m, io, l, x, locals, going),
-                    Inr(passed) => {
-                        let after = passed.witness;
-                        let pass_io: (after.io = io) = passes(fuel, state, m, io, l, after, locals, passed.proof.left);
-                        match Ran::then_stopped<List<Value>, Ended>(Ran::of(read_values(next, after.locals), after.io), λ (more: List<Value>) =>
-                            match after.locals.words(1, exit).head_bit() {
-                                False => later(more, after.memory, after.io),
-                                True => Done(Ended(more, after.memory, after.io)),
-                            }, x, passed.proof.right) {
-                            Inl(never) => false_elim(Ran::of_stopped<List<Value>>(read_values(next, after.locals), after.io, x, never)),
-                            Inr(read) => {
-                                let more = read.witness;
-                                trans((match after.locals.words(1, exit).head_bit() as λ b => (match b {
-                                        False => later(more, after.memory, after.io),
-                                        True => Done(Ended(more, after.memory, after.io)),
-                                    }).stopped() = Some(x) → x.world() = after.io {
-                                    True => λ never => absurd(never),
-                                    False => λ e => each(more, after.memory, after.io, x, e),
-                                })(read.proof.right), pass_io)
-                            },
-                        }
-                    },
-                }
-            },
-        }
-    }
-}
-
-theorem loop_later_stopped_io(blocks: Blocks, calls: Calls(), inner: Body, parameters: List<Typed>, exit: Nat, next: List<Typed>,
-    passes: (rest: Nat) → (state: List<Value>) → (m: Heap) → (io: Io) → (l: Locals) → (after: Config) → pass_locals(parameters, state) = Some(l) →
-        inner.run(blocks, calls, rest, Config(l, m, io)) = Done(after) → after.io = io,
-    goes: (rest: Nat) → (state: List<Value>) → (m: Heap) → (io: Io) → (l: Locals) → (x: Stop) → pass_locals(parameters, state) = Some(l) →
-        inner.run(blocks, calls, rest, Config(l, m, io)).stopped() = Some(x) → x.world() = io,
-    fuel: Nat):
-    (state: List<Value>) → (m: Heap) → (io: Io) → (x: Stop) →
-    bytes_level::loop_later(λ (n: Nat) (pass: Config) => inner.run(blocks, calls, n, pass), parameters, exit, next, fuel, state, m, io).stopped() = Some(x) →
-    x.world() = io {
-    match fuel {
-        Zero => λ state m io x e => j(Option::some_inj(StopGoing(io), x, e), λ y _ => y.world() = io, refl),
-        Succ(rest) => loop_pass_stopped_io(blocks, calls, inner, parameters, exit, next, passes, goes, rest,
-            bytes_level::loop_later(λ (n: Nat) (pass: Config) => inner.run(blocks, calls, n, pass), parameters, exit, next, rest),
-            loop_later_stopped_io(blocks, calls, inner, parameters, exit, next, passes, goes, rest)),
-    }
-}
-
-theorem loop_run_stopped_io(blocks: Blocks, calls: Calls(), inner: Body, parameters: List<Typed>, exit: Nat, next: List<Typed>,
-    passes: (rest: Nat) → (state: List<Value>) → (m: Heap) → (io: Io) → (l: Locals) → (after: Config) → pass_locals(parameters, state) = Some(l) →
-        inner.run(blocks, calls, rest, Config(l, m, io)) = Done(after) → after.io = io,
-    goes: (rest: Nat) → (state: List<Value>) → (m: Heap) → (io: Io) → (l: Locals) → (x: Stop) → pass_locals(parameters, state) = Some(l) →
-        inner.run(blocks, calls, rest, Config(l, m, io)).stopped() = Some(x) → x.world() = io,
-    fuel: Nat):
-    (state: List<Value>) → (m: Heap) → (io: Io) → (x: Stop) →
-    bytes_level::loop_run(λ (n: Nat) (pass: Config) => inner.run(blocks, calls, n, pass), parameters, exit, next, fuel, state, m, io).stopped() = Some(x) →
-    x.world() = io {
-    loop_pass_stopped_io(blocks, calls, inner, parameters, exit, next, passes, goes, fuel,
-        bytes_level::loop_later(λ (n: Nat) (pass: Config) => inner.run(blocks, calls, n, pass), parameters, exit, next, fuel),
-        loop_later_stopped_io(blocks, calls, inner, parameters, exit, next, passes, goes, fuel))
-}
-
-theorem Body::stopped_io(self body: Body, blocks: Blocks, calls: Calls(), quiet: Quiet(calls), quiet_stop: QuietStop(calls), fuel: Nat):
-    (used, used2: List<Nat>) → (c: Config) → (x: Stop) → body.fresh(used) = Some(used2) → body.run(blocks, calls, fuel, c).stopped() = Some(x) → x.world() = c.io {
-    match body {
-        Leaf(instrs) => λ used used2 c x fresh ran => false_elim(Ran::of_stopped<Config>(run_instrs(blocks, instrs, c), c.io, x, ran)),
-        Seq(first, rest) => λ used used2 c x fresh ran => {
-            let fresh_first = Option::and_then_some(first.fresh(used), λ (u: List<Nat>) => rest.fresh(u), used2, fresh);
-            match Ran::then_stopped<Config, Config>(first.run(blocks, calls, fuel, c), λ (mid: Config) => rest.run(blocks, calls, fuel, mid), x, ran) {
-                Inl(going) => first.stopped_io(blocks, calls, quiet, quiet_stop, fuel, used, fresh_first.witness, c, x, fresh_first.proof.left, going),
-                Inr(done) => trans(rest.stopped_io(blocks, calls, quiet, quiet_stop, fuel, fresh_first.witness, used2, done.witness, x, fresh_first.proof.right,
-                        done.proof.right),
-                    first.run_io(blocks, calls, quiet, fuel, used, fresh_first.witness, c, done.witness, fresh_first.proof.left, done.proof.left)),
-            }
-        },
-        Branch(condition, yes, no) => λ used used2 c x fresh ran => {
-            let fresh_yes = Option::and_then_some(yes.fresh(used), λ (uy: List<Nat>) => no.fresh(used).and_then(λ (un: List<Nat>) => Some(uy ++ un)),
-                used2, fresh);
-            let fresh_no = Option::and_then_some(no.fresh(used), λ (un: List<Nat>) => Some(fresh_yes.witness ++ un), used2, fresh_yes.proof.right);
-            (match c.locals.words(1, condition).head_bit() as λ bit =>
-                (match bit { True => yes.run(blocks, calls, fuel, c), False => no.run(blocks, calls, fuel, c) }).stopped() = Some(x) → x.world() = c.io {
-                True => λ r => yes.stopped_io(blocks, calls, quiet, quiet_stop, fuel, used, fresh_yes.witness, c, x, fresh_yes.proof.left, r),
-                False => λ r => no.stopped_io(blocks, calls, quiet, quiet_stop, fuel, used, fresh_no.witness, c, x, fresh_no.proof.left, r),
-            })(ran)
-        },
-        Call(callee, arguments, results) => λ used used2 c x fresh ran =>
-            match Ran::then_stopped<List<Value>, Config>(Ran::of(read_values(arguments, c.locals), c.io), λ (args: List<Value>) =>
-                calls(callee, args, c.memory, c.io).then(λ (answer: Answer) =>
-                    Ran::of(bind_values(results, answer.words, c.locals), answer.io).then(λ (l: Locals) => Done(Config(l, answer.heap, answer.io)))), x, ran) {
-                Inl(never) => false_elim(Ran::of_stopped<List<Value>>(read_values(arguments, c.locals), c.io, x, never)),
-                Inr(read) => match Ran::then_stopped<Answer, Config>(calls(callee, read.witness, c.memory, c.io), λ (answer: Answer) =>
-                    Ran::of(bind_values(results, answer.words, c.locals), answer.io).then(λ (l: Locals) => Done(Config(l, answer.heap, answer.io))), x,
-                    read.proof.right) {
-                    Inl(going) => quiet_stop(callee, read.witness, c.memory, c.io, x, going),
-                    Inr(answered) => false_elim(Ran::done_not_stopped<Locals, Config>(bind_values(results, answered.witness.words, c.locals),
-                        answered.witness.io, λ (l: Locals) => Config(l, answered.witness.heap, answered.witness.io), x, answered.proof.right)),
-                },
-            },
-        Loop(inputs, parameters, inner, exit, next, outputs) => λ used used2 c x fresh ran => {
-            let fr = loop_fresh(used, used2, inputs, parameters, inner, exit, next, outputs, fresh);
-            let step = λ (n: Nat) (pass: Config) => inner.run(blocks, calls, n, pass);
-            match Ran::then_stopped<List<Value>, Config>(Ran::of(read_values(inputs, c.locals), c.io), λ (state: List<Value>) =>
-                bytes_level::loop_run(step, parameters, exit, next, fuel, state, c.memory, c.io).then(λ (end: Ended) =>
-                    Ran::of(bind_values(outputs, end.state, c.locals), end.io).then(λ (l: Locals) => Done(Config(l, end.memory, end.io)))), x, ran) {
-                Inl(never) => false_elim(Ran::of_stopped<List<Value>>(read_values(inputs, c.locals), c.io, x, never)),
-                Inr(read) => match Ran::then_stopped<Ended, Config>(bytes_level::loop_run(step, parameters, exit, next, fuel, read.witness, c.memory, c.io),
-                    λ (end: Ended) => Ran::of(bind_values(outputs, end.state, c.locals), end.io).then(λ (l: Locals) => Done(Config(l, end.memory, end.io))), x,
-                    read.proof.right) {
-                    Inl(going) => loop_run_stopped_io(blocks, calls, inner, parameters, exit, next,
-                        λ rest st m io l aft _ rn => inner.run_io(blocks, calls, quiet, rest, fr.start, fr.inside, Config(l, m, io), aft, fr.body, rn),
-                        λ rest st m io l w _ rn => inner.stopped_io(blocks, calls, quiet, quiet_stop, rest, fr.start, fr.inside, Config(l, m, io), w, fr.body, rn),
-                        fuel, read.witness, c.memory, c.io, x, going),
-                    Inr(ended) => false_elim(Ran::done_not_stopped<Locals, Config>(bind_values(outputs, ended.witness.state, c.locals), ended.witness.io,
-                        λ (l: Locals) => Config(l, ended.witness.memory, ended.witness.io), x, ended.proof.right)),
-                },
-            }
-        },
-        Sys(_) => λ used used2 c x never => absurd(never),
-        Exit(status) => λ used used2 c x fresh ran =>
-            j(Option::some_inj(StopExited(c.locals.word(status), c.io), x, ran), λ y _ => y.world() = c.io, refl),
-    }
-}
-
-theorem Routine::call_stopped_io(self r: Routine, used: List<Nat>, scope: r.scope() = Some(used), blocks: Blocks, calls: Calls(), quiet: Quiet(calls),
-    quiet_stop: QuietStop(calls), fuel: Nat, args: List<Value>, heap: Heap, io: Io, x: Stop, ran: r.call(blocks, calls, fuel, args, heap, io).stopped() = Some(x)): x.world() = io {
-    let fresh = Option::and_then_some(fresh_ids([], typed_ids(r.parameters)), λ (u: List<Nat>) => r.body.fresh(u), used, scope);
-    match Ran::then_stopped<Locals, Answer>(Ran::of(bind_values(r.parameters, args, Locals::empty()), io), λ (l: Locals) =>
-        r.body.run(blocks, calls, fuel, Config(l, heap, io)).then(λ (after: Config) =>
-            Ran::of(read_values(r.results, after.locals), after.io).then(λ (words: List<Value>) => Done(Answer(words, after.memory, after.io)))), x, ran) {
-        Inl(never) => false_elim(Ran::of_stopped<Locals>(bind_values(r.parameters, args, Locals::empty()), io, x, never)),
-        Inr(bound) => match Ran::then_stopped<Config, Answer>(r.body.run(blocks, calls, fuel, Config(bound.witness, heap, io)), λ (after: Config) =>
-            Ran::of(read_values(r.results, after.locals), after.io).then(λ (words: List<Value>) => Done(Answer(words, after.memory, after.io))), x,
-            bound.proof.right) {
-            Inl(going) => r.body.stopped_io(blocks, calls, quiet, quiet_stop, fuel, fresh.witness, used, Config(bound.witness, heap, io), x, fresh.proof.right,
-                going),
-            Inr(done) => false_elim(Ran::done_not_stopped<List<Value>, Answer>(read_values(r.results, done.witness.locals), done.witness.io,
-                λ (words: List<Value>) => Answer(words, done.witness.memory, done.witness.io), x, done.proof.right)),
-        },
-    }
-}
-
-theorem program_stop_quiet(routines: List<Routine>, blocks: Blocks, scoped: Scoped::all(routines), fuel: Nat): QuietStop(program_calls(routines, blocks, fuel)) {
-    match fuel {
-        Zero => λ f args heap io x e => j(Option::some_inj(StopGoing(io), x, e), λ y _ => y.world() = io, refl),
-        Succ(n) => λ f args heap io x => (match routines.nth(f) as λ y => routines.nth(f) = y →
-            (match y { None => Stuck(io), Some(r) => r.call(blocks, program_calls(routines, blocks, n), n, args, heap, io) }).stopped() = Some(x) → x.world() = io {
-            None => λ _ never => absurd(never),
-            Some(r) => λ nth ran => {
-                let s = scoped_nth(routines, f, r, nth, scoped);
-                r.call_stopped_io(s.witness, s.proof, blocks, program_calls(routines, blocks, n), program_quiet(routines, blocks, scoped, n),
-                    program_stop_quiet(routines, blocks, scoped, n), n, args, heap, io, x, ran)
+                r.call_grows(s.witness, s.proof, blocks, program_calls(routines, blocks, n), program_grows(routines, blocks, scoped, n), n, args, heap, io, a, ran)
             },
         })(refl),
     }
@@ -1595,33 +1272,33 @@ theorem routine_of_program<M>(site: Site<M>, stack: Stack<M>(site.fetch, site.da
 // answered at `n`, each entered at a depth below the caller's, so at the
 // room table's depth below; the hypothesis gives their return there.
 theorem program_returns<M>(site: Site<M>, stack: Stack<M>(site.fetch, site.data), spans: Spans, room: Nat → Nat → Nat, top: Nat, blocks: Blocks,
-    routines: List<Routine>, valid: routines_valid(program_signatures(routines), routines) = True, law: RoomLaw(routines, room),
-    at: RoutinesAt<M>(site, stack, spans, room, top, blocks, program_signatures(routines), routines.len(), routines, 0), fuel: Nat):
+    routines: List<Routine>, valid: routines_valid(program_signatures(routines), routines) = True, scoped: Scoped::all(routines),
+    law: RoomLaw(routines, room), at: RoutinesAt<M>(site, stack, spans, room, top, blocks, program_signatures(routines), routines.len(), routines, 0),
+    fuel: Nat):
     (cap: Nat) → CalleesReturn<M>(site, stack, spans, λ (g: Nat) => room(g, cap), top, routines.len(),
         peak_answers(program_calls(routines, blocks, fuel), program_peaks(routines, blocks, fuel), cap + 1)) {
     match fuel {
-        Zero => λ cap f below args heap a answered => absurd(answered.proof.left),
-        Succ(n) => λ cap f below args heap a answered => {
-            let io = answered.witness;
+        Zero => λ cap f below args heap io a answered => absurd(answered.left),
+        Succ(n) => λ cap f below args heap io a answered => {
             let calls = program_calls(routines, blocks, n);
             let peaks = program_peaks(routines, blocks, n);
             let callees = (match cap as λ c => CalleesReturn<M>(site, stack, spans, rooms_below(room, c), top, routines.len(), peak_answers(calls, peaks, c)) {
-                Zero => λ g lower args2 heap2 a2 answered2 => false_elim(Nat::not_succ_le_zero(peaks(g, args2, heap2, answered2.witness), answered2.proof.right)),
-                Succ(c) => program_returns<M>(site, stack, spans, room, top, blocks, routines, valid, law, at, n, c),
+                Zero => λ g lower args2 heap2 io2 a2 answered2 => false_elim(Nat::not_succ_le_zero(peaks(g, args2, heap2, io2), answered2.right)),
+                Succ(c) => program_returns<M>(site, stack, spans, room, top, blocks, routines, valid, scoped, law, at, n, c),
             });
             (match routines.nth(f) as λ o => routines.nth(f) = o →
                 (match o { None => Stuck(io), Some(r) => r.call(blocks, calls, n, args, heap, io) }) = Done(a) →
                 (match o { None => 0, Some(r) => r.peak(blocks, calls, peaks, n, args, heap, io) }) + 1 <= cap + 1 →
-                site.Returns(stack, asm_labels(site.program)(f + 1), RoutinePre<M>(site, stack, spans, λ (g: Nat) => room(g, cap), top, f, args, heap),
-                    RoutinePost<M>(site, stack, spans, a)) {
+                site.ReturnsClaim(stack, site.linux_kernel(stack), calls_between(Now(heap, io), Now(a.heap, a.io)), 0, asm_labels(site.program)(f + 1),
+                    RoutinePreNow<M>(site, stack, spans, λ (g: Nat) => room(g, cap), top, f, args, heap, io), RoutinePostNow<M>(site, stack, spans, a)) {
                 None => λ _ never _ => absurd(never),
                 Some(r) => λ nth ran peaked => {
                     let q = r.peak(blocks, calls, peaks, n, args, heap, io);
                     let within: (q <= cap) = Nat::le_of_succ_succ(q, cap, peaked);
-                    routine_of_program<M>(site, stack, spans, room, top, blocks, routines, valid, law, at, f, r, nth).left(calls, peaks, n, cap, callees, args,
-                        heap, io, a, ran, within)
+                    routine_of_program<M>(site, stack, spans, room, top, blocks, routines, valid, law, at, f, r, nth).left(calls, peaks, n, cap, callees,
+                        program_grows(routines, blocks, scoped, n), args, heap, io, a, ran, within)
                 },
-            })(refl, answered.proof.left, answered.proof.right)
+            })(refl, answered.left, answered.right)
         },
     }
 }
@@ -1632,41 +1309,50 @@ theorem pred_sub(n: Nat): n.pred() = n - 1 { match n { Zero => refl, Succ(m) => 
 // `n` machine steps from its entry, its calls still going at least `n - 1`
 // each from theirs and the CALL one.
 theorem program_stops<M>(site: Site<M>, stack: Stack<M>(site.fetch, site.data), spans: Spans, room: Nat → Nat → Nat, top: Nat, blocks: Blocks,
-    routines: List<Routine>, valid: routines_valid(program_signatures(routines), routines) = True, law: RoomLaw(routines, room),
+    routines: List<Routine>, valid: routines_valid(program_signatures(routines), routines) = True, scoped: Scoped::all(routines),
+    law: RoomLaw(routines, room),
     at: RoutinesAt<M>(site, stack, spans, room, top, blocks, program_signatures(routines), routines.len(), routines, 0), x: Stop, fuel: Nat):
     (cap: Nat) → CalleesStop<M>(x, site, stack, spans, λ (g: Nat) => room(g, cap), top, routines.len(),
         peak_stops(x, program_calls(routines, blocks, fuel), program_peaks(routines, blocks, fuel), cap + 1), x.least(fuel.pred())) {
     match fuel {
-        Zero => λ cap f below args heap stopped s here resident i rsp inside held ret saved =>
-            Exists(s.state, Exists(0, ⟨refl, ⟨x.least_le(0), x.reached_zero(site, stack, x.zero_of(stopped.witness, stopped.proof.left),
-                Running<M, True>(s.state, s.io))⟩⟩)),
-        Succ(n) => λ cap f below args heap stopped => {
-            let io = stopped.witness;
+        Zero => λ cap f below args heap io stopped s here resident i rsp inside held ret saved => {
+            let zero: x.Zero(s.io) = j(sym(held.right), λ w _ => x.Zero(w), x.zero_of(io, stopped.left));
+            let lens: (s.io.past.len() = io.past.len()) = cong_fn<Io, Nat>(λ w => w.past.len(), held.right);
+            let none: (x.calls_from(Now(heap, io)) = 0) = {
+                let world: (x.world() = io) = (match x as λ y => y.Zero(io) → y.world() = io { StopGoing(_) => λ e => sym(e), StopExited(_, _) => λ never => false_elim(never) })(x.zero_of(io, stopped.left));
+                let wl: (x.world().past.len() = io.past.len()) = cong_fn<Io, Nat>(λ w => w.past.len(), world);
+                let def: (x.calls_from(Now(heap, io)) = x.world().past.len() - io.past.len()) = refl;
+                omega
+            };
+            j(sym(none), λ c _ => site.Performs(stack.writes, site.linux_kernel(stack), x.Reached(site, stack), c, x.least(0), s),
+                Exists(s.state, Exists(0, ⟨refl, ⟨x.least_le(0), x.reached_zero(site, stack, Running<M, Io>(s.state, s.io), zero)⟩⟩)))
+        },
+        Succ(n) => λ cap f below args heap io stopped => {
             let calls = program_calls(routines, blocks, n);
             let peaks = program_peaks(routines, blocks, n);
             let callees = (match cap as λ c => CalleesReturn<M>(site, stack, spans, rooms_below(room, c), top, routines.len(), peak_answers(calls, peaks, c)) {
-                Zero => λ g lower args2 heap2 a2 answered2 => false_elim(Nat::not_succ_le_zero(peaks(g, args2, heap2, answered2.witness), answered2.proof.right)),
-                Succ(c) => program_returns<M>(site, stack, spans, room, top, blocks, routines, valid, law, at, n, c),
+                Zero => λ g lower args2 heap2 io2 a2 answered2 => false_elim(Nat::not_succ_le_zero(peaks(g, args2, heap2, io2), answered2.right)),
+                Succ(c) => program_returns<M>(site, stack, spans, room, top, blocks, routines, valid, scoped, law, at, n, c),
             });
             let callees_stop = (match cap as λ c => CalleesStop<M>(x, site, stack, spans, rooms_below(room, c), top, routines.len(), peak_stops(x, calls, peaks, c),
                 x.least(n.pred())) {
-                Zero => λ g lower args2 heap2 stopped2 => false_elim(Nat::not_succ_le_zero(peaks(g, args2, heap2, stopped2.witness), stopped2.proof.right)),
-                Succ(c) => program_stops<M>(site, stack, spans, room, top, blocks, routines, valid, law, at, x, n, c),
+                Zero => λ g lower args2 heap2 io2 stopped2 => false_elim(Nat::not_succ_le_zero(peaks(g, args2, heap2, io2), stopped2.right)),
+                Succ(c) => program_stops<M>(site, stack, spans, room, top, blocks, routines, valid, scoped, law, at, x, n, c),
             });
             (match routines.nth(f) as λ y => routines.nth(f) = y →
                 (match y { None => Stuck(io), Some(r) => r.call(blocks, calls, n, args, heap, io) }).stopped() = Some(x) →
                 (match y { None => 0, Some(r) => r.peak(blocks, calls, peaks, n, args, heap, io) }) + 1 <= cap + 1 →
-                site.EntersClaim(stack, Kernel::none<M, True>(), 0, x.least(n), asm_labels(site.program)(f + 1),
-                    λ (i: Nat) (s: Running<M, True>) => RoutinePre<M>(site, stack, spans, λ (g: Nat) => room(g, cap), top, f, args, heap)(i, s.state) ∧ True,
-                    λ (_: Nat) (_: Running<M, True>) (_: BitVec(64)) (t: Running<M, True>) => x.Reached(site, stack)(t)) {
+                site.EntersClaim(stack, site.linux_kernel(stack), x.calls_from(Now(heap, io)), x.least(n), asm_labels(site.program)(f + 1),
+                    RoutinePreNow<M>(site, stack, spans, λ (g: Nat) => room(g, cap), top, f, args, heap, io),
+                    λ (_: Nat) (_: Running<M, Io>) (_: BitVec(64)) (t: Running<M, Io>) => x.Reached(site, stack)(t)) {
                 None => λ _ never _ => absurd(never),
                 Some(r) => λ nth ran peaked => {
                     let q = r.peak(blocks, calls, peaks, n, args, heap, io);
                     let within: (q <= cap) = Nat::le_of_succ_succ(q, cap, peaked);
-                    routine_of_program<M>(site, stack, spans, room, top, blocks, routines, valid, law, at, f, r, nth).right(calls, peaks, n, cap, callees, x,
+                    routine_of_program<M>(site, stack, spans, room, top, blocks, routines, valid, law, at, f, r, nth).right(calls, peaks, n, cap, callees, program_grows(routines, blocks, scoped, n), x,
                         x.least(n.pred()), callees_stop, x.least_pred(n), args, heap, io, ran, within)
                 },
-            })(refl, stopped.proof.left, stopped.proof.right)
+            })(refl, stopped.left, stopped.right)
         },
     }
 }
@@ -1692,35 +1378,36 @@ theorem program_tracks<M>(site: Site<M>, stack: Stack<M>(site.fetch, site.data),
         let all = at(loan, lent);
         let peak = run_peak(p, blocks, n, f, args, heap, io);
         let pre: RoutinePre<M>(site, stack, spans, λ (g: Nat) => room(g, peak), top, f, args, heap)(i, s) = ⟨⟨passed, roomy⟩, ⟨high, injected⟩⟩;
-        (match run(p, blocks, n, f, args, heap, io) as λ x => run(p, blocks, n, f, args, heap, io) = x → site.Tracked(stack, spans, s, i, ret, io, n, x) {
+        let entry: RoutinePreNow<M>(site, stack, spans, λ (g: Nat) => room(g, peak), top, f, args, heap, io)(i, Running<M, Io>(s, io)) = ⟨pre, refl⟩;
+        (match run(p, blocks, n, f, args, heap, io) as λ y => run(p, blocks, n, f, args, heap, io) = y → site.Tracked(stack, spans, s, i, ret, io, n, y) {
             Done(a) => λ ran => {
-                let returns = program_returns<M>(site, stack, spans, room, top, blocks, p.routines, valid, law, all, n, peak, f, below, args, heap, a,
-                    Exists(io, ⟨ran, (peak + 1).le_refl()⟩));
-                let got = returns(s, here, resident, i, rsp, inside, pre, ret, saved);
-                let post = got.proof.right.right.right.right;
-                let world: (a.io = io) = program_quiet(p.routines, blocks, scoped, n, f, args, heap, io, a, ran);
-                Exists(0, site.performs_steps(stack.writes, site.linux_kernel(stack), λ r => site.Returned(stack, spans, s, i, ret, a, r), Running(s, io),
-                    got.witness, got.proof.left, ⟨⟨got.proof.right.left, ⟨got.proof.right.right.left, got.proof.right.right.right.left⟩⟩,
-                        ⟨⟨answered_args(lower_values(spans, a.words), got.witness.gprs, post.left), post.right.left⟩,
-                         ⟨⟨post.right.right.left, post.right.right.right⟩, sym(world)⟩⟩⟩))
+                let returns = program_returns<M>(site, stack, spans, room, top, blocks, p.routines, valid, scoped, law, all, n, peak, f, below, args, heap, io, a,
+                    ⟨ran, (peak + 1).le_refl()⟩);
+                let count = calls_between(Now(heap, io), Now(a.heap, a.io));
+                Exists(count, site.performs_weaken(stack.writes, site.linux_kernel(stack),
+                    λ (t: Running<M, Io>) => (t.state.rip = ret) ∧ (site.Resident(t.state.memory) ∧ ((read_gpr(Rsp, t.state.gprs) = stack.at(i + 8)) ∧
+                        RoutinePostNow<M>(site, stack, spans, a)(i, Running<M, Io>(s, io), t))),
+                    λ (r: Running<M, Io>) => site.Returned(stack, spans, s, i, ret, a, r),
+                    λ t g => {
+                        let post = g.right.right.right.left;
+                        ⟨⟨g.left, ⟨g.right.left, g.right.right.left⟩⟩,
+                         ⟨⟨answered_args(lower_values(spans, a.words), t.state.gprs, post.left), post.right.left⟩,
+                          ⟨⟨post.right.right.left, post.right.right.right⟩, g.right.right.right.right⟩⟩⟩
+                    }, count, 0, Running<M, Io>(s, io),
+                    returns(Running<M, Io>(s, io), here, resident, i, rsp, inside, entry, ret, saved)))
             },
             Exited(status, o) => λ ran => {
                 let x = StopExited(status, o);
                 let stopped: (run(p, blocks, n, f, args, heap, io).stopped() = Some(x)) = cong_fn<Ran<Answer>, Option<Stop>>(λ r => r.stopped(), ran);
-                let went = program_stops<M>(site, stack, spans, room, top, blocks, p.routines, valid, law, all, x, n, peak, f, below, args, heap,
-                    Exists(io, ⟨stopped, (peak + 1).le_refl()⟩))(Running<M, True>(s, trivial), here, resident, i, rsp, inside, ⟨pre, trivial⟩, ret, saved);
-                let quiet: (o = io) = program_stop_quiet(p.routines, blocks, scoped, n, f, args, heap, io, x, stopped);
-                Exists(0, Exists(went.witness, Exists(went.proof.witness, ⟨went.proof.proof.left, ⟨trivial, ⟨went.proof.proof.right.right, sym(quiet)⟩⟩⟩)))
+                Exists(x.calls_from(Now(heap, io)), program_stops<M>(site, stack, spans, room, top, blocks, p.routines, valid, scoped, law, all, x, n, peak, f,
+                    below, args, heap, io, ⟨stopped, (peak + 1).le_refl()⟩)(Running<M, Io>(s, io), here, resident, i, rsp, inside, entry, ret, saved))
             },
             Going(o) => λ ran => {
                 let x = StopGoing(o);
                 let stopped: (run(p, blocks, n, f, args, heap, io).stopped() = Some(x)) = cong_fn<Ran<Answer>, Option<Stop>>(λ r => r.stopped(), ran);
-                let went = program_stops<M>(site, stack, spans, room, top, blocks, p.routines, valid, law, all, x, n, peak, f, below, args, heap,
-                    Exists(io, ⟨stopped, (peak + 1).le_refl()⟩))(Running<M, True>(s, trivial), here, resident, i, rsp, inside, ⟨pre, trivial⟩, ret, saved);
-                let quiet: (o = io) = program_stop_quiet(p.routines, blocks, scoped, n, f, args, heap, io, x, stopped);
-                let steps = went.proof.witness;
-                let counted: (n - 1 <= steps) = j(pred_sub(n), λ k _ => k <= steps, went.proof.proof.right.left);
-                Exists(0, Exists(went.witness, Exists(steps, ⟨went.proof.proof.left, ⟨counted, sym(quiet)⟩⟩)))
+                Exists(x.calls_from(Now(heap, io)), j(pred_sub(n), λ k _ => site.LinuxPerforms(stack, λ (r: Running<M, Io>) => r.io = o, x.calls_from(Now(heap, io)),
+                    k, Running<M, Io>(s, io)), program_stops<M>(site, stack, spans, room, top, blocks, p.routines, valid, scoped, law, all, x, n, peak, f,
+                    below, args, heap, io, ⟨stopped, (peak + 1).le_refl()⟩)(Running<M, Io>(s, io), here, resident, i, rsp, inside, entry, ret, saved)))
             },
             Stuck(_) => λ ran => Exists(0, Exists(s, Exists(0, ⟨refl, ⟨trivial, trivial⟩⟩))),
         })(refl)

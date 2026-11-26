@@ -172,6 +172,99 @@ fn Site::LinuxPerforms<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.d
 }
 
 // ---------------------------------------------------------------------------
+// Counting system calls by the world
+
+// Linux may resume a call leaving nothing behind.
+theorem linux_leaves_nil(c: LinuxCmd<Nat>, a: c.Resp()): LinuxLeaves(c, a, Nil) {
+    (match c as λ d => (b: d.Resp()) → LinuxLeaves(d, b, Nil) {
+        ReadCmd(fd, max) => λ b => match b as λ r => LinuxLeaves(ReadCmd(fd, max), r, Nil) { ReadBytes(_) => refl, ReadFailed(_) => trivial },
+        WriteCmd(_, _) => λ b => refl,
+        OpenCmd(_) => λ b => refl,
+        CloseCmd(_) => λ b => refl,
+        StatCmd(target) => λ b => match b as λ r => LinuxLeaves(StatCmd(target), r, Nil) { Stated(_) => refl, StatFailed(_) => trivial },
+    })(a)
+}
+
+// Each exchange is one more in the history.
+theorem exchanged_len(io: Io, c: LinuxCmd<Nat>, a: c.Resp()): io.exchanged(c, a).past.len() = io.past.len() + 1 { refl }
+
+// A claim at Linux whose goal fixes the world at `o` reaches it from a
+// start whose history is no longer.
+theorem Site::linux_performs_grows<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), goal: Running<M, Io> → Type, o: Io,
+    pins: (t: Running<M, Io>) → goal(t) → t.io = o, calls: Nat):
+    (least: Nat) → (from: Running<M, Io>) → site.LinuxPerforms(stack, goal, calls, least, from) → from.io.past.len() <= o.past.len() {
+    match calls {
+        Zero => λ least from p => j(pins(Running(p.witness, from.io), p.proof.proof.right.right), λ w _ => from.io.past.len() <= w.past.len(),
+            from.io.past.len().le_refl()),
+        Succ(more) => λ least from p => match p.proof.proof.right {
+            Inl(reached) => j(pins(Running(p.witness, from.io), reached.right), λ w _ => from.io.past.len() <= w.past.len(), from.io.past.len().le_refl()),
+            Inr(called) => {
+                let c = called.witness;
+                let a = from.io.answer(c);
+                let zero = BitVec::zero(n := 64);
+                let u = linux_answered(site.linux(stack), p.witness, c, a, Nil, zero, zero);
+                let later = called.proof.right(Nil, linux_leaves_nil(c, a), zero, zero);
+                let grown = site.linux_performs_grows(stack, goal, o, pins, more, least - p.proof.witness, Running(u, from.io.exchanged(c, a)), later);
+                let e = exchanged_len(from.io, c, a);
+                { omega }
+            },
+        },
+    }
+}
+
+// And makes exactly as many system calls as `o` has exchanges past the
+// start: each records one. So a count proved any way can be read off the
+// worlds (a loop's passes, whose number is the run's, need it).
+theorem Site::linux_performs_exact<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), goal: Running<M, Io> → Type, o: Io,
+    pins: (t: Running<M, Io>) → goal(t) → t.io = o, calls: Nat):
+    (least: Nat) → (from: Running<M, Io>) → (k: Nat) → o.past.len() = k + from.io.past.len() → site.LinuxPerforms(stack, goal, calls, least, from) →
+    site.LinuxPerforms(stack, goal, k, least, from) {
+    match calls {
+        Zero => λ least from k e p => {
+            let same: (from.io = o) = pins(Running(p.witness, from.io), p.proof.proof.right.right);
+            let lens: (from.io.past.len() = o.past.len()) = cong_fn<Io, Nat>(λ w => w.past.len(), same);
+            (match k as λ k2 => o.past.len() = k2 + from.io.past.len() → site.LinuxPerforms(stack, goal, k2, least, from) {
+                Zero => λ _ => p,
+                Succ(k2) => λ e2 => false_elim({ omega }),
+            })(e)
+        },
+        Succ(more) => λ least from k e p => {
+            let t = p.witness;
+            let n = p.proof.witness;
+            match p.proof.proof.right {
+                Inl(reached) => {
+                    let same: (from.io = o) = pins(Running(t, from.io), reached.right);
+                    let lens: (from.io.past.len() = o.past.len()) = cong_fn<Io, Nat>(λ w => w.past.len(), same);
+                    (match k as λ k2 => o.past.len() = k2 + from.io.past.len() → site.LinuxPerforms(stack, goal, k2, least, from) {
+                        Zero => λ _ => Exists(t, Exists(n, ⟨p.proof.proof.left, reached⟩)),
+                        Succ(k2) => λ e2 => false_elim({ omega }),
+                    })(e)
+                },
+                Inr(called) => {
+                    let c = called.witness;
+                    let a = from.io.answer(c);
+                    let after = from.io.exchanged(c, a);
+                    let grown_len = exchanged_len(from.io, c, a);
+                    (match k as λ k2 => o.past.len() = k2 + from.io.past.len() → site.LinuxPerforms(stack, goal, k2, least, from) {
+                        Zero => λ e2 => {
+                            let zero = BitVec::zero(n := 64);
+                            let grown = site.linux_performs_grows(stack, goal, o, pins, more, least - n,
+                                Running(linux_answered(site.linux(stack), t, c, a, Nil, zero, zero), after),
+                                called.proof.right(Nil, linux_leaves_nil(c, a), zero, zero));
+                            false_elim({ omega })
+                        },
+                        Succ(k2) => λ e2 => Exists(t, Exists(n, ⟨p.proof.proof.left, Inr(Exists(c, ⟨called.proof.left, λ junk leaves rcx r11 =>
+                            site.linux_performs_exact(stack, goal, o, pins, more, least - n,
+                                Running(linux_answered(site.linux(stack), t, c, a, junk, rcx, r11), after), k2, { omega },
+                                called.proof.right(junk, leaves, rcx, r11))⟩))⟩)),
+                    })(e)
+                },
+            }
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
 // The contract (docs/language/ownership-design.md §17.7)
 
 // Routine `f` entered at stack offset `i`, as every clause takes it, under

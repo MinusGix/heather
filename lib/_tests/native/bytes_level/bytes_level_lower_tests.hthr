@@ -35,11 +35,11 @@ fn into(registers: List<Gpr>) → List<Place> { registers.map(λ (r: Gpr) => Int
 fn lowered(body: Body, placement: List<Place>) → Option<Emitted> { body.emit(0, 0, [], 0, 0, Start, two_in(), placement, 0) }
 
 // A region with no call answers nothing of a callee.
-fn no_answers() → RoutineAnswers() { λ _ _ _ _ => False }
+fn no_answers() → RoutineAnswers() { λ _ _ _ _ _ => False }
 
 theorem no_callees<M>(site: Site<M>, stack: Stack<M>(site.fetch, site.data), spans: Spans, top: Nat):
     CalleesReturn<M>(site, stack, spans, λ (_: Nat) => 0, top, 0, no_answers()) {
-    λ f below args heap a never => false_elim(never)
+    λ f below args heap io a never => false_elim(never)
 }
 
 fn lowers(body: Body, placement: List<Place>) → Bool { lowered(body, placement).is_some() }
@@ -55,8 +55,8 @@ theorem cells_lowers(): lowers(cells_body(), into([Rax, Rax, Rcx])) = True { ref
 
 theorem cells_code<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data), top: Nat, spans: Spans,
     loan: Loan<M>(site.fetch, site.data, stack, top, spans), blocks: Blocks, lent: blocks.Lent(spans), values: Valuation(), d: Nat,
-    s0: MachineState<M>, before, after: Heap):
-    MayEmitHeap<M>(0, site, stack, spans, values, d, s0, Start, two_in(), cells_body().Holds(spans, blocks, values, no_answers(), 0, before, after), before, after,
+    s0: MachineState<M>, before, after: Now):
+    MayEmitNow<M>(0, site, stack, spans, values, d, s0, Start, two_in(), cells_body().Holds(spans, blocks, values, no_answers(), 0, before, after), before, after,
         lowered(cells_body(), into([Rax, Rax, Rcx]))) {
     cells_body().emit_emits<M>(0, 0, site, laid, stack, top, spans, loan, blocks, lent, λ (_: Nat) => 0, 0, 0, no_answers(),
         no_callees<M>(site, stack, spans, top), values, 0, d, d, s0, λ c => false_elim(c), [], trivial, Start, two_in(), into([Rax, Rax, Rcx]), 0,
@@ -83,8 +83,8 @@ theorem fill_lowers(): lowers(fill_body(), into([Rax, Rax, Rcx, Rdx, R8, R8])) =
 
 theorem fill_code<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data), top: Nat, spans: Spans,
     loan: Loan<M>(site.fetch, site.data, stack, top, spans), blocks: Blocks, lent: blocks.Lent(spans), values: Valuation(), d: Nat,
-    s0: MachineState<M>, before, after: Heap):
-    MayEmitHeap<M>(0, site, stack, spans, values, d, s0, Start, two_in(), fill_body().Holds(spans, blocks, values, no_answers(), 0, before, after), before, after,
+    s0: MachineState<M>, before, after: Now):
+    MayEmitNow<M>(0, site, stack, spans, values, d, s0, Start, two_in(), fill_body().Holds(spans, blocks, values, no_answers(), 0, before, after), before, after,
         lowered(fill_body(), into([Rax, Rax, Rcx, Rdx, R8, R8]))) {
     fill_body().emit_emits<M>(0, 0, site, laid, stack, top, spans, loan, blocks, lent, λ (_: Nat) => 0, 0, 0, no_answers(),
         no_callees<M>(site, stack, spans, top), values, 0, d, d, s0, λ c => false_elim(c), [], trivial, Start, two_in(),
@@ -117,8 +117,8 @@ theorem larger_lowers(): lowers(larger_body(), into([Rax, Rcx, Rdx, Rax, Rax])) 
 
 theorem larger_code<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data), top: Nat, spans: Spans,
     loan: Loan<M>(site.fetch, site.data, stack, top, spans), blocks: Blocks, lent: blocks.Lent(spans), values: Valuation(), d: Nat,
-    s0: MachineState<M>, before, after: Heap):
-    MayEmitHeap<M>(0, site, stack, spans, values, d, s0, Start, two_in(), larger_body().Holds(spans, blocks, values, no_answers(), 0, before, after), before, after,
+    s0: MachineState<M>, before, after: Now):
+    MayEmitNow<M>(0, site, stack, spans, values, d, s0, Start, two_in(), larger_body().Holds(spans, blocks, values, no_answers(), 0, before, after), before, after,
         lowered(larger_body(), into([Rax, Rcx, Rdx, Rax, Rax]))) {
     larger_body().emit_emits<M>(0, 0, site, laid, stack, top, spans, loan, blocks, lent, λ (_: Nat) => 0, 0, 0, no_answers(),
         no_callees<M>(site, stack, spans, top), values, 0, d, d, s0, λ c => false_elim(c), [], ⟨trivial, ⟨trivial, trivial⟩⟩, Start, two_in(),
