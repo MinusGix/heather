@@ -1049,6 +1049,33 @@ fn CSt::POne(self s: CSt) → Type {
     (e1, e2: VEnt) → Mem(e1, s.views) → Mem(e2, s.views) → (e1.mode.writes() && !e1.back) = True → (e2.mode.writes() && !e2.back) = True → e1.lvl = e2.lvl
 }
 
+// A live entry whose parent's cell is a copy: its place fits that copy at
+// the run's words, and its own copy is like what the place reads there (its
+// code and length), so writing it back is a write that fits and keeps the
+// place fitting (`cfit`). A copy's write-back is the design's ordinary case
+// for small plain data (§15.2), and the run's write is stuck where the place
+// does not fit; the like-ness is what a write at a place of several steps
+// needs to keep it fitting.
+fn CSt::CFitAt(tys: Nat → Type, strs: Strs(tys), ss: List<Sel>, dp, dc: Dyn(tys)) → Type {
+    (Sel::fit(tys, strs, ss, dp) = True) ∧ ((dc.code = (Sel::read_at(tys, strs, ss, dp)).code) ∧ (Dyn::len(tys, strs, dc) = Dyn::len(tys, strs, Sel::read_at(tys, strs, ss, dp))))
+}
+
+fn CSt::CFit(tys: Nat → Type, strs: Strs(tys), s: CSt, env: REnv(tys), ws: List<Ix>) → Type {
+    (en: VEnt) → Mem(en, s.views) → (y, z: Var) → s.lvl(y) = Some(en.par) → s.lvl(z) = Some(en.lvl) → (dp, dc: Dyn(tys)) →
+        (REnv::get(tys, env, y)).v = level2::Plain(dp) → (REnv::get(tys, env, z)).v = level2::Plain(dc) → CSt::CFitAt(tys, strs, Steps::sels(s.unsteps(en.at), ws), dp, dc)
+}
+
+// Two live entries opened on one parent, one of them to write, are apart at
+// their places (`sib`). `excl` says so of their whole regions; under a
+// parent that is a view the regions share the parent's, and a write-back
+// into a copy changes the copy at one child's place, which must keep a
+// sibling's place fitting. The licence's decider found the places apart, a
+// common prefix deciding nothing (`Steps::apart_prefix`).
+fn CSt::Sib(tys: Nat → Type, strs: Strs(tys), s: CSt, ws: List<Ix>) → Type {
+    (e1, e2: VEnt) → Mem(e1, s.views) → Mem(e2, s.views) → e1.mode.writes() = True → e1.par = e2.par → ¬(e1.lvl = e2.lvl) →
+        Sel::Apart(tys, strs, Steps::sels(s.unsteps(e1.at), ws), Steps::sels(s.unsteps(e2.at), ws))
+}
+
 record Inv(tys: Nat → Type, strs: Strs(tys), s: CSt, e: Env(tys), m: Mach(tys), h0: Heap(tys), lent: Nat → Bool) {
     sim: Sim(tys, strs, s, s.patched(tys, strs, e, m), m),
     root: Nat → Option<Ref>,
@@ -1073,6 +1100,8 @@ record Inv(tys: Nat → Type, strs: Strs(tys), s: CSt, e: Env(tys), m: Mach(tys)
     wpar: (en: VEnt) → Mem(en, s.views) → en.mode.writes() = True → s.WPar(en),
     uni: CSt::Uni(tys, s, m.env),
     pone: s.POne(),
+    cfit: CSt::CFit(tys, strs, s, m.env, Mach::ixs(tys, strs, m)),
+    sib: CSt::Sib(tys, strs, s, Mach::ixs(tys, strs, m)),
 }
 
 // Where nothing is pending, the invariant's first part is `Sim` itself.
@@ -1575,6 +1604,8 @@ theorem Inv::start(tys: Nat → Type, strs: Strs(tys), sig: Sig, vs: List<Value(
         λ e1 e2 no => false_elim(no),
         λ en no => false_elim(no),
         λ en no => false_elim(no),
+        λ e1 e2 no => false_elim(no),
+        λ en no => false_elim(no),
         λ e1 e2 no => false_elim(no))
 }
 
@@ -1722,8 +1753,15 @@ theorem CSt::refok_keep(s, s2: CSt, root, root2: Nat → Option<Ref>, ws, ws2: L
 }
 
 // The levels a live region reads, as the invariant's `words` names them.
+theorem Bool::or_true_right(self a: Bool): (a || True) = True { match a { True => refl, False => refl } }
+
 theorem CSt::region_lvl(self s: CSt, en: VEnt, m: Mem(en, s.views), l: Nat, h: l.member(Steps::lvls(en.reg)) = True): s.in_regions(l) = True {
     s.views.any_bit_mem(λ e => l.member(Steps::lvls(e.reg)) || l.member(Steps::lvls(e.at)), en, m, j(sym(h), λ c _ => (c || l.member(Steps::lvls(en.at))) = True, refl))
+}
+
+theorem CSt::at_lvl(self s: CSt, en: VEnt, m: Mem(en, s.views), l: Nat, h: l.member(Steps::lvls(en.at)) = True): s.in_regions(l) = True {
+    s.views.any_bit_mem(λ e => l.member(Steps::lvls(e.reg)) || l.member(Steps::lvls(e.at)), en, m,
+        j(sym(h), λ c _ => (l.member(Steps::lvls(en.reg)) || c) = True, Bool::or_true_right(l.member(Steps::lvls(en.reg)))))
 }
 
 // ---------------------------------------------------------------------------
@@ -1918,6 +1956,53 @@ theorem CSt::changes_push(self s: CSt, cv: CVar, o: Nat, nohold: (a: Acc) → cv
     }
 }
 
+// `cfit` and `sib` where only the words may have moved: kept where every
+// entry's place selects alike.
+theorem CSt::cfit_ws(tys: Nat → Type, strs: Strs(tys), s: CSt, env: REnv(tys), ws, ws2: List<Ix>,
+    ats: (en: VEnt) → Mem(en, s.views) → Steps::sels(s.unsteps(en.at), ws2) = Steps::sels(s.unsteps(en.at), ws), cf: CSt::CFit(tys, strs, s, env, ws)): CSt::CFit(tys, strs, s, env, ws2)
+{
+    λ en mem y z hy hz dp dc cy cz => j(sym(ats(en, mem)), λ q _ => CSt::CFitAt(tys, strs, q, dp, dc), cf(en, mem, y, z, hy, hz, dp, dc, cy, cz))
+}
+
+theorem CSt::sib_keep(tys: Nat → Type, strs: Strs(tys), s, s2: CSt, ws, ws2: List<Ix>, vs: s2.views = s.views,
+    ats: (en: VEnt) → Mem(en, s.views) → Steps::sels(s2.unsteps(en.at), ws2) = Steps::sels(s.unsteps(en.at), ws), sb: CSt::Sib(tys, strs, s, ws)): CSt::Sib(tys, strs, s2, ws2)
+{
+    λ e1 e2 m1 m2 w1 pp ne => {
+        let n1: Mem(e1, s.views) = j(vs, λ q _ => Mem(e1, q), m1);
+        let n2: Mem(e2, s.views) = j(vs, λ q _ => Mem(e2, q), m2);
+        j(sym(ats(e2, n2)), λ q _ => Sel::Apart(tys, strs, Steps::sels(s2.unsteps(e1.at), ws2), q),
+            j(sym(ats(e1, n1)), λ q _ => Sel::Apart(tys, strs, q, Steps::sels(s.unsteps(e2.at), ws)), sb(e1, e2, n1, n2, w1, pp, ne)))
+    }
+}
+
+// `cfit` after a push: an old entry's variables moved up one, a new entry's
+// own variable the pushed one.
+theorem CSt::cfit_push(tys: Nat → Type, strs: Strs(tys), s: CSt, cv: CVar, env: REnv(tys), c: Cell(tys), ws, ws2: List<Ix>, cf: CSt::CFit(tys, strs, s, env, ws),
+    pb: (en: VEnt) → Mem(en, s.views) → en.par < s.na + s.nd,
+    new: (en: VEnt) → Mem(en, s.views) → en.lvl = s.na + s.nd → (y0: Var) → s.lvl(y0) = Some(en.par) → (dp, dc: Dyn(tys)) → (REnv::get(tys, env, y0)).v = level2::Plain(dp) →
+        c.v = level2::Plain(dc) → CSt::CFitAt(tys, strs, Steps::sels(s.unsteps(en.at), ws), dp, dc),
+    ats: (en: VEnt) → Mem(en, s.views) → Steps::sels((s.push(cv)).unsteps(en.at), ws2) = Steps::sels(s.unsteps(en.at), ws)):
+    CSt::CFit(tys, strs, s.push(cv), REnv::push(tys, env, c), ws2)
+{
+    let env2 = REnv::push(tys, env, c);
+    λ en mem y z hy hz dp dc cy cz => match s.push_lvl(cv, y, en.par, hy) {
+        Inl(py) => false_elim(Nat::lt_irrefl(en.par, omega(pb(en, mem), py.right))),
+        Inr(ey) => match ey {
+            ⟨y0, py⟩ => {
+                let cy0: ((REnv::get(tys, env, y0)).v = level2::Plain(dp)) =
+                    trans(cong_fn(λ (q: Cell(tys)) => q.v, sym(REnv::get_push_up(tys, env, c, y0))), j(py.left, λ u _ => (REnv::get(tys, env2, u)).v = level2::Plain(dp), cy));
+                j(sym(ats(en, mem)), λ q _ => CSt::CFitAt(tys, strs, q, dp, dc), match s.push_lvl(cv, z, en.lvl, hz) {
+                    Inl(pz) => new(en, mem, pz.right, y0, py.right, dp, dc, cy0, j(pz.left, λ u _ => (REnv::get(tys, env2, u)).v = level2::Plain(dc), cz)),
+                    Inr(ez) => match ez {
+                        ⟨z0, qz⟩ => cf(en, mem, y0, z0, py.right, qz.right, dp, dc, cy0,
+                            trans(cong_fn(λ (q: Cell(tys)) => q.v, sym(REnv::get_push_up(tys, env, c, z0))), j(qz.left, λ u _ => (REnv::get(tys, env2, u)).v = level2::Plain(dc), cz))),
+                    },
+                })
+            },
+        },
+    }
+}
+
 // The invariant after a binding of a plain value, nothing pending (its
 // cell's ownership flag is any: a plain value owns no block).
 theorem Inv::push_plain(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: Nat → Bool}, inv: Inv(tys, strs, s, e, m, h0, lent),
@@ -1936,6 +2021,8 @@ theorem Inv::push_plain(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(ty
     let ch: ((o: Nat) → s2.Changes(o) → s.Changes(o)) = λ o h1 => s.changes_push(cv, o, λ a e _ => absurd(e), h1);
     let regs: ((en: VEnt) → Mem(en, s.views) → Steps::sels(s2.unsteps(en.reg), ws2) = Steps::sels(s.unsteps(en.reg), ws)) = λ en mem =>
         CSt::sels_keep(en.reg, s2, ws2, s, ws, λ l2 m2l => CSt::ixs_push(tys, strs, s, cv, m, c, sim0.margs, l2, (inv.words(l2, s.region_lvl(en, mem, l2, m2l))).left));
+    let ats: ((en: VEnt) → Mem(en, s.views) → Steps::sels(s2.unsteps(en.at), ws2) = Steps::sels(s.unsteps(en.at), ws)) = λ en mem =>
+        CSt::sels_keep(en.at, s2, ws2, s, ws, λ l2 m2l => CSt::ixs_push(tys, strs, s, cv, m, c, sim0.margs, l2, (inv.words(l2, s.at_lvl(en, mem, l2, m2l))).left));
     Inv(sim2, inv.root,
         λ x l h r cr => match s.push_lvl(cv, x, l, h) {
             Inl(nw) => {
@@ -1997,7 +2084,10 @@ theorem Inv::push_plain(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(ty
         CSt::excl_keep(tys, strs, s, s2, ws, ws2, refl, omega(), λ en mem => (inv.chain(en, mem)).left, λ en mem => (inv.vents(en, mem)).right.left, regs, inv.excl),
         λ en mem w => CSt::wpar_keep(s, s2, en, s.role_push(cv, en.par, omega((inv.chain(en, mem)).left, (inv.vents(en, mem)).right.left)), refl, inv.wpar(en, mem, w)),
         CSt::uni_push(tys, s, cv, m.env, c, inv.uni, λ en mem => omega((inv.chain(en, mem)).left, (inv.vents(en, mem)).right.left),
-            λ en mem at => false_elim(Nat::lt_irrefl(en.lvl, omega((inv.vents(en, mem)).right.left, at)))), inv.pone)
+            λ en mem at => false_elim(Nat::lt_irrefl(en.lvl, omega((inv.vents(en, mem)).right.left, at)))), inv.pone,
+        CSt::cfit_push(tys, strs, s, cv, m.env, c, ws, ws2, inv.cfit, λ en mem => omega((inv.chain(en, mem)).left, (inv.vents(en, mem)).right.left),
+            λ en mem at => false_elim(Nat::lt_irrefl(en.lvl, omega((inv.vents(en, mem)).right.left, at))), ats),
+        CSt::sib_keep(tys, strs, s, s2, ws, ws2, refl, ats, inv.sib))
 }
 
 // ---------------------------------------------------------------------------
@@ -2229,6 +2319,8 @@ theorem Inv::fresh(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, 
     let ch: ((o: Nat) → ¬(o = s.nobj) → s2.Changes(o) → s.Changes(o)) = λ o ne h1 => s.changes_push(cv, o, λ a e _ => ne(sym(cong_fn(Role::held, e))), h1);
     let regs: ((en: VEnt) → Mem(en, s.views) → Steps::sels(s2.unsteps(en.reg), ws2) = Steps::sels(s.unsteps(en.reg), ws)) = λ en mem =>
         CSt::sels_keep(en.reg, s2, ws2, s, ws, λ l2 m2l => words2(l2, s.region_lvl(en, mem, l2, m2l)));
+    let ats: ((en: VEnt) → Mem(en, s.views) → Steps::sels(s2.unsteps(en.at), ws2) = Steps::sels(s.unsteps(en.at), ws)) = λ en mem =>
+        CSt::sels_keep(en.at, s2, ws2, s, ws, λ l2 m2l => words2(l2, s.at_lvl(en, mem, l2, m2l)));
     let new_block: ((o: Nat) → (r: Ref) → inv.root(o) = Some(r) → ¬(r.b = hb)) = λ o r hr eb => Nat::lt_irrefl(hb, j(eb, λ q _ => q < hb, inv.inheap(o, r, hr)));
     Inv(sim2, root2,
         λ y l h r cr => match s.push_lvl(cv, y, l, h) {
@@ -2365,7 +2457,10 @@ theorem Inv::fresh(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, 
         CSt::excl_keep(tys, strs, s, s2, ws, ws2, refl, omega(), λ en mem => (inv.chain(en, mem)).left, λ en mem => (inv.vents(en, mem)).right.left, regs, inv.excl),
         λ en mem w => CSt::wpar_keep(s, s2, en, s.role_push(cv, en.par, omega((inv.chain(en, mem)).left, (inv.vents(en, mem)).right.left)), refl, inv.wpar(en, mem, w)),
         CSt::uni_push(tys, s, cv, m.env, cn, inv.uni, λ en mem => omega((inv.chain(en, mem)).left, (inv.vents(en, mem)).right.left),
-            λ en mem at => false_elim(Nat::lt_irrefl(en.lvl, omega((inv.vents(en, mem)).right.left, at)))), inv.pone)
+            λ en mem at => false_elim(Nat::lt_irrefl(en.lvl, omega((inv.vents(en, mem)).right.left, at)))), inv.pone,
+        CSt::cfit_push(tys, strs, s, cv, m.env, cn, ws, ws2, inv.cfit, λ en mem => omega((inv.chain(en, mem)).left, (inv.vents(en, mem)).right.left),
+            λ en mem at => false_elim(Nat::lt_irrefl(en.lvl, omega((inv.vents(en, mem)).right.left, at))), ats),
+        CSt::sib_keep(tys, strs, s, s2, ws, ws2, refl, ats, inv.sib))
 }
 
 // A value read at its own code is there.
@@ -2563,7 +2658,7 @@ theorem Inv::gone(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {
             ⟨cc.left, CSt::parent_keep(s, s2, en, other(en.par, pb, nopar(en, mem)), refl, cc.right)⟩
         },
         inv.excl,
-        λ en mem w => CSt::wpar_keep(s, s2, en, other(en.par, omega((inv.chain(en, mem)).left, (inv.vents(en, mem)).right.left), nopar(en, mem)), refl, inv.wpar(en, mem, w)), inv.uni, inv.pone)
+        λ en mem w => CSt::wpar_keep(s, s2, en, other(en.par, omega((inv.chain(en, mem)).left, (inv.vents(en, mem)).right.left), nopar(en, mem)), refl, inv.wpar(en, mem, w)), inv.uni, inv.pone, inv.cfit, inv.sib)
 }
 
 // ---------------------------------------------------------------------------
@@ -2715,6 +2810,14 @@ theorem Inv::kill(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {
             let pl2: ((s2.role(l2)).plain() = True) = trans(cong_fn(λ (q: Role) => q.plain(), s.role_set_other(l, l2, KGone, ne, b, rl.left)), rl.right);
             trans(Sim::lvl_ix(tys, strs, sim2, l2, rl.left, pl2), sym(Sim::lvl_ix(tys, strs, sim0, l2, rl.left, rl.right)))
         });
+    let ats: ((en: VEnt) → Mem(en, s.views) → Steps::sels(s2.unsteps(en.at), ws2) = Steps::sels(s2.unsteps(en.at), ws)) = λ en mem =>
+        CSt::sels_keep(en.at, s2, ws2, s2, ws, λ l2 m2l => {
+            let w = s.at_lvl(en, mem, l2, m2l);
+            let rl = inv.words(l2, w);
+            let ne: ¬(l2 = l) = λ eq => absurd(trans(sym(hf.left), j(eq, λ q _ => s.in_regions(q) = True, w)));
+            let pl2: ((s2.role(l2)).plain() = True) = trans(cong_fn(λ (q: Role) => q.plain(), s.role_set_other(l, l2, KGone, ne, b, rl.left)), rl.right);
+            trans(Sim::lvl_ix(tys, strs, sim2, l2, rl.left, pl2), sym(Sim::lvl_ix(tys, strs, sim0, l2, rl.left, rl.right)))
+        });
     let killed: ((b2: Nat) → ¬(b2 = r.b) → Heap::obj(tys, h2, b2) = Heap::obj(tys, m.heap, b2)) = λ b2 ne => Heap::obj_kill_other(tys, m.heap, r.b, b2, ne);
     let dead: ((ob: Obj(tys)) → Heap::obj(tys, h2, r.b) = Some(ob) → False) = λ ob h1 => {
         let n0: (h2.nth(r.b) = Some(Dead) ∨ h2.nth(r.b) = None) = match m.heap.nth(r.b) as λ q => m.heap.nth(r.b) = q → (h2.nth(r.b) = Some(Dead) ∨ h2.nth(r.b) = None) {
@@ -2752,7 +2855,8 @@ theorem Inv::kill(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {
             Inr(ne) => inv.bare(o2, r2, h1, ob, trans(sym(killed(r2.b, ne)), hob)),
         },
         ig.chain,
-        CSt::excl_keep(tys, strs, s2, s2, ws, ws2, refl, omega(), λ en mem => (ig.chain(en, mem)).left, λ en mem => (ig.vents(en, mem)).right.left, regs, ig.excl), ig.wpar, ig.uni, ig.pone)
+        CSt::excl_keep(tys, strs, s2, s2, ws, ws2, refl, omega(), λ en mem => (ig.chain(en, mem)).left, λ en mem => (ig.vents(en, mem)).right.left, regs, ig.excl), ig.wpar, ig.uni, ig.pone,
+        CSt::cfit_ws(tys, strs, s2, m.env, ws, ws2, ats, ig.cfit), CSt::sib_keep(tys, strs, s2, s2, ws, ws2, refl, ats, ig.sib))
 }
 
 // ---------------------------------------------------------------------------
@@ -2897,6 +3001,8 @@ theorem Inv::push_hold(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys
     let rolen: (s2.role(s.na + s.nd) = KHold(o, a)) = cong_fn(λ (v: CVar) => v.role, s.var_pushed(cv));
     let regs: ((en: VEnt) → Mem(en, s.views) → Steps::sels(s2.unsteps(en.reg), ws2) = Steps::sels(s.unsteps(en.reg), ws)) = λ en mem =>
         CSt::sels_keep(en.reg, s2, ws2, s, ws, λ l2 m2l => CSt::ixs_push(tys, strs, s, cv, m, c, sim0.margs, l2, (inv.words(l2, s.region_lvl(en, mem, l2, m2l))).left));
+    let ats: ((en: VEnt) → Mem(en, s.views) → Steps::sels(s2.unsteps(en.at), ws2) = Steps::sels(s.unsteps(en.at), ws)) = λ en mem =>
+        CSt::sels_keep(en.at, s2, ws2, s, ws, λ l2 m2l => CSt::ixs_push(tys, strs, s, cv, m, c, sim0.margs, l2, (inv.words(l2, s.at_lvl(en, mem, l2, m2l))).left));
     let newrole = λ (l: Nat) (at: l = s.na + s.nd) => j(sym(at), λ q _ => s2.role(q) = KHold(o, a), rolen);
     Inv(sim2, inv.root,
         λ x l h r cr => match s.push_lvl(cv, x, l, h) {
@@ -2977,7 +3083,10 @@ theorem Inv::push_hold(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys
         CSt::excl_keep(tys, strs, s, s2, ws, ws2, refl, omega(), λ en mem => (inv.chain(en, mem)).left, λ en mem => (inv.vents(en, mem)).right.left, regs, inv.excl),
         λ en mem w => CSt::wpar_keep(s, s2, en, s.role_push(cv, en.par, omega((inv.chain(en, mem)).left, (inv.vents(en, mem)).right.left)), refl, inv.wpar(en, mem, w)),
         CSt::uni_push(tys, s, cv, m.env, c, inv.uni, λ en mem => omega((inv.chain(en, mem)).left, (inv.vents(en, mem)).right.left),
-            λ en mem at => false_elim(Nat::lt_irrefl(en.lvl, omega((inv.vents(en, mem)).right.left, at)))), inv.pone)
+            λ en mem at => false_elim(Nat::lt_irrefl(en.lvl, omega((inv.vents(en, mem)).right.left, at)))), inv.pone,
+        CSt::cfit_push(tys, strs, s, cv, m.env, c, ws, ws2, inv.cfit, λ en mem => omega((inv.chain(en, mem)).left, (inv.vents(en, mem)).right.left),
+            λ en mem at => false_elim(Nat::lt_irrefl(en.lvl, omega((inv.vents(en, mem)).right.left, at))), ats),
+        CSt::sib_keep(tys, strs, s, s2, ws, ws2, refl, ats, inv.sib))
 }
 
 // ---------------------------------------------------------------------------
@@ -3352,56 +3461,61 @@ theorem Steps::apart_sels(tys: Nat → Type, strs: Strs(tys), ws: List<Ix>, xs, 
 }
 
 // One live entry against one place of its object: what the licence owes,
-// holding at the meaning's words, gives their selections apart.
+// holding at the meaning's words, gives their selections apart; and where the
+// entry's region and the place share a prefix, the parts after it, the
+// decider walking a common prefix as it is (`Steps::apart_prefix`).
 theorem CSt::against_sound(self s: CSt, tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(tys, cx.strs), env: Env(tys), en: VEnt, pl: Pl, rs: List<Residual>,
-    ok: s.against(en, pl) = Some(rs), hold: Residual::All(rs, tys, cx, env, True), same: en.obj = pl.obj,
-    r1: s.InRange(Steps::lvls(en.reg)), r2: s.InRange(Steps::lvls(pl.at))):
-    Sel::Apart(tys, cx.strs, Steps::sels(s.unsteps(en.reg), Env::ixs(tys, env)), Steps::sels(s.unsteps(pl.at), Env::ixs(tys, env)))
+    ok: s.against(en, pl) = Some(rs), hold: Residual::All(rs, tys, cx, env, True), same: en.obj = pl.obj, pre, xa, xb: List<Step>, ea: en.reg = pre ++ xa, eb: pl.at = pre ++ xb,
+    r1: s.InRange(Steps::lvls(xa)), r2: s.InRange(Steps::lvls(xb))):
+    Sel::Apart(tys, cx.strs, Steps::sels(s.unsteps(xa), Env::ixs(tys, env)), Steps::sels(s.unsteps(xb), Env::ixs(tys, env)))
 {
     let w = Env::ixs(tys, env);
-    let ok1: (Steps::apart(en.reg, pl.at).and_then(λ os => s.owed_all(os)) = Some(rs)) =
+    let ok0: (Steps::apart(en.reg, pl.at).and_then(λ os => s.owed_all(os)) = Some(rs)) =
         j(j(same, λ q _ => en.obj.same(q) = True, en.obj.same_self()), λ c _ => (match c { False => Some(Nil<Residual>), True => Steps::apart(en.reg, pl.at).and_then(λ os => s.owed_all(os)) }) = Some(rs), ok);
-    let p = Option::and_then_some(Steps::apart(en.reg, pl.at), λ os => s.owed_all(os), rs, ok1);
+    let dec: (Steps::apart(en.reg, pl.at) = Steps::apart(xa, xb)) =
+        trans(cong_fn(λ (q: List<Step>) => Steps::apart(q, pl.at), ea), trans(cong_fn(λ (q: List<Step>) => Steps::apart(pre ++ xa, q), eb), Steps::apart_prefix(pre, xa, xb)));
+    let ok1: (Steps::apart(xa, xb).and_then(λ os => s.owed_all(os)) = Some(rs)) = j(dec, λ q _ => q.and_then(λ os => s.owed_all(os)) = Some(rs), ok0);
+    let p = Option::and_then_some(Steps::apart(xa, xb), λ os => s.owed_all(os), rs, ok1);
     let os = p.witness;
-    let un: (Steps::apart(s.unsteps(en.reg), s.unsteps(pl.at)) = Some(os.map(λ o => s.unobl(o)))) =
-        trans(CSt::unsteps_apart(en.reg, s, pl.at, r1, r2), cong_fn(λ (q: Option<List<Obligation>>) => s.unobls(q), p.proof.left));
+    let un: (Steps::apart(s.unsteps(xa), s.unsteps(xb)) = Some(os.map(λ o => s.unobl(o)))) =
+        trans(CSt::unsteps_apart(xa, s, xb, r1, r2), cong_fn(λ (q: Option<List<Obligation>>) => s.unobls(q), p.proof.left));
     let oh = CSt::owed_holds(os, s, tys, cx, env, rs, p.proof.right, hold);
-    Steps::apart_sels(tys, cx.strs, w, s.unsteps(en.reg), s.unsteps(pl.at),
-        Steps::apart_sound(Dyn::model(tys, cx.strs), Dyn::model_laws(tys, cx.strs, sl), w, s.unsteps(en.reg), s.unsteps(pl.at), os.map(λ o => s.unobl(o)), un, oh),
-        Steps::apart_fit(Dyn::model(tys, cx.strs), Dyn::model_laws(tys, cx.strs, sl), w, s.unsteps(en.reg), s.unsteps(pl.at), os.map(λ o => s.unobl(o)), un, oh))
+    Steps::apart_sels(tys, cx.strs, w, s.unsteps(xa), s.unsteps(xb),
+        Steps::apart_sound(Dyn::model(tys, cx.strs), Dyn::model_laws(tys, cx.strs, sl), w, s.unsteps(xa), s.unsteps(xb), os.map(λ o => s.unobl(o)), un, oh),
+        Steps::apart_fit(Dyn::model(tys, cx.strs), Dyn::model_laws(tys, cx.strs, sl), w, s.unsteps(xa), s.unsteps(xb), os.map(λ o => s.unobl(o)), un, oh))
 }
 
 theorem CSt::against_all_sound(self ps: List<Pl>, s: CSt, tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(tys, cx.strs), env: Env(tys), en: VEnt): (rs: List<Residual>) →
     s.against_all(en, ps) = Some(rs) → Residual::All(rs, tys, cx, env, True) → (pl: Pl) → Mem(pl, ps) → en.obj = pl.obj →
-    s.InRange(Steps::lvls(en.reg)) → s.InRange(Steps::lvls(pl.at)) →
-    Sel::Apart(tys, cx.strs, Steps::sels(s.unsteps(en.reg), Env::ixs(tys, env)), Steps::sels(s.unsteps(pl.at), Env::ixs(tys, env)))
+    (pre, xa, xb: List<Step>) → en.reg = pre ++ xa → pl.at = pre ++ xb → s.InRange(Steps::lvls(xa)) → s.InRange(Steps::lvls(xb)) →
+    Sel::Apart(tys, cx.strs, Steps::sels(s.unsteps(xa), Env::ixs(tys, env)), Steps::sels(s.unsteps(xb), Env::ixs(tys, env)))
 {
     match ps {
         Nil => λ rs _ _ pl m => false_elim(m),
-        Cons(p0, rest) => λ rs ok hold pl m same r1 r2 => {
+        Cons(p0, rest) => λ rs ok hold pl m same pre xa xb ea eb r1 r2 => {
             let a1 = Option::and_then_some(s.against(en, p0), λ q1 => s.against_all(en, rest).map(λ q2 => q1 ++ q2), rs, ok);
             let a2 = Option::map_some_inv(s.against_all(en, rest), λ (q2: List<Residual>) => a1.witness ++ q2, rs, a1.proof.right);
             let sp = Residual::all_app(tys, cx, env, True, a1.witness, a2.witness, j(sym(a2.proof.right), λ q _ => Residual::All(q, tys, cx, env, True), hold));
             match m {
-                Inl(e0) => j(sym(e0), λ q _ => Sel::Apart(tys, cx.strs, Steps::sels(s.unsteps(en.reg), Env::ixs(tys, env)), Steps::sels(s.unsteps(q.at), Env::ixs(tys, env))),
-                    s.against_sound(tys, cx, sl, env, en, p0, a1.witness, a1.proof.left, sp.left, trans(same, cong_fn(λ (q: Pl) => q.obj, e0)), r1,
-                        j(e0, λ q _ => s.InRange(Steps::lvls(q.at)), r2))),
-                Inr(m2) => CSt::against_all_sound(rest, s, tys, cx, sl, env, en, a2.witness, a2.proof.left, sp.right, pl, m2, same, r1, r2),
+                Inl(e0) => s.against_sound(tys, cx, sl, env, en, p0, a1.witness, a1.proof.left, sp.left, trans(same, cong_fn(λ (q: Pl) => q.obj, e0)), pre, xa, xb, ea,
+                    trans(cong_fn(λ (q: Pl) => q.at, sym(e0)), eb), r1, r2),
+                Inr(m2) => CSt::against_all_sound(rest, s, tys, cx, sl, env, en, a2.witness, a2.proof.left, sp.right, pl, m2, same, pre, xa, xb, ea, eb, r1, r2),
             }
         },
     }
 }
 
 // The licence's verdict and its residuals: every live entry it meets is
-// apart from every place of its object.
+// apart from every place of its object, and after a prefix they share, the
+// parts after it.
 theorem CSt::license_sound(self vs: List<VEnt>, s: CSt, tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(tys, cx.strs), env: Env(tys), md: Mode, l: Nat, ps: List<Pl>): (rs: List<Residual>) →
     s.license(vs, md, l, ps) = Some(rs) → Residual::All(rs, tys, cx, env, True) → (en: VEnt) → Mem(en, vs) → s.meets(l, md, en) = True → (pl: Pl) → Mem(pl, ps) → en.obj = pl.obj →
-    s.InRange(Steps::lvls(en.reg)) → s.InRange(Steps::lvls(pl.at)) →
-    Sel::Apart(tys, cx.strs, Steps::sels(s.unsteps(en.reg), Env::ixs(tys, env)), Steps::sels(s.unsteps(pl.at), Env::ixs(tys, env)))
+    (pre, xa, xb: List<Step>) → en.reg = pre ++ xa → pl.at = pre ++ xb → s.InRange(Steps::lvls(xa)) → s.InRange(Steps::lvls(xb)) →
+    Sel::Apart(tys, cx.strs, Steps::sels(s.unsteps(xa), Env::ixs(tys, env)), Steps::sels(s.unsteps(xb), Env::ixs(tys, env)))
 {
     match vs {
         Nil => λ rs _ _ en m => false_elim(m),
-        Cons(e0, rest) => λ rs ok hold en m mt pl mp same r1 r2 => {
+        Cons(e0, rest) => λ rs ok hold en m mt pl mp same pre xa xb ea eb r1 r2 => {
             let here = match s.meets(l, md, e0) { True => s.against_all(e0, ps), False => Some(Nil<Residual>) };
             let a1 = Option::and_then_some(here, λ q1 => s.license(rest, md, l, ps).map(λ q2 => q1 ++ q2), rs, ok);
             let a2 = Option::map_some_inv(s.license(rest, md, l, ps), λ (q2: List<Residual>) => a1.witness ++ q2, rs, a1.proof.right);
@@ -3410,11 +3524,10 @@ theorem CSt::license_sound(self vs: List<VEnt>, s: CSt, tys: Nat → Type, cx: C
                 Inl(e1) => {
                     let mt0: (s.meets(l, md, e0) = True) = j(e1, λ q _ => s.meets(l, md, q) = True, mt);
                     let h0: (s.against_all(e0, ps) = Some(a1.witness)) = j(mt0, λ c _ => (match c { True => s.against_all(e0, ps), False => Some(Nil<Residual>) }) = Some(a1.witness), a1.proof.left);
-                    j(sym(e1), λ q _ => Sel::Apart(tys, cx.strs, Steps::sels(s.unsteps(q.reg), Env::ixs(tys, env)), Steps::sels(s.unsteps(pl.at), Env::ixs(tys, env))),
-                        CSt::against_all_sound(ps, s, tys, cx, sl, env, e0, a1.witness, h0, sp.left, pl, mp, trans(cong_fn(λ (q: VEnt) => q.obj, sym(e1)), same),
-                            j(e1, λ q _ => s.InRange(Steps::lvls(q.reg)), r1), r2))
+                    CSt::against_all_sound(ps, s, tys, cx, sl, env, e0, a1.witness, h0, sp.left, pl, mp, trans(cong_fn(λ (q: VEnt) => q.obj, sym(e1)), same),
+                        pre, xa, xb, trans(cong_fn(λ (q: VEnt) => q.reg, sym(e1)), ea), eb, r1, r2)
                 },
-                Inr(m2) => CSt::license_sound(rest, s, tys, cx, sl, env, md, l, ps, a2.witness, a2.proof.left, sp.right, en, m2, mt, pl, mp, same, r1, r2),
+                Inr(m2) => CSt::license_sound(rest, s, tys, cx, sl, env, md, l, ps, a2.witness, a2.proof.left, sp.right, en, m2, mt, pl, mp, same, pre, xa, xb, ea, eb, r1, r2),
             }
         },
     }
@@ -3525,7 +3638,13 @@ theorem Inv::push_view(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys
     nx1: (e1, e2: VEnt) → Mem(e1, ne) → Mem(e2, s.views) → e1.mode.writes() = True → e1.obj = e2.obj → e2.lvl.member(s.anc_of(e1, s.na + s.nd)) = False →
         Sel::Apart(tys, strs, Steps::sels(s.unsteps(e1.reg), Mach::ixs(tys, strs, m)), Steps::sels(s.unsteps(e2.reg), Mach::ixs(tys, strs, m))),
     nx2: (e1, e2: VEnt) → Mem(e1, s.views) → Mem(e2, ne) → e1.mode.writes() = True → e1.obj = e2.obj → e1.lvl.member(s.anc_of(e2, s.na + s.nd)) = False →
-        Sel::Apart(tys, strs, Steps::sels(s.unsteps(e1.reg), Mach::ixs(tys, strs, m)), Steps::sels(s.unsteps(e2.reg), Mach::ixs(tys, strs, m)))):
+        Sel::Apart(tys, strs, Steps::sels(s.unsteps(e1.reg), Mach::ixs(tys, strs, m)), Steps::sels(s.unsteps(e2.reg), Mach::ixs(tys, strs, m))),
+    ncfit: (en: VEnt) → Mem(en, ne) → (y0: Var) → s.lvl(y0) = Some(en.par) → (dp, dc: Dyn(tys)) → (REnv::get(tys, m.env, y0)).v = level2::Plain(dp) → c.v = level2::Plain(dc) →
+        CSt::CFitAt(tys, strs, Steps::sels(s.unsteps(en.at), Mach::ixs(tys, strs, m)), dp, dc),
+    nsib1: (e1, e2: VEnt) → Mem(e1, ne) → Mem(e2, s.views) → e1.mode.writes() = True → e1.par = e2.par →
+        Sel::Apart(tys, strs, Steps::sels(s.unsteps(e1.at), Mach::ixs(tys, strs, m)), Steps::sels(s.unsteps(e2.at), Mach::ixs(tys, strs, m))),
+    nsib2: (e1, e2: VEnt) → Mem(e1, s.views) → Mem(e2, ne) → e1.mode.writes() = True → e1.par = e2.par →
+        Sel::Apart(tys, strs, Steps::sels(s.unsteps(e1.at), Mach::ixs(tys, strs, m)), Steps::sels(s.unsteps(e2.at), Mach::ixs(tys, strs, m)))):
     Inv(tys, strs, s.with_view(ne, code), Env::push(tys, e, d), Mach::push(tys, m, c), h0, lent)
 {
     let cv = CVar(code, KView);
@@ -3571,6 +3690,29 @@ theorem Inv::push_view(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys
                 Inr(mo) => Inr(Exists(en, ⟨mo, pe.right⟩)),
             },
         },
+    };
+    let aall: ((en: VEnt) → Mem(en, ne ++ s.views) → (l: Nat) → l.member(Steps::lvls(en.at)) = True → l < nl) = λ en mem l ml => match ne.mem_append(s.views, en, mem) {
+        Inl(mn) => (nwords(en, mn, l, j(sym(ml), λ q _ => (l.member(Steps::lvls(en.reg)) || q) = True, Bool::or_true_right(l.member(Steps::lvls(en.reg)))))).left,
+        Inr(mo) => (inv.words(l, s.at_lvl(en, mo, l, ml))).left,
+    };
+    let ats: ((en: VEnt) → Mem(en, ne ++ s.views) → Steps::sels(s2.unsteps(en.at), ws2) = Steps::sels(s.unsteps(en.at), ws)) = λ en mem => wsel(en.at, aall(en, mem));
+    let cfv: CSt::CFit(tys, strs, sv, m.env, ws) = λ en mem y z hy hz dp dc cy cz => match ne.mem_append(s.views, en, mem) {
+        Inl(mn) => false_elim(Nat::lt_irrefl(nl, j(nlvl(en, mn), λ q _ => q < nl, s.lvl_below(z, en.lvl, hz)))),
+        Inr(mo) => inv.cfit(en, mo, y, z, hy, hz, dp, dc, cy, cz),
+    };
+    let sib2: CSt::Sib(tys, strs, s2, ws2) = λ e1 e2b m1 m2b w1 pp n12 => {
+        let ap: Sel::Apart(tys, strs, Steps::sels(s.unsteps(e1.at), ws), Steps::sels(s.unsteps(e2b.at), ws)) = match ne.mem_append(s.views, e1, m1) {
+            Inl(n1) => match ne.mem_append(s.views, e2b, m2b) {
+                Inl(n2) => false_elim(n12(trans(nlvl(e1, n1), sym(nlvl(e2b, n2))))),
+                Inr(o2) => nsib1(e1, e2b, n1, o2, w1, pp),
+            },
+            Inr(o1) => match ne.mem_append(s.views, e2b, m2b) {
+                Inl(n2) => nsib2(e1, e2b, o1, n2, w1, pp),
+                Inr(o2) => inv.sib(e1, e2b, o1, o2, w1, pp, n12),
+            },
+        };
+        j(sym(ats(e2b, m2b)), λ q _ => Sel::Apart(tys, strs, Steps::sels(s2.unsteps(e1.at), ws2), q),
+            j(sym(ats(e1, m1)), λ q _ => Sel::Apart(tys, strs, q, Steps::sels(s.unsteps(e2b.at), ws)), ap))
     };
     let anc2: ((en: VEnt) → en.par < nl → s2.anc_of(en, s2.na + s2.nd) = s.anc_of(en, nl)) =
         λ en pb => trans(CSt::anc_ext(nl + 1, s, s2, eold, lt, lv, en, pb), CSt::anc_one(nl, s, lt, en, pb));
@@ -3682,7 +3824,13 @@ theorem Inv::push_view(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys
                 Inl(mn) => nuni(en, mn, y0, hy),
                 Inr(mo) => false_elim(Nat::lt_irrefl(en.lvl, omega(lv(en, mo), at))),
             }),
-        s2.pone_none(pend))
+        s2.pone_none(pend),
+        CSt::cfit_push(tys, strs, sv, cv, m.env, c, ws, ws2, cfv, pall,
+            λ en mem at y0 hy dp dc cy cc => match ne.mem_append(s.views, en, mem) {
+                Inl(mn) => ncfit(en, mn, y0, hy, dp, dc, cy, cc),
+                Inr(mo) => false_elim(Nat::lt_irrefl(en.lvl, omega(lv(en, mo), at))),
+            }, ats),
+        sib2)
 }
 
 // ---------------------------------------------------------------------------
@@ -3939,6 +4087,20 @@ theorem Stmt::view_reads(tys: Nat → Type, strs: Strs(tys), h: Heap(tys), v: Va
     })(at)
 }
 
+// A copy opened at a place of a copy: the place fits the parent's copy, and
+// the new copy is what it reads there.
+theorem Stmt::view_cfit(tys: Nat → Type, strs: Strs(tys), h: Heap(tys), v: Value(tys), d: Dyn(tys), ws: List<Ix>, xs: List<Step>, at: Value::get(tys, strs, h, v, Steps::sels(xs, ws)) = Some(d),
+    dp, dc: Dyn(tys), cv: v = level2::Plain(dp), cc: (Cell::view_of(tys, v, d, ws, xs)).v = level2::Plain(dc)): CSt::CFitAt(tys, strs, Steps::sels(xs, ws), dp, dc)
+{
+    let ss = Steps::sels(xs, ws);
+    let at2: (Sel::get(tys, strs, ss, dp) = Some(d)) = j(cv, λ u _ => Value::get(tys, strs, h, u, ss) = Some(d), at);
+    let gp = Sel::get_parts(tys, strs, ss, dp, d, at2);
+    let cc2: (level2::Plain(d) = level2::Plain(dc)) = j(cv, λ u _ => (Cell::view_of(tys, u, d, ws, xs)).v = level2::Plain(dc), cc);
+    let dd: (d = dc) = cong_fn(λ (u: Value(tys)) => match u { Plain(q) => q, Refer(_) => d }, cc2);
+    j(dd, λ q _ => CSt::CFitAt(tys, strs, ss, dp, q),
+        ⟨gp.left, ⟨cong_fn(λ (q: Dyn(tys)) => q.code, sym(gp.right)), cong_fn(λ (q: Dyn(tys)) => Dyn::len(tys, strs, q), sym(gp.right))⟩⟩)
+}
+
 // The view stage, once the new entries' facts are in hand: the run binds the
 // root's reference narrowed (or a copy of a plain root's value), and the
 // invariant holds with the new entries.
@@ -3958,7 +4120,12 @@ theorem Stmt::stage_view_core(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(tys,
     nx1: (e1, e2: VEnt) → Mem(e1, ne) → Mem(e2, s.views) → e1.mode.writes() = True → e1.obj = e2.obj → e2.lvl.member(s.anc_of(e1, s.na + s.nd)) = False →
         Sel::Apart(tys, cx.strs, Steps::sels(s.unsteps(e1.reg), Mach::ixs(tys, cx.strs, m)), Steps::sels(s.unsteps(e2.reg), Mach::ixs(tys, cx.strs, m))),
     nx2: (e1, e2: VEnt) → Mem(e1, s.views) → Mem(e2, ne) → e1.mode.writes() = True → e1.obj = e2.obj → e1.lvl.member(s.anc_of(e2, s.na + s.nd)) = False →
-        Sel::Apart(tys, cx.strs, Steps::sels(s.unsteps(e1.reg), Mach::ixs(tys, cx.strs, m)), Steps::sels(s.unsteps(e2.reg), Mach::ixs(tys, cx.strs, m)))):
+        Sel::Apart(tys, cx.strs, Steps::sels(s.unsteps(e1.reg), Mach::ixs(tys, cx.strs, m)), Steps::sels(s.unsteps(e2.reg), Mach::ixs(tys, cx.strs, m))),
+    nat: (en: VEnt) → Mem(en, ne) → s.unsteps(en.at) = p.steps,
+    nsib1: (e1, e2: VEnt) → Mem(e1, ne) → Mem(e2, s.views) → e1.mode.writes() = True → e1.par = e2.par →
+        Sel::Apart(tys, cx.strs, Steps::sels(s.unsteps(e1.at), Mach::ixs(tys, cx.strs, m)), Steps::sels(s.unsteps(e2.at), Mach::ixs(tys, cx.strs, m))),
+    nsib2: (e1, e2: VEnt) → Mem(e1, s.views) → Mem(e2, ne) → e1.mode.writes() = True → e1.par = e2.par →
+        Sel::Apart(tys, cx.strs, Steps::sels(s.unsteps(e1.at), Mach::ixs(tys, cx.strs, m)), Steps::sels(s.unsteps(e2.at), Mach::ixs(tys, cx.strs, m)))):
     Stepped(tys, cx.strs, fns, call, View(p, md), s.with_view(ne, g.code), Env::push(tys, e, p.val(tys, cx.strs, e)), m, h0, lent)
 {
     let strs = cx.strs;
@@ -3983,8 +4150,14 @@ theorem Stmt::stage_view_core(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(tys,
         let yr: (y0 = p.root) = trans(sym(s.lvl_var(y0, en.par, hy)), trans(cong_fn(λ (q: Nat) => s.var_at(q), npar(en, mem)), s.lvl_var(p.root, g.root, hroot)));
         j(sym(yr), λ z _ => Value::refers(tys, c.v) = Value::refers(tys, (REnv::get(tys, m.env, z)).v), Value::refers_view(tys, (REnv::get(tys, m.env, p.root)).v, d, ws, p.steps))
     };
+    let ncfit: ((en: VEnt) → Mem(en, ne) → (y0: Var) → s.lvl(y0) = Some(en.par) → (dp, dc: Dyn(tys)) → (REnv::get(tys, m.env, y0)).v = level2::Plain(dp) → c.v = level2::Plain(dc) →
+            CSt::CFitAt(tys, strs, Steps::sels(s.unsteps(en.at), ws), dp, dc)) = λ en mem y0 hy dp dc cy cc => {
+        let yr: (y0 = p.root) = trans(sym(s.lvl_var(y0, en.par, hy)), trans(cong_fn(λ (q: Nat) => s.var_at(q), npar(en, mem)), s.lvl_var(p.root, g.root, hroot)));
+        j(sym(nat(en, mem)), λ q _ => CSt::CFitAt(tys, strs, Steps::sels(q, ws), dp, dc),
+            Stmt::view_cfit(tys, strs, m.heap, (REnv::get(tys, m.env, p.root)).v, d, ws, p.steps, at, dp, dc, j(yr, λ z _ => (REnv::get(tys, m.env, z)).v = level2::Plain(dp), cy), cc))
+    };
     Stepped(Mach::push(tys, m, c), λ k => Stmt::view_runs(tys, strs, fns, call, m, p, md, d, at, k),
-        Inv::push_view(tys, strs, inv, none, g.code, ne, c, d, rd, Sim::place_code(tys, strs, sim, p, g, ok), nown, nlvl, nobj, nchain, nwords, nback, nchg, nwpar, nuni, nref2, nx1, nx2))
+        Inv::push_view(tys, strs, inv, none, g.code, ne, c, d, rd, Sim::place_code(tys, strs, sim, p, g, ok), nown, nlvl, nobj, nchain, nwords, nback, nchg, nwpar, nuni, nref2, nx1, nx2, ncfit, nsib1, nsib2))
 }
 
 theorem List::mem_map_inv<A, B>(self xs: List<A>, f: A → B, b: B): Mem(b, xs.map(f)) → Exists<A>(λ a => Mem(a, xs) ∧ (b = f(a))) {
@@ -4020,19 +4193,30 @@ theorem CSt::read_lic_view(self s: CSt, l: Nat, xs: List<Step>, rl: List<Residua
     j(hr, λ q _ => (match q { KGone => None<List<Residual>>(), _ => s.license(s.views, Reading, l, match q { KHold(o2, _) => [Pl(o2, xs)], KView => (s.ents(l)).map(λ e => Pl(e.obj, e.reg ++ xs)), KPlain => Nil, KGone => Nil }) }) = Some(rl), h)
 }
 
-// What the licence's verdict gives at the run's words.
+// What the licence's verdict gives at the run's words, after a prefix the
+// entry's region and the place share.
+theorem Inv::lic_suffix(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(tys, cx.strs), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: Nat → Bool}, inv: Inv(tys, cx.strs, s, e, m, h0, lent),
+    none: s.pending() = False, md: Mode, l: Nat, ps: List<Pl>, rs: List<Residual>, ok: s.license(s.views, md, l, ps) = Some(rs), hold: Residual::All(rs, tys, cx, e, True),
+    en: VEnt, mem: Mem(en, s.views), mt: s.meets(l, md, en) = True, pl: Pl, mp: Mem(pl, ps), same: en.obj = pl.obj, pre, xa, xb: List<Step>, ea: en.reg = pre ++ xa, eb: pl.at = pre ++ xb,
+    ra: s.InRange(Steps::lvls(xa)), pa: (l2: Nat) → l2.member(Steps::lvls(xa)) = True → (s.role(l2)).plain() = True,
+    rb: s.InRange(Steps::lvls(xb)), pb: (l2: Nat) → l2.member(Steps::lvls(xb)) = True → (s.role(l2)).plain() = True):
+    Sel::Apart(tys, cx.strs, Steps::sels(s.unsteps(xa), Mach::ixs(tys, cx.strs, m)), Steps::sels(s.unsteps(xb), Mach::ixs(tys, cx.strs, m)))
+{
+    let sim = Inv::sim_now(tys, cx.strs, inv, none);
+    let ap = CSt::license_sound(s.views, s, tys, cx, sl, e, md, l, ps, rs, ok, hold, en, mem, mt, pl, mp, same, pre, xa, xb, ea, eb, ra, rb);
+    j(Sim::region_sels(tys, cx.strs, sim, xb, rb, pb), λ q _ => Sel::Apart(tys, cx.strs, Steps::sels(s.unsteps(xa), Mach::ixs(tys, cx.strs, m)), q),
+        j(Sim::region_sels(tys, cx.strs, sim, xa, ra, pa), λ q _ => Sel::Apart(tys, cx.strs, q, Steps::sels(s.unsteps(xb), Env::ixs(tys, e))), ap))
+}
+
+// The same with no prefix: the entry's whole region against the place.
 theorem Inv::lic_apart(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(tys, cx.strs), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: Nat → Bool}, inv: Inv(tys, cx.strs, s, e, m, h0, lent),
     none: s.pending() = False, md: Mode, l: Nat, ps: List<Pl>, rs: List<Residual>, ok: s.license(s.views, md, l, ps) = Some(rs), hold: Residual::All(rs, tys, cx, e, True),
     en: VEnt, mem: Mem(en, s.views), mt: s.meets(l, md, en) = True, pl: Pl, mp: Mem(pl, ps), same: en.obj = pl.obj,
     rp: s.InRange(Steps::lvls(pl.at)), pp: (l2: Nat) → l2.member(Steps::lvls(pl.at)) = True → (s.role(l2)).plain() = True):
     Sel::Apart(tys, cx.strs, Steps::sels(s.unsteps(en.reg), Mach::ixs(tys, cx.strs, m)), Steps::sels(s.unsteps(pl.at), Mach::ixs(tys, cx.strs, m)))
 {
-    let sim = Inv::sim_now(tys, cx.strs, inv, none);
-    let re: s.InRange(Steps::lvls(en.reg)) = λ l2 ml => (inv.words(l2, s.region_lvl(en, mem, l2, ml))).left;
-    let pe: ((l2: Nat) → l2.member(Steps::lvls(en.reg)) = True → (s.role(l2)).plain() = True) = λ l2 ml => (inv.words(l2, s.region_lvl(en, mem, l2, ml))).right;
-    let ap = CSt::license_sound(s.views, s, tys, cx, sl, e, md, l, ps, rs, ok, hold, en, mem, mt, pl, mp, same, re, rp);
-    j(Sim::region_sels(tys, cx.strs, sim, pl.at, rp, pp), λ q _ => Sel::Apart(tys, cx.strs, Steps::sels(s.unsteps(en.reg), Mach::ixs(tys, cx.strs, m)), q),
-        j(Sim::region_sels(tys, cx.strs, sim, en.reg, re, pe), λ q _ => Sel::Apart(tys, cx.strs, q, Steps::sels(s.unsteps(pl.at), Env::ixs(tys, e))), ap))
+    Inv::lic_suffix(tys, cx, sl, inv, none, md, l, ps, rs, ok, hold, en, mem, mt, pl, mp, same, Nil, en.reg, pl.at, refl, refl,
+        λ l2 ml => (inv.words(l2, s.region_lvl(en, mem, l2, ml))).left, λ l2 ml => (inv.words(l2, s.region_lvl(en, mem, l2, ml))).right, rp, pp)
 }
 
 theorem CSt::anc_step(self s: CSt, en: VEnt, k: Nat, ne: ¬(en.par = en.lvl)): s.anc_of(en, Succ(k)) = Cons(en.par, (s.ents(en.par)).foldr(λ (pe: VEnt) (acc: List<Nat>) => s.anc_of(pe, k) ++ acc, Nil)) {
@@ -4084,6 +4268,43 @@ theorem CSt::lvls_app(self s: CSt, xs, ys: List<Step>, P: Nat → Type, hx: (l: 
     λ l m => match l.member_app_or(Steps::lvls(xs), Steps::lvls(ys), j(Steps::lvls_append(xs, ys), λ q _ => l.member(q) = True, m)) { Inl(a) => hx(l, a), Inr(b) => hy(l, b) }
 }
 
+// A live entry under a holder: of its object, its region its place.
+theorem CSt::parent_hold(self s: CSt, en: VEnt, o: Nat, a: Acc, hr: s.role(en.par) = KHold(o, a), p: s.Parent(en)): (o = en.obj) ∧ (en.reg = en.at) {
+    j(hr, λ q _ => match q { KHold(o2, _) => (o2 = en.obj) ∧ (en.reg = en.at), KView => VEnt::Any(s.ents(en.par), λ pe => (pe.obj = en.obj) ∧ (en.reg = pe.reg ++ en.at)),
+        KPlain => False, KGone => False }, p)
+}
+
+// A live entry under a view of one entry: its region that entry's then its
+// place.
+theorem CSt::parent_one(self s: CSt, en, pw: VEnt, hr: s.role(en.par) = KView, eo: s.ents(en.par) = [pw], p: s.Parent(en)): (pw.obj = en.obj) ∧ (en.reg = pw.reg ++ en.at) {
+    let a: VEnt::Any(s.ents(en.par), λ pe => (pe.obj = en.obj) ∧ (en.reg = pe.reg ++ en.at)) =
+        j(hr, λ q _ => match q { KHold(o2, _) => (o2 = en.obj) ∧ (en.reg = en.at), KView => VEnt::Any(s.ents(en.par), λ pe => (pe.obj = en.obj) ∧ (en.reg = pe.reg ++ en.at)),
+            KPlain => False, KGone => False }, p);
+    match j(eo, λ q _ => VEnt::Any(q, λ pe => (pe.obj = en.obj) ∧ (en.reg = pe.reg ++ en.at)), a) { Inl(x) => x, Inr(no) => false_elim(no) }
+}
+
+// An entry's parent is its first ancestor.
+theorem CSt::anc_par(self s: CSt, en: VEnt, lt: en.par < en.lvl, lv: en.lvl < s.na + s.nd): en.par.member(s.anc_of(en, s.na + s.nd)) = True {
+    let k = s.na + s.nd - 1;
+    let kk: (s.na + s.nd = Succ(k)) = omega(lv);
+    let ne: ¬(en.par = en.lvl) = λ eq => Nat::lt_irrefl(en.par, j(sym(eq), λ q _ => en.par < q, lt));
+    let rest = (s.ents(en.par)).foldr(λ (pe: VEnt) (acc: List<Nat>) => s.anc_of(pe, k) ++ acc, Nil);
+    let hd: (en.par.member(Cons(en.par, rest)) = True) = j(sym(en.par.same_self()), λ c _ => (c || en.par.member(rest)) = True, refl);
+    j(sym(trans(cong_fn(λ (q: Nat) => s.anc_of(en, q), kk), s.anc_step(en, k, ne))), λ q _ => en.par.member(q) = True, hd)
+}
+
+// The licence's verdict against a live entry whose region is a prefix then
+// its place, at a place of the same prefix: their places apart.
+theorem Inv::sib_lic(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(tys, cx.strs), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: Nat → Bool}, inv: Inv(tys, cx.strs, s, e, m, h0, lent),
+    none: s.pending() = False, md: Mode, l: Nat, ps: List<Pl>, rs: List<Residual>, ok: s.license(s.views, md, l, ps) = Some(rs), hold: Residual::All(rs, tys, cx, e, True),
+    en: VEnt, mem: Mem(en, s.views), mt: s.meets(l, md, en) = True, pl: Pl, mp: Mem(pl, ps), same: en.obj = pl.obj, pre, xb: List<Step>, ea: en.reg = pre ++ en.at, eb: pl.at = pre ++ xb,
+    rb: s.InRange(Steps::lvls(xb)), pb: (l2: Nat) → l2.member(Steps::lvls(xb)) = True → (s.role(l2)).plain() = True):
+    Sel::Apart(tys, cx.strs, Steps::sels(s.unsteps(en.at), Mach::ixs(tys, cx.strs, m)), Steps::sels(s.unsteps(xb), Mach::ixs(tys, cx.strs, m)))
+{
+    Inv::lic_suffix(tys, cx, sl, inv, none, md, l, ps, rs, ok, hold, en, mem, mt, pl, mp, same, pre, en.at, xb, ea, eb,
+        λ l2 ml => (inv.words(l2, s.at_lvl(en, mem, l2, ml))).left, λ l2 ml => (inv.words(l2, s.at_lvl(en, mem, l2, ml))).right, rb, pb)
+}
+
 // A view to read of a holder.
 theorem Stmt::stage_view_hold_read(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(tys, cx.strs), fns: Nat → Func, call: Caller(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: Nat → Bool},
     inv: Inv(tys, cx.strs, s, e, m, h0, lent), none: s.pending() = False, p: Place, g: Got, ok: s.read(tys, cx.strs, p) = Some(g), o: Nat, a: Acc, hr: s.role(g.root) = KHold(o, a),
@@ -4128,6 +4349,17 @@ theorem Stmt::stage_view_hold_read(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws
             let ap = Inv::lic_apart(tys, cx, sl, inv, none, Reading, l, [Pl(o, g.at)], ri.rl, lic, resl, e1, m1, mt, Pl(o, g.at), Inl(refl),
                 trans(eo, cong_fn(λ (q: VEnt) => q.obj, e2is)), rlv.left, rlv.right);
             j(sym(e2is), λ q _ => Sel::Apart(tys, strs, Steps::sels(s.unsteps(e1.reg), ws), Steps::sels(s.unsteps(q.reg), ws)), ap)
+        },
+        λ en mem => j(sym(VEnt::mem_one(en, en0, mem)), λ q _ => s.unsteps(q.at) = p.steps, unst),
+        λ e1 e2 m1 m2 w => absurd(trans(sym(w), j(sym(VEnt::mem_one(e1, en0, m1)), λ q _ => q.mode.writes() = False, refl))),
+        λ e1 e2 m1 m2 w pp => {
+            let e2is = VEnt::mem_one(e2, en0, m2);
+            let pl1: (e1.par = l) = trans(pp, cong_fn(λ (q: VEnt) => q.par, e2is));
+            let ph = s.parent_hold(e1, o, a, j(sym(pl1), λ q _ => s.role(q) = KHold(o, a), hr), (inv.chain(e1, m1)).right);
+            let ne1: ¬(e1.lvl = l) = λ eq => absurd(trans(sym((inv.vents(e1, m1)).right.right), trans(cong_fn(λ (q: Nat) => s.role(q), eq), hr)));
+            let mt = s.meets_hold(l, Reading, e1, o, a, hr, ne1, j(sym(w), λ c _ => (False || c) = True, refl));
+            let ap = Inv::sib_lic(tys, cx, sl, inv, none, Reading, l, [Pl(o, g.at)], ri.rl, lic, resl, e1, m1, mt, Pl(o, g.at), Inl(refl), sym(ph.left), Nil, g.at, ph.right, refl, rlv.left, rlv.right);
+            j(sym(e2is), λ q _ => Sel::Apart(tys, strs, Steps::sels(s.unsteps(e1.at), ws), Steps::sels(s.unsteps(q.at), ws)), ap)
         })
 }
 
@@ -4212,6 +4444,30 @@ theorem Stmt::stage_view_view_read(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws
                     })(refl);
                 j(sym(goal_reg), λ q _ => Sel::Apart(tys, strs, Steps::sels(s.unsteps(e1.reg), ws), q), ap)
             },
+        },
+        λ en mem => match inv_of(en, mem) { ⟨pe, pp⟩ => j(sym(pp.right), λ q _ => s.unsteps(q.at) = p.steps, unst) },
+        λ e1 e2 m1 m2 w => match inv_of(e1, m1) { ⟨pe, pp⟩ => absurd(trans(sym(w), j(sym(pp.right), λ q _ => q.mode.writes() = False, refl))) },
+        λ e1 e2 m1 m2 w pq => match inv_of(e2, m2) {
+            ⟨pe, pp⟩ => {
+                let pl1: (e1.par = l) = trans(pq, cong_fn(λ (q: VEnt) => q.par, pp.right));
+                let rv: (s.role(e1.par) = KView) = j(sym(pl1), λ q _ => s.role(q) = KView, hr);
+                match inv.wpar(e1, m1, w)(rv) {
+                    ⟨pw, ppw⟩ => {
+                        let eo: (s.ents(l) = [pw]) = j(pl1, λ q _ => s.ents(q) = [pw], ppw.left);
+                        let pep: (pe = pw) = VEnt::mem_one(pe, pw, j(eo, λ q _ => Mem(pe, q), pp.left));
+                        let po = s.parent_one(e1, pw, rv, ppw.left, (inv.chain(e1, m1)).right);
+                        let ch = inv.chain(e1, m1);
+                        let lv1 = (inv.vents(e1, m1)).right.left;
+                        let ne1: ¬(e1.lvl = l) = λ eq => Nat::lt_irrefl(l, j(eq, λ q _ => l < q, j(pl1, λ q _ => q < e1.lvl, ch.left)));
+                        let anc: (l.member(s.anc_of(e1, nl)) = True) = j(pl1, λ q _ => q.member(s.anc_of(e1, nl)) = True, s.anc_par(e1, ch.left, lv1));
+                        let mt = s.meets_view(l, Reading, e1, hr, ne1, j(sym(w), λ c2 _ => (False || c2) = True, refl), anc);
+                        let ap = Inv::sib_lic(tys, cx, sl, inv, none, Reading, l, (s.ents(l)).map(λ e3 => Pl(e3.obj, e3.reg ++ g.at)), ri.rl, lic, resl, e1, m1, mt,
+                            Pl(pe.obj, pe.reg ++ g.at), List::mem_map(s.ents(l), pe, λ e3 => Pl(e3.obj, e3.reg ++ g.at), pp.left),
+                            trans(sym(po.left), cong_fn(λ (q: VEnt) => q.obj, sym(pep))), pw.reg, g.at, po.right, cong_fn(λ (q: VEnt) => q.reg ++ g.at, pep), rlv.left, rlv.right);
+                        j(sym(pp.right), λ q _ => Sel::Apart(tys, strs, Steps::sels(s.unsteps(e1.at), ws), Steps::sels(s.unsteps(q.at), ws)), ap)
+                    },
+                }
+            },
         })
 }
 
@@ -4295,6 +4551,24 @@ theorem Stmt::stage_view_hold_write(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaw
             let ap = Inv::lic_apart(tys, cx, sl, inv, none, Reading, l, [Pl(o, g.at)], ri.rl, lic, resl, e1, m1, mt, Pl(o, g.at), Inl(refl),
                 trans(eo, cong_fn(λ (q: VEnt) => q.obj, e2is)), rlv.left, rlv.right);
             j(sym(e2is), λ q _ => Sel::Apart(tys, strs, Steps::sels(s.unsteps(e1.reg), ws), Steps::sels(s.unsteps(q.reg), ws)), ap)
+        },
+        λ en mem => j(sym(VEnt::mem_one(en, en0, mem)), λ q _ => s.unsteps(q.at) = p.steps, unst),
+        λ e1 e2 m1 m2 w pp => {
+            let e1is = VEnt::mem_one(e1, en0, m1);
+            let pl2: (e2.par = l) = trans(sym(pp), cong_fn(λ (q: VEnt) => q.par, e1is));
+            let ph = s.parent_hold(e2, o, a, j(sym(pl2), λ q _ => s.role(q) = KHold(o, a), hr), (inv.chain(e2, m2)).right);
+            let mt = s.meets_hold(l, Writing, e2, o, a, hr, ne_view(e2, m2), refl);
+            let ap = Inv::sib_lic(tys, cx, sl, inv, none, Writing, l, [Pl(o, g.at)], rw, wl.right, resw, e2, m2, mt, Pl(o, g.at), Inl(refl), sym(ph.left), Nil, g.at, ph.right, refl, rlv.left, rlv.right);
+            j(sym(e1is), λ q _ => Sel::Apart(tys, strs, Steps::sels(s.unsteps(q.at), ws), Steps::sels(s.unsteps(e2.at), ws)),
+                Sel::apart_sym(tys, strs, Steps::sels(s.unsteps(e2.at), ws), Steps::sels(s.unsteps(g.at), ws), ap))
+        },
+        λ e1 e2 m1 m2 w pp => {
+            let e2is = VEnt::mem_one(e2, en0, m2);
+            let pl1: (e1.par = l) = trans(pp, cong_fn(λ (q: VEnt) => q.par, e2is));
+            let ph = s.parent_hold(e1, o, a, j(sym(pl1), λ q _ => s.role(q) = KHold(o, a), hr), (inv.chain(e1, m1)).right);
+            let mt = s.meets_hold(l, Reading, e1, o, a, hr, ne_view(e1, m1), j(sym(w), λ c _ => (False || c) = True, refl));
+            let ap = Inv::sib_lic(tys, cx, sl, inv, none, Reading, l, [Pl(o, g.at)], ri.rl, lic, resl, e1, m1, mt, Pl(o, g.at), Inl(refl), sym(ph.left), Nil, g.at, ph.right, refl, rlv.left, rlv.right);
+            j(sym(e2is), λ q _ => Sel::Apart(tys, strs, Steps::sels(s.unsteps(e1.at), ws), Steps::sels(s.unsteps(q.at), ws)), ap)
         })
 }
 
@@ -4398,6 +4672,34 @@ theorem Stmt::stage_view_view_write(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaw
                             },
                         })(refl);
                     j(sym(e2is), λ q _ => Sel::Apart(tys, strs, Steps::sels(s.unsteps(e1.reg), ws), Steps::sels(s.unsteps(q.reg), ws)), ap)
+                },
+                λ en mem => j(sym(VEnt::mem_one(en, en0, mem)), λ q _ => s.unsteps(q.at) = p.steps, unst),
+                λ e1 e2 m1 m2 w pp => {
+                    let e1is = VEnt::mem_one(e1, en0, m1);
+                    let pl2: (e2.par = l) = trans(sym(pp), cong_fn(λ (q: VEnt) => q.par, e1is));
+                    let rv: (s.role(e2.par) = KView) = j(sym(pl2), λ q _ => s.role(q) = KView, hr);
+                    let po = s.parent_one(e2, pe1, rv, j(sym(pl2), λ q _ => s.ents(q) = [pe1], eone), (inv.chain(e2, m2)).right);
+                    let ch = inv.chain(e2, m2);
+                    let ne2: ¬(e2.lvl = l) = λ eq => Nat::lt_irrefl(l, j(eq, λ q _ => l < q, j(pl2, λ q _ => q < e2.lvl, ch.left)));
+                    let anc: (l.member(s.anc_of(e2, nl)) = True) = j(pl2, λ q _ => q.member(s.anc_of(e2, nl)) = True, s.anc_par(e2, ch.left, (inv.vents(e2, m2)).right.left));
+                    let mt = s.meets_view(l, Writing, e2, hr, ne2, refl, anc);
+                    let ap = Inv::sib_lic(tys, cx, sl, inv, none, Writing, l, [Pl(pe1.obj, pe1.reg ++ g.at)], rw, licw, resw, e2, m2, mt, Pl(pe1.obj, pe1.reg ++ g.at), Inl(refl),
+                        sym(po.left), pe1.reg, g.at, po.right, refl, rlv.left, rlv.right);
+                    j(sym(e1is), λ q _ => Sel::Apart(tys, strs, Steps::sels(s.unsteps(q.at), ws), Steps::sels(s.unsteps(e2.at), ws)),
+                        Sel::apart_sym(tys, strs, Steps::sels(s.unsteps(e2.at), ws), Steps::sels(s.unsteps(g.at), ws), ap))
+                },
+                λ e1 e2 m1 m2 w pp => {
+                    let e2is = VEnt::mem_one(e2, en0, m2);
+                    let pl1: (e1.par = l) = trans(pp, cong_fn(λ (q: VEnt) => q.par, e2is));
+                    let rv: (s.role(e1.par) = KView) = j(sym(pl1), λ q _ => s.role(q) = KView, hr);
+                    let po = s.parent_one(e1, pe1, rv, j(sym(pl1), λ q _ => s.ents(q) = [pe1], eone), (inv.chain(e1, m1)).right);
+                    let ch = inv.chain(e1, m1);
+                    let ne1: ¬(e1.lvl = l) = λ eq => Nat::lt_irrefl(l, j(eq, λ q _ => l < q, j(pl1, λ q _ => q < e1.lvl, ch.left)));
+                    let anc: (l.member(s.anc_of(e1, nl)) = True) = j(pl1, λ q _ => q.member(s.anc_of(e1, nl)) = True, s.anc_par(e1, ch.left, (inv.vents(e1, m1)).right.left));
+                    let mt = s.meets_view(l, Reading, e1, hr, ne1, j(sym(w), λ c2 _ => (False || c2) = True, refl), anc);
+                    let ap = Inv::sib_lic(tys, cx, sl, inv, none, Reading, l, (s.ents(l)).map(λ e3 => Pl(e3.obj, e3.reg ++ g.at)), ri.rl, lic, resl, e1, m1, mt,
+                        Pl(pe1.obj, pe1.reg ++ g.at), List::mem_map(s.ents(l), pe1, λ e3 => Pl(e3.obj, e3.reg ++ g.at), mp1), sym(po.left), pe1.reg, g.at, po.right, refl, rlv.left, rlv.right);
+                    j(sym(e2is), λ q _ => Sel::Apart(tys, strs, Steps::sels(s.unsteps(e1.at), ws), Steps::sels(s.unsteps(q.at), ws)), ap)
                 })
         },
     }
@@ -5033,7 +5335,11 @@ theorem CSt::regions_other(self s: CSt, tys: Nat → Type, e, e2: Env(tys), x: V
 theorem Inv::set_cell(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: Nat → Bool}, inv: Inv(tys, strs, s, e, m, h0, lent),
     none: s.pending() = False, x: Var, l: Nat, hl: s.lvl(x) = Some(l), nrf: s.in_regions(l) = False, f: Dyn(tys) → Dyn(tys), c: Cell(tys),
     agr: Cell::Agrees(tys, strs, m.heap, s.role(l), c, f(Env::get(tys, e, x))), code: (f(Env::get(tys, e, x))).code = (s.var(l)).code, nref: (r: Ref) → c.v = Refer(r) → False,
-    cref: Value::refers(tys, (REnv::get(tys, m.env, x)).v) = False):
+    cref: Value::refers(tys, (REnv::get(tys, m.env, x)).v) = False,
+    cpar: (en: VEnt) → Mem(en, s.views) → en.par = l → (z: Var) → s.lvl(z) = Some(en.lvl) → (dp, dc: Dyn(tys)) → c.v = level2::Plain(dp) → (REnv::get(tys, m.env, z)).v = level2::Plain(dc) →
+        CSt::CFitAt(tys, strs, Steps::sels(s.unsteps(en.at), Mach::ixs(tys, strs, m)), dp, dc),
+    cself: (en: VEnt) → Mem(en, s.views) → en.lvl = l → (y: Var) → s.lvl(y) = Some(en.par) → (dp, dc: Dyn(tys)) → (REnv::get(tys, m.env, y)).v = level2::Plain(dp) → c.v = level2::Plain(dc) →
+        CSt::CFitAt(tys, strs, Steps::sels(s.unsteps(en.at), Mach::ixs(tys, strs, m)), dp, dc)):
     Inv(tys, strs, s, Env::set(tys, e, x, f), Mach(m.heap, REnv::set(tys, m.env, x, c), m.io), h0, lent)
 {
     let sim = Inv::sim_now(tys, strs, inv, none);
@@ -5075,6 +5381,22 @@ theorem Inv::set_cell(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)
     let wsame = Inv::words_after(tys, strs, inv, none, sim2, s.regions_other(tys, e, e2, x, l, hl, nrf, λ k ir => (inv.words(k, ir)).left, ecell));
     let regs: ((en: VEnt) → Mem(en, s.views) → Steps::sels(s.unsteps(en.reg), Mach::ixs(tys, strs, m2)) = Steps::sels(s.unsteps(en.reg), Mach::ixs(tys, strs, m))) =
         λ en me => CSt::sels_keep(en.reg, s, Mach::ixs(tys, strs, m2), s, Mach::ixs(tys, strs, m), λ l2 ml => wsame(l2, s.region_lvl(en, me, l2, ml)));
+    let ats: ((en: VEnt) → Mem(en, s.views) → Steps::sels(s.unsteps(en.at), Mach::ixs(tys, strs, m2)) = Steps::sels(s.unsteps(en.at), Mach::ixs(tys, strs, m))) =
+        λ en me => CSt::sels_keep(en.at, s, Mach::ixs(tys, strs, m2), s, Mach::ixs(tys, strs, m), λ l2 ml => wsame(l2, s.at_lvl(en, me, l2, ml)));
+    let cf2: CSt::CFit(tys, strs, s, m2.env, Mach::ixs(tys, strs, m2)) = λ en me y z hy hz dp dc cy cz => {
+        let old_v = λ (w0: Var) (k0: Nat) (hw: s.lvl(w0) = Some(k0)) (ne: ¬(k0 = l)) (dd: Dyn(tys)) (cw: (REnv::get(tys, m2.env, w0)).v = level2::Plain(dd)) =>
+            trans(cong_fn(λ (cc: Cell(tys)) => cc.v, sym(mcell(w0, other(w0, k0, hw, ne)))), cw);
+        let new_v = λ (w0: Var) (k0: Nat) (hw: s.lvl(w0) = Some(k0)) (eq: k0 = l) (dd: Dyn(tys)) (cw: (REnv::get(tys, m2.env, w0)).v = level2::Plain(dd)) =>
+            trans(cong_fn(λ (cc: Cell(tys)) => cc.v, sym(m2root)), j(isroot(w0, k0, hw, eq), λ u _ => (REnv::get(tys, m2.env, u)).v = level2::Plain(dd), cw));
+        let lt0: (en.par < en.lvl) = (inv.chain(en, me)).left;
+        j(sym(ats(en, me)), λ q _ => CSt::CFitAt(tys, strs, q, dp, dc), match Nat::eq_or_ne(en.par, l) {
+            Inl(eq) => cpar(en, me, eq, z, hz, dp, dc, new_v(y, en.par, hy, eq, dp, cy), old_v(z, en.lvl, hz, λ e3 => Nat::lt_irrefl(l, j(eq, λ q _ => q < l, j(e3, λ q _ => en.par < q, lt0))), dc, cz)),
+            Inr(np) => match Nat::eq_or_ne(en.lvl, l) {
+                Inl(eq) => cself(en, me, eq, y, hy, dp, dc, old_v(y, en.par, hy, np, dp, cy), new_v(z, en.lvl, hz, eq, dc, cz)),
+                Inr(nv) => inv.cfit(en, me, y, z, hy, hz, dp, dc, old_v(y, en.par, hy, np, dp, cy), old_v(z, en.lvl, hz, nv, dc, cz)),
+            },
+        })
+    };
     let refs2: ((y: Var) → (l2: Nat) → s.lvl(y) = Some(l2) → (r: Ref) → (REnv::get(tys, m2.env, y)).v = Refer(r) → s.RefOk(inv.root, Mach::ixs(tys, strs, m2), l2, r)) =
         λ y l2 hy r hr => {
             let hr1: ((REnv::get(tys, m.env, y)).v = Refer(r)) = trans(cong_fn(λ (cc: Cell(tys)) => cc.v, sym(mcell(y, notref(y, r, hr)))), hr);
@@ -5104,7 +5426,7 @@ theorem Inv::set_cell(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)
             };
             trans(rk(y, en.lvl, hy), trans(inv.uni(en, me, y, z, hy, hz), sym(rk(z, en.par, hz))))
         },
-        inv.pone)
+        inv.pone, cf2, CSt::sib_keep(tys, strs, s, s, Mach::ixs(tys, strs, m), Mach::ixs(tys, strs, m2), refl, ats, inv.sib))
 }
 
 // A holder's block stored: the holder reads its new meaning; every other
@@ -5126,6 +5448,8 @@ theorem Inv::store_rest(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(ty
     let ws2 = Mach::ixs(tys, strs, m2);
     let regs: ((en: VEnt) → Mem(en, s.views) → Steps::sels(s.unsteps(en.reg), ws2) = Steps::sels(s.unsteps(en.reg), ws)) =
         λ en me => CSt::sels_keep(en.reg, s, ws2, s, ws, λ l2 ml => wsame(l2, s.region_lvl(en, me, l2, ml)));
+    let ats: ((en: VEnt) → Mem(en, s.views) → Steps::sels(s.unsteps(en.at), ws2) = Steps::sels(s.unsteps(en.at), ws)) =
+        λ en me => CSt::sels_keep(en.at, s, ws2, s, ws, λ l2 ml => wsame(l2, s.at_lvl(en, me, l2, ml)));
     let lenh: (h2.len() = m.heap.len()) = Heap::store_len(tys, m.heap, r.b, nw);
     let le0: (s.na + s.nd <= s.na + s.nd) = omega();
     Inv(j(sym(s.patched_none(tys, strs, ex, m2, none)), λ q _ => Sim(tys, strs, s, q, m2), sim2), inv.root,
@@ -5145,7 +5469,8 @@ theorem Inv::store_rest(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(ty
         inv.young, inv.held, inv.vents,
         λ o3 r3 h3 ob ho => match Heap::obj_store_holes(tys, m.heap, r.b, r3.b, nw, ob, ho) { ⟨o0, po⟩ => trans(po.right, inv.bare(o3, r3, h3, o0, po.left)) },
         inv.chain,
-        CSt::excl_keep(tys, strs, s, s, ws, ws2, refl, le0, λ en me => (inv.chain(en, me)).left, λ en me => (inv.vents(en, me)).right.left, regs, inv.excl), inv.wpar, inv.uni, inv.pone)
+        CSt::excl_keep(tys, strs, s, s, ws, ws2, refl, le0, λ en me => (inv.chain(en, me)).left, λ en me => (inv.vents(en, me)).right.left, regs, inv.excl), inv.wpar, inv.uni, inv.pone,
+        CSt::cfit_ws(tys, strs, s, m.env, ws, ws2, ats, inv.cfit), CSt::sib_keep(tys, strs, s, s, ws, ws2, refl, ats, inv.sib))
 }
 
 theorem Inv::store(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: Nat → Bool}, inv: Inv(tys, strs, s, e, m, h0, lent),
@@ -5282,6 +5607,26 @@ theorem WriteInv::facts(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(tys, cx.st
         Bool::not_true_false(s.in_regions(wi.l), cp.left))
 }
 
+// A copy's place kept by a write at a path apart from it, and by its own
+// copy changed to one with the same code and length.
+theorem CSt::cfit_apart(tys: Nat → Type, strs: Strs(tys), a, ss: List<Sel>, ap: Sel::Apart(tys, strs, a, ss), g: Dyn(tys) → Dyn(tys), dp, dc: Dyn(tys), cf: CSt::CFitAt(tys, strs, a, dp, dc)):
+    CSt::CFitAt(tys, strs, a, Sel::write_at(tys, strs, ss, g, dp), dc)
+{
+    let rd: (Sel::read_at(tys, strs, a, Sel::write_at(tys, strs, ss, g, dp)) = Sel::read_at(tys, strs, a, dp)) = ap.reads.left_after_right(g, dp);
+    ⟨trans(ap.fit1(g, dp), cf.left), ⟨trans(cf.right.left, cong_fn(λ (q: Dyn(tys)) => q.code, sym(rd))), trans(cf.right.right, cong_fn(λ (q: Dyn(tys)) => Dyn::len(tys, strs, q), sym(rd)))⟩⟩
+}
+
+theorem CSt::cfit_like(tys: Nat → Type, strs: Strs(tys), a: List<Sel>, dp, dc, dc2: Dyn(tys), cf: CSt::CFitAt(tys, strs, a, dp, dc), ec: dc2.code = dc.code, el: Dyn::len(tys, strs, dc2) = Dyn::len(tys, strs, dc)):
+    CSt::CFitAt(tys, strs, a, dp, dc2)
+{
+    ⟨cf.left, ⟨trans(ec, cf.right.left), trans(el, cf.right.right)⟩⟩
+}
+
+theorem CSt::parent_plain(self s: CSt, en: VEnt, hr: s.role(en.par) = KPlain, p: s.Parent(en)): False {
+    j(hr, λ q _ => match q { KHold(o2, _) => (o2 = en.obj) ∧ (en.reg = en.at), KView => VEnt::Any(s.ents(en.par), λ pe => (pe.obj = en.obj) ∧ (en.reg = pe.reg ++ en.at)),
+        KPlain => False, KGone => False }, p)
+}
+
 // A write to a plain variable: its cell holds the new value; no block, no
 // region and no other cell changes.
 theorem Stmt::stage_write_plain(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(tys, cx.strs), fns: Nat → Func, call: Caller(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: Nat → Bool},
@@ -5313,7 +5658,9 @@ theorem Stmt::stage_write_plain(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(ty
     let agr: Cell::Agrees(tys, strs, m.heap, s.role(wi.l), c2, f2(old)) =
         j(sym(hp2), λ rr _ => Cell::Agrees(tys, strs, m.heap, rr, c2, f2(old)), cong_fn(λ (q: Dyn(tys)) => level2::Plain(q), sym(wsv)));
     let code: ((f2(old)).code = (s.var(wi.l)).code) = trans(cong_fn(λ (q: Dyn(tys)) => q.code, wsv), trans(wk.left, sim.codes(p.root, wi.l, wi.hl)));
-    let iv = Inv::set_cell(tys, strs, inv, none, p.root, wi.l, wi.hl, wf.nrf, f2, c2, agr, code, λ r0 eq => absurd(eq), cong_fn(λ (u: Value(tys)) => Value::refers(tys, u), pc));
+    let iv = Inv::set_cell(tys, strs, inv, none, p.root, wi.l, wi.hl, wf.nrf, f2, c2, agr, code, λ r0 eq => absurd(eq), cong_fn(λ (u: Value(tys)) => Value::refers(tys, u), pc),
+        λ en me pq z hz dp dc _ _ => false_elim(s.parent_plain(en, j(sym(pq), λ q _ => s.role(q) = KPlain, hp2), (inv.chain(en, me)).right)),
+        λ en me lq y hy dp dc _ _ => absurd(trans(sym((inv.vents(en, me)).right.right), trans(cong_fn(λ (q: Nat) => s.role(q), lq), hp2))));
     let wt: (s.wrote_to(wi.l) = s) = j(sym(hp2), λ r _ => (match r as λ _ => CSt { KPlain => s, KHold(_, _) => s.written(wi.l).unback(wi.l), KView => s.written(wi.l).unback(wi.l), KGone => s.written(wi.l).unback(wi.l) }) = s, refl);
     Stepped(Mach(m.heap, REnv::set(tys, m.env, p.root, c2), m.io), λ k => Stmt::write_runs_plain(tys, strs, fns, call, m, p, v, vd, wf.vx, old, pc, nw, put, k),
         j(sym(trans(wf.nst, wt)), λ q _ => Inv(tys, strs, q, Env::set(tys, e, p.root, f2), Mach(m.heap, REnv::set(tys, m.env, p.root, c2), m.io), h0, lent), iv))
@@ -5355,6 +5702,14 @@ theorem Stmt::stage_write_hold(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(tys
         KView => s.written(wi.l).unback(wi.l), KGone => s.written(wi.l).unback(wi.l) }) = s.written(wi.l).unback(wi.l), refl);
     let s2 = CSt(s.args, s.locs, s.na, s.nd, s.views, s.nobj, Cons(wi.l, s.touched), Cons(wi.l, s.wrote));
     let nst: (s2 = n.st) = sym(trans(wf.nst, trans(wt, s.wrote_none(wi.l, nolvl))));
+        let unst: (s.unsteps(wi.xs) = p.steps) = CSt::unsteps_steps(p.steps, s, wi.xs, wi.hxs);
+        let rp = CSt::steps_range(p.steps, s, wi.xs, wi.hxs);
+        let pp = CSt::atoms_plain(Steps::lvls(wi.xs), s, wi.ra, wi.hra);
+        let lic: ((en: VEnt) → Mem(en, s.views) → en.obj = o → Sel::Apart(tys, strs, Steps::sels(s.unsteps(en.reg), wsm), ss)) = λ en me eo => {
+            let mt = s.meets_hold(wi.l, Writing, en, o, a, hr2, nolvl(en, me), refl);
+            let ap = Inv::lic_apart(tys, cx, sl, inv, none, Writing, wi.l, [Pl(o, wi.xs)], wf.rl, wl.right, wf.resl, en, me, mt, Pl(o, wi.xs), Inl(refl), eo, rp, pp);
+            j(trans(cong_fn(λ (q: List<Step>) => Steps::sels(q, wsm), unst), wf.same), λ q _ => Sel::Apart(tys, strs, Steps::sels(s.unsteps(en.reg), wsm), q), ap)
+        };
     let rd0: Value::Reads(tys, strs, m.heap, (REnv::get(tys, m.env, p.root)).v, old) =
         j(hr2, λ rr _ => Cell::Agrees(tys, strs, m.heap, rr, REnv::get(tys, m.env, p.root), old), sim.vars(p.root, wi.l, wi.hl));
     (match (REnv::get(tys, m.env, p.root)).v as λ u => (REnv::get(tys, m.env, p.root)).v = u → Value::Reads(tys, strs, m.heap, u, old) →
@@ -5367,7 +5722,15 @@ theorem Stmt::stage_write_hold(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(tys
             let m2: Mach(tys) = Mach(m.heap, REnv::set(tys, m.env, p.root, c2), m.io);
             let agr: Cell::Agrees(tys, strs, m.heap, s.role(wi.l), c2, f2(old)) =
                 j(sym(hr2), λ rr _ => Cell::Agrees(tys, strs, m.heap, rr, c2, f2(old)), cong_fn(λ (q: Dyn(tys)) => Some(q), sym(wsv)));
-            let iv = Inv::set_cell(tys, strs, inv, none, p.root, wi.l, wi.hl, wf.nrf, f2, c2, agr, code, λ r0 eq => absurd(eq), cong_fn(λ (u: Value(tys)) => Value::refers(tys, u), pc));
+            let iv = Inv::set_cell(tys, strs, inv, none, p.root, wi.l, wi.hl, wf.nrf, f2, c2, agr, code, λ r0 eq => absurd(eq), cong_fn(λ (u: Value(tys)) => Value::refers(tys, u), pc),
+                λ en me pq z hz dp dc cp cz => {
+                    let ph = s.parent_hold(en, o, a, j(sym(pq), λ q _ => s.role(q) = KHold(o, a), hr2), (inv.chain(en, me)).right);
+                    let cf0 = inv.cfit(en, me, p.root, z, j(sym(pq), λ q _ => s.lvl(p.root) = Some(q), wi.hl), hz, old, dc, pc, cz);
+                    let ap = j(ph.right, λ q _ => Sel::Apart(tys, strs, Steps::sels(s.unsteps(q), wsm), ss), lic(en, me, sym(ph.left)));
+                    let nwe: (nw = dp) = cong_fn(λ (u: Value(tys)) => match u { Plain(q) => q, Refer(_) => nw }, cp);
+                    j(nwe, λ q _ => CSt::CFitAt(tys, strs, Steps::sels(s.unsteps(en.at), wsm), q, dc), CSt::cfit_apart(tys, strs, Steps::sels(s.unsteps(en.at), wsm), ss, ap, g, old, dc, cf0))
+                },
+                λ en me lq _ _ _ _ _ _ => false_elim(nolvl(en, me, lq)));
             Stepped(m2, λ k => Stmt::write_runs_plain(tys, strs, fns, call, m, p, v, vd, wf.vx, old, pc, nw, put, k),
                 j(nst, λ q _ => Inv(tys, strs, q, e2, m2, h0, lent), Inv::touch(tys, strs, iv, Cons(wi.l, s.touched), Cons(wi.l, s.wrote))))
         },
@@ -5393,14 +5756,6 @@ theorem Stmt::stage_write_hold(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(tys
                     trans(cong_fn(λ (t: Dyn(tys)) => Sel::read_at(tys, strs, r.sels, t), wa), trans(wg.right, trans(cong_fn(ff, rdo), sym(wsv))));
                 let fnw: (Sel::fit(tys, strs, r.sels, nwb) = True) = j(sym(wa), λ t _ => Sel::fit(tys, strs, r.sels, t) = True, wg.left);
                 let agr: (Sel::get(tys, strs, r.sels, nwb) = Some(f2(old))) = trans(Sel::get_fit(tys, strs, r.sels, nwb, fnw), cong_fn(λ (t: Dyn(tys)) => Some(t), rdn));
-                let unst: (s.unsteps(wi.xs) = p.steps) = CSt::unsteps_steps(p.steps, s, wi.xs, wi.hxs);
-                let rp = CSt::steps_range(p.steps, s, wi.xs, wi.hxs);
-                let pp = CSt::atoms_plain(Steps::lvls(wi.xs), s, wi.ra, wi.hra);
-                let lic: ((en: VEnt) → Mem(en, s.views) → en.obj = o → Sel::Apart(tys, strs, Steps::sels(s.unsteps(en.reg), wsm), ss)) = λ en me eo => {
-                    let mt = s.meets_hold(wi.l, Writing, en, o, a, hr2, nolvl(en, me), refl);
-                    let ap = Inv::lic_apart(tys, cx, sl, inv, none, Writing, wi.l, [Pl(o, wi.xs)], wf.rl, wl.right, wf.resl, en, me, mt, Pl(o, wi.xs), Inl(refl), eo, rp, pp);
-                    j(trans(cong_fn(λ (q: List<Step>) => Steps::sels(q, wsm), unst), wf.same), λ q _ => Sel::Apart(tys, strs, Steps::sels(s.unsteps(en.reg), wsm), q), ap)
-                };
                 let iv = Inv::store(tys, strs, inv, none, p.root, wi.l, wi.hl, wf.nrf, o, a, hr2, wl.left, r, cv, ob, pob.left, ss, nwb, f2, agr, code,
                     λ q ap => Sel::get_apart(tys, strs, r.sels ++ ss, q, Sel::apart_ext_l(tys, strs, r.sels, ss, q, ap), g, ob),
                     λ vs ap => Sel::get_under(tys, strs, sl, r.sels, ss, vs, ap, g, ob, fr, hc, hln),
@@ -5641,7 +5996,21 @@ theorem Inv::rekin(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {ex: Env(tys)},
         λ x mx y z hy hz => match s.pre_rekin(f, kf, tl, wl, x, mx) {
             ⟨en, pe⟩ => inv.uni(en, pe.left, y, z, trans(hy, cong_fn(λ (n: Nat) => Some(n), pe.right.lvl)), trans(hz, cong_fn(λ (n: Nat) => Some(n), pe.right.par))),
         },
-        pone)
+        pone,
+        λ x mx y z hy hz dp dc cy cz => match s.pre_rekin(f, kf, tl, wl, x, mx) {
+            ⟨en, pe⟩ => j(sym(pe.right.at), λ q _ => CSt::CFitAt(tys, strs, Steps::sels(s.unsteps(q), ws), dp, dc),
+                inv.cfit(en, pe.left, y, z, trans(hy, cong_fn(λ (n: Nat) => Some(n), pe.right.par)), trans(hz, cong_fn(λ (n: Nat) => Some(n), pe.right.lvl)), dp, dc, cy, cz)),
+        },
+        λ x1 x2 m1 m2 w pp ne => match s.pre_rekin(f, kf, tl, wl, x1, m1) {
+            ⟨en1, p1⟩ => match s.pre_rekin(f, kf, tl, wl, x2, m2) {
+                ⟨en2, p2⟩ => {
+                    let ap = inv.sib(en1, en2, p1.left, p2.left, trans(cong_fn(λ (md: Mode) => md.writes(), sym(p1.right.mode)), w), trans(sym(p1.right.par), trans(pp, p2.right.par)),
+                        λ eq => ne(trans(p1.right.lvl, trans(eq, sym(p2.right.lvl)))));
+                    j(sym(p2.right.at), λ q _ => Sel::Apart(tys, strs, Steps::sels(s.unsteps(x1.at), ws), Steps::sels(s.unsteps(q), ws)),
+                        j(sym(p1.right.at), λ q _ => Sel::Apart(tys, strs, Steps::sels(s.unsteps(q), ws), Steps::sels(s.unsteps(en2.at), ws)), ap))
+                },
+            },
+        })
 }
 
 // The invariant at a write's state.
@@ -5784,8 +6153,6 @@ theorem Sel::read_under(tys: Nat → Type, strs: Strs(tys), sl: StrsLaws(tys, st
      ⟨trans(rq, trans(wa2, sym(back))),
       ⟨trans(cong_fn(λ (q: Dyn(tys)) => q.code, rq), wka.left), trans(cong_fn(λ (q: Dyn(tys)) => Dyn::len(tys, strs, q), rq), wka.right)⟩⟩⟩
 }
-
-theorem Bool::or_true_right(self a: Bool): (a || True) = True { match a { True => refl, False => refl } }
 
 theorem Value::refers_inv(tys: Nat → Type, v: Value(tys), h: Value::refers(tys, v) = True): Exists<Ref>(λ q => v = Refer(q)) {
     (match v as λ u => Value::refers(tys, u) = True → Exists<Ref>(λ q => u = Refer(q)) { Plain(_) => λ no => absurd(no), Refer(q) => λ _ => Exists(q, refl) })(h)
@@ -6657,7 +7024,31 @@ theorem Stmt::stage_write_view(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(tys
                 let agr: Cell::Agrees(tys, strs, m.heap, s.role(wi.l), c2, f2(old)) =
                     j(sym(hr2), λ rr _ => Cell::Agrees(tys, strs, m.heap, rr, c2, f2(old)), cong_fn(λ (q: Dyn(tys)) => Some(q), sym(wsv)));
                 let code: ((f2(old)).code = (s.var(wi.l)).code) = trans(cong_fn(λ (q: Dyn(tys)) => q.code, wsv), trans(wk.left, sim.codes(p.root, wi.l, wi.hl)));
-                let iv = Inv::set_cell(tys, strs, inv, none, p.root, wi.l, wi.hl, wf.nrf, f2, c2, agr, code, λ r0 eq => absurd(eq), cong_fn(λ (u: Value(tys)) => Value::refers(tys, u), pc));
+                let unst: (s.unsteps(wi.xs) = p.steps) = CSt::unsteps_steps(p.steps, s, wi.xs, wi.hxs);
+                let rp = CSt::steps_range(p.steps, s, wi.xs, wi.hxs);
+                let pp = CSt::atoms_plain(Steps::lvls(wi.xs), s, wi.ra, wi.hra);
+                let nlv = s.na + s.nd;
+                let iv = Inv::set_cell(tys, strs, inv, none, p.root, wi.l, wi.hl, wf.nrf, f2, c2, agr, code, λ r0 eq => absurd(eq), cong_fn(λ (u: Value(tys)) => Value::refers(tys, u), pc),
+                    λ en me pq z hz dp dc cp cz => {
+                        let rv: (s.role(en.par) = KView) = j(sym(pq), λ q _ => s.role(q) = KView, hr2);
+                        let eo: (s.ents(en.par) = [pe]) = j(sym(pq), λ q _ => s.ents(q) = [pe], ppe.left);
+                        let po = s.parent_one(en, pe, rv, eo, (inv.chain(en, me)).right);
+                        let ch = inv.chain(en, me);
+                        let nev: ¬(en.lvl = wi.l) = λ eq => Nat::lt_irrefl(wi.l, j(eq, λ q _ => wi.l < q, j(pq, λ q _ => q < en.lvl, ch.left)));
+                        let anc: (wi.l.member(s.anc_of(en, nlv)) = True) = j(pq, λ q _ => q.member(s.anc_of(en, nlv)) = True, s.anc_par(en, ch.left, (inv.vents(en, me)).right.left));
+                        let mt = s.meets_view(wi.l, Writing, en, hr2, nev, refl, anc);
+                        let ap0 = Inv::sib_lic(tys, cx, sl, inv, none, Writing, wi.l, [Pl(pe.obj, pe.reg ++ wi.xs)], wf.rl, ppe.right.right, wf.resl, en, me, mt, Pl(pe.obj, pe.reg ++ wi.xs), Inl(refl),
+                            sym(po.left), pe.reg, wi.xs, po.right, refl, rp, pp);
+                        let ap = j(trans(cong_fn(λ (q: List<Step>) => Steps::sels(q, wsm), unst), wf.same), λ q _ => Sel::Apart(tys, strs, Steps::sels(s.unsteps(en.at), wsm), q), ap0);
+                        let cf0 = inv.cfit(en, me, p.root, z, j(sym(pq), λ q _ => s.lvl(p.root) = Some(q), wi.hl), hz, old, dc, pc, cz);
+                        let nwe: (nw = dp) = cong_fn(λ (u: Value(tys)) => match u { Plain(q) => q, Refer(_) => nw }, cp);
+                        j(nwe, λ q _ => CSt::CFitAt(tys, strs, Steps::sels(s.unsteps(en.at), wsm), q, dc), CSt::cfit_apart(tys, strs, Steps::sels(s.unsteps(en.at), wsm), ss, ap, g, old, dc, cf0))
+                    },
+                    λ en me lq y hy dp dc cy cc => {
+                        let cf0 = inv.cfit(en, me, y, p.root, hy, j(sym(lq), λ q _ => s.lvl(p.root) = Some(q), wi.hl), dp, old, cy, pc);
+                        let nwe: (nw = dc) = cong_fn(λ (u: Value(tys)) => match u { Plain(q) => q, Refer(_) => nw }, cc);
+                        j(nwe, λ q _ => CSt::CFitAt(tys, strs, Steps::sels(s.unsteps(en.at), wsm), dp, q), CSt::cfit_like(tys, strs, Steps::sels(s.unsteps(en.at), wsm), dp, old, nw, cf0, wk.left, wk.right))
+                    });
                 let rin = s.var_inside(p.root, wi.l, wi.hl);
                 let min: Var::In(p.root, (m.env).args.len(), (m.env).locs.len()) =
                     j(sym(sim.mlocs), λ q _ => Var::In(p.root, (m.env).args.len(), q), j(sym(sim.margs), λ q _ => Var::In(p.root, q, s.nd), rin));
