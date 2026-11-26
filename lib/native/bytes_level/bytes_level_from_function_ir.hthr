@@ -1,0 +1,521 @@
+// FunctionIR programs translated to the bytes level
+// (docs/language/ownership-design.md §17.5 stage 2, §17.8;
+// issues/bytes-level-translation.md): what stage 3 compiles through.
+//
+// - A program is FunctionIR's `List<Function>`, its last function first;
+//   the translation is its routines in number order (`translate_program`).
+// - Buffer `k` of a function is the reference parameter `2k` and the
+//   length word `2k + 1`, as `Function.lent` already passes them
+//   (`lent_homes`). A `Fixed` span is the reference parameter 0 and the
+//   port the body's first node sets.
+// - Inside a scope, a buffer is named by its home (`Lent`: the reference
+//   id and the length id), as the old lowering names it
+//   (function_ir_lower_reads). A loop's pass has the homes its state
+//   carries unchanged (`loop_carried`), and after the loop the scope has
+//   them under the outputs' names too (`StructuredRegion::lends`).
+// - A byte load is an `Offset` and a `Load(1)`, a wide load at 1, 2, 4 or
+//   8 bytes an `Offset` and a `Load` at that width.
+// - A byte store is an `Offset`, a `Store(1)` and the byte loaded back,
+//   which is what the old node's output names. A wide store is the same
+//   without the load back, where the function reads nothing at the output
+//   (the old lowering leaves it unheld, so no lowered program reads it).
+// - Word nodes are wrapped in `Compute`. A node a later node of its leaf
+//   binds again before anything reads it is dropped (`rebound`): the
+//   bytes level binds an id once in a scope.
+// - A call is a call on the values: its arguments as the scope holds them,
+//   a buffer's home as a reference and a length. Its results are the word
+//   `result` and the `also` words. It is refused unless it calls a function
+//   below its caller, a lent callee given the caller's homes first
+//   (`calls_below`), as the old lowering refuses it.
+// - A lend is each view's `Offset` from its buffer's reference and its
+//   length (`end - start`), then the call, the views first.
+// - A bounded loop is a plain loop whose state carries its counter. See
+//   `loop_body` and `bounded_loop`.
+//
+// Where the meanings differ (§17.8). FunctionIR's loads read zero and its
+// stores do nothing past a buffer's end. At the bytes level a load or a
+// store there has no answer.
+// - A byte load the path does not know is inside becomes a comparison and a
+//   branch: the load where the index is below the length, zero where it is
+//   not. "Known" is the old lowering's own test (`File::bounded` over the
+//   facts the scope has gathered, the same `Known`s), so a program the old
+//   lowering accepts gets no guard.
+// - A store or a wide load the path does not know is inside is refused,
+//   since its old meaning (some bytes stored or read, others not) has no
+//   single node.
+// - A lend whose views the path does not know lie inside their buffers, in
+//   order and apart, is refused (`views_lendable`, `views_apart`, the old
+//   lowering's checks).
+// - A function with levels is refused. The old meaning answers zero past
+//   its last level, and the bytes level has no such truncation
+//   (issues/bytes-level-lowering-recursion.md).
+import bytes_level;
+import function_ir;
+import function_ir_lower;
+import function_ir_lower_reads;
+import function_ir_lower_views;
+import function_ir_lower_calls;
+import function_ir_state;
+import bool;
+import list;
+import nat;
+import option;
+
+// ---------------------------------------------------------------------------
+// Ids
+
+fn mem_nat(id: Nat, ids: List<Nat>) → Bool { match ids { Nil => False, Cons(x, rest) => x.same(id) || mem_nat(id, rest) } }
+
+fn max_of(ids: List<Nat>) → Nat { match ids { Nil => 0, Cons(x, rest) => x.max(max_of(rest)) } }
+
+fn port_ids(ports: Ports) → List<Nat> { ports.entries.map(λ (p: Port) => p.id) }
+
+// The ids a node reads (its operands), and the one it binds.
+fn node_reads(node: Node) → List<Nat> {
+    match node {
+        Const(_, _, _) => [],
+        Move(_, _, source) => [source],
+        Add(_, _, left, right) => [left, right],
+        Sub(_, _, left, right) => [left, right],
+        BitAnd(_, _, left, right) => [left, right],
+        BitOr(_, _, left, right) => [left, right],
+        BitXor(_, _, left, right) => [left, right],
+        ShiftLeft(_, _, value, _) => [value],
+        LogicalShiftRight(_, _, value, _) => [value],
+        ArithmeticShiftRight(_, _, value, _) => [value],
+        UnsignedLessThan(_, _, left, right) => [left, right],
+        SignedLessThan(_, _, left, right) => [left, right],
+        Equal(_, _, left, right) => [left, right],
+        BufferLoad(_, _, index) => [index],
+        BufferStore(_, _, index, value) => [index, value],
+        Resize(_, _, _, source) => [source],
+        SignResize(_, _, _, source) => [source],
+        TableRead(_, _, _, index, _) => [index],
+        WideLoad(_, _, _, index) => [index],
+        WideStore(_, _, _, index, value) => [index, value],
+        ByteSwap(_, _, source) => [source],
+        RotateRight(_, _, value, _) => [value],
+        Apply(_, _, _, left, right) => [left, right],
+    }
+}
+
+fn nodes_reads(nodes: List<Node>) → List<Nat> { match nodes { Nil => [], Cons(n, rest) => node_reads(n) ++ nodes_reads(rest) } }
+
+fn nodes_outputs(nodes: List<Node>) → List<Nat> { match nodes { Nil => [], Cons(n, rest) => Cons(node_output(n).id, nodes_outputs(rest)) } }
+
+fn views_ids(views: List<View>) → List<Nat> {
+    match views { Nil => [], Cons(v, rest) => Cons(v.home, Cons(v.start, Cons(v.end, Cons(v.base, Cons(v.length, views_ids(rest)))))) }
+}
+
+// Every id a region reads, outside the outputs its nodes bind.
+fn region_reads(region: StructuredRegion) → List<Nat> {
+    match region {
+        Dataflow(body) => nodes_reads(body.nodes),
+        Sequence(prefix, rest) => nodes_reads(prefix.nodes) ++ region_reads(rest),
+        Compose(first, rest) => region_reads(first) ++ region_reads(rest),
+        Conditional(_, condition, _, _, yes, no) => Cons(condition, region_reads(yes) ++ region_reads(no)),
+        Call(_, arguments, _, _) => arguments,
+        Loop(inputs, bound, _, _, body, exit, next, _, _) => Cons(bound, Cons(exit, inputs ++ (next ++ region_reads(body)))),
+        Lend(views, _, arguments, _) => views_ids(views) ++ arguments,
+    }
+}
+
+// Every id a region names, read or bound.
+fn region_ids(region: StructuredRegion) → List<Nat> {
+    match region {
+        Dataflow(body) => nodes_reads(body.nodes) ++ nodes_outputs(body.nodes),
+        Sequence(prefix, rest) => nodes_reads(prefix.nodes) ++ (nodes_outputs(prefix.nodes) ++ region_ids(rest)),
+        Compose(first, rest) => region_ids(first) ++ region_ids(rest),
+        Conditional(inputs, condition, arguments, outputs, yes, no) =>
+            Cons(condition, port_ids(inputs) ++ (port_ids(arguments) ++ (port_ids(outputs) ++ (region_ids(yes) ++ region_ids(no))))),
+        Call(_, arguments, result, also) => Cons(result, arguments ++ also),
+        Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) =>
+            Cons(bound, Cons(count, Cons(exit, Cons(exhausted, inputs ++ (parameters ++ (next ++ (outputs ++ region_ids(body)))))))),
+        Lend(views, _, arguments, result) => Cons(result, views_ids(views) ++ arguments),
+    }
+}
+
+fn fixed_ids(fixed: Option<Fixed>) → List<Nat> { match fixed { None => [], Some(x) => [x.length] } }
+
+// The first id past every id the function names: where the translation's
+// own ids start.
+fn Function::fresh_from(self f: Function) → Nat {
+    max_of(f.parameters ++ (Cons(f.result, f.also) ++ (region_ids(f.body) ++ fixed_ids(f.fixed)))) + 1
+}
+
+// What the function reads anywhere, past the binding nodes: whether a wide
+// store's output is ever read.
+fn Function::reads(self f: Function) → List<Nat> { Cons(f.result, f.also ++ region_reads(f.body)) }
+
+// ---------------------------------------------------------------------------
+// A scope: its buffers' homes, the ids holding references, and what the
+// path knows (the old lowering's `Known`s, gathered as it gathers them).
+
+record Scope { homes: List<Lent>, refs: List<Nat>, known: List<Known> }
+
+fn Scope::file(self s: Scope) → File { File(File::empty().slots, s.known) }
+
+fn Scope::know(self s: Scope, k: Known) → Scope { Scope(s.homes, s.refs, Cons(k, s.known)) }
+
+fn Scope::with_refs(self s: Scope, more: List<Nat>) → Scope { Scope(s.homes, more ++ s.refs, s.known) }
+
+fn Scope::kind(self s: Scope, id: Nat) → ValueKind { match mem_nat(id, s.refs) { True => RefKind, False => WordKind } }
+
+fn Scope::typed(self s: Scope, id: Nat) → Typed { Typed(id, s.kind(id)) }
+
+fn Scope::typed_all(self s: Scope, ids: List<Nat>) → List<Typed> { ids.map(λ (id: Nat) => s.typed(id)) }
+
+fn words_typed(ids: List<Nat>) → List<Typed> { ids.map(word_id) }
+
+fn home_of(homes: List<Lent>, buffer: Nat) → Option<Lent> {
+    match homes { Nil => None, Cons(h, rest) => match h.buffer.same(buffer) { True => Some(h), False => home_of(rest, buffer) } }
+}
+
+fn homes_bases(homes: List<Lent>) → List<Nat> { match homes { Nil => [], Cons(h, rest) => Cons(h.base, homes_bases(rest)) } }
+
+// What a word node tells the path, as the old lowering learns it from the
+// node (`Node::fold`, and an immediate `ADD`'s `Offset`).
+fn node_known(node: Node, known: List<Known>) → List<Known> {
+    match node {
+        Const(width, output, value) => match width.same(64) {
+            True => Cons(Constant(output, value), known),
+            False => match width.same(1) {
+                False => known,
+                True => match value { Zero => Cons(Falsity(output), known), Succ(m) => match m { Zero => Cons(Truth(output), known), Succ(_) => known } },
+            },
+        },
+        UnsignedLessThan(width, output, left, right) => match width.same(64) { True => Cons(Compared(output, Below, left, right), known), False => known },
+        SignedLessThan(width, output, left, right) => match width.same(64) { True => Cons(Compared(output, Less, left, right), known), False => known },
+        Equal(width, output, left, right) => match width.same(64) { True => Cons(Compared(output, Same, left, right), known), False => known },
+        Add(width, output, base, amount) => match width.same(64) {
+            False => known,
+            True => match known_value(known, amount) { None => known, Some(v) => Cons(Offset(output, base, v), known) },
+        },
+        _ => known,
+    }
+}
+
+// Whether the path knows bytes `index` to `index + last` of the home inside.
+fn Scope::inside(self s: Scope, index: Nat, home: Lent, last: Nat) → Bool {
+    s.file().bounded(index, home.length) && match last { Zero => True, Succ(_) => s.file().span_bounded(index, home.length, last) }
+}
+
+// ---------------------------------------------------------------------------
+// Bodies
+
+// A body of pieces, adjacent leaves joined.
+fn join_leaf(instrs: List<Instr>, rest: Body) → Body {
+    match rest { Leaf(more) => Leaf(instrs ++ more), _ => Seq(Leaf(instrs), rest) }
+}
+
+fn seq_bodies(first: Body, rest: Body) → Body {
+    match first { Leaf(instrs) => join_leaf(instrs, rest), _ => match rest { Leaf(more) => match more { Nil => first, Cons(_, _) => Seq(first, rest) }, _ => Seq(first, rest) } }
+}
+
+// What a step of the translation made: the body, the next fresh id, and
+// the scope after it.
+record Made { body: Body, next: Nat, scope: Scope }
+
+// How a memory node is translated, decided once for the program and its
+// placement (bytes_level_compare): `Plain` the node's instructions, `Guarded`
+// a byte load under its comparison, `Refused` nothing.
+inductive Memory { Plain(instrs: List<Instr>), Guarded(test: Nat, instrs: List<Instr>), Refused }
+
+fn wide_bytes(bytes: Nat) → Bool { bytes.same(1) || (bytes.same(2) || (bytes.same(4) || bytes.same(8))) }
+
+// A wide store's output loaded back, where the function reads it.
+fn reload(bytes, output, t: Nat, reads: List<Nat>) → List<Instr> { match mem_nat(output, reads) { True => [Load(bytes, output, t)], False => [] } }
+
+// A node that touches a buffer, at the fresh id `t` (the reference to the
+// bytes) and `t + 1` (a guard's bit); `reads` is what the function reads.
+fn Scope::memory(self s: Scope, node: Node, t: Nat, reads: List<Nat>) → Memory {
+    match node {
+        BufferLoad(output, buffer, index) => match home_of(s.homes, buffer) {
+            None => Refused,
+            Some(h) => match s.inside(index, h, 0) {
+                True => Plain([Offset(t, h.base, index), Load(1, output, t)]),
+                False => Guarded(t + 1, [Offset(t, h.base, index), Load(1, output, t)]),
+            },
+        },
+        BufferStore(output, buffer, index, value) => match home_of(s.homes, buffer) {
+            None => Refused,
+            Some(h) => match s.inside(index, h, 0) {
+                False => Refused,
+                True => Plain([Offset(t, h.base, index), Store(1, t, value), Load(1, output, t)]),
+            },
+        },
+        WideLoad(bytes, output, buffer, index) => match home_of(s.homes, buffer) {
+            None => Refused,
+            Some(h) => match wide_bytes(bytes) && s.inside(index, h, bytes - 1) {
+                False => Refused,
+                True => Plain([Offset(t, h.base, index), Load(bytes, output, t)]),
+            },
+        },
+        WideStore(bytes, output, buffer, index, value) => match home_of(s.homes, buffer) {
+            None => Refused,
+            Some(h) => match wide_bytes(bytes) && s.inside(index, h, bytes - 1) {
+                False => Refused,
+                True => Plain([Offset(t, h.base, index), Store(bytes, t, value)] ++ reload(bytes, output, t, reads)),
+            },
+        },
+        _ => Plain([Compute(node)]),
+    }
+}
+
+// The guard of a byte load: the bit `test` the comparison of the index with
+// the length, then the load where it is set and zero where it is not.
+fn guarded(test, index, length, output: Nat, instrs: List<Instr>) → Body {
+    Seq(Leaf([Compute(UnsignedLessThan(64, test, index, length))]), Branch(test, Leaf(instrs), Leaf([Compute(Const(64, output, 0))])))
+}
+
+fn load_index(node: Node) → Nat { match node { BufferLoad(_, _, index) => index, _ => 0 } }
+
+fn load_buffer(node: Node) → Nat { match node { BufferLoad(_, buffer, _) => buffer, _ => 0 } }
+
+fn load_output(node: Node) → Nat { match node { BufferLoad(output, _, _) => output, _ => 0 } }
+
+fn Scope::length_of(self s: Scope, buffer: Nat) → Nat { match home_of(s.homes, buffer) { None => 0, Some(h) => h.length } }
+
+// Whether a later node of the leaf binds `id` again before any reads it:
+// a write nothing sees, as the optimizer leaves one where it decided a
+// comparison and wrote its bit after it (docs/native/optimizer-design.md
+// §5.1). The bytes level binds an id once in a scope, so the translation
+// drops the first write; the facts it gives the path are still gathered.
+fn rebound(id: Nat, rest: List<Node>) → Bool {
+    match rest {
+        Nil => False,
+        Cons(n, more) => match mem_nat(id, node_reads(n)) {
+            True => False,
+            False => node_output(n).id.same(id) || rebound(id, more),
+        },
+    }
+}
+
+// A node of a leaf as the translation takes it: nothing where it touches
+// no buffer and is rebound (a store's write is kept whatever its output),
+// its memory form otherwise.
+fn Scope::node_form(self s: Scope, node: Node, rest: List<Node>, t: Nat, reads: List<Nat>) → Memory {
+    match node.pure() && rebound(node_output(node).id, rest) { True => Plain([]), False => s.memory(node, t, reads) }
+}
+
+// A leaf's nodes, one by one: each two fresh ids on, whether it uses them or
+// not, so that the placement's translation counts them alike.
+fn translate_nodes(s: Scope, nodes: List<Node>, next: Nat, reads: List<Nat>) → Option<Made> {
+    match nodes {
+        Nil => Some(Made(Leaf([]), next, s)),
+        Cons(node, rest) => {
+            let after = Scope(s.homes, s.refs, node_known(node, s.known));
+            match s.node_form(node, rest, next, reads) {
+                Refused => None,
+                Plain(instrs) => match translate_nodes(after, rest, next + 2, reads) {
+                    None => None,
+                    Some(more) => Some(Made(join_leaf(instrs, more.body), more.next, more.scope)),
+                },
+                Guarded(test, instrs) => match translate_nodes(after, rest, next + 2, reads) {
+                    None => None,
+                    Some(more) => Some(Made(seq_bodies(guarded(test, load_index(node), s.length_of(load_buffer(node)), load_output(node), instrs), more.body),
+                        more.next, more.scope)),
+                },
+            }
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Loops
+//
+// FunctionIR's loop of at most `bound` passes, the passes left counted
+// down from `bound` in `count`, and the bit `exhausted` set where the
+// passes ran out. At the bytes level, from the fresh id `t` on:
+//
+//   z = 0; zb = (bound = 0)   (where the path knows the bound is a
+//                              nonzero constant, none of this: a pass runs)
+//   zb set:   the outputs are the inputs, exhausted = 1   (no pass runs)
+//   zb clear: the plain loop over the state, the counter and a flag:
+//               the pass's body, then on its exit bit
+//                 set:   the counter 0, the flag 0
+//                 clear: the counter count + (2^64 - 1), that is count - 1
+//                        as the old step adds it, the flag 1;
+//               then stop = (counter = 0);
+//             the loop ends where `stop` is set, its flag out;
+//   exhausted = (flag = 1), the flag a word, 1 where no pass ran.
+//
+// A pass that exits ends the loop with the flag clear, and one that does
+// not ends it only where it was the last the bound allows, with the flag
+// set: the old bit. The counter and the flag are the state's last two
+// elements, so the loop's registers are the old placement's (the state's,
+// the counter's, the flag's), and `exhausted` is a comparison a branch on
+// it can fold, as the old one branches on its flag. The first pass's flag is the bound's word,
+// never read. The exit bit is only branched on, never read as a word,
+// since the old lowering may have folded its comparison into the test,
+// and `stop` is a comparison with a constant the loop's test can fold:
+// the tail needs no register past the counter's and the flag's.
+
+// The copies of the inputs to the outputs, word by word; a reference by an
+// offset of zero.
+fn copies(s: Scope, inputs, outputs: List<Nat>, zero: Nat) → List<Instr> {
+    match inputs {
+        Nil => [],
+        Cons(i, irest) => match outputs {
+            Nil => [],
+            Cons(o, orest) => Cons(match s.kind(i) { WordKind => Compute(Move(64, o, i)), RefKind => Offset(o, i, zero) }, copies(s, irest, orest, zero)),
+        },
+    }
+}
+
+// What a pass adds after the body (ids `t + 2` to `t + 6`): the counter
+// next at `t + 4`, the flag at `t + 3`, `stop` at `t + 2`.
+fn pass_tail(count, exit, t: Nat) → Body {
+    Seq(Branch(exit, Leaf([Compute(Const(64, t + 4, 0)), Compute(Const(64, t + 3, 0))]),
+            Leaf([Compute(Const(64, t + 5, 18446744073709551615)), Compute(Add(64, t + 4, count, t + 5)), Compute(Const(64, t + 3, 1))])),
+        Leaf([Compute(Const(64, t + 6, 0)), Compute(Equal(64, t + 2, t + 4, t + 6))]))
+}
+
+// The ids a loop's translation takes past `t`.
+fn loop_ids() → Nat { 11 }
+
+fn ref_ids_of(s: Scope, inputs, ids: List<Nat>) → List<Nat> {
+    match inputs {
+        Nil => [],
+        Cons(i, irest) => match ids {
+            Nil => [],
+            Cons(x, xrest) => match s.kind(i) { RefKind => Cons(x, ref_ids_of(s, irest, xrest)), WordKind => ref_ids_of(s, irest, xrest) },
+        },
+    }
+}
+
+// Whether the path knows the bound is a constant other than zero: then a
+// pass always runs, and the loop needs no check before it.
+fn Scope::runs_once(self s: Scope, bound: Nat) → Bool {
+    match known_value(s.known, bound) { None => False, Some(v) => match v { Zero => False, Succ(_) => True } }
+}
+
+fn bounded_loop(s: Scope, inputs: List<Nat>, bound: Nat, parameters: List<Nat>, count: Nat, pass: Body, exit: Nat, next, outputs: List<Nat>,
+    exhausted, t: Nat) → Body {
+    let pass_scope = Scope([], ref_ids_of(s, inputs, parameters) ++ ref_ids_of(s, inputs, next), []);
+    let out_scope = s.with_refs(ref_ids_of(s, inputs, outputs));
+    let plain = bytes_level::Loop(s.typed_all(inputs) ++ [word_id(bound), word_id(bound)], pass_scope.typed_all(parameters) ++ [word_id(count), word_id(t + 8)],
+        seq_bodies(pass, pass_tail(count, exit, t)), t + 2, pass_scope.typed_all(next) ++ [word_id(t + 4), word_id(t + 3)],
+        out_scope.typed_all(outputs) ++ [word_id(t + 7), word_id(t + 9)]);
+    let after = Leaf([Compute(Const(64, t + 10, 1)), Compute(Equal(64, exhausted, t + 9, t + 10))]);
+    match s.runs_once(bound) {
+        True => Seq(plain, after),
+        False => Seq(Leaf([Compute(Const(64, t, 0)), Compute(Equal(64, t + 1, bound, t))]),
+            Seq(Branch(t + 1, Leaf(copies(s, inputs, outputs, t) ++ [Compute(Const(64, t + 9, 1))]), plain), after)),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Regions
+
+fn Scope::after_loop(self s: Scope, inputs, parameters, next, outputs: List<Nat>) → Scope {
+    Scope(carried_out(loop_carried(s.homes, inputs, parameters, next), outputs) ++ s.homes, ref_ids_of(s, inputs, outputs) ++ s.refs, s.known)
+}
+
+fn view_instrs(views: List<View>) → List<Instr> {
+    match views {
+        Nil => [],
+        Cons(v, rest) => Cons(Offset(v.base, v.home, v.start), Cons(Compute(Sub(64, v.length, v.end, v.start)), view_instrs(rest))),
+    }
+}
+
+fn views_bases(views: List<View>) → List<Nat> { match views { Nil => [], Cons(v, rest) => Cons(v.base, views_bases(rest)) } }
+
+fn views_lendable_in(views: List<View>, s: Scope) → Bool {
+    match views { Nil => False, Cons(_, _) => views_lendable(views, s.file(), s.homes) && views_apart(views, s.file()) }
+}
+
+// Whether a call of `callee` from function `at` is one the old meaning
+// answers as the bytes level does: a function below the caller (a function
+// without levels answers a call of itself or one above with zero), and a
+// callee lent `m` buffers given the caller's homes of buffers 0 to `m - 1`
+// as its first `2m` arguments (`args_lend`, the old lowering's check), so
+// that its buffer `k` is the caller's.
+fn calls_below(at, callee: Nat, lents: List<Nat>, s: Scope, arguments: List<Nat>) → Bool {
+    (callee + 1).leb(at) && args_lend(s.homes, lent_count(lents, callee), 0, arguments)
+}
+
+fn translate_region(s: Scope, region: StructuredRegion, next: Nat, reads: List<Nat>, at: Nat, lents: List<Nat>) → Option<Made> {
+    match region {
+        Dataflow(body) => translate_nodes(s, body.nodes, next, reads),
+        Sequence(prefix, rest) => match translate_nodes(s, prefix.nodes, next, reads) {
+            None => None,
+            Some(first) => match translate_region(first.scope, rest, first.next, reads, at, lents) {
+                None => None,
+                Some(second) => Some(Made(seq_bodies(first.body, second.body), second.next, second.scope)),
+            },
+        },
+        Compose(prefix, rest) => match translate_region(s, prefix, next, reads, at, lents) {
+            None => None,
+            Some(first) => match translate_region(first.scope, rest, first.next, reads, at, lents) {
+                None => None,
+                Some(second) => Some(Made(seq_bodies(first.body, second.body), second.next, second.scope)),
+            },
+        },
+        Conditional(_, condition, _, _, yes, no) => match translate_region(s.know(Truth(condition)), yes, next, reads, at, lents) {
+            None => None,
+            Some(left) => match translate_region(s.know(Falsity(condition)), no, left.next, reads, at, lents) {
+                None => None,
+                Some(right) => Some(Made(Branch(condition, left.body, right.body), right.next, s)),
+            },
+        },
+        Call(callee, arguments, result, also) => match calls_below(at, callee, lents, s, arguments) {
+            False => None,
+            True => Some(Made(Call(callee, s.typed_all(arguments), words_typed(Cons(result, also))), next, s)),
+        },
+        Lend(views, callee, arguments, result) => match views_lendable_in(views, s) && (callee + 1).leb(at) {
+            False => None,
+            True => Some(Made(Seq(Leaf(view_instrs(views)), Call(callee, s.with_refs(views_bases(views)).typed_all(views_homes(views) ++ arguments),
+                [word_id(result)])), next, s)),
+        },
+        Loop(inputs, bound, parameters, count, body, exit, later, outputs, exhausted) => {
+            let inner = Scope(carried_homes(loop_carried(s.homes, inputs, parameters, later)), ref_ids_of(s, inputs, parameters), []);
+            match translate_region(inner, body, next + loop_ids(), reads, at, lents) {
+                None => None,
+                Some(pass) => Some(Made(bounded_loop(s, inputs, bound, parameters, count, pass.body, exit, later, outputs, exhausted, next), pass.next,
+                    s.after_loop(inputs, parameters, later, outputs))),
+            }
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Functions and programs
+
+// A function's homes: its lent buffers' parameters, or its fixed span.
+fn Function::buffer_homes(self f: Function) → List<Lent> {
+    match f.fixed {
+        None => lent_homes(f.parameters, f.lent, 0),
+        Some(x) => match f.parameters { Nil => [], Cons(base, _) => [Lent(0, base, x.length)] },
+    }
+}
+
+fn Function::translate(self f: Function, at: Nat, lents: List<Nat>) → Option<Routine> {
+    match f.levels {
+        Succ(_) => None,
+        Zero => {
+            let s = Scope(f.buffer_homes(), homes_bases(f.buffer_homes()), []);
+            match translate_region(s, f.body, f.fresh_from(), f.reads(), at, lents) {
+                None => None,
+                Some(made) => Some(Routine(s.typed_all(f.parameters), made.body, words_typed(Cons(f.result, f.also)))),
+            }
+        },
+    }
+}
+
+// Function `at` on, in number order, `lents` each one's lent count.
+fn translate_functions(functions: List<Function>, at: Nat, lents: List<Nat>) → Option<List<Routine>> {
+    match functions {
+        Nil => Some([]),
+        Cons(f, rest) => match f.translate(at, lents) {
+            None => None,
+            Some(r) => match translate_functions(rest, at + 1, lents) { None => None, Some(rs) => Some(Cons(r, rs)) },
+        },
+    }
+}
+
+// The program: FunctionIR lists its functions last first, the bytes level
+// numbers its routines from the first.
+fn translate_program(functions: List<Function>) → Option<Program> {
+    match translate_functions(functions.rev(), 0, functions.rev().map(λ (f: Function) => f.lent)) { None => None, Some(routines) => Some(Program(routines)) }
+}

@@ -1,0 +1,168 @@
+#!/usr/bin/env bash
+# Stage 2's test (docs/language/ownership-design.md §17.5, §17.8;
+# issues/bytes-level-translation.md): every row of
+# `crates/linked/generated/EXPORTS.tsv` compiled the old way and through the
+# bytes level, and the two assemblies compared.
+#
+#   scripts/bytes-level-compare                # every row
+#   scripts/bytes-level-compare count_newlines # the rows named by symbol
+#   scripts/bytes-level-compare --compile-only # stage 1 alone
+#   scripts/bytes-level-compare --gates        # some native gates' programs instead
+#
+# The old way is `heather compile-x86`, as `scripts/linked` runs it; its
+# certificate is kept, since it spells the program the lowering was given
+# (`<prefix>_cut_program()`, after the optimizer), the planner's placement
+# (`<prefix>_placement()`), the buffer counts and the code (`<prefix>_code()`).
+# The new way is a probe over those definitions: the cut program translated
+# (`bytes_level_from_function_ir`'s `translate_program`), its placement
+# translated beside it (`translate_placement`), `Program::lower`, and the
+# bytes of both codes (`compare_report`), evaluated by `heather eval`. So
+# nothing here changes what `scripts/linked` writes or what the compiler
+# does: the checked-in assembly stays the old path's.
+#
+# Output: one line per row, `<symbol>: same (<n> bytes)` or the report of
+# where the two differ, then each routine that differs, and the table in
+# `$out/report.tsv`. A row that lowered has both codes disassembled in
+# `$out/<symbol>/old.s` and `new.s`, and their difference, routine by
+# routine and call and jump displacements aside, in `$out/<symbol>/diff.txt`. Every compile and
+# evaluation is capped (`--limits dev`). It runs in no test lane: a full run
+# compiles every export (minutes each, its certificate checked), so it is run
+# by hand, after a change to the translation or to either lowering. A row's
+# certificate is reused while the binary, the row and the module's import
+# closure are unchanged (the key `scripts/linked` uses).
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+cargo build -q --release -p heather-cli
+heather=target/release/heather
+out="${HEATHER_COMPARE_DIR:-target/bytes-level-compare}"
+store="${HEATHER_CACHE_DIR:-target}/native-images"
+generated=crates/linked/generated
+mkdir -p "$out"
+binary_hash=$(sha256sum "$heather" | cut -d' ' -f1)
+rows=$("$heather" linked-exports "$generated" --rows)
+
+compile_only=false
+gates=false
+wanted=()
+for arg in "$@"; do
+  case "$arg" in
+    --compile-only) compile_only=true ;;
+    --gates) gates=true ;;
+    *) wanted+=("$arg") ;;
+  esac
+done
+# `--gates`: instead of the exports, programs the native gates compile
+# (crates/cli/tests/native*.rs), one per form they add to the exports':
+# words returned past the first, a structure returned through memory,
+# levels, and a span read and written by loops.
+if $gates; then
+  rows=$(printf '%s\t%s\t%s\t\n' \
+    examples/x86-native/two_words.hthr add_wide add_wide \
+    examples/x86-native/enum_fields.hthr signal signal \
+    examples/x86-native/three_words.hthr stats stats \
+    examples/x86-native/recursion.hthr rsum rsum \
+    examples/x86-native/branches.hthr nested_true nested_true \
+    examples/binary-search/search.hthr lower_bound lower_bound \
+    examples/sort/sort.hthr sort_in_place sort_in_place \
+    examples/utf8/utf8_check.hthr utf8_valid_up_to utf8_valid_up_to)
+  out="$out/gates"
+fi
+mkdir -p "$out"
+want() {
+  (( ${#wanted[@]} == 0 )) && return 0
+  local s
+  for s in "${wanted[@]}"; do [[ $s == "$1" ]] && return 0; done
+  return 1
+}
+
+# Stage 1: the old compile, its certificate kept under its key.
+compile() {
+  local module=$1 function=$2 symbol=$3 key=$4
+  shift 4
+  local dir="$out/$symbol" entries=()
+  for entry in "$@"; do entries+=(--entry "$entry"); done
+  if [[ -f "$dir/key" && $(cat "$dir/key") == "$key" && -f "$dir/$symbol.certificate.hthr" ]]; then
+    echo "$symbol: certificate reused"
+    return 0
+  fi
+  rm -rf "$dir" && mkdir -p "$dir"
+  "$heather" compile-x86 "$module" "$function" --limits dev,cpu=1500 --symbol "$symbol" "${entries[@]}" -o "$dir/$symbol.s" \
+    --cache-dir "$store" > "$dir/compile.log" 2>&1 ||
+    { tail -5 "$dir/compile.log" >&2; echo "$symbol: compile-x86 failed" >&2; return 1; }
+  echo "$key" > "$dir/key"
+  echo "$symbol: compiled"
+}
+export -f compile
+export heather store out
+
+jobs=()
+while IFS=$'\t' read -r module function symbol entries; do
+  want "$symbol" || continue
+  stem=$(basename "$module" .hthr)
+  # A program outside lib/ (a gate's example) is keyed by its own text and
+  # the library's.
+  closure=$({ scripts/lib-closures --files "$stem" 2>/dev/null || { echo "$module"; find lib -name '*.hthr' | sort; }; } | xargs sha256sum | sha256sum | cut -d' ' -f1)
+  key=$(printf '%s\n%s\t%s\t%s\n%s\n%s\n%s\n' "$binary_hash" "$module" "$function" "$symbol" "$entries" "$closure" "${HEATHER_OPTIMIZE:-}" |
+        sha256sum | cut -d' ' -f1)
+  jobs+=("$module"$'\t'"$function"$'\t'"$symbol"$'\t'"$key${entries:+ $entries}")
+done <<< "$rows"
+printf '%s\n' "${jobs[@]}" | tr '\t' ' ' | xargs -P "${HEATHER_COMPARE_JOBS:-3}" -L 1 bash -c 'compile "$@"' compile
+$compile_only && exit 0
+
+# Stage 2: each certificate's definitions as a module of their own
+# (scripts/bytes-level-compare-defs.py), and the probe over them.
+probe_dir="$out/probes"
+mkdir -p "$probe_dir"
+report="$out/report.tsv"
+printf 'symbol\treport\troutines\n' > "$report"
+status=0
+while IFS=$'\t' read -r module function symbol entries; do
+  want "$symbol" || continue
+  dir="$out/$symbol"
+  defs="${symbol}_compare_defs"
+  if ! python3 scripts/bytes-level-compare-defs.py "$dir/$symbol.certificate.hthr" "$probe_dir/$defs.hthr"; then
+    echo "$symbol: (its certificate names no lowering this script reads)"
+    printf '%s\t%s\t\n' "$symbol" "(no lowering read)" >> "$report"
+    status=1
+    continue
+  fi
+  probe="$probe_dir/${symbol}_compare.hthr"
+  printf 'import %s;\nimport function_ir;\nimport bytes_level;\nimport bytes_level_from_function_ir;\nimport bytes_level_compare;\n' "$defs" > "$probe"
+  prefix="${symbol}_native"
+  term="compare_report(${prefix}_lowered(), ${prefix}_lowered_counts(), ${prefix}_placement(), ${prefix}_code())"
+  if ! line=$("$heather" eval --limits dev,cpu=1500 -L "$probe_dir" -L "$(dirname "$module")" --cache "$probe" "$term" 2> "$dir/eval.log" | tail -1); then
+    tail -5 "$dir/eval.log" >&2
+    line="(evaluation failed: $dir/eval.log)"
+    status=1
+  fi
+  # The report's numbers worded (`compare_report`, bytes_level_compare).
+  line=$(python3 -c '
+import ast, sys
+r = sys.argv[1]
+try:
+    v = ast.literal_eval(r)
+except Exception:
+    print(r); sys.exit()
+words = {0: "the translation refused the program", 1: "the placement did not translate",
+         2: "the translation is not valid, routine %s first", 3: "Program::lower refused, routine %s first",
+         4: "lowered but not laid out", 5: "same (%s bytes)", 6: "differs: %s bytes old, %s new, first at byte %s"}
+w = words.get(v[0], str(v))
+print(w % tuple(v[1:]) if "%" in w else w)' "$line")
+  echo "$symbol: $line"
+  # Where it lowered, both codes disassembled and compared routine by
+  # routine (scripts/bytes-level-compare-diff.py): $dir/diff.txt.
+  routines=""
+  case "$line" in
+    same*|differs*)
+      if "$heather" eval --limits dev,cpu=1500 -L "$probe_dir" -L "$(dirname "$module")" --cache "$probe" \
+          "both_codes(${prefix}_lowered(), ${prefix}_placement(), ${prefix}_code())" > "$dir/both.txt" 2>> "$dir/eval.log"; then
+        python3 scripts/bytes-level-compare-diff.py "$dir/both.txt" "$dir" "$dir/$symbol.s" > "$dir/routines.txt"
+        routines=$(grep -vc ': same' "$dir/routines.txt" || true)
+        sed 's/^/  /' "$dir/routines.txt" | grep -v ': same' || true
+      fi ;;
+  esac
+  printf '%s\t%s\t%s\n' "$symbol" "$line" "${routines:+$routines routines differ}" >> "$report"
+done <<< "$rows"
+echo "table: $report"
+exit $status

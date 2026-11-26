@@ -1,0 +1,212 @@
+// What the translation of FunctionIR programs to the bytes level
+// preserves (issues/bytes-level-translation.md, item 3;
+// docs/language/ownership-design.md §17.8): its memory nodes, stage by
+// stage.
+//
+// The heap is the buffers: buffer `k`'s home is a reference to block `k`
+// at offset 0, and the block's bytes are the buffer's (`Heap::of`, an empty
+// shadow, nothing undefined). Over such a heap, every `Done` of a
+// translated memory node is the old node's run:
+// - a byte load's `Offset` and `Load(1)` leave the old output
+//   (`byte_load_runs`);
+// - a byte store's `Offset`, `Store(1)` and `Load(1)` leave the old output
+//   and the old buffer as the block (`byte_store_runs`).
+// The statement over programs, and the forms this does not yet cover, are
+// the issue's log.
+import bytes_level;
+import bytes_memory;
+import bytes_level_lower;
+import bytes_level_from_function_ir;
+import x86_64_memory_contract;
+import x86_64_store;
+import function_ir;
+import function_ir_eval;
+import function_ir_state;
+import list;
+import list_window;
+import bitvec;
+import bool;
+import logic;
+import nat;
+import option;
+import omega;
+
+// ---------------------------------------------------------------------------
+// A byte read from a block that is a buffer
+
+// The byte a load reads at offset `i` of block `k` is the buffer's byte
+// `i`, as `BufferLoad` reads it, whatever the buffer's length: a read that
+// answers lies inside the block.
+theorem byte_read_is(heap: Heap, buffers: Buffers(), k, i: Nat, same: heap.bytes(k) = buffer_bytes(buffers, k), bytes: List<BitVec(8)>,
+    read: heap.read_bytes(Loc(k, i), 1) = Some(bytes)): word_of_bytes(bytes) = byte_word(buffer_byte(buffers, k, i)) {
+    let facts = heap.read_bytes_some(Loc(k, i), 1, bytes, read);
+    let one = word_of_one(bytes, heap.read_bytes_len(Loc(k, i), 1, bytes, read));
+    let window: (heap.bytes(k).window(i, i + 1).nth(0) = heap.bytes(k).nth(0 + i)) = heap.bytes(k).nth_window(i, i + 1, 0, omega());
+    let first: (bytes.nth(0) = buffer_bytes(buffers, k).nth(i)) =
+        trans(cong_fn<List<BitVec(8)>, Option<BitVec(8)>>(λ l => l.nth(0), sym(facts.right.right.right)),
+            trans(window, trans(cong_fn<Nat, Option<BitVec(8)>>(λ x => heap.bytes(k).nth(x), omega()),
+                cong_fn<List<BitVec(8)>, Option<BitVec(8)>>(λ l => l.nth(i), same))));
+    let unwrap = λ (o: Option<BitVec(8)>) => match o { None => BitVec::zero(), Some(b) => b };
+    let byte: (byte_at(bytes, 0) = buffer_byte(buffers, k, i)) =
+        trans(cong_fn<Option<BitVec(8)>, BitVec(8)>(unwrap, first), sym(buffer_byte_entry(buffers, k, i)));
+    trans(one, cong_fn<BitVec(8), BitVec(64)>(λ b => b.zero_extend(56), byte))
+}
+
+// ---------------------------------------------------------------------------
+// The translated byte load
+
+// The reference `amount` past `place`'s, as `Offset` sets it.
+theorem offset_ref(c: Config, output, place, amount: Nat, loc: Loc, at: c.locals.refs(place) = Some(loc), blocks: Blocks):
+    Offset(output, place, amount).step(blocks, c) =
+        Some(Config(c.locals.set_ref(output, Loc(loc.block, loc.offset + c.locals.word(amount).toNat())), c.memory, c.io)) {
+    j(sym(at), λ o _ => o.and_then(λ (l: Loc) => Some(Config(c.locals.set_ref(output, Loc(l.block, l.offset + c.locals.word(amount).toNat())), c.memory, c.io))) =
+        Some(Config(c.locals.set_ref(output, Loc(loc.block, loc.offset + c.locals.word(amount).toNat())), c.memory, c.io)), refl)
+}
+
+// The translation of `BufferLoad(output, k, index)` at the home whose
+// reference is block `k` from 0, run to an end: the reference `t` set, the
+// output what the old node gives it, nothing else changed.
+fn load_end(c: Config, buffers: Buffers(), k, index, output, t: Nat) → Config {
+    Config(c.locals.set_ref(t, Loc(k, 0 + c.locals.word(index).toNat())).set_word(output, load_value(buffers, k, index, c.locals.words)), c.memory, c.io)
+}
+
+theorem byte_load_runs(blocks: Blocks, c: Config, buffers: Buffers(), k, base, index, output, t: Nat, at: c.locals.refs(base) = Some(Loc(k, 0)),
+    same: c.memory.bytes(k) = buffer_bytes(buffers, k), after: Config,
+    ran: run_instrs(blocks, [Offset(t, base, index), Load(1, output, t)], c) = Some(after)): after = load_end(c, buffers, k, index, output, t) {
+    let loc = Loc(k, 0 + c.locals.word(index).toNat());
+    let mid = Config(c.locals.set_ref(t, loc), c.memory, c.io);
+    let first = offset_ref(c, t, base, index, Loc(k, 0), at, blocks);
+    let here: (mid.locals.refs(t) = Some(loc)) = j(sym(t.same_self()), λ b _ => (match b { True => Some(loc), False => c.locals.refs(t) }) = Some(loc), refl);
+    let rest: (run_instrs(blocks, [Load(1, output, t)], mid) = Some(after)) =
+        j(first, λ o _ => o.and_then(λ (m: Config) => run_instrs(blocks, [Load(1, output, t)], m)) = Some(after), ran);
+    let loaded = λ (m: Heap) (x: Option<BitVec(64)>) => x.and_then(λ (y: BitVec(64)) =>
+        Some(Config(mid.locals.set_word(output, word_value(y)), m, mid.io)));
+    let step: (loaded(c.memory, c.memory.load(loc, 1)).and_then(λ (m: Config) => run_instrs(blocks, [], m)) = Some(after)) =
+        j(here, λ o _ => o.and_then(λ (l: Loc) => loaded(c.memory, c.memory.load(l, 1))).and_then(λ (m: Config) => run_instrs(blocks, [], m)) =
+            Some(after), rest);
+    (match c.memory.load(loc, 1) as λ o => c.memory.load(loc, 1) = o → loaded(c.memory, o).and_then(λ (m: Config) => run_instrs(blocks, [], m)) = Some(after) →
+            after = load_end(c, buffers, k, index, output, t) {
+        None => λ _ never => absurd(never),
+        Some(x) => λ found done => {
+            let end = Option::some_inj(Config(mid.locals.set_word(output, word_value(x)), c.memory, c.io), after, done);
+            let read = c.memory.load_some(loc, 1, x, found);
+            let zero: (0 + c.locals.word(index).toNat() = c.locals.word(index).toNat()) = omega();
+            let byte: (x = byte_word(buffer_byte(buffers, k, c.locals.words(64, index).toNat()))) =
+                trans(sym(read.proof.right), byte_read_is(c.memory, buffers, k, c.locals.word(index).toNat(), same, read.witness,
+                    j(cong_fn<Nat, Loc>(λ o => Loc(k, o), zero), λ l _ => c.memory.read_bytes(l, 1) = Some(read.witness), read.proof.left)));
+            trans(sym(end), cong_fn<BitVec(64), Config>(λ y => Config(mid.locals.set_word(output, word_value(y)), c.memory, c.io), byte))
+        },
+    })(refl, step)
+}
+
+// ---------------------------------------------------------------------------
+// A byte written into a block that is a buffer
+
+// One byte placed at offset `i` of block `k` leaves the block the buffer
+// with its byte `i` stored (`store_byte`), and every other block as it was.
+theorem byte_placed_is(heap: Heap, buffers: Buffers(), k, i: Nat, b: BitVec(8), same: heap.bytes(k) = buffer_bytes(buffers, k),
+    fits: i + 1 <= heap.bytes(k).len()): heap.placed(Loc(k, i), Piece::plain([b])).bytes(k) = buffer_bytes(store_byte(buffers, k, i, b), k) {
+    let inside: (i < heap.bytes(k).len()) = omega(fits);
+    trans(heap.placed_bytes(Loc(k, i), Piece::plain([b]), fits, k),
+        trans(set_block_here(λ (d: Nat) => heap.bytes(d), k, heap.bytes(k).put_window(i, [b])),
+            trans(heap.bytes(k).put_window_cons(i, b, Nil, inside),
+                trans(heap.bytes(k).update(i, λ (_: BitVec(8)) => b).put_window_nil(i + 1),
+                    trans(cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ l => l.update(i, λ (_: BitVec(8)) => b), same),
+                        sym(buffer_bytes_stored(buffers, k, i, b)))))))
+}
+
+theorem byte_placed_other(heap: Heap, k, i: Nat, b: BitVec(8), fits: i + 1 <= heap.bytes(k).len(), other: Nat, differs: other ≠ k):
+    heap.placed(Loc(k, i), Piece::plain([b])).bytes(other) = heap.bytes(other) {
+    trans(heap.placed_bytes(Loc(k, i), Piece::plain([b]), fits, other),
+        set_block_other(λ (d: Nat) => heap.bytes(d), k, heap.bytes(k).put_window(i, [b]), other, differs))
+}
+
+// ---------------------------------------------------------------------------
+// The translated byte store
+
+// What a store's run leaves, where it answers: the heap with its byte
+// placed, inside its block.
+theorem store_step(blocks: Blocks, c: Config, place, value: Nat, loc: Loc, at: c.locals.refs(place) = Some(loc), after: Config,
+    stepped: Store(1, place, value).step(blocks, c) = Some(after)):
+    (after.locals = c.locals) ∧ ((after.memory = c.memory.placed(loc, Piece::plain(low_bytes(1, c.locals.word(value))))) ∧
+        (loc.offset + 1 <= c.memory.bytes(loc.block).len())) {
+    let piece = Piece::plain(low_bytes(1, c.locals.word(value)));
+    let put = λ (l: Loc) => c.memory.put(blocks.written, l, piece).and_then(λ (m: Heap) => Some(Config(c.locals, m, c.io)));
+    let stepped2: (put(loc) = Some(after)) = j(at, λ o _ => o.and_then(put) = Some(after), stepped);
+    (match c.memory.put(blocks.written, loc, piece) as λ o => c.memory.put(blocks.written, loc, piece) = o →
+            o.and_then(λ (m: Heap) => Some(Config(c.locals, m, c.io))) = Some(after) →
+            (after.locals = c.locals) ∧ ((after.memory = c.memory.placed(loc, piece)) ∧ (loc.offset + 1 <= c.memory.bytes(loc.block).len())) {
+        None => λ _ never => absurd(never),
+        Some(m) => λ found done => {
+            let end = Option::some_inj(Config(c.locals, m, c.io), after, done);
+            let facts = c.memory.put_some(blocks.written, loc, piece, m, found);
+            ⟨cong_fn<Config, Locals>(λ x => x.locals, sym(end)),
+                ⟨trans(cong_fn<Config, Heap>(λ x => x.memory, sym(end)), sym(facts.right.right)), c.memory.fits_parts(loc, 1, facts.right.left).left⟩⟩
+        },
+    })(refl, stepped2)
+}
+
+// The translation of `BufferStore(output, k, index, value)` at the home
+// whose reference is block `k` from 0, run to an end: block `k` is the old
+// buffer after the store, every other block as it was, and the output is
+// what the old node gives it, at every width.
+theorem byte_store_runs(blocks: Blocks, c: Config, buffers: Buffers(), k, base, index, value, output, t: Nat, at: c.locals.refs(base) = Some(Loc(k, 0)),
+    same: c.memory.bytes(k) = buffer_bytes(buffers, k), after: Config,
+    ran: run_instrs(blocks, [Offset(t, base, index), Store(1, t, value), Load(1, output, t)], c) = Some(after)):
+    (after.memory.bytes(k) = buffer_bytes(store_byte(buffers, k, c.locals.words(64, index).toNat(), low_byte(c.locals.words(64, value))), k)) ∧
+        (((other: Nat) → other ≠ k → after.memory.bytes(other) = c.memory.bytes(other)) ∧
+            (after.locals = c.locals.set_ref(t, Loc(k, 0 + c.locals.word(index).toNat())).set_word(output,
+                load_value(store_byte(buffers, k, c.locals.words(64, index).toNat(), low_byte(c.locals.words(64, value))), k, index, c.locals.words)))) {
+    let i = c.locals.word(index).toNat();
+    let loc = Loc(k, 0 + i);
+    let mid = Config(c.locals.set_ref(t, loc), c.memory, c.io);
+    let first = offset_ref(c, t, base, index, Loc(k, 0), at, blocks);
+    let here: (mid.locals.refs(t) = Some(loc)) = j(sym(t.same_self()), λ b _ => (match b { True => Some(loc), False => c.locals.refs(t) }) = Some(loc), refl);
+    let rest: (run_instrs(blocks, [Store(1, t, value), Load(1, output, t)], mid) = Some(after)) =
+        j(first, λ o _ => o.and_then(λ (m: Config) => run_instrs(blocks, [Store(1, t, value), Load(1, output, t)], m)) = Some(after), ran);
+    (match Store(1, t, value).step(blocks, mid) as λ o => Store(1, t, value).step(blocks, mid) = o →
+            o.and_then(λ (m: Config) => run_instrs(blocks, [Load(1, output, t)], m)) = Some(after) →
+            (after.memory.bytes(k) = buffer_bytes(store_byte(buffers, k, c.locals.words(64, index).toNat(), low_byte(c.locals.words(64, value))), k)) ∧
+            (((other: Nat) → other ≠ k → after.memory.bytes(other) = c.memory.bytes(other)) ∧
+                (after.locals = c.locals.set_ref(t, Loc(k, 0 + c.locals.word(index).toNat())).set_word(output,
+                    load_value(store_byte(buffers, k, c.locals.words(64, index).toNat(), low_byte(c.locals.words(64, value))), k, index, c.locals.words)))) {
+        None => λ _ never => absurd(never),
+        Some(stored) => λ stepped done => {
+            let facts = store_step(blocks, mid, t, value, loc, here, stored, stepped);
+            let zero: (0 + i = i) = omega();
+            let byte = low_byte(c.locals.words(64, value));
+            let after_buffers = store_byte(buffers, k, i, byte);
+            let fits: (i + 1 <= c.memory.bytes(k).len()) = j(zero, λ x _ => x + 1 <= c.memory.bytes(k).len(), facts.right.right);
+            let placed: (stored.memory = c.memory.placed(Loc(k, i), Piece::plain([byte]))) =
+                j(cong_fn<Nat, Loc>(λ o => Loc(k, o), zero), λ l _ => stored.memory = c.memory.placed(l, Piece::plain([byte])), facts.right.left);
+            let block: (stored.memory.bytes(k) = buffer_bytes(after_buffers, k)) =
+                trans(cong_fn<Heap, List<BitVec(8)>>(λ m => m.bytes(k), placed), byte_placed_is(c.memory, buffers, k, i, byte, same, fits));
+            // The load back, from the stored heap: the byte as the old node's
+            // output reads it.
+            let loaded = λ (x: Option<BitVec(64)>) => x.and_then(λ (y: BitVec(64)) => Some(Config(stored.locals.set_word(output, word_value(y)), stored.memory, stored.io)));
+            let ref_t: (stored.locals.refs(t) = Some(loc)) = trans(cong_fn<Locals, Option<Loc>>(λ l => l.refs(t), facts.left), here);
+            let step: (loaded(stored.memory.load(loc, 1)).and_then(λ (m: Config) => run_instrs(blocks, [], m)) = Some(after)) =
+                j(ref_t, λ o _ => o.and_then(λ (l: Loc) => loaded(stored.memory.load(l, 1))).and_then(λ (m: Config) => run_instrs(blocks, [], m)) = Some(after), done);
+            (match stored.memory.load(loc, 1) as λ o => stored.memory.load(loc, 1) = o → loaded(o).and_then(λ (m: Config) => run_instrs(blocks, [], m)) = Some(after) →
+                    (after.memory.bytes(k) = buffer_bytes(after_buffers, k)) ∧
+                    (((other: Nat) → other ≠ k → after.memory.bytes(other) = c.memory.bytes(other)) ∧
+                        (after.locals = c.locals.set_ref(t, loc).set_word(output, load_value(after_buffers, k, index, c.locals.words)))) {
+                None => λ _ never => absurd(never),
+                Some(x) => λ found finished => {
+                    let end = Option::some_inj(Config(stored.locals.set_word(output, word_value(x)), stored.memory, stored.io), after, finished);
+                    let read = stored.memory.load_some(loc, 1, x, found);
+                    let value_is: (x = byte_word(buffer_byte(after_buffers, k, i))) =
+                        trans(sym(read.proof.right), byte_read_is(stored.memory, after_buffers, k, i, block, read.witness,
+                            j(cong_fn<Nat, Loc>(λ o => Loc(k, o), zero), λ l _ => stored.memory.read_bytes(l, 1) = Some(read.witness), read.proof.left)));
+                    let memory: (after.memory = stored.memory) = cong_fn<Config, Heap>(λ m => m.memory, sym(end));
+                    ⟨trans(cong_fn<Heap, List<BitVec(8)>>(λ m => m.bytes(k), memory), block),
+                        ⟨λ other differs => trans(cong_fn<Heap, List<BitVec(8)>>(λ m => m.bytes(other), memory),
+                                trans(cong_fn<Heap, List<BitVec(8)>>(λ m => m.bytes(other), placed), byte_placed_other(c.memory, k, i, byte, fits, other, differs))),
+                            trans(cong_fn<Config, Locals>(λ m => m.locals, sym(end)),
+                                trans(cong_fn<Locals, Locals>(λ l => l.set_word(output, word_value(x)), facts.left),
+                                    cong_fn<BitVec(64), Locals>(λ y => mid.locals.set_word(output, word_value(y)), value_is)))⟩⟩
+                },
+            })(refl, step)
+        },
+    })(refl, rest)
+}

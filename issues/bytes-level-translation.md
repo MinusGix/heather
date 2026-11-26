@@ -62,3 +62,35 @@ The translation and its theorem pass the library gate; the comparison runs over 
   - `also` and `Fixed` exist in the language (a results list; a reference and a constant length).
   - Levels have no counterpart. The old meaning answers zero past the last level, while the translated meaning recurses on. The out-of-room exit has no meaning ([[bytes-level-lowering-recursion]]).
   - `TableRead` is refused by `lower_nodes` on both paths.
+- 2026-11-26, item 2: **the translation** (`lib/native/bytes_level/bytes_level_from_function_ir.hthr`).
+  - Its shape:
+    - `translate_program` numbers routines from the first; FunctionIR lists its functions last first.
+    - Buffer `k` is the reference parameter `2k` and the length word `2k + 1`; a `Fixed` span is parameter 0 and the port the body sets.
+    - A scope names a buffer by its home, as the old lowering does: `Lent`, `loop_carried` inside a loop, `StructuredRegion::lends` after one.
+  - Nodes:
+    - A byte load is `Offset` and `Load(1)`.
+    - A byte store is `Offset`, `Store(1)`, and `Load(1)` for the old output.
+    - A wide access at 1, 2, 4 or 8 bytes is `Offset` and `Load`/`Store`. The store is reloaded only where the function reads its output; the old lowering leaves that output unheld.
+    - Word nodes are `Compute`.
+  - Calls and lends:
+    - A call is a call on the values.
+    - A lend is the views' `Offset`s and lengths, then the call.
+  - A bounded loop is the plain loop with the counter and an exhausted flag as the state's last two elements.
+    - The pass's tail branches on the old exit bit: counter 0 and flag 0, or counter `+ (2^64 - 1)` and flag 1. Then the test is `counter = 0`; after the loop, `exhausted = (flag = 1)`.
+    - The exit bit is only branched on, because the old planner may have folded its comparison into the test. A materialised comparison needs two registers the old placement does not leave (count_newlines has none spare).
+    - Before the loop, a bound-zero branch, skipped where the path knows the bound is a nonzero constant (every export's loop: `2^64 - 1`).
+  - Where the meanings differ (`Scope::memory`, using the old lowering's own `File::bounded`/`span_bounded` over the same `Known`s):
+    - A byte load not known inside becomes a comparison and a branch (zero past the end).
+    - A store or wide load not known inside is refused.
+    - A lend whose views are not known lendable and apart is refused.
+  - Also refused, as the old lowering refuses them:
+    - a function with levels;
+    - a call of a function not below its caller, which the old meaning answers with zero;
+    - a lent callee not given the caller's homes first (`calls_below`, `args_lend`).
+  - Found by the comparison: the optimizer writes a decided comparison's bit right after the comparison (one id bound twice). The translation drops a pure node a later node of its leaf rebinds before anything reads it (`rebound`). That is exact in meaning, and its facts are still gathered.
+  - Probes (`lib/_tests/native/bytes_level/bytes_level_from_function_ir_tests.hthr`): each run is two closed verdicts, the new answer and the old (`program_run`), and their agreement.
+    - The exports' own source programs: `count_newlines`, also past its end; `raise_span`'s word and the span after it; `copy_window`'s lend.
+    - One per form: a guarded load inside and past the end; a store and its output; a wide load and store; a loop that runs out (with its exhausted bit), one of no passes, one that exits, one that exits on its last allowed pass.
+    - Controls: a store not known inside, refused; a wide load not known whole, refused; a leveled function, refused.
+    - The comparison on a word function lowered both ways: the same 7 bytes.
+  - Verification: `scripts/fmt --check` and `scripts/lib-closures` clean; `scripts/linked --check` unchanged; `HEATHER_PR_NATIVE=all scripts/test --pr`: `== suite: 4139 passed, 0 failed, 3 ignored ==`. That run predates two changes: the drop restricted to pure nodes, and the call checks. The modules and probes were re-checked after them, and the final verification re-runs the suite.

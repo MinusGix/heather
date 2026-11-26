@@ -1,0 +1,550 @@
+// Stage 2's test, its evaluated half (docs/language/ownership-design.md
+// §17.8; issues/bytes-level-translation.md; scripts/bytes-level-compare):
+// a FunctionIR program as compile-x86 lowered it, with the planner's
+// placement and the old code, against its translation lowered by
+// `Program::lower`.
+//
+// The placement is a stream the lowerings read in emission order, so it
+// is translated in step with the program (`placed_region`, the same walk
+// as `translate_region`, the same decisions):
+// - A node that was one place becomes as many as its instructions, each
+//   the old place. A byte load's `Offset` and `Load` both land in the
+//   register the old load did, as the old load's address did; a store's
+//   reference is formed there and its byte loaded back there.
+// - A guard's comparison is folded into its branch.
+// - A loop's registers are the old ones: the state's, then the counter's
+//   and the flag's (the state's last two elements here; `exhausted` is the
+//   flag out). The tail's counter and flag are placed in their registers,
+//   its constants and its `stop` folded.
+// - Label numbers shift by two per loop (its bound-zero branch), so the
+//   function's `Short` hints are renumbered. The old loop's fourth label
+//   (the exhausted mark) has no counterpart.
+//
+// None of this is trusted: `Program::lower` checks what it is given, and
+// a placement it cannot use is a refusal the report names.
+import bytes_level;
+import bytes_level_lower;
+import bytes_level_scope;
+import bytes_level_routines;
+import bytes_level_from_function_ir;
+import function_ir;
+import function_ir_lower;
+import function_ir_lower_structured;
+import function_ir_lower_reads;
+import function_ir_lower_calls;
+import x86_64;
+import x86_64_asm;
+import bitvec;
+import bool;
+import list;
+import nat;
+import option;
+
+// ---------------------------------------------------------------------------
+// Labels: the old number of each label and its new one, as pairs.
+
+record Labels { old: Nat, new: Nat, pairs: List<Nat> }
+
+fn pair_up(old, new, k: Nat) → List<Nat> { match k { Zero => [], Succ(j) => pair_up(old, new, j) ++ [old + k, new + k] } }
+
+fn find_pair(pairs: List<Nat>, name: Nat) → Option<Nat> {
+    match pairs {
+        Nil => None,
+        Cons(o, rest) => match rest { Nil => None, Cons(n, more) => match o.same(name) { True => Some(n), False => find_pair(more, name) } },
+    }
+}
+
+fn Labels::both(self l: Labels, k: Nat) → Labels { Labels(l.old + k, l.new + k, l.pairs ++ pair_up(l.old, l.new, k)) }
+
+fn Labels::renamed(self l: Labels, name: Nat) → Option<Nat> { find_pair(l.pairs, name) }
+
+// What a step of the walk made: the new places, the old ones left, the
+// next fresh id, the scope after, and the labels.
+record Placed { places: List<Place>, rest: List<Place>, next: Nat, scope: Scope, labels: Labels }
+
+fn repeat_place(p: Place, n: Nat) → List<Place> { match n { Zero => [], Succ(k) => Cons(p, repeat_place(p, k)) } }
+
+// The registers the walk may use for the loop's two bits.
+record Spare { first: Option<Gpr>, second: Option<Gpr> }
+
+fn Spare::one(self s: Spare, flag: Gpr) → Gpr { match s.first { None => flag, Some(r) => r } }
+
+fn Spare::two(self s: Spare, flag: Gpr) → Gpr { match s.second { None => s.one(flag), Some(r) => r } }
+
+fn placed_nodes(s: Scope, nodes: List<Node>, old: List<Place>, next: Nat, reads: List<Nat>, labels: Labels) → Option<Placed> {
+    match nodes {
+        Nil => Some(Placed([], old, next, s, labels)),
+        Cons(node, rest) => match old {
+            Nil => None,
+            Cons(q, later) => {
+                let after = Scope(s.homes, s.refs, node_known(node, s.known));
+                match s.node_form(node, rest, next, reads) {
+                    Refused => None,
+                    Plain(instrs) => match placed_nodes(after, rest, later, next + 2, reads, labels) {
+                        None => None,
+                        Some(more) => Some(Placed(repeat_place(q, instrs.len()) ++ more.places, more.rest, more.next, more.scope, more.labels)),
+                    },
+                    Guarded(_, instrs) => match placed_nodes(after, rest, later, next + 2, reads, Labels(labels.old, labels.new + 2, labels.pairs)) {
+                        None => None,
+                        Some(more) => Some(Placed(Cons(Folded, repeat_place(q, instrs.len() + 1)) ++ more.places, more.rest, more.next, more.scope, more.labels)),
+                    },
+                }
+            },
+        },
+    }
+}
+
+// A call's places: its spill mask, where the old placement has one.
+fn call_places(old: List<Place>) → List<Place> {
+    match old { Nil => [], Cons(p, _) => match p { Spilling(m) => [Spilling(m)], Into(_) => [], Folded => [], Saving(_) => [], CallSlots(_) => [], Short(_) => [] } }
+}
+
+// The old loop's registers: the state's, the counter's, the flag's.
+record LoopPlaces { state: List<Gpr>, counter: Gpr, flag: Gpr, rest: List<Place> }
+
+fn loop_places(n: Nat, old: List<Place>) → Option<LoopPlaces> {
+    match loop_registers(n, old) { None => None, Some(r) => Some(LoopPlaces(r.state, r.counter, r.flag, r.rest)) }
+}
+
+fn into_all(registers: List<Gpr>) → List<Place> { registers.map(λ (r: Gpr) => Into(r)) }
+
+fn placed_region(s: Scope, region: StructuredRegion, old: List<Place>, next: Nat, reads: List<Nat>, labels: Labels, spare: Spare) → Option<Placed> {
+    match region {
+        Dataflow(body) => placed_nodes(s, body.nodes, old, next, reads, labels),
+        Sequence(prefix, rest) => match placed_nodes(s, prefix.nodes, old, next, reads, labels) {
+            None => None,
+            Some(first) => match placed_region(first.scope, rest, first.rest, first.next, reads, first.labels, spare) {
+                None => None,
+                Some(second) => Some(Placed(first.places ++ second.places, second.rest, second.next, second.scope, second.labels)),
+            },
+        },
+        Compose(prefix, rest) => match placed_region(s, prefix, old, next, reads, labels, spare) {
+            None => None,
+            Some(first) => match placed_region(first.scope, rest, first.rest, first.next, reads, first.labels, spare) {
+                None => None,
+                Some(second) => Some(Placed(first.places ++ second.places, second.rest, second.next, second.scope, second.labels)),
+            },
+        },
+        Conditional(_, condition, _, _, yes, no) =>
+            match placed_region(s.know(Truth(condition)), yes, old, next, reads, labels.both(2), spare) {
+                None => None,
+                Some(left) => match placed_region(s.know(Falsity(condition)), no, left.rest, left.next, reads, left.labels, spare) {
+                    None => None,
+                    Some(right) => Some(Placed(left.places ++ right.places, right.rest, right.next, s, right.labels)),
+                },
+            },
+        Call(_, _, _, _) => Some(Placed(call_places(old), after_saves(old), next, s, labels)),
+        Lend(views, _, _, _) => match views_lendable_in(views, s) {
+            False => None,
+            True => {
+                let front = old.take(2 * views.len());
+                let after = old.drop(2 * views.len());
+                Some(Placed(front ++ call_places(after), after_saves(after), next, s, labels))
+            },
+        },
+        Loop(inputs, bound, parameters, count, body, exit, later, outputs, exhausted) => match loop_places(parameters.len(), old) {
+            None => None,
+            Some(lp) => {
+                let inner = Scope(carried_homes(loop_carried(s.homes, inputs, parameters, later)), ref_ids_of(s, inputs, parameters), []);
+                // Old labels H, C, X, J are old + 1 to + 4. The new loop's
+                // H, C, J come after the bound-zero branch's two labels,
+                // where there is one.
+                let skip = match s.runs_once(bound) { True => 0, False => 2 };
+                let entered = Labels(labels.old + 4, labels.new + skip + 4,
+                    labels.pairs ++ [labels.old + 1, labels.new + skip + 1, labels.old + 2, labels.new + skip + 2, labels.old + 4, labels.new + skip + 3]);
+                match placed_region(inner, body, lp.rest, next + loop_ids(), reads, entered, spare) {
+                    None => None,
+                    Some(pass) => {
+                        let check: List<Place> = match s.runs_once(bound) {
+                            True => [],
+                            False => [Folded, Folded] ++ (into_all(lp.state) ++ [Into(lp.flag)]),
+                        };
+                        let front: List<Place> = check ++ (into_all(lp.state) ++ [Into(lp.counter), Into(lp.flag)]);
+                        // The tail's branch: its yes arm, then its no arm.
+                        let tail: List<Place> = [Into(lp.counter), Into(lp.flag), Folded, Into(lp.counter), Into(lp.flag), Folded, Folded];
+                        Some(Placed(front ++ (pass.places ++ (tail ++ [Folded, Folded])), pass.rest, pass.next, s.after_loop(inputs, parameters, later, outputs),
+                            Labels(pass.labels.old, pass.labels.new + 2, pass.labels.pairs)))
+                    },
+                }
+            },
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Functions
+
+// The function's header: its saves, its slots, its short labels.
+fn header_of(old: List<Place>) → List<Place> { old.take(old.len() - placement_body(old).len()) }
+
+fn renamed_header(header: List<Place>, labels: Labels) → List<Place> {
+    match header {
+        Nil => [],
+        Cons(p, rest) => match p {
+            Short(n) => match labels.renamed(n) { None => renamed_header(rest, labels), Some(m) => Cons(Short(m), renamed_header(rest, labels)) },
+            Into(r) => Cons(Into(r), renamed_header(rest, labels)),
+            Folded => Cons(Folded, renamed_header(rest, labels)),
+            Saving(c) => Cons(Saving(c), renamed_header(rest, labels)),
+            CallSlots(c) => Cons(CallSlots(c), renamed_header(rest, labels)),
+            Spilling(m) => Cons(Spilling(m), renamed_header(rest, labels)),
+        },
+    }
+}
+
+fn place_register(p: Place) → Option<Gpr> {
+    match p { Into(r) => Some(r), Folded => None, Saving(_) => None, CallSlots(_) => None, Spilling(_) => None, Short(_) => None }
+}
+
+fn used_in(places: List<Place>, r: Gpr) → Bool {
+    match places { Nil => False, Cons(p, rest) => match place_register(p) { None => used_in(rest, r), Some(q) => q.same(r) || used_in(rest, r) } }
+}
+
+fn first_unused(places: List<Place>, candidates: List<Gpr>) → Option<Gpr> {
+    match candidates { Nil => None, Cons(r, rest) => match used_in(places, r) { True => first_unused(places, rest), False => Some(r) } }
+}
+
+fn spare_candidates() → List<Gpr> { [R11, R10, R9, R8, Rsi, Rdi, Rdx, Rcx] }
+
+fn spare_of(places: List<Place>) → Spare {
+    match first_unused(places, spare_candidates()) {
+        None => Spare(None, None),
+        Some(r) => Spare(Some(r), first_unused(Cons(Into(r), places), spare_candidates())),
+    }
+}
+
+record PlacedFunction { places: List<Place>, rest: List<Place>, labels: Labels }
+
+// The function's places, from the old stream at its start; the registers
+// it leaves unused are read off the whole rest of the stream, which is an
+// over-approximation of its own.
+fn Function::placed(self f: Function, old: List<Place>, labels: Labels) → Option<PlacedFunction> {
+    let s = Scope(f.buffer_homes(), homes_bases(f.buffer_homes()), []);
+    let body = placement_body(old);
+    match placed_region(s, f.body, body, f.fresh_from(), f.reads(), labels, spare_of(body)) {
+        None => None,
+        Some(made) => Some(PlacedFunction(renamed_header(header_of(old), made.labels) ++ made.places, made.rest, made.labels)),
+    }
+}
+
+fn placed_functions(functions: List<Function>, old: List<Place>, labels: Labels) → Option<List<Place>> {
+    match functions {
+        Nil => Some([]),
+        Cons(f, rest) => match f.placed(old, labels) {
+            None => None,
+            Some(made) => match placed_functions(rest, made.rest, made.labels) { None => None, Some(more) => Some(made.places ++ more) },
+        },
+    }
+}
+
+// The placement of the translated program: functions in emission order,
+// function 0 first, labels from the count of functions on.
+fn translate_placement(functions: List<Function>, placement: List<Place>) → Option<List<Place>> {
+    placed_functions(functions.rev(), placement, Labels(functions.len(), functions.len(), []))
+}
+
+// ---------------------------------------------------------------------------
+// The report
+
+fn bytes_nats(bytes: List<BitVec(8)>) → List<Nat> { bytes.map(λ (b: BitVec(8)) => b.toNat()) }
+
+// A program's bytes, as `asm_code` assembles them, in one pass: `asm_code`
+// measures everything before each item again, which a program the size of
+// the lexer's cannot afford in one evaluation. Its items in order with
+// their offsets; its labels as a table, the last of a name first, as
+// `asm_target` reads them; then each item's bytes.
+record ItemsOf { items: List<Asm>, names: List<Nat> }
+
+fn prog_items(p: Prog, after: List<Asm>, names: List<Nat>) → ItemsOf {
+    match p { Start => ItemsOf(after, names), At(before, name, item) => prog_items(before, Cons(item, after), Cons(name, names)) }
+}
+
+// The label table, latest first: (name, offset) pairs as two numbers.
+fn label_table(items: List<Asm>, names: List<Nat>, here: Nat, table: List<Nat>) → List<Nat> {
+    match items {
+        Nil => table,
+        Cons(item, rest) => match names {
+            Nil => table,
+            Cons(name, more) => label_table(rest, more, here + asm_len(item), match name { Zero => table, Succ(_) => Cons(name, Cons(here, table)) }),
+        },
+    }
+}
+
+fn label_at(table: List<Nat>, name: Nat) → Nat {
+    match table { Nil => 0, Cons(n, rest) => match rest { Nil => 0, Cons(at, more) => match n.same(name) { True => at, False => label_at(more, name) } } }
+}
+
+fn items_bytes(labels: Nat → Nat, items: List<Asm>, here: Nat) → List<Nat> {
+    match items { Nil => [], Cons(item, rest) => bytes_nats(asm_bytes(no_fills(), labels, here, item)) ++ items_bytes(labels, rest, here + asm_len(item)) }
+}
+
+fn prog_bytes(p: Prog) → List<Nat> {
+    let of = prog_items(p, [], []);
+    let table = label_table(of.items, of.names, 0, []);
+    items_bytes(λ (name: Nat) => label_at(table, name), of.items, 0)
+}
+
+fn prog_starts(p: Prog, n: Nat) → List<Nat> {
+    let of = prog_items(p, [], []);
+    let table = label_table(of.items, of.names, 0, []);
+    List::count_from(1, n).map(λ (k: Nat) => label_at(table, k))
+}
+
+fn first_difference(a, b: List<Nat>, at: Nat) → Nat {
+    match a {
+        Nil => at,
+        Cons(x, xs) => match b { Nil => at, Cons(y, ys) => match x.same(y) { True => first_difference(xs, ys, at + 1), False => at } },
+    }
+}
+
+fn first_invalid(sigs: Nat → Option<Signature>, routines: List<Routine>, k: Nat) → Nat {
+    match routines { Nil => k, Cons(r, rest) => match r.valid(sigs) { False => k, True => first_invalid(sigs, rest, k + 1) } }
+}
+
+// The first routine whose emission is refused, at the translated placement.
+fn first_refused(prog: Prog, routines: List<Routine>, k, bound: Nat, placement: List<Place>, names: Nat) → Nat {
+    match routines {
+        Nil => k,
+        Cons(r, rest) => match r.emit(prog, k, bound, placement, names) {
+            None => k,
+            Some(out) => first_refused(out.prog, rest, k + 1, bound, out.placement, out.names),
+        },
+    }
+}
+
+// The report, a list of numbers the script words:
+// - [0]: the translation refused the program.
+// - [1]: the placement's translation failed.
+// - [2, k]: the translated program is not valid, routine `k` first.
+// - [3, k]: `Program::lower` refused, routine `k` first.
+// - [4, k]: lowered, but not laid out (k routines emitted).
+// - [5, n]: the same `n` bytes.
+// - [6, old, new, at]: `old` and `new` bytes, first different at `at`.
+fn compare_report(functions: List<Function>, counts: List<Nat>, placement: List<Place>, code: Prog) → List<Nat> {
+    match translate_program(functions) {
+        None => [0],
+        Some(p) => match translate_placement(functions, placement) {
+            None => [1],
+            Some(places) => match p.valid() {
+                False => [2, first_invalid(program_signatures(p.routines), p.routines, 0)],
+                True => match p.lower(places) {
+                    None => [3, first_refused(Start, p.routines, 0, p.routines.len(), places, p.routines.len())],
+                    Some(lowered) => {
+                        let old = prog_bytes(code);
+                        let new = prog_bytes(lowered);
+                        match old.len().same(new.len()) && first_difference(old, new, 0).same(old.len()) {
+                            True => [5, old.len()],
+                            False => [6, old.len(), new.len(), first_difference(old, new, 0)],
+                        }
+                    },
+                },
+            },
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Where `Program::lower` refuses: the path to the first part of a body that
+// does not emit, as `Body::emit` walks it. Each step is two numbers: the
+// construct (10 a leaf, 11 a sequence, 12 a branch, 13 a loop, 14 a call,
+// 15 a system call, 16 an exit) and which part (a leaf's instruction, 0 or
+// 1 for a sequence's or a branch's halves, 0 for a loop's pass; 9 the
+// branch's test or the loop's close, 7 the loop's registers, 8 its entry).
+// Empty where the body emits.
+// An instruction as numbers: its kind (0 a word node, 1 a load, 2 a store,
+// 3 and 4 a reference's load and store, 5 an offset, 6 a copy) and its
+// fields.
+fn instr_shown(instr: Instr) → List<Nat> {
+    match instr {
+        Compute(node) => Cons(0, Cons(node_output(node).id, node_reads(node))),
+        Load(bytes, output, place) => [1, bytes, output, place],
+        Store(bytes, place, value) => [2, bytes, place, value],
+        LoadRef(output, place) => [3, output, place],
+        StoreRef(place, value) => [4, place, value],
+        Offset(output, place, amount) => [5, output, place, amount],
+        Copy(target, source, length) => [6, target, source, length],
+    }
+}
+
+fn instrs_refused(saves: Nat, prog: Prog, file: File, instrs: List<Instr>, placement: List<Place>, names: Nat, at: Nat) → List<Nat> {
+    match instrs {
+        Nil => [],
+        Cons(instr, rest) => match instr.emit(saves, prog, file, placement, names) {
+            None => [10, at] ++ instr_shown(instr),
+            Some(first) => instrs_refused(saves, first.prog, first.file, rest, first.placement, first.names, at + 1),
+        },
+    }
+}
+
+fn Body::refused(self body: Body, saves, slots: Nat, short: List<Nat>, bound, spare: Nat, prog: Prog, file: File, placement: List<Place>, names: Nat) →
+    List<Nat> {
+    match body {
+        Leaf(instrs) => instrs_refused(saves, prog, file, instrs, placement, names, 0),
+        Seq(first, rest) => match first.emit(saves, slots, short, bound, spare, prog, file, placement, names) {
+            None => [11, 0] ++ first.refused(saves, slots, short, bound, spare, prog, file, placement, names),
+            Some(done) => [11, 1] ++ rest.refused(saves, slots, short, bound, spare, done.prog, done.file, done.placement, done.names),
+        },
+        Branch(condition, yes, no) => match file.branch_test(condition) {
+            None => [12, 9],
+            Some(tested) => match yes.emit(saves, slots, short, bound, spare, prog.branched_by(tested.test, names + 1, shorts(short, names + 1)),
+                file.know(Truth(condition)), placement, names + 2) {
+                None => [12, 0] ++ yes.refused(saves, slots, short, bound, spare, prog.branched_by(tested.test, names + 1, shorts(short, names + 1)),
+                    file.know(Truth(condition)), placement, names + 2),
+                Some(left) => [12, 1] ++ no.refused(saves, slots, short, bound, spare, left.prog.else_label_by(names + 1, names + 2, shorts(short, names + 2)),
+                    file.know(Falsity(condition)), left.placement, left.names),
+            },
+        },
+        Call(_, _, _) => [14],
+        Loop(inputs, parameters, inner, exit, next, outputs) => match state_registers(placement, typed_ids(parameters).len()) {
+            None => [13, 7],
+            Some(taken) => match file.plain_entry(saves, typed_ids(inputs), typed_ids(parameters), taken.registers) {
+                None => [13, 8],
+                Some(entry) => match inner.emit(saves, slots, short, bound, spare, plain_head(prog, entry.code, names), entry.head, taken.rest, names + 4) {
+                    None => [13, 0] ++ inner.refused(saves, slots, short, bound, spare, plain_head(prog, entry.code, names), entry.head, taken.rest, names + 4),
+                    Some(_) => [13, 9],
+                },
+            },
+        },
+        Sys(_) => [15],
+        Exit(_) => [16],
+    }
+}
+
+// Routine `r`'s refusal at its placement (20 its scope, 21 its parameters,
+// then its body's path; 22 its closing where the body emits).
+fn Routine::refused(self r: Routine, prog: Prog, k, bound: Nat, placement: List<Place>, names: Nat) → List<Nat> {
+    match r.scope() {
+        None => [20],
+        Some(used) => match input_file(word_ports(typed_ids(r.parameters)), parameter_registers()) {
+            None => [21],
+            Some(file) => {
+                let asked = placement_slots(placement);
+                let saves = placement_saves(placement);
+                let spare = ids_past(used);
+                let opened = function_opened(prog, k, r.loads(), r.slots(asked), saves);
+                match r.whole(spare).emit(saves, r.slots(asked), placement_short(placement), bound, spare, opened, file, placement_body(placement), names) {
+                    None => r.whole(spare).refused(saves, r.slots(asked), placement_short(placement), bound, spare, opened, file, placement_body(placement), names),
+                    Some(_) => [22],
+                }
+            },
+        },
+    }
+}
+
+// The refusal of the first routine `Program::lower` refuses.
+fn refused_path(prog: Prog, routines: List<Routine>, k, bound: Nat, placement: List<Place>, names: Nat) → List<Nat> {
+    match routines {
+        Nil => [],
+        Cons(r, rest) => match r.emit(prog, k, bound, placement, names) {
+            None => Cons(k, r.refused(prog, k, bound, placement, names)),
+            Some(out) => refused_path(out.prog, rest, k + 1, bound, out.placement, out.names),
+        },
+    }
+}
+
+fn refusal_of(functions: List<Function>, placement: List<Place>) → List<Nat> {
+    match translate_program(functions) {
+        None => [],
+        Some(p) => match translate_placement(functions, placement) {
+            None => [],
+            Some(places) => refused_path(Start, p.routines, 0, p.routines.len(), places, p.routines.len()),
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Both codes, for a disassembly: the old bytes, the new bytes, and where
+// each routine starts in each (its label, `k + 1`). Empty where the
+// translation is not lowered.
+
+fn starts(p: Prog, k, n: Nat) → List<Nat> { match n { Zero => [], Succ(m) => Cons(asm_labels(p)(k + 1), starts(p, k + 1, m)) } }
+
+fn both_codes(functions: List<Function>, placement: List<Place>, code: Prog) → List<List<Nat>> {
+    match translate_program(functions) {
+        None => [],
+        Some(p) => match translate_placement(functions, placement) {
+            None => [],
+            Some(places) => match p.lower(places) {
+                None => [],
+                Some(lowered) => [prog_bytes(code), prog_bytes(lowered), prog_starts(code, functions.len()), prog_starts(lowered, functions.len())],
+            },
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The first id a routine's scope binds twice, as `Body::fresh` walks it, and
+// whether it was a loop's parameter or output (1), a call's result (2) or
+// an instruction's (3); empty where none is.
+
+fn dup_ids(used, ids: List<Nat>, why: Nat) → List<Nat> {
+    match ids { Nil => [], Cons(id, rest) => match listed(used, id) { True => [id, why], False => dup_ids(Cons(id, used), rest, why) } }
+}
+
+fn dup_instrs(instrs: List<Instr>, used: List<Nat>) → List<Nat> {
+    match instrs {
+        Nil => [],
+        Cons(instr, rest) => match instr.binds() {
+            None => dup_instrs(rest, used),
+            Some(v) => match listed(used, v.id) { True => [v.id, 3], False => dup_instrs(rest, Cons(v.id, used)) },
+        },
+    }
+}
+
+fn Body::dup(self body: Body, used: List<Nat>) → List<Nat> {
+    match body {
+        Leaf(instrs) => dup_instrs(instrs, used),
+        Seq(first, rest) => match first.fresh(used) { None => first.dup(used), Some(mid) => rest.dup(mid) },
+        Branch(_, yes, no) => match yes.fresh(used) { None => yes.dup(used), Some(_) => no.dup(used) },
+        Call(_, _, results) => dup_ids(used, typed_ids(results), 2),
+        Loop(_, parameters, inner, _, _, outputs) => match fresh_ids([], typed_ids(parameters)) {
+            None => dup_ids([], typed_ids(parameters), 1),
+            Some(start) => match inner.fresh(start) { None => inner.dup(start), Some(inside) => dup_ids(used ++ inside, typed_ids(outputs), 1) },
+        },
+        Sys(_) => [],
+        Exit(_) => [],
+    }
+}
+
+fn first_dup(functions: List<Function>, k: Nat) → List<Nat> {
+    match translate_program(functions) {
+        None => [],
+        Some(p) => match p.routines.nth(k) { None => [], Some(r) => r.body.dup(typed_ids(r.parameters)) },
+    }
+}
+
+// The node of the program binding `id` in function `f` (numbered as the
+// routines are), as the evaluator shows it: what a refusal names.
+fn nodes_binding(nodes: List<Node>, id: Nat) → List<Node> {
+    match nodes { Nil => [], Cons(n, rest) => match node_output(n).id.same(id) { True => Cons(n, nodes_binding(rest, id)), False => nodes_binding(rest, id) } }
+}
+
+fn region_binding(region: StructuredRegion, id: Nat) → List<Node> {
+    match region {
+        Dataflow(body) => nodes_binding(body.nodes, id),
+        Sequence(prefix, rest) => nodes_binding(prefix.nodes, id) ++ region_binding(rest, id),
+        Compose(first, rest) => region_binding(first, id) ++ region_binding(rest, id),
+        Conditional(_, _, _, _, yes, no) => region_binding(yes, id) ++ region_binding(no, id),
+        Call(_, _, _, _) => [],
+        Loop(_, _, _, _, body, _, _, _, _) => region_binding(body, id),
+        Lend(_, _, _, _) => [],
+    }
+}
+
+fn binding_of(functions: List<Function>, f, id: Nat) → List<Node> {
+    match functions.rev().nth(f) { None => [], Some(function) => region_binding(function.body, id) }
+}
+
+// Whether the translation lowers, without its bytes: for a program whose
+// code is too large to assemble in one evaluation.
+fn lowers_report(functions: List<Function>, placement: List<Place>) → List<Nat> {
+    match translate_program(functions) {
+        None => [0],
+        Some(p) => match translate_placement(functions, placement) {
+            None => [1],
+            Some(places) => match p.valid() {
+                False => [2, first_invalid(program_signatures(p.routines), p.routines, 0)],
+                True => match p.lower(places) { None => [3, first_refused(Start, p.routines, 0, p.routines.len(), places, p.routines.len())], Some(_) => [7] },
+            },
+        },
+    }
+}
