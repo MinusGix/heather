@@ -57,6 +57,7 @@ import placement;
 import bytes_memory;
 import bytes_level;
 import bytes_level_routines;
+import bytes_level_scope;
 import x86_64_memory_contract;
 import x86_64_call_contract;
 import x86_64_asm;
@@ -462,4 +463,145 @@ fn PlaceComplete(tys: Nat → Type, strs: Strs(tys), prim: Nat → Bool) → Typ
     (fs: List<Func>) → ((g: Nat) → g < fs.len() → Exists<Owes>(λ d => check(tys)(strs, λ g2 => (funcs_at(fs)(g2)).sig, prim, λ _ => True, g, funcs_at(fs)(g)) = Some(d)) ∧
         ((funcs_at(fs)(g)).fragment(tys, strs, λ g2 => (funcs_at(fs)(g2)).sig, prim) = True)) →
     Exists<Program>(λ placed => place(tys, strs, prim, fs) = Some(placed))
+}
+
+// ---------------------------------------------------------------------------
+// The stages of `placement_sound` (types only, §25.6)
+//
+// One stage per form `place` emits, each concluding in the bytes level's
+// own claim for that form: a leaf's `run_instrs`, a call's `CallRan`, a
+// branch's bit, a loop's `LoopRan`, a routine's `RoutineRan`. The invariant
+// between them is `StageRel`: level 2's machine and a bytes-level
+// configuration at an environment of slots. A level-2 statement's step is
+// taken as `Stmt::Steps` (the run hands its continuation one machine, for
+// every continuation), so a stage never mentions what follows it.
+
+// A cell's slots read its value lowered.
+fn SlotHolds(tys: Nat → Type, strs: Strs(tys), inj: Nat → Nat, h: level2::Heap(tys), s: PSlot, c: Cell(tys), l: Locals) → Type {
+    read_values(s.ids, l) = value_lower(tys, strs, inj, h, c.v)
+}
+
+fn SlotsHold(tys: Nat → Type, strs: Strs(tys), inj: Nat → Nat, h: level2::Heap(tys), ss: List<PSlot>, cs: List<Cell(tys)>, l: Locals) → Type {
+    match ss {
+        Nil => match cs { Nil => True, Cons(_, _) => False },
+        Cons(s, sr) => match cs { Nil => False, Cons(c, cr) => SlotHolds(tys, strs, inj, h, s, c, l) ∧ SlotsHold(tys, strs, inj, h, sr, cr, l) },
+    }
+}
+
+// A slot a store may go through reaches only writable blocks.
+fn SlotsWritable(tys: Nat → Type, inj: Nat → Nat, blocks: Blocks, ss: List<PSlot>, cs: List<Cell(tys)>) → Type {
+    (k: Nat) → (s: PSlot) → ss.nth(k) = Some(s) → s.w = True → (c: Cell(tys)) → cs.nth(k) = Some(c) → (r: level2::Ref) → c.v = Refer(r) → blocks.written(inj(r.b)) = True
+}
+
+// The stage invariant: the heap injected, every variable's slots holding
+// its value (the environment by level: arguments, then locals oldest
+// first), the same world, and stores only where the bytes level may write.
+fn StageRel(tys: Nat → Type, strs: Strs(tys), inj: Nat → Nat, blocks: Blocks, e: PEnv, m: Mach(tys), c: Config) → Type {
+    HeapInjects(tys, strs, inj, m.heap, c.memory) ∧ ((e.na = m.env.args.len()) ∧ (SlotsHold(tys, strs, inj, m.heap, e.vars, m.env.args ++ m.env.locs.rev(), c.locals) ∧
+        ((c.io = m.io) ∧ SlotsWritable(tys, inj, blocks, e.vars, m.env.args ++ m.env.locs.rev()))))
+}
+
+// Level 2's statement hands every continuation the machine `m2`.
+fn Stmt::Steps(tys: Nat → Type, strs: Strs(tys), fns: Nat → Func, call: Caller(tys), s: Stmt, m, m2: Mach(tys)) → Type {
+    (k: Mach(tys) → level2::Ran(tys)) → s.run(tys, strs, fns, call, m, k) = k(m2)
+}
+
+// The calls answered alike (the fuel induction's hypothesis): related
+// arguments and heaps, a done level-2 call, a done bytes-level call related.
+fn CallsLower(tys: Nat → Type, strs: Strs(tys), sigs: Nat → Sig, call: Caller(tys), calls: Calls()) → Type {
+    (g: Nat) → (vs: List<level2::Value(tys)>) → (h: level2::Heap(tys)) → (io: Io) → (inj: Nat → Nat) → (hb: x86_64_memory_contract::Heap) →
+        (args: List<x86_64_call_contract::Value>) → HeapInjects(tys, strs, inj, h, hb) → values_lower(tys, strs, inj, h, vs) = Some(args) → (a: level2::Answer(tys)) →
+        call(g, vs, h, io) = level2::Done(a) → Exists<x86_64_call_contract::Answer>(λ a2 => (calls(g, args, hb, io) = x86_64_call_contract::Done(a2)) ∧ AnswerLowers(tys, strs, sigs(g), inj, h, a, a2))
+}
+
+// A statement `place` emits as a leaf (every kind but a call): its nodes
+// run (`run_instrs`) to a configuration related to level 2's step.
+fn LeafStage(tys: Nat → Type, strs: Strs(tys), sigs: Nat → Sig, prim: Nat → Bool, fns: Nat → Func, call: Caller(tys), blocks: Blocks, s: Stmt) → Type {
+    (e: PEnv) → (next: Nat) → (o: SOut) → s.place(tys, PCx(strs, sigs, prim), e, next) = Some(o) → (inj: Nat → Nat) → (m: Mach(tys)) → (c: Config) →
+        StageRel(tys, strs, inj, blocks, e, m, c) → (m2: Mach(tys)) → Stmt::Steps(tys, strs, fns, call, s, m, m2) →
+        (match o.code as λ _ => Type { Leaf(is) => Exists<Config>(λ c2 => (run_instrs(blocks, is, c) = Some(c2)) ∧ StageRel(tys, strs, inj, blocks, o.env, m2, c2)), _ => False })
+}
+
+// The leaf stages, by kind.
+fn StageOp(tys: Nat → Type, strs: Strs(tys), sigs: Nat → Sig, prim: Nat → Bool, fns: Nat → Func, call: Caller(tys), blocks: Blocks) → Type {
+    (op: Prim) → (a, b: Var) → LeafStage(tys, strs, sigs, prim, fns, call, blocks, Op(op, a, b))
+}
+fn StageLit(tys: Nat → Type, strs: Strs(tys), sigs: Nat → Sig, prim: Nat → Bool, fns: Nat → Func, call: Caller(tys), blocks: Blocks) → Type {
+    (w: Width) → (n: Nat) → LeafStage(tys, strs, sigs, prim, fns, call, blocks, Stmt::Lit(w, n))
+}
+fn StageRead(tys: Nat → Type, strs: Strs(tys), sigs: Nat → Sig, prim: Nat → Bool, fns: Nat → Func, call: Caller(tys), blocks: Blocks) → Type {
+    (p: body::Place) → LeafStage(tys, strs, sigs, prim, fns, call, blocks, Stmt::Read(p))
+}
+fn StageWrite(tys: Nat → Type, strs: Strs(tys), sigs: Nat → Sig, prim: Nat → Bool, fns: Nat → Func, call: Caller(tys), blocks: Blocks) → Type {
+    (p: body::Place) → (v: Var) → LeafStage(tys, strs, sigs, prim, fns, call, blocks, Stmt::Write(p, v))
+}
+fn StageView(tys: Nat → Type, strs: Strs(tys), sigs: Nat → Sig, prim: Nat → Bool, fns: Nat → Func, call: Caller(tys), blocks: Blocks) → Type {
+    (p: body::Place) → (md: Mode) → LeafStage(tys, strs, sigs, prim, fns, call, blocks, View(p, md))
+}
+fn StageTake(tys: Nat → Type, strs: Strs(tys), sigs: Nat → Sig, prim: Nat → Bool, fns: Nat → Func, call: Caller(tys), blocks: Blocks) → Type {
+    (p: body::Place) → LeafStage(tys, strs, sigs, prim, fns, call, blocks, Take(p))
+}
+fn StageDeath(tys: Nat → Type, strs: Strs(tys), sigs: Nat → Sig, prim: Nat → Bool, fns: Nat → Func, call: Caller(tys), blocks: Blocks) → Type {
+    (p: body::Place) → LeafStage(tys, strs, sigs, prim, fns, call, blocks, Death(p))
+}
+
+// A call: under the calls answered alike, `CallRan` of the call `place`
+// emits, to a configuration related to level 2's step.
+fn StageCall(tys: Nat → Type, strs: Strs(tys), sigs: Nat → Sig, prim: Nat → Bool, fns: Nat → Func, call: Caller(tys), calls: Calls(), blocks: Blocks) → Type {
+    (g: Nat) → (xs: List<Var>) → (n: Nat) → (e: PEnv) → (next: Nat) → (o: SOut) → (Stmt::Call(g, xs, n)).place(tys, PCx(strs, sigs, prim), e, next) = Some(o) →
+        CallsLower(tys, strs, sigs, call, calls) → (inj: Nat → Nat) → (m: Mach(tys)) → (c: Config) → StageRel(tys, strs, inj, blocks, e, m, c) →
+        (m2: Mach(tys)) → Stmt::Steps(tys, strs, fns, call, Stmt::Call(g, xs, n), m, m2) →
+        (match o.code as λ _ => Type {
+            bytes_level::Call(g2, args, rs) => Exists<Config>(λ c2 => Exists<Nat → Nat>(λ inj2 => CallRan(calls, g2, args, rs, c, c2) ∧ (inj_extends(tys, inj2, inj, m.heap) ∧
+                StageRel(tys, strs, inj2, blocks, o.env, m2, c2)))),
+            _ => False,
+        })
+}
+
+// A join's test: its leaf runs to a configuration whose bit, swapped as
+// `place` swapped the arms, is level 2's test.
+fn StageTest(tys: Nat → Type, strs: Strs(tys), blocks: Blocks) → Type {
+    (t: body::Test) → (e: PEnv) → (next: Nat) → (tested: Pair<List<Instr>, Bool>) → t.place(e, next) = Some(tested) → (inj: Nat → Nat) → (m: Mach(tys)) → (c: Config) →
+        StageRel(tys, strs, inj, blocks, e, m, c) → (bit: Bool) → t.run(tys, strs, m) = Some(bit) →
+        Exists<Config>(λ c2 => (run_instrs(blocks, tested.fst, c) = Some(c2)) ∧ ((c2.locals.words(1, next).head_bit() = (match tested.snd { False => bit, True => !bit })) ∧
+            StageRel(tys, strs, inj, blocks, e, m, c2)))
+}
+
+// A path's end: a `Ret`'s leaf binds the leave's ids to the values level 2
+// answers (results, then written words), lowered.
+fn StageRet(tys: Nat → Type, strs: Strs(tys), blocks: Blocks) → Type {
+    (sig: Sig) → (tail: Leave) → (rs: List<Var>) → (e: PEnv) → (next: Nat) → (ss: List<PSlot>) → e.gets(rs) = Some(ss) → (code: bytes_level::Body) →
+        tail.ret(ret_values(ss, sig.results.len()), next) = Some(code) → (inj: Nat → Nat) → (m: Mach(tys)) → (c: Config) → StageRel(tys, strs, inj, blocks, e, m, c) →
+        (match code as λ _ => Type {
+            Leaf(is) => Exists<Config>(λ c2 => (run_instrs(blocks, is, c) = Some(c2)) ∧ ((match tail as λ _ => Type {
+                TRet(res) => read_values(res, c2.locals) = values_lower(tys, strs, inj, m.heap, sig.returned(tys, rs.map(λ x => (REnv::get(tys, m.env, x)).v))),
+                TLoop(_, _, nx, flag) => (c2.locals.word(flag) = BitVec::ofNat(1)) ∧ (read_values(nx.take(ss.len()), c2.locals).is_some() = True),
+            }) ∧ (c2.memory = c.memory))),
+            _ => False,
+        })
+}
+
+// A `Jump`'s leaf: the next state is its arguments lowered, the flag zero.
+fn StageJump(tys: Nat → Type, strs: Strs(tys), blocks: Blocks) → Type {
+    (tail: Leave) → (xs: List<Var>) → (e: PEnv) → (next: Nat) → (ss: List<PSlot>) → e.gets(xs) = Some(ss) → (code: bytes_level::Body) →
+        tail.jump(PSlot::ids_of(ss), next) = Some(code) → (inj: Nat → Nat) → (m: Mach(tys)) → (c: Config) → StageRel(tys, strs, inj, blocks, e, m, c) →
+        (match code as λ _ => Type {
+            Leaf(is) => Exists<Config>(λ c2 => (run_instrs(blocks, is, c) = Some(c2)) ∧ ((match tail as λ _ => Type {
+                TRet(_) => False,
+                TLoop(ps, _, nx, flag) => (c2.locals.word(flag) = BitVec::ofNat(0)) ∧
+                    (read_values(nx.take(ps.len()), c2.locals) = values_lower(tys, strs, inj, m.heap, xs.map(λ x => (REnv::get(tys, m.env, x)).v))),
+            }) ∧ (c2.memory = c.memory))),
+            _ => False,
+        })
+}
+
+// A function placed as a loop: level 2's run of it done (its passes joined
+// by `Jump`s, each a call of itself) is the routine's `LoopRan`, from
+// related entries; and a function placed straight is its body's run.
+fn StageRoutine(tys: Nat → Type, strs: Strs(tys), sigs: Nat → Sig, prim: Nat → Bool, fns: Nat → Func, calls: Calls()) → Type {
+    (f: Func) → (r: Routine) → f.place(tys, PCx(strs, sigs, prim)) = Some(r) → (g: Nat) → (call: Caller(tys)) → CallsLower(tys, strs, sigs, call, calls) →
+        (blocks: Blocks) → (fuel: Nat) → (vs: List<level2::Value(tys)>) → (h: level2::Heap(tys)) → (io: Io) → (inj: Nat → Nat) → (hb: x86_64_memory_contract::Heap) →
+        (args: List<x86_64_call_contract::Value>) → HeapInjects(tys, strs, inj, h, hb) → values_lower(tys, strs, inj, h, vs) = Some(args) → WritesLent(tys, inj, blocks, f.sig.params, vs) →
+        (a: level2::Answer(tys)) → f.run(tys, strs, fns, call, g, vs, h, io) = level2::Done(a) →
+        Exists<x86_64_call_contract::Answer>(λ a2 => RoutineRan(r, blocks, calls, fuel, args, hb, io, a2) ∧ AnswerLowers(tys, strs, f.sig, inj, h, a, a2))
 }
