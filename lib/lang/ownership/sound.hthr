@@ -10264,6 +10264,88 @@ theorem Like::start(tys: Nat → Type, strs: Strs(tys), sig: Sig, ds: List<Dyn(t
         λ en no => false_elim(no))
 }
 
+// A parent's role is neither plain nor gone (`chain`'s `Parent`).
+theorem CSt::parent_live(self s: CSt, en: VEnt, p: s.Parent(en)): (¬(s.role(en.par) = KPlain)) ∧ (¬(s.role(en.par) = KGone)) {
+    ⟨λ eq => s.parent_plain(en, eq, p),
+     λ eq => j(eq, λ q _ => match q { KHold(o2, _) => (o2 = en.obj) ∧ (en.reg = en.at), KView => VEnt::Any(s.ents(en.par), λ pe => (pe.obj = en.obj) ∧ (en.reg = pe.reg ++ en.at)),
+        KPlain => False, KGone => False }, p)⟩
+}
+
+// What a reference narrowed by selections reads: what the reference reads,
+// read there.
+theorem Value::read_narrow(tys: Nat → Type, strs: Strs(tys), h: Heap(tys), qp: Ref, a: List<Sel>, dp, dc: Dyn(tys),
+    rp: Value::Reads(tys, strs, h, Refer(qp), dp), rc: Value::Reads(tys, strs, h, Refer(Ref(qp.b, qp.sels ++ a)), dc)): dc = Sel::read_at(tys, strs, a, dp)
+{
+    match Value::refer_inv(tys, strs, h, qp, dp, rp) {
+        ⟨ob, pob⟩ => match Value::refer_inv(tys, strs, h, Ref(qp.b, qp.sels ++ a), dc, rc) {
+            ⟨ob2, pob2⟩ => {
+                let same: (ob2 = ob) = Option::some_inj(ob2, ob, trans(sym(pob2.left), pob.left));
+                let rcv: (Sel::read_at(tys, strs, qp.sels ++ a, ob) = dc) = j(same, λ q _ => Sel::read_at(tys, strs, qp.sels ++ a, q) = dc, pob2.right.right);
+                trans(sym(rcv), trans(Sel::read_append(tys, strs, qp.sels, a, ob), cong_fn(λ (q: Dyn(tys)) => Sel::read_at(tys, strs, a, q), pob.right.right)))
+            },
+        },
+    }
+}
+
+// Where nothing is pending, a live view to write is like what its place
+// reads in its parent (`Inv::back_like`): where the chain refers, its
+// reference is its parent's narrowed by the place, so it reads exactly that;
+// where it is a copy, `cfit` says so. What `Like` asks of a view joining a
+// pending chain, and of a write-back whose child is not pending.
+theorem Inv::back_like(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>}, inv: Inv(tys, strs, s, e, m, h0, lent),
+    none: s.pending() = False, lv: Nat, en: VEnt, he: s.ents(lv) = [en], cw: en.mode.writes() = True, y, z: Var, hy: s.lvl(y) = Some(en.par), hz: s.lvl(z) = Some(lv)):
+    Dyn::Like(tys, strs, Env::get(tys, e, z), Dyn::read(tys, strs, Env::ixs(tys, e), s.unsteps(en.at), Env::get(tys, e, y)))
+{
+    let sim = Inv::sim_now(tys, strs, inv, none);
+    let ws = Mach::ixs(tys, strs, m);
+    let cm = s.ent_mem(lv, en, he);
+    let mem = cm.left;
+    let hz2: (s.lvl(z) = Some(en.lvl)) = trans(hz, cong_fn(λ (q: Nat) => Some(q), sym(cm.right)));
+    let rov: (s.role(lv) = KView) = j(cm.right, λ q _ => s.role(q) = KView, (inv.vents(en, mem)).right.right);
+    let pl = s.parent_live(en, (inv.chain(en, mem)).right);
+    let lvb: (lv < s.na + s.nd) = s.lvl_below(z, lv, hz);
+    let a = Steps::sels(s.unsteps(en.at), ws);
+    let dz = Env::get(tys, e, z);
+    let dy = Env::get(tys, e, y);
+    let rd: (Dyn::read(tys, strs, Env::ixs(tys, e), s.unsteps(en.at), dy) = Sel::read_at(tys, strs, a, dy)) =
+        trans(Steps::read_sels(tys, strs, Env::ixs(tys, e), s.unsteps(en.at), dy), cong_fn(λ (ss: List<Sel>) => Sel::read_at(tys, strs, ss, dy), sym(Inv::at_sels(tys, strs, inv, en, mem))));
+    let zv: Value::Reads(tys, strs, m.heap, (REnv::get(tys, m.env, z)).v, dz) = j(rov, λ q _ => Cell::Agrees(tys, strs, m.heap, q, REnv::get(tys, m.env, z), dz), sim.vars(z, lv, hz));
+    let yv: Value::Reads(tys, strs, m.heap, (REnv::get(tys, m.env, y)).v, dy) = Cell::agrees_reads(tys, strs, m.heap, s.role(en.par), REnv::get(tys, m.env, y), dy, sim.vars(y, en.par, hy), pl.left, pl.right);
+    let un = inv.uni(en, mem, z, y, hz2, hy);
+    let yat: (s.var_at(en.par) = y) = s.lvl_var(y, en.par, hy);
+    let zat: (s.var_at(lv) = z) = s.lvl_var(z, lv, hz);
+    let goal: Dyn::Like(tys, strs, dz, Sel::read_at(tys, strs, a, dy)) = (match (REnv::get(tys, m.env, z)).v as λ u => (REnv::get(tys, m.env, z)).v = u → Dyn::Like(tys, strs, dz, Sel::read_at(tys, strs, a, dy)) {
+        Refer(qc) => λ hc => (match (REnv::get(tys, m.env, y)).v as λ u => (REnv::get(tys, m.env, y)).v = u → Dyn::Like(tys, strs, dz, Sel::read_at(tys, strs, a, dy)) {
+            Plain(_) => λ hp => {
+                let tf: (True = False) = trans(j(hc, λ u _ => Value::refers(tys, u) = Value::refers(tys, (REnv::get(tys, m.env, y)).v), un), cong_fn(λ (u: Value(tys)) => Value::refers(tys, u), hp));
+                absurd(tf)
+            },
+            Refer(qp) => λ hp => {
+                let qeq: (qc = qp.narrow(ws, s.unsteps(en.at))) = Inv::ref_child(tys, strs, inv, en.par, lv, en, he, cw, refl, lvb, qp, qc,
+                    j(sym(yat), λ x _ => (REnv::get(tys, m.env, x)).v = Refer(qp), hp), j(sym(zat), λ x _ => (REnv::get(tys, m.env, x)).v = Refer(qc), hc));
+                let rp: Value::Reads(tys, strs, m.heap, Refer(qp), dy) = j(hp, λ u _ => Value::Reads(tys, strs, m.heap, u, dy), yv);
+                let hc2: ((REnv::get(tys, m.env, z)).v = Refer(qp.narrow(ws, s.unsteps(en.at)))) = trans(hc, cong_fn(λ (q: Ref) => Refer(q), qeq));
+                let rc: Value::Reads(tys, strs, m.heap, Refer(qp.narrow(ws, s.unsteps(en.at))), dz) = j(hc2, λ u _ => Value::Reads(tys, strs, m.heap, u, dz), zv);
+                let eq: (dz = Sel::read_at(tys, strs, a, dy)) = Value::read_narrow(tys, strs, m.heap, qp, a, dy, dz, rp, rc);
+                j(eq, λ q _ => Dyn::Like(tys, strs, dz, q), Dyn::like_refl(tys, strs, dz))
+            },
+        })(refl),
+        Plain(dc) => λ hc => (match (REnv::get(tys, m.env, y)).v as λ u => (REnv::get(tys, m.env, y)).v = u → Dyn::Like(tys, strs, dz, Sel::read_at(tys, strs, a, dy)) {
+            Refer(_) => λ hp => {
+                let tf: (True = False) = trans(sym(cong_fn(λ (u: Value(tys)) => Value::refers(tys, u), hp)), trans(sym(un), cong_fn(λ (u: Value(tys)) => Value::refers(tys, u), hc)));
+                absurd(tf)
+            },
+            Plain(dp) => λ hp => {
+                let cf = inv.cfit(en, mem, y, z, hy, hz2, dp, dc, hp, hc);
+                let ez: (dc = dz) = Option::some_inj(dc, dz, j(hc, λ u _ => Value::Reads(tys, strs, m.heap, u, dz), zv));
+                let ey: (dp = dy) = Option::some_inj(dp, dy, j(hp, λ u _ => Value::Reads(tys, strs, m.heap, u, dy), yv));
+                j(ez, λ q _ => Dyn::Like(tys, strs, q, Sel::read_at(tys, strs, a, dy)), j(ey, λ q _ => Dyn::Like(tys, strs, dc, Sel::read_at(tys, strs, a, q)), cf.right))
+            },
+        })(refl),
+    })(refl);
+    j(sym(rd), λ q _ => Dyn::Like(tys, strs, dz, q), goal)
+}
+
 // What the checker's `Ret` found, split once.
 record RetInv(tys: Nat → Type, strs: Strs(tys), s: CSt, sig: Sig, xs: List<Var>) {
     ls: List<Nat>,
