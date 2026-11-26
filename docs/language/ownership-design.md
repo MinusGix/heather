@@ -4164,9 +4164,27 @@ proof; each is listed with the program that forced it.
     is kept, one under it is the callee's).
   - **`Value::Views`, per result by its origin:**
     - `OFresh`: plain, or a block made by the call (past the heap's length,
-      no selections). Two fresh results are in different blocks (being
-      added: the caller's `own` needs each new owned root alone in its
-      block).
+      no selections), **live with no holes in the heap after**
+      (`Heap::Bare`, this fragment's clause beside `Heap::Stays`' no-holes
+      part, the two replaced together by the round with holes). The caller
+      takes the new root as an object, and the invariant needs every
+      object's block bare (`Inv.bare`), which `Heap::Stays` cannot say of a
+      block that did not exist and `ReadAll` cannot see, since it reads a
+      value by filling holes. The program: `f() → (Buf fresh) { b = Fresh(2,
+      0); Ret([b]) }` called as `y = f(); Write(y[0], 1)`; a callee whose
+      answer's block held an owned hole would read the same and leave the
+      caller's write of `y[0]` storing into a value it does not hold.
+    - **`Value::FreshApart`, beside `Views`**: two fresh results of one call
+      are in different blocks; the caller's `own` needs each new owned root
+      alone in its block. The program is the checker's own defect it
+      exposed: `f(r: Buf read) → (Buf fresh, Buf fresh) { x = Fresh(2, 0);
+      Ret([x, x]) }` was checked, and gave its caller two owned objects in
+      one block, the death of either freeing the other's. `CSt::ret` now
+      refuses a holder answered fresh twice (`CSt::fresh_once`,
+      `fresh_twice_refused`; `fresh_two_checked` makes two and answers each
+      once). At `Ret` it follows from `one` (two levels, two objects),
+      `made` (both whole) and `apart` (two whole references into one block
+      are not apart, `Sel::apart_nil_nil`).
     - `OParam`: the argument itself where it refers, plain where it was
       passed by value (`keep_by_value`, §23.13).
     - `OView`: the argument's reference narrowed by the signature's steps at

@@ -768,13 +768,27 @@ fn CSt::lvls(self s: CSt, xs: List<Var>) → Option<List<Nat>> {
     match xs { Nil => Some(Nil), Cons(x, rest) => s.lvl(x).and_then(λ l => s.lvls(rest).map(λ ls => Cons(l, ls))) }
 }
 
+// A fresh object answered once (§23.17): a holder answered as a fresh result
+// is not answered again, so no two of a call's fresh results share a block
+// (the caller takes each as an object alone in its block). Without it
+// `Ret([x, x])` answered one owned object as two.
+fn CSt::fresh_once(self s: CSt, ls: List<Nat>, rs: List<Result>) → Bool {
+    match rs {
+        Nil => True,
+        Cons(r, rest) => match ls {
+            Nil => True,
+            Cons(l, lr) => (match r.origin { OFresh => match s.role(l) { KHold(_, _) => !l.member(lr), KPlain => True, KView => True, KGone => True }, OParam(_) => True, OView(_, _) => True }) && s.fresh_once(lr, rest),
+        },
+    }
+}
+
 // A return reads its variables owing nothing (a `Ret` owes nothing in the
-// verdict's tree), answers its results as their origins say, and gives
+// verdict's tree), answers its results as their origins say, a fresh object once, and gives
 // back each written parameter.
 fn CSt::ret(self s: CSt, tys: Nat → Type, strs: Strs(tys), sig: Sig, xs: List<Var>) → Bool {
     match s.read_vars(tys, strs, xs) {
         Some(rs) => match rs {
-            Nil => match s.lvls(xs) { Some(ls) => !s.pending() && s.returns_all(tys, strs, ls, ls, sig.results) && s.gives_back(ls.drop(sig.results.len()), sig.written()), None => False },
+            Nil => match s.lvls(xs) { Some(ls) => !s.pending() && s.returns_all(tys, strs, ls, ls, sig.results) && s.fresh_once(ls, sig.results) && s.gives_back(ls.drop(sig.results.len()), sig.written()), None => False },
             Cons(_, _) => False,
         },
         None => False,
