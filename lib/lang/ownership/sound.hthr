@@ -2920,31 +2920,63 @@ theorem Sim::lvl_ix(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)},
 }
 
 // The invariant after a fresh object `d` of code `c`, nothing pending.
-theorem Inv::fresh(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>}, inv: Inv(tys, strs, s, e, m, h0, lent),
-    none: s.pending() = False, c: Shape, d: Dyn(tys), okc: d.code = c):
+// The invariant on another heap, given every variable's agreement there and
+// the words regions read as they were (`Inv::heap_rest` derives them).
+theorem Inv::heap_rest_ws(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>}, inv: Inv(tys, strs, s, e, m, h0, lent),
+    none: s.pending() = False, h2: Heap(tys), io2: Io, lf: LentFrame(tys, strs, h0, h2, lent), gr: m.heap.len() <= h2.len(), st: Heap::Stays(tys, m.heap, h2),
+    ex: Env(tys), sim2: Sim(tys, strs, s, ex, Mach(h2, m.env, io2)),
+    wsame: (l2: Nat) → s.in_regions(l2) = True → (Mach::ixs(tys, strs, Mach(h2, m.env, io2))).nth(s.ix_of(l2)) = (Mach::ixs(tys, strs, m)).nth(s.ix_of(l2))):
+    Inv(tys, strs, s, ex, Mach(h2, m.env, io2), h0, lent)
+{
+    let m2: Mach(tys) = Mach(h2, m.env, io2);
+    let ws = Mach::ixs(tys, strs, m);
+    let ws2 = Mach::ixs(tys, strs, m2);
+    let regs: ((en: VEnt) → Mem(en, s.views) → Steps::sels(s.unsteps(en.reg), ws2) = Steps::sels(s.unsteps(en.reg), ws)) =
+        λ en me => CSt::sels_keep(en.reg, s, ws2, s, ws, λ l2 ml => wsame(l2, s.region_lvl(en, me, l2, ml)));
+    let ats: ((en: VEnt) → Mem(en, s.views) → Steps::sels(s.unsteps(en.at), ws2) = Steps::sels(s.unsteps(en.at), ws)) =
+        λ en me => CSt::sels_keep(en.at, s, ws2, s, ws, λ l2 ml => wsame(l2, s.at_lvl(en, me, l2, ml)));
+    let le0: (s.na + s.nd <= s.na + s.nd) = omega();
+    Inv(j(sym(s.patched_none(tys, strs, ex, m2, none)), λ q _ => Sim(tys, strs, s, q, m2), sim2), inv.root,
+        λ y l2 hy q cq => CSt::refok_keep(s, s, inv.root, inv.root, ws, ws2, l2, q, refl, refl, λ _ _ _ => refl, λ _ _ => refl,
+            λ en me => regs(en, s.views.mem_filter(en, λ e0 => e0.lvl.same(l2), me)), inv.refs(y, l2, hy, q, cq)),
+        inv.apart,
+        λ o3 r3 h3 => omega(inv.inheap(o3, r3, h3), gr),
+        inv.owned, inv.own, inv.one, inv.words,
+        lf,
+        omega(inv.grows, gr),
+        inv.young, inv.held, inv.vents,
+        λ o3 r3 h3 ob ho => match st(r3.b, inv.inheap(o3, r3, h3), ob, ho) { ⟨ob1, p1⟩ => p1.right(inv.bare(o3, r3, h3, ob1, p1.left)) },
+        inv.chain,
+        CSt::excl_keep(tys, strs, s, s, ws, ws2, refl, le0, λ en me => (inv.chain(en, me)).left, λ en me => (inv.vents(en, me)).right.left, regs, inv.excl), inv.wpar, inv.uni,
+        CSt::cfit_ws(tys, strs, s, m.env, ws, ws2, ats, inv.cfit), CSt::sib_keep(tys, strs, s, s, ws, ws2, refl, ats, inv.sib),
+        inv.args, inv.href, inv.made, inv.nbase, Heap::stays_trans(tys, h0, m.heap, h2, inv.stays, st, inv.grows))
+}
+
+// A fresh holder bound at a block already live and bare, past the entry
+// heap, that no root reaches: a call's fresh result (P5), or `Fresh`'s new
+// block (`Inv::fresh`, after `Inv::heap_rest` grows the heap).
+theorem Inv::bind_fresh(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>}, inv: Inv(tys, strs, s, e, m, h0, lent),
+    none: s.pending() = False, c: Shape, d: Dyn(tys), okc: d.code = c, hb: Nat, hobn: Heap::obj(tys, m.heap, hb) = Some(Obj(d, Nil)),
+    new_block: (o: Nat) → (r: Ref) → inv.root(o) = Some(r) → ¬(r.b = hb), hbe: h0.len() <= hb):
     Inv(tys, strs, s.push(CVar(c, KHold(s.nobj, AcOwn))).fresh_obj(), Env::push(tys, e, d),
-        Mach(m.heap ++ [Live(Obj(d, Nil))], REnv::push(tys, m.env, Cell(Refer(Ref(m.heap.len(), Nil)), True)), m.io), h0, lent)
+        Mach(m.heap, REnv::push(tys, m.env, Cell(Refer(Ref(hb, Nil)), True)), m.io), h0, lent)
 {
     let cv = CVar(c, KHold(s.nobj, AcOwn));
     let s2 = s.push(cv).fresh_obj();
-    let hb = m.heap.len();
-    let x: Block(tys) = Live(Obj(d, Nil));
-    let h2 = m.heap ++ [x];
+    let h2 = m.heap;
     let cn: Cell(tys) = Cell(Refer(Ref(hb, Nil)), True);
     let mg = Mach(h2, m.env, m.io);
     let m2 = Mach(h2, REnv::push(tys, m.env, cn), m.io);
     let e2 = Env::push(tys, e, d);
     let root2 = s.fresh_root(inv.root, hb);
     let sim0 = Inv::sim_now(tys, strs, inv, none);
-    let simg = Sim::grow(tys, strs, inv, sim0, x);
-    let hv: (Heap::val(tys, strs, h2, hb) = Some(d)) =
-        trans(cong_fn(λ (q: Option<Obj(tys)>) => match q { Some(o) => Obj::read(tys, strs, h2, h2.len(), o), None => None<Dyn(tys)>() }, Heap::obj_new(tys, m.heap, Obj(d, Nil))), Obj::fill_nil(tys, strs, h2, h2.len(), d));
+    let simg = sim0;
+    let hv: (Heap::val(tys, strs, h2, hb) = Some(d)) = Heap::val_bare(tys, strs, h2, hb, Obj(d, Nil), hobn, refl);
     let ag: Value::Reads(tys, strs, h2, Refer(Ref(hb, Nil)), d) = j(sym(hv), λ q _ => (match q { Some(dv) => Sel::get(tys, strs, Nil<Sel>() ++ Nil<Sel>(), dv), None => None<Dyn(tys)>() }) = Some(d), refl);
     let sim1: Sim(tys, strs, s2, e2, m2) = Sim::push(tys, strs, simg, cv, cn, d, ag, okc);
     let sim2 = j(sym(s2.patched_none(tys, strs, e2, m2, none)), λ q _ => Sim(tys, strs, s2, q, m2), sim1);
     let ws = Mach::ixs(tys, strs, m);
     let ws2 = Mach::ixs(tys, strs, m2);
-    let lenh: (h2.len() = hb + 1) = m.heap.len_snoc(x);
     let rolen: (s2.role(s.na + s.nd) = KHold(s.nobj, AcOwn)) = cong_fn(λ (v: CVar) => v.role, s.var_pushed(cv));
     let below_obj: ((l, o: Nat) → (a: Acc) → l < s.na + s.nd → s.role(l) = KHold(o, a) → ¬(o = s.nobj)) = λ l o a b hr eq => Nat::lt_irrefl(o, j(sym(eq), λ q _ => o < q, inv.held(l, o, a, b, hr)));
     let words2: ((l: Nat) → s.in_regions(l) = True → ws2.nth(s2.ix_of(l)) = ws.nth(s.ix_of(l))) = λ l w => {
@@ -2956,7 +2988,6 @@ theorem Inv::fresh(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, 
         CSt::sels_keep(en.reg, s2, ws2, s, ws, λ l2 m2l => words2(l2, s.region_lvl(en, mem, l2, m2l)));
     let ats: ((en: VEnt) → Mem(en, s.views) → Steps::sels(s2.unsteps(en.at), ws2) = Steps::sels(s.unsteps(en.at), ws)) = λ en mem =>
         CSt::sels_keep(en.at, s2, ws2, s, ws, λ l2 m2l => words2(l2, s.at_lvl(en, mem, l2, m2l)));
-    let new_block: ((o: Nat) → (r: Ref) → inv.root(o) = Some(r) → ¬(r.b = hb)) = λ o r hr eb => Nat::lt_irrefl(hb, j(eb, λ q _ => q < hb, inv.inheap(o, r, hr)));
     Inv(sim2, root2,
         λ y l h r cr => match s.push_lvl(cv, y, l, h) {
             Inl(nw) => {
@@ -2996,17 +3027,17 @@ theorem Inv::fresh(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, 
         λ o r hr => match Nat::eq_or_ne(o, s.nobj) {
             Inl(eq) => {
                 let rn: (Ref(hb, Nil) = r) = Option::some_inj(Ref(hb, Nil), r, trans(sym(s.fresh_root_at(inv.root, hb)), j(eq, λ q _ => root2(q) = Some(r), hr)));
-                j(rn, λ q _ => q.b < h2.len(), omega(lenh))
+                j(rn, λ q _ => q.b < h2.len(), Heap::obj_below(tys, h2, hb, Obj(d, Nil), hobn))
             },
             Inr(ne) => {
                 let lt = inv.inheap(o, r, trans(sym(s.fresh_root_other(inv.root, hb, o, ne)), hr));
-                omega(lt, lenh)
+                lt
             },
         },
         λ o ch1 r hr => match Nat::eq_or_ne(o, s.nobj) {
             Inl(eq) => {
                 let rn: (Ref(hb, Nil) = r) = Option::some_inj(Ref(hb, Nil), r, trans(sym(s.fresh_root_at(inv.root, hb)), j(eq, λ q _ => root2(q) = Some(r), hr)));
-                Inr(j(rn, λ q _ => h0.len() <= q.b, inv.grows))
+                Inr(j(rn, λ q _ => h0.len() <= q.b, hbe))
             },
             Inr(ne) => inv.owned(o, ch(o, ne, ch1), r, trans(sym(s.fresh_root_other(inv.root, hb, o, ne)), hr)),
         },
@@ -3060,9 +3091,8 @@ theorem Inv::fresh(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, 
             let ww = inv.words(l, w);
             ⟨omega(ww.left), trans(cong_fn(λ (q: Role) => q.plain(), s.role_push(cv, l, ww.left)), ww.right)⟩
         },
-        LentFrame::keep(tys, strs, inv.frame, h2, λ b ob ho _ => Heap::obj_grow(tys, m.heap, x, b, omega(Heap::obj_below(tys, h0, b, ob, ho), inv.grows)),
-            λ b ob ho _ _ => Heap::obj_grow(tys, m.heap, x, b, omega(Heap::obj_below(tys, h0, b, ob, ho), inv.grows))),
-        omega(inv.grows, lenh),
+        inv.frame,
+        inv.grows,
         λ o ge => trans(s.fresh_root_other(inv.root, hb, o, λ eq => omega(ge, eq)), inv.young(o, omega(ge))),
         λ l o a b hr => match Nat::below_succ(l, s.na + s.nd, b) {
             Inr(at) => {
@@ -3079,11 +3109,11 @@ theorem Inv::fresh(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, 
             Inl(eq) => {
                 let rn: (Ref(hb, Nil) = r) = Option::some_inj(Ref(hb, Nil), r, trans(sym(s.fresh_root_at(inv.root, hb)), j(eq, λ q _ => root2(q) = Some(r), hr)));
                 let hob2: (Heap::obj(tys, h2, hb) = Some(ob)) = j(sym(rn), λ q _ => Heap::obj(tys, h2, q.b) = Some(ob), hob);
-                sym(cong_fn(λ (q: Obj(tys)) => q.holes, Option::some_inj(Obj(d, Nil), ob, trans(sym(Heap::obj_new(tys, m.heap, Obj(d, Nil))), hob2))))
+                sym(cong_fn(λ (q: Obj(tys)) => q.holes, Option::some_inj(Obj(d, Nil), ob, trans(sym(hobn), hob2))))
             },
             Inr(ne) => {
                 let hr0 = trans(sym(s.fresh_root_other(inv.root, hb, o, ne)), hr);
-                inv.bare(o, r, hr0, ob, trans(sym(Heap::obj_grow(tys, m.heap, x, r.b, inv.inheap(o, r, hr0))), hob))
+                inv.bare(o, r, hr0, ob, hob)
             },
         },
         λ en mem => {
@@ -3111,7 +3141,7 @@ theorem Inv::fresh(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, 
         λ o ge r rt => match Nat::eq_or_ne(o, s.nobj) {
             Inl(eq) => {
                 let rr: (Some(Ref(hb, Nil)) = Some(r)) = trans(sym(s.fresh_root_at(inv.root, hb)), j(eq, λ q _ => root2(q) = Some(r), rt));
-                j(Option::some_inj(Ref(hb, Nil), r, rr), λ q _ => (h0.len() <= q.b) ∧ (q.sels = Nil), ⟨inv.grows, refl⟩)
+                j(Option::some_inj(Ref(hb, Nil), r, rr), λ q _ => (h0.len() <= q.b) ∧ (q.sels = Nil), ⟨hbe, refl⟩)
             },
             Inr(ne) => inv.made(o, ge, r, trans(sym(s.fresh_root_other(inv.root, hb, o, ne)), rt)),
         },
@@ -3119,7 +3149,26 @@ theorem Inv::fresh(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, 
             let nb: (s.na <= s.nobj + 1) = omega(inv.nbase);
             nb
         },
-        Heap::stays_trans(tys, h0, m.heap, m.heap ++ [Live(Obj(d, Nil))], inv.stays, Heap::stays_grow(tys, m.heap, Live(Obj(d, Nil))), inv.grows))
+        inv.stays)
+}
+
+theorem Inv::fresh(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>}, inv: Inv(tys, strs, s, e, m, h0, lent),
+    none: s.pending() = False, c: Shape, d: Dyn(tys), okc: d.code = c):
+    Inv(tys, strs, s.push(CVar(c, KHold(s.nobj, AcOwn))).fresh_obj(), Env::push(tys, e, d),
+        Mach(m.heap ++ [Live(Obj(d, Nil))], REnv::push(tys, m.env, Cell(Refer(Ref(m.heap.len(), Nil)), True)), m.io), h0, lent)
+{
+    let x: Block(tys) = Live(Obj(d, Nil));
+    let h2 = m.heap ++ [x];
+    let hb = m.heap.len();
+    let sim0 = Inv::sim_now(tys, strs, inv, none);
+    let lf = LentFrame::keep(tys, strs, inv.frame, h2, λ b ob ho _ => Heap::obj_grow(tys, m.heap, x, b, omega(Heap::obj_below(tys, h0, b, ob, ho), inv.grows)),
+        λ b ob ho _ _ => Heap::obj_grow(tys, m.heap, x, b, omega(Heap::obj_below(tys, h0, b, ob, ho), inv.grows)));
+    let simg = Sim::grow(tys, strs, inv, sim0, x);
+    let ig: Inv(tys, strs, s, e, Mach(h2, m.env, m.io), h0, lent) =
+        Inv::heap_rest_ws(tys, strs, inv, none, h2, m.io, lf, omega(m.heap.len_snoc(x)), Heap::stays_grow(tys, m.heap, x), e, simg,
+            λ l w => { let rl = inv.words(l, w); trans(Sim::lvl_ix(tys, strs, simg, l, rl.left, rl.right), sym(Sim::lvl_ix(tys, strs, sim0, l, rl.left, rl.right))) });
+    Inv::bind_fresh(tys, strs, ig, none, c, d, okc, hb, Heap::obj_new(tys, m.heap, Obj(d, Nil)),
+        λ o r hr eb => Nat::lt_irrefl(hb, j(eb, λ q _ => q < hb, inv.inheap(o, r, hr))), inv.grows)
 }
 
 // A value read at its own code is there.
@@ -14100,29 +14149,7 @@ theorem Inv::heap_rest(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys
     ecw: (k: Nat) → s.in_regions(k) = True → Env::get(tys, ex, s.var_at(k)) = Env::get(tys, e, s.var_at(k))):
     Inv(tys, strs, s, ex, Mach(h2, m.env, io2), h0, lent)
 {
-    let m2: Mach(tys) = Mach(h2, m.env, io2);
-    let ws = Mach::ixs(tys, strs, m);
-    let wsame = Inv::words_after(tys, strs, inv, Inv::sim_now(tys, strs, inv, none), sim2, ecw);
-    let ws2 = Mach::ixs(tys, strs, m2);
-    let regs: ((en: VEnt) → Mem(en, s.views) → Steps::sels(s.unsteps(en.reg), ws2) = Steps::sels(s.unsteps(en.reg), ws)) =
-        λ en me => CSt::sels_keep(en.reg, s, ws2, s, ws, λ l2 ml => wsame(l2, s.region_lvl(en, me, l2, ml)));
-    let ats: ((en: VEnt) → Mem(en, s.views) → Steps::sels(s.unsteps(en.at), ws2) = Steps::sels(s.unsteps(en.at), ws)) =
-        λ en me => CSt::sels_keep(en.at, s, ws2, s, ws, λ l2 ml => wsame(l2, s.at_lvl(en, me, l2, ml)));
-    let le0: (s.na + s.nd <= s.na + s.nd) = omega();
-    Inv(j(sym(s.patched_none(tys, strs, ex, m2, none)), λ q _ => Sim(tys, strs, s, q, m2), sim2), inv.root,
-        λ y l2 hy q cq => CSt::refok_keep(s, s, inv.root, inv.root, ws, ws2, l2, q, refl, refl, λ _ _ _ => refl, λ _ _ => refl,
-            λ en me => regs(en, s.views.mem_filter(en, λ e0 => e0.lvl.same(l2), me)), inv.refs(y, l2, hy, q, cq)),
-        inv.apart,
-        λ o3 r3 h3 => omega(inv.inheap(o3, r3, h3), gr),
-        inv.owned, inv.own, inv.one, inv.words,
-        lf,
-        omega(inv.grows, gr),
-        inv.young, inv.held, inv.vents,
-        λ o3 r3 h3 ob ho => match st(r3.b, inv.inheap(o3, r3, h3), ob, ho) { ⟨ob1, p1⟩ => p1.right(inv.bare(o3, r3, h3, ob1, p1.left)) },
-        inv.chain,
-        CSt::excl_keep(tys, strs, s, s, ws, ws2, refl, le0, λ en me => (inv.chain(en, me)).left, λ en me => (inv.vents(en, me)).right.left, regs, inv.excl), inv.wpar, inv.uni,
-        CSt::cfit_ws(tys, strs, s, m.env, ws, ws2, ats, inv.cfit), CSt::sib_keep(tys, strs, s, s, ws, ws2, refl, ats, inv.sib),
-        inv.args, inv.href, inv.made, inv.nbase, Heap::stays_trans(tys, h0, m.heap, h2, inv.stays, st, inv.grows))
+    Inv::heap_rest_ws(tys, strs, inv, none, h2, io2, lf, gr, st, ex, sim2, Inv::words_after(tys, strs, inv, Inv::sim_now(tys, strs, inv, none), sim2, ecw))
 }
 
 // ---------------------------------------------------------------------------
