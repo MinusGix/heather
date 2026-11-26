@@ -6673,3 +6673,80 @@ theorem Stmt::stage_write_view(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(tys
         })(refl, rd0),
     }
 }
+
+// ---------------------------------------------------------------------------
+// The write-back: what it needs of paths and of the walk
+
+// Writing back what a path reads changes nothing (the model's `put_back`
+// along the path, by `over_read`).
+theorem Sel::put_back_path(tys: Nat → Type, strs: Strs(tys), sl: StrsLaws(tys, strs), xs: List<Sel>): (d: Dyn(tys)) → Sel::write_at(tys, strs, xs, λ _ => Sel::read_at(tys, strs, xs, d), d) = d {
+    match xs {
+        Nil => λ d => refl,
+        Cons(a, rest) => λ d => {
+            let ml = Dyn::model_laws(tys, strs, sl);
+            let x = Dyn::at(tys, strs, a, d);
+            trans(ml.over_read(a, λ y => Sel::write_at(tys, strs, rest, λ _ => Sel::read_at(tys, strs, rest, x), y), λ _ => x, d, Sel::put_back_path(tys, strs, sl, rest, x)),
+                ml.put_back(a, d))
+        },
+    }
+}
+
+theorem CSt::up_stop(self s: CSt, tys: Nat → Type, strs: Strs(tys), e: Env(tys), c, f1: Nat, x: VEnt, rest: List<VEnt>, h: s.ents(c) = Cons(x, rest), sp: x.par.same(c) = True):
+    s.up(tys, strs, e, c, Succ(f1)) = e
+{
+    let br = λ (es: List<VEnt>) => match es as λ _ => Env(tys) { Nil => e, Cons(en, _) => match en.par.same(c) as λ _ => Env(tys) { True => e,
+        False => s.up(tys, strs, Env::set(tys, e, s.var_at(en.par), λ d => Dyn::write(tys, strs, Env::ixs(tys, e), s.unsteps(en.at), λ _ => Env::get(tys, e, s.var_at(c)), d)), en.par, f1) } };
+    trans(cong_fn(br, h), j(sym(sp), λ b _ => (match b as λ _ => Env(tys) { True => e, False => s.up(tys, strs, Env::set(tys, e, s.var_at(x.par), λ d => Dyn::write(tys, strs, Env::ixs(tys, e), s.unsteps(x.at), λ _ => Env::get(tys, e, s.var_at(c)), d)), x.par, f1) }) = e, refl))
+}
+
+// The walk reads an entry's parent and place, not whether it is written back.
+theorem CSt::up_rekin(self fu: Nat, s: CSt, tys: Nat → Type, strs: Strs(tys), f: VEnt → VEnt, kf: (x: VEnt) → Kin(f(x), x), tl, wl: List<Nat>): (e: Env(tys)) → (c: Nat) →
+    (s.rekin(f, tl, wl)).up(tys, strs, e, c, fu) = s.up(tys, strs, e, c, fu)
+{
+    match fu {
+        Zero => λ e c => refl,
+        Succ(f1) => λ e c => {
+            let s1 = s.rekin(f, tl, wl);
+            (match s.ents(c) as λ es => s.ents(c) = es → s1.up(tys, strs, e, c, Succ(f1)) = s.up(tys, strs, e, c, Succ(f1)) {
+                Nil => λ h => trans(CSt::up_nil(Succ(f1), s1, tys, strs, e, c, trans(VEnt::ents_map(s.views, f, kf, c), cong_fn(λ (es: List<VEnt>) => es.map(f), h))),
+                    sym(CSt::up_nil(Succ(f1), s, tys, strs, e, c, h))),
+                Cons(x, rest) => λ h => {
+                    let h1: (s1.ents(c) = Cons(f(x), rest.map(f))) = trans(VEnt::ents_map(s.views, f, kf, c), cong_fn(λ (es: List<VEnt>) => es.map(f), h));
+                    let kx = kf(x);
+                    (match x.par.same(c) as λ b => x.par.same(c) = b → s1.up(tys, strs, e, c, Succ(f1)) = s.up(tys, strs, e, c, Succ(f1)) {
+                        True => λ sp => trans(s1.up_stop(tys, strs, e, c, f1, f(x), rest.map(f), h1, trans(cong_fn(λ (n: Nat) => n.same(c), kx.par), sp)),
+                            sym(s.up_stop(tys, strs, e, c, f1, x, rest, h, sp))),
+                        False => λ np => {
+                            let wr = λ (pp: Nat) (aa: List<Step>) => s1.up(tys, strs, Env::set(tys, e, s.var_at(pp), λ d => Dyn::write(tys, strs, Env::ixs(tys, e), s.unsteps(aa), λ _ => Env::get(tys, e, s.var_at(c)), d)), pp, f1);
+                            trans(s1.up_step(tys, strs, e, c, f1, f(x), rest.map(f), h1, trans(cong_fn(λ (n: Nat) => n.same(c), kx.par), np)),
+                                trans(trans(cong_fn(λ (pp: Nat) => wr(pp, (f(x)).at), kx.par), cong_fn(λ (aa: List<Step>) => wr(x.par, aa), kx.at)),
+                                    trans(CSt::up_rekin(f1, s, tys, strs, f, kf, tl, wl, Env::set(tys, e, s.var_at(x.par), λ d => Dyn::write(tys, strs, Env::ixs(tys, e), s.unsteps(x.at), λ _ => Env::get(tys, e, s.var_at(c)), d)), x.par),
+                                        sym(s.up_step(tys, strs, e, c, f1, x, rest, h, np)))))
+                        },
+                    })(refl)
+                },
+            })(refl)
+        },
+    }
+}
+
+// The walk past its chain: more fuel changes nothing once it exceeds the level.
+theorem CSt::up_more(self fu: Nat, s: CSt, tys: Nat → Type, strs: Strs(tys), lt: (en: VEnt) → Mem(en, s.views) → en.par < en.lvl): (e: Env(tys)) → (c: Nat) → c < fu →
+    s.up(tys, strs, e, c, fu) = s.up(tys, strs, e, c, Succ(fu))
+{
+    match fu {
+        Zero => λ e c no => false_elim(Nat::not_succ_le_zero(c, no)),
+        Succ(f1) => λ e c cl => (match s.ents(c) as λ es => s.ents(c) = es → s.up(tys, strs, e, c, Succ(f1)) = s.up(tys, strs, e, c, Succ(Succ(f1))) {
+            Nil => λ h => trans(CSt::up_nil(Succ(f1), s, tys, strs, e, c, h), sym(CSt::up_nil(Succ(Succ(f1)), s, tys, strs, e, c, h))),
+            Cons(x, rest) => λ h => {
+                let mx: Mem(x, s.ents(c)) = j(sym(h), λ es _ => Mem(x, es), Inl(refl));
+                let xl: (x.lvl = c) = x.lvl.same_sound(c, s.views.mem_filter_holds(x, λ q => q.lvl.same(c), mx));
+                let pc: (x.par < c) = j(xl, λ n _ => x.par < n, lt(x, s.views.mem_filter(x, λ q => q.lvl.same(c), mx)));
+                let np: (x.par.same(c) = False) = Nat::same_false(x.par, c, λ eq => Nat::lt_irrefl(c, omega(pc, eq)));
+                let e1 = Env::set(tys, e, s.var_at(x.par), λ d => Dyn::write(tys, strs, Env::ixs(tys, e), s.unsteps(x.at), λ _ => Env::get(tys, e, s.var_at(c)), d));
+                trans(s.up_step(tys, strs, e, c, f1, x, rest, h, np),
+                    trans(CSt::up_more(f1, s, tys, strs, lt, e1, x.par, omega(pc, cl)), sym(s.up_step(tys, strs, e, c, Succ(f1), x, rest, h, np))))
+            },
+        })(refl),
+    }
+}
