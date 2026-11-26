@@ -16,6 +16,7 @@ import bytes_level::{run};
 import bytes_memory;
 import bytes_level_from_function_ir;
 import bytes_level_compare;
+import bytes_level_from_function_ir_sound;
 import x86_64_memory_contract;
 import x86_64_call_contract;
 import function_ir;

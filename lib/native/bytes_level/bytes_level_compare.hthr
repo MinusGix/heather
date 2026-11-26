@@ -64,6 +64,14 @@ record Placed { places: List<Place>, rest: List<Place>, next: Nat, scope: Scope,
 
 fn repeat_place(p: Place, n: Nat) → List<Place> { match n { Zero => [], Succ(k) => Cons(p, repeat_place(p, k)) } }
 
+// A node's instructions' places: each the old node's, except a constant
+// among several, which is folded (a reference's copy's zero).
+fn instr_place(instr: Instr, q: Place) → Place { match instr { Compute(node) => match node { Const(_, _, _) => Folded, _ => q }, _ => q } }
+
+fn instrs_places(instrs: List<Instr>, q: Place) → List<Place> {
+    match instrs { Nil => [], Cons(i, rest) => match rest { Nil => [q], Cons(_, _) => instrs.map(λ (x: Instr) => instr_place(x, q)) } }
+}
+
 // The registers the walk may use for the loop's two bits.
 record Spare { first: Option<Gpr>, second: Option<Gpr> }
 
@@ -77,12 +85,12 @@ fn placed_nodes(s: Scope, nodes: List<Node>, old: List<Place>, next: Nat, reads:
         Cons(node, rest) => match old {
             Nil => None,
             Cons(q, later) => {
-                let after = Scope(s.homes, s.refs, node_known(node, s.known));
+                let after = Scope(s.homes, s.node_refs(node), node_known(node, s.known));
                 match s.node_form(node, rest, next, reads) {
                     Refused => None,
                     Plain(instrs) => match placed_nodes(after, rest, later, next + 2, reads, labels) {
                         None => None,
-                        Some(more) => Some(Placed(repeat_place(q, instrs.len()) ++ more.places, more.rest, more.next, more.scope, more.labels)),
+                        Some(more) => Some(Placed(instrs_places(instrs, q) ++ more.places, more.rest, more.next, more.scope, more.labels)),
                     },
                     Guarded(_, instrs) => match placed_nodes(after, rest, later, next + 2, reads, Labels(labels.old, labels.new + 2, labels.pairs)) {
                         None => None,
@@ -108,43 +116,51 @@ fn loop_places(n: Nat, old: List<Place>) → Option<LoopPlaces> {
 
 fn into_all(registers: List<Gpr>) → List<Place> { registers.map(λ (r: Gpr) => Into(r)) }
 
-fn placed_region(s: Scope, region: StructuredRegion, old: List<Place>, next: Nat, reads: List<Nat>, labels: Labels, spare: Spare) → Option<Placed> {
+fn placed_region(s: Scope, region: StructuredRegion, old: List<Place>, next: Nat, reads: List<Nat>, labels: Labels, spare: Spare, d: Nat) → Option<Placed> {
     match region {
-        Dataflow(body) => placed_nodes(s, body.nodes, old, next, reads, labels),
-        Sequence(prefix, rest) => match placed_nodes(s, prefix.nodes, old, next, reads, labels) {
+        Dataflow(body) => placed_nodes(s, shift_nodes(body.nodes, d), old, next, reads, labels),
+        Sequence(prefix, rest) => match placed_nodes(s, shift_nodes(prefix.nodes, d), old, next, reads, labels) {
             None => None,
-            Some(first) => match placed_region(first.scope, rest, first.rest, first.next, reads, first.labels, spare) {
+            Some(first) => match placed_region(first.scope, rest, first.rest, first.next, reads, first.labels, spare, d) {
                 None => None,
                 Some(second) => Some(Placed(first.places ++ second.places, second.rest, second.next, second.scope, second.labels)),
             },
         },
-        Compose(prefix, rest) => match placed_region(s, prefix, old, next, reads, labels, spare) {
+        Compose(prefix, rest) => match placed_region(s, prefix, old, next, reads, labels, spare, d) {
             None => None,
-            Some(first) => match placed_region(first.scope, rest, first.rest, first.next, reads, first.labels, spare) {
+            Some(first) => match placed_region(first.scope, rest, first.rest, first.next, reads, first.labels, spare, d) {
                 None => None,
                 Some(second) => Some(Placed(first.places ++ second.places, second.rest, second.next, second.scope, second.labels)),
             },
         },
         Conditional(_, condition, _, _, yes, no) =>
-            match placed_region(s.know(Truth(condition)), yes, old, next, reads, labels.both(2), spare) {
+            match placed_region(s.know(Truth(condition + d)), yes, old, next, reads, labels.both(2), spare, d) {
                 None => None,
-                Some(left) => match placed_region(s.know(Falsity(condition)), no, left.rest, left.next, reads, left.labels, spare) {
+                Some(left) => match placed_region(s.know(Falsity(condition + d)), no, left.rest, left.next, reads, left.labels, spare, d) {
                     None => None,
                     Some(right) => Some(Placed(left.places ++ right.places, right.rest, right.next, s, right.labels)),
                 },
             },
         Call(_, _, _, _) => Some(Placed(call_places(old), after_saves(old), next, s, labels)),
-        Lend(views, _, _, _) => match views_lendable_in(views, s) {
+        Lend(views0, _, _, _) => match views_lendable_in(shift_views(views0, d), s) {
             False => None,
             True => {
-                let front = old.take(2 * views.len());
-                let after = old.drop(2 * views.len());
+                let front = old.take(2 * views0.len());
+                let after = old.drop(2 * views0.len());
                 Some(Placed(front ++ call_places(after), after_saves(after), next, s, labels))
             },
         },
-        Loop(inputs, bound, parameters, count, body, exit, later, outputs, exhausted) => match loop_places(parameters.len(), old) {
+        Loop(inputs0, bound0, parameters0, count0, body0, exit0, later0, outputs0, exhausted) => match loop_places(parameters0.len(), old) {
             None => None,
             Some(lp) => {
+                // The pass at its own offset, as the translation reads it.
+                let inputs = shift_ids(inputs0, d);
+                let outputs = shift_ids(outputs0, d);
+                let bound = bound0 + d;
+                let e = next + loop_ids();
+                let parameters = shift_ids(parameters0, e);
+                let later = shift_ids(later0, e);
+                let pass_reads = shift_ids(Cons(exit0, later0 ++ region_reads(body0)), e) ++ reads;
                 let inner = Scope(carried_homes(loop_carried(s.homes, inputs, parameters, later)), ref_ids_of(s, inputs, parameters), []);
                 // Old labels H, C, X, J are old + 1 to + 4. The new loop's
                 // H, C, J come after the bound-zero branch's two labels,
@@ -152,7 +168,7 @@ fn placed_region(s: Scope, region: StructuredRegion, old: List<Place>, next: Nat
                 let skip = match s.runs_once(bound) { True => 0, False => 2 };
                 let entered = Labels(labels.old + 4, labels.new + skip + 4,
                     labels.pairs ++ [labels.old + 1, labels.new + skip + 1, labels.old + 2, labels.new + skip + 2, labels.old + 4, labels.new + skip + 3]);
-                match placed_region(inner, body, lp.rest, next + loop_ids(), reads, entered, spare) {
+                match placed_region(inner, body0, lp.rest, e + pass_span(parameters0, count0, body0, exit0, later0), pass_reads, entered, spare, e) {
                     None => None,
                     Some(pass) => {
                         let check: List<Place> = match s.runs_once(bound) {
@@ -220,7 +236,7 @@ record PlacedFunction { places: List<Place>, rest: List<Place>, labels: Labels }
 fn Function::placed(self f: Function, old: List<Place>, labels: Labels) → Option<PlacedFunction> {
     let s = Scope(f.buffer_homes(), homes_bases(f.buffer_homes()), []);
     let body = placement_body(old);
-    match placed_region(s, f.body, body, f.fresh_from(), f.reads(), labels, spare_of(body)) {
+    match placed_region(s, f.body, body, f.fresh_from(), f.reads(), labels, spare_of(body), 0) {
         None => None,
         Some(made) => Some(PlacedFunction(renamed_header(header_of(old), made.labels) ++ made.places, made.rest, made.labels)),
     }
@@ -545,6 +561,60 @@ fn lowers_report(functions: List<Function>, placement: List<Place>) → List<Nat
                 False => [2, first_invalid(program_signatures(p.routines), p.routines, 0)],
                 True => match p.lower(places) { None => [3, first_refused(Start, p.routines, 0, p.routines.len(), places, p.routines.len())], Some(_) => [7] },
             },
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Where validity fails: the path to the first part of a routine's body the
+// kinds refuse, as `Body::check` walks it (10 a leaf and the instruction
+// shown, 11 a sequence's half, 12 a branch's test (9) or arm, 13 a loop's
+// head (7), pass (0) or close (9), 14 a call); empty where it checks.
+fn instrs_invalid(instrs: List<Instr>, kinds: List<Typed>, at: Nat) → List<Nat> {
+    match instrs {
+        Nil => [],
+        Cons(instr, rest) => match instr.check(kinds) { None => [10, at] ++ instr_shown(instr), Some(after) => instrs_invalid(rest, after, at + 1) },
+    }
+}
+
+fn Body::invalid(self body: Body, signatures: Nat → Option<Signature>, kinds: List<Typed>) → List<Nat> {
+    match body {
+        Leaf(instrs) => instrs_invalid(instrs, kinds, 0),
+        Seq(first, rest) => match first.check(signatures, kinds) {
+            None => [11, 0] ++ first.invalid(signatures, kinds),
+            Some(mid) => [11, 1] ++ rest.invalid(signatures, mid),
+        },
+        Branch(condition, yes, no) => match has_kind(kinds, condition, WordKind) {
+            False => [12, 9, condition],
+            True => match yes.check(signatures, kinds) {
+                None => [12, 0] ++ yes.invalid(signatures, kinds),
+                Some(_) => [12, 1] ++ no.invalid(signatures, kinds),
+            },
+        },
+        Call(callee, arguments, results) => [14, callee],
+        Loop(inputs, parameters, inner, exit, next, outputs) =>
+            match has_kinds(kinds, inputs) && (same_kinds(kinds_of(inputs), kinds_of(parameters)) &&
+                (same_kinds(kinds_of(next), kinds_of(parameters)) && same_kinds(kinds_of(outputs), kinds_of(parameters)))) {
+                False => [13, 7],
+                True => match bind_kinds([], parameters) {
+                    None => [13, 8],
+                    Some(start) => match inner.check(signatures, start) {
+                        None => [13, 0] ++ inner.invalid(signatures, start),
+                        Some(_) => [13, 9],
+                    },
+                },
+            },
+        Sys(_) => [15],
+        Exit(_) => [16],
+    }
+}
+
+fn invalid_path(functions: List<Function>, k: Nat) → List<Nat> {
+    match translate_program(functions) {
+        None => [],
+        Some(p) => match p.routines.nth(k) {
+            None => [],
+            Some(r) => match bind_kinds([], r.parameters) { None => [20], Some(start) => r.body.invalid(program_signatures(p.routines), start) },
         },
     }
 }

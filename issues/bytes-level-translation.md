@@ -94,3 +94,57 @@ The translation and its theorem pass the library gate; the comparison runs over 
     - Controls: a store not known inside, refused; a wide load not known whole, refused; a leveled function, refused.
     - The comparison on a word function lowered both ways: the same 7 bytes.
   - Verification: `scripts/fmt --check` and `scripts/lib-closures` clean; `scripts/linked --check` unchanged; `HEATHER_PR_NATIVE=all scripts/test --pr`: `== suite: 4139 passed, 0 failed, 3 ignored ==`. That run predates two changes: the drop restricted to pure nodes, and the call checks. The modules and probes were re-checked after them, and the final verification re-runs the suite.
+- 2026-11-26, item 4: **the comparison** (`scripts/bytes-level-compare`; `--gates` for the gates' programs; no test lane runs it, since it compiles every row).
+  - How it works:
+    - It compiles each row the old way with `compile-x86` and keeps the certificate under the key `scripts/linked` uses.
+    - It reads off the certificate what the lowering was given (`_cut_program` or `_program`, the counts, the planner's `_placement`) and the old `_code` (`scripts/bytes-level-compare-defs.py`).
+    - It evaluates `compare_report` (`bytes_level_compare`): the translation, the placement translated in step with it, `Program::lower`, and the bytes of both codes.
+    - Both codes are disassembled and diffed routine by routine, call and jump displacements aside (`scripts/bytes-level-compare-diff.py`, writing `old.s`, `new.s`, `diff.txt` per row).
+  - Its own checks:
+    - The evaluated old bytes equal the published `.s`, for every row that lowered.
+    - `asm_code` re-measures everything before each item, which ran out of memory on scan_token, so the comparison assembles in one pass (`prog_bytes`).
+  - Exports:
+
+    | Row | Outcome |
+    |---|---|
+    | sha512_t1, _t2, _next; sha256_t1, _t2, _next | same bytes (223, 145, 182, 133, 100, 137) |
+    | count_newlines | +8 bytes, only its loop's routine |
+    | raise_span, list_raise_letters | +8, only the loop's routine |
+    | copy_span | +12, the loop's routine |
+    | copy_window | +12, the loop's routine; the lend's routine has the same instructions |
+    | scan_token | +8, only routine 36 (its loop) of 39 |
+    | sha256_compress | refused: `ByteSwap(32)` of a `Load(4)` (routine 6) |
+    | sha256_init, _update, _finish; scan_tokens | refused: `Store(4)` of a `ByteSwap(32)` (routine 1; scan_tokens routine 41) |
+
+  - Gates:
+
+    | Program | Outcome |
+    |---|---|
+    | two_words add_wide, enum_fields signal (words past the first) | same bytes |
+    | three_words stats (a structure through memory: `Fixed`, eight-byte stores) | same bytes |
+    | branches nested_true | same bytes |
+    | binary-search lower_bound | +12, the loop's routine |
+    | utf8 utf8_valid_up_to | +8, the loop's routine |
+    | sort sort_in_place | +8 and +16, its two loop routines |
+    | recursion rsum | refused by the translation (levels) |
+
+  - The differences, reviewed. Every routine without a bounded loop is byte-identical, call displacements aside. Each difference has one of four causes:
+    1. **The bounded loop** (every loop routine). The bytes level has only the plain loop, so the counter and an exhausted flag are the state's last two elements, in the old placement's counter and flag registers.
+       - Old: `TEST counter; JE` at the head of each pass, `MOV flag, 0/1` on leaving.
+       - New:
+         - one `MOV flag, bound` at entry;
+         - a tail branch on the exit bit (`MOV counter, 0; MOV flag, 0` or `ADD counter, -1; MOV flag, 1`), then `CMP counter, 0; JNE`;
+         - after the loop, `CMP flag, 1` where the old code tested the flag;
+         - a jump to a jump at the tail's join.
+       - Net +8 bytes, +12 where the registers take REX prefixes. Accepted for stage 2. A counted loop at the bytes level (a hidden counter register, as FunctionIR's loop has) would remove it; it goes in the stage-3 list.
+    2. **A reference's copy** (sort routine 2: an `ADD r, 0`). The optimizer leaves a dead `Move` of the span's reference. The bytes level has no reference move, so the translation copies it as an `Offset` of a folded zero. Accepted; a reference `Move` instruction would remove it.
+    3. **Four-byte accesses' register kind** (the four sha256 rows and scan_tokens refused). `Program::lower` holds a `Load(4)` result as `Word` and takes a `Store(4)` value only as `Word`, where FunctionIR's wide forms use `Narrow(32)`. So a `ByteSwap(32)` after a dword load is refused, and so is a dword store of a `ByteSwap(32)`. Smallest programs:
+       - `Leaf[Offset(t, r, i), Load(4, x, t), Compute(ByteSwap(32, y, x))]`
+       - `Leaf[Compute(ByteSwap(32, y, x)), Offset(t, r, i), Store(4, t, y)]`
+       Reported to the coordinator, not worked around.
+    4. **Levels** (rsum): no counterpart at the bytes level.
+  - The translation changes the comparison drove, each exact in meaning:
+    - **A loop's pass read at an offset of its own**, past every id so far (`translate_region`'s `d`). FunctionIR runs each pass in its own valuation, and the optimizer's copies reuse a pass's ids after the loop (sort), which the bytes level's scope check refuses.
+    - **A `Move` of a reference** copies the reference.
+    - **A function's results typed by its scope**: the sret wrapper answers its reference.
+    - **The bound-zero check skipped** where the bound is a known nonzero constant.

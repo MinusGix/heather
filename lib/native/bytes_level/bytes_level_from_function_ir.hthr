@@ -19,7 +19,10 @@
 //   which is what the old node's output names. A wide store is the same
 //   without the load back, where the function reads nothing at the output
 //   (the old lowering leaves it unheld, so no lowered program reads it).
-// - Word nodes are wrapped in `Compute`. A node a later node of its leaf
+// - Word nodes are wrapped in `Compute`; a `Move` of a reference is a
+//   reference's copy (an `Offset` of zero), as the optimizer leaves one. A
+//   function's results are typed as its scope holds them: a structure
+//   returned through memory answers its reference. A node a later node of its leaf
 //   binds again before anything reads it is dropped (`rebound`): the
 //   bytes level binds an id once in a scope.
 // - A call is a call on the values: its arguments as the scope holds them,
@@ -29,8 +32,9 @@
 //   (`calls_below`), as the old lowering refuses it.
 // - A lend is each view's `Offset` from its buffer's reference and its
 //   length (`end - start`), then the call, the views first.
-// - A bounded loop is a plain loop whose state carries its counter. See
-//   `loop_body` and `bounded_loop`.
+// - A bounded loop is a plain loop whose state carries its counter
+//   (`bounded_loop`), its pass's ids moved past every other id (the
+//   offset `translate_region` reads a region at).
 //
 // Where the meanings differ (§17.8). FunctionIR's loads read zero and its
 // stores do nothing past a buffer's end. At the bytes level a load or a
@@ -258,8 +262,19 @@ fn Scope::memory(self s: Scope, node: Node, t: Nat, reads: List<Nat>) → Memory
                 True => Plain([Offset(t, h.base, index), Store(bytes, t, value)] ++ reload(bytes, output, t, reads)),
             },
         },
+        // A copy of a reference is a reference: an offset of zero (`t` the
+        // zero word).
+        Move(width, output, source) => match s.kind(source) {
+            WordKind => Plain([Compute(node)]),
+            RefKind => Plain([Compute(Const(64, t, 0)), Offset(output, source, t)]),
+        },
         _ => Plain([Compute(node)]),
     }
+}
+
+// The references a node adds to its scope: a copy of one.
+fn Scope::node_refs(self s: Scope, node: Node) → List<Nat> {
+    match node { Move(_, output, source) => match s.kind(source) { WordKind => s.refs, RefKind => Cons(output, s.refs) }, _ => s.refs }
 }
 
 // The guard of a byte load: the bit `test` the comparison of the index with
@@ -304,7 +319,7 @@ fn translate_nodes(s: Scope, nodes: List<Node>, next: Nat, reads: List<Nat>) →
     match nodes {
         Nil => Some(Made(Leaf([]), next, s)),
         Cons(node, rest) => {
-            let after = Scope(s.homes, s.refs, node_known(node, s.known));
+            let after = Scope(s.homes, s.node_refs(node), node_known(node, s.known));
             match s.node_form(node, rest, next, reads) {
                 Refused => None,
                 Plain(instrs) => match translate_nodes(after, rest, next + 2, reads) {
@@ -406,6 +421,59 @@ fn bounded_loop(s: Scope, inputs: List<Nat>, bound: Nat, parameters: List<Nat>, 
 }
 
 // ---------------------------------------------------------------------------
+// A loop's pass renamed
+//
+// FunctionIR runs each pass in a valuation of its own, so a program may
+// reuse a pass's ids outside it (the optimizer's copies do). The bytes
+// level counts a pass's ids as bound in the scope around the loop. A pass
+// reads only its parameters and what it binds, so every id in it moved by
+// one amount is the same pass: the translation reads each pass with its
+// ids moved past every id so far (`translate_region`'s offset).
+
+fn shift_ids(ids: List<Nat>, d: Nat) → List<Nat> { ids.map(λ (x: Nat) => x + d) }
+
+fn shift_ports(ports: Ports, d: Nat) → Ports { Ports(ports.entries.map(λ (p: Port) => Port(id := p.id + d, width := p.width))) }
+
+fn shift_node(node: Node, d: Nat) → Node {
+    match node {
+        Const(w, o, v) => Const(w, o + d, v),
+        Move(w, o, x) => Move(w, o + d, x + d),
+        Add(w, o, a, b) => Add(w, o + d, a + d, b + d),
+        Sub(w, o, a, b) => Sub(w, o + d, a + d, b + d),
+        BitAnd(w, o, a, b) => BitAnd(w, o + d, a + d, b + d),
+        BitOr(w, o, a, b) => BitOr(w, o + d, a + d, b + d),
+        BitXor(w, o, a, b) => BitXor(w, o + d, a + d, b + d),
+        ShiftLeft(w, o, x, k) => ShiftLeft(w, o + d, x + d, k),
+        LogicalShiftRight(w, o, x, k) => LogicalShiftRight(w, o + d, x + d, k),
+        ArithmeticShiftRight(w, o, x, k) => ArithmeticShiftRight(w, o + d, x + d, k),
+        UnsignedLessThan(w, o, a, b) => UnsignedLessThan(w, o + d, a + d, b + d),
+        SignedLessThan(w, o, a, b) => SignedLessThan(w, o + d, a + d, b + d),
+        Equal(w, o, a, b) => Equal(w, o + d, a + d, b + d),
+        BufferLoad(o, buffer, i) => BufferLoad(o + d, buffer, i + d),
+        BufferStore(o, buffer, i, v) => BufferStore(o + d, buffer, i + d, v + d),
+        Resize(f, t, o, x) => Resize(f, t, o + d, x + d),
+        SignResize(f, t, o, x) => SignResize(f, t, o + d, x + d),
+        TableRead(w, o, bits, i, entries) => TableRead(w, o + d, bits, i + d, entries),
+        WideLoad(n, o, buffer, i) => WideLoad(n, o + d, buffer, i + d),
+        WideStore(n, o, buffer, i, v) => WideStore(n, o + d, buffer, i + d, v + d),
+        ByteSwap(w, o, x) => ByteSwap(w, o + d, x + d),
+        RotateRight(w, o, x, k) => RotateRight(w, o + d, x + d, k),
+        Apply(op, w, o, a, b) => Apply(op, w, o + d, a + d, b + d),
+    }
+}
+
+fn shift_nodes(nodes: List<Node>, d: Nat) → List<Node> { nodes.map(λ (n: Node) => shift_node(n, d)) }
+
+fn shift_views(views: List<View>, d: Nat) → List<View> {
+    views.map(λ (v: View) => View(v.buffer, v.home + d, v.start + d, v.end + d, v.written, v.base + d, v.length + d))
+}
+
+// The first id past every id a pass names.
+fn pass_span(parameters: List<Nat>, count: Nat, body: StructuredRegion, exit: Nat, next: List<Nat>) → Nat {
+    max_of(Cons(count, Cons(exit, parameters ++ (next ++ region_ids(body))))) + 1
+}
+
+// ---------------------------------------------------------------------------
 // Regions
 
 fn Scope::after_loop(self s: Scope, inputs, parameters, next, outputs: List<Nat>) → Scope {
@@ -435,45 +503,57 @@ fn calls_below(at, callee: Nat, lents: List<Nat>, s: Scope, arguments: List<Nat>
     (callee + 1).leb(at) && args_lend(s.homes, lent_count(lents, callee), 0, arguments)
 }
 
-fn translate_region(s: Scope, region: StructuredRegion, next: Nat, reads: List<Nat>, at: Nat, lents: List<Nat>) → Option<Made> {
+// A region read with every id moved by `d` (0 for a function's body; a
+// loop's pass is translated at an offset of its own).
+fn translate_region(s: Scope, region: StructuredRegion, next: Nat, reads: List<Nat>, at: Nat, lents: List<Nat>, d: Nat) → Option<Made> {
     match region {
-        Dataflow(body) => translate_nodes(s, body.nodes, next, reads),
-        Sequence(prefix, rest) => match translate_nodes(s, prefix.nodes, next, reads) {
+        Dataflow(body) => translate_nodes(s, shift_nodes(body.nodes, d), next, reads),
+        Sequence(prefix, rest) => match translate_nodes(s, shift_nodes(prefix.nodes, d), next, reads) {
             None => None,
-            Some(first) => match translate_region(first.scope, rest, first.next, reads, at, lents) {
+            Some(first) => match translate_region(first.scope, rest, first.next, reads, at, lents, d) {
                 None => None,
                 Some(second) => Some(Made(seq_bodies(first.body, second.body), second.next, second.scope)),
             },
         },
-        Compose(prefix, rest) => match translate_region(s, prefix, next, reads, at, lents) {
+        Compose(prefix, rest) => match translate_region(s, prefix, next, reads, at, lents, d) {
             None => None,
-            Some(first) => match translate_region(first.scope, rest, first.next, reads, at, lents) {
+            Some(first) => match translate_region(first.scope, rest, first.next, reads, at, lents, d) {
                 None => None,
                 Some(second) => Some(Made(seq_bodies(first.body, second.body), second.next, second.scope)),
             },
         },
-        Conditional(_, condition, _, _, yes, no) => match translate_region(s.know(Truth(condition)), yes, next, reads, at, lents) {
+        Conditional(_, condition, _, _, yes, no) => match translate_region(s.know(Truth(condition + d)), yes, next, reads, at, lents, d) {
             None => None,
-            Some(left) => match translate_region(s.know(Falsity(condition)), no, left.next, reads, at, lents) {
+            Some(left) => match translate_region(s.know(Falsity(condition + d)), no, left.next, reads, at, lents, d) {
                 None => None,
-                Some(right) => Some(Made(Branch(condition, left.body, right.body), right.next, s)),
+                Some(right) => Some(Made(Branch(condition + d, left.body, right.body), right.next, s)),
             },
         },
-        Call(callee, arguments, result, also) => match calls_below(at, callee, lents, s, arguments) {
+        Call(callee, arguments, result, also) => match calls_below(at, callee, lents, s, shift_ids(arguments, d)) {
             False => None,
-            True => Some(Made(Call(callee, s.typed_all(arguments), words_typed(Cons(result, also))), next, s)),
+            True => Some(Made(Call(callee, s.typed_all(shift_ids(arguments, d)), words_typed(shift_ids(Cons(result, also), d))), next, s)),
         },
-        Lend(views, callee, arguments, result) => match views_lendable_in(views, s) && (callee + 1).leb(at) {
-            False => None,
-            True => Some(Made(Seq(Leaf(view_instrs(views)), Call(callee, s.with_refs(views_bases(views)).typed_all(views_homes(views) ++ arguments),
-                [word_id(result)])), next, s)),
+        Lend(views0, callee, arguments, result) => {
+            let views = shift_views(views0, d);
+            match views_lendable_in(views, s) && (callee + 1).leb(at) {
+                False => None,
+                True => Some(Made(Seq(Leaf(view_instrs(views)), Call(callee, s.with_refs(views_bases(views)).typed_all(views_homes(views) ++ shift_ids(arguments, d)),
+                    [word_id(result + d)])), next, s)),
+            }
         },
-        Loop(inputs, bound, parameters, count, body, exit, later, outputs, exhausted) => {
+        Loop(inputs0, bound0, parameters0, count0, body, exit0, later0, outputs0, exhausted0) => {
+            let inputs = shift_ids(inputs0, d);
+            let outputs = shift_ids(outputs0, d);
+            // The pass's own ids from `e` on, past every id so far.
+            let e = next + loop_ids();
+            let parameters = shift_ids(parameters0, e);
+            let later = shift_ids(later0, e);
+            let pass_reads = shift_ids(Cons(exit0, later0 ++ region_reads(body)), e) ++ reads;
             let inner = Scope(carried_homes(loop_carried(s.homes, inputs, parameters, later)), ref_ids_of(s, inputs, parameters), []);
-            match translate_region(inner, body, next + loop_ids(), reads, at, lents) {
+            match translate_region(inner, body, e + pass_span(parameters0, count0, body, exit0, later0), pass_reads, at, lents, e) {
                 None => None,
-                Some(pass) => Some(Made(bounded_loop(s, inputs, bound, parameters, count, pass.body, exit, later, outputs, exhausted, next), pass.next,
-                    s.after_loop(inputs, parameters, later, outputs))),
+                Some(pass) => Some(Made(bounded_loop(s, inputs, bound0 + d, parameters, count0 + e, pass.body, exit0 + e, later, outputs, exhausted0 + d, next),
+                    pass.next, s.after_loop(inputs, parameters, later, outputs))),
             }
         },
     }
@@ -495,9 +575,9 @@ fn Function::translate(self f: Function, at: Nat, lents: List<Nat>) → Option<R
         Succ(_) => None,
         Zero => {
             let s = Scope(f.buffer_homes(), homes_bases(f.buffer_homes()), []);
-            match translate_region(s, f.body, f.fresh_from(), f.reads(), at, lents) {
+            match translate_region(s, f.body, f.fresh_from(), f.reads(), at, lents, 0) {
                 None => None,
-                Some(made) => Some(Routine(s.typed_all(f.parameters), made.body, words_typed(Cons(f.result, f.also)))),
+                Some(made) => Some(Routine(s.typed_all(f.parameters), made.body, made.scope.typed_all(Cons(f.result, f.also)))),
             }
         },
     }
