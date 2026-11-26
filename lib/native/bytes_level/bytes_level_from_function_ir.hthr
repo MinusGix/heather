@@ -151,9 +151,25 @@ fn Function::fresh_from(self f: Function) → Nat {
     max_of(f.parameters ++ (Cons(f.result, f.also) ++ (region_ids(f.body) ++ fixed_ids(f.fixed)))) + 1
 }
 
-// What the function reads anywhere, past the binding nodes: whether a wide
-// store's output is ever read.
-fn Function::reads(self f: Function) → List<Nat> { Cons(f.result, f.also ++ region_reads(f.body)) }
+// Every id a region's own scope reads: a loop's pass reads only its
+// parameters and what it binds, in a valuation of its own, so of a loop the
+// scope reads its inputs and bound.
+fn scope_reads(region: StructuredRegion) → List<Nat> {
+    match region {
+        Dataflow(body) => nodes_reads(body.nodes),
+        Sequence(prefix, rest) => nodes_reads(prefix.nodes) ++ scope_reads(rest),
+        Compose(first, rest) => scope_reads(first) ++ scope_reads(rest),
+        Conditional(_, condition, _, _, yes, no) => Cons(condition, scope_reads(yes) ++ scope_reads(no)),
+        Call(_, arguments, _, _) => arguments,
+        Loop(inputs, bound, _, _, _, _, _, _, _) => Cons(bound, inputs),
+        Lend(views, _, arguments, _) => views_ids(views) ++ arguments,
+    }
+}
+
+// What the function's scope reads, past the binding nodes: whether a wide
+// store's output or a reference's copy is ever read (a pass adds its own,
+// moved, `translate_region`).
+fn Function::reads(self f: Function) → List<Nat> { Cons(f.result, f.also ++ scope_reads(f.body)) }
 
 // ---------------------------------------------------------------------------
 // A scope: its buffers' homes, the ids holding references, and what the
