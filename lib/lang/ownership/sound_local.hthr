@@ -1,0 +1,442 @@
+// sound_local: the soundness proof's invariant restated as local agreement,
+// footprints and like-ness (docs/language/ownership-design.md §26.2, §26.6;
+// issues/ownership-sound-consolidate.md). Definitions only, each with a
+// decider at closed data beside it; nothing is proved over them yet (§24:
+// a statement is evaluated along runs before anything is proved over it).
+//
+// Write `val(l)` for what level `l`'s cell reads (through the heap where it
+// refers, itself where it is a copy: `CSt::val_at`), `d(l)` for its meaning
+// (`CSt::mean_at`), and call a live view to write opened on `l` a *write child*
+// of `l`, at its place (`CSt::wkids`, `VEnt::place`). The groups:
+//
+// - **Agreement** (`Agree`), per live level: `val(l)` is `d(l)` outside the
+//   places of `l`'s write children, as the lens equation of the frame
+//   (`Sel::put_lent`): `val(l) = puts(children's places, val(l), d(l))`; and
+//   every level's meaning has the code the checker records.
+// - **Sync** (`CSt::Synced`), per live view: a view to read is its parent's
+//   meaning at its place (one of its entries, after a join chose it); a view
+//   to write that is written back is so at each entry; and where the parent
+//   is a copy, also its parent's value at its place.
+// - **Where a cell lives** (`Cells`): a holder's cell refers to its object's
+//   root or is a copy where the object has none, and is owned exactly where
+//   the holder owns an object that refers; a view's is its parent's narrowed
+//   at its place, a copy where the parent is one; a plain variable's is a
+//   copy; and an argument's object's root is what its cell refers to.
+// - **Footprints apart** (`Foot::AllApart`): two live levels neither of which
+//   is an ancestor of the other, one of which may write, have footprints
+//   apart. A footprint is a block at selections, or, for a copy, the level of
+//   the copy its chain starts at with the selections from there (§26.6: two
+//   copies opened on one copy meet there, so a copy's footprint is not only
+//   its own cell).
+// - **Like-ness** (`Likes`): a live level's value has its meaning's code and
+//   length; a live view to write's place fits its parent's value, and its
+//   value and meaning are like what its parent's read there (§26.6: like-ness
+//   is the code and the length at the top, what `RFits` gives; the deep
+//   shape is not kept by a checked write).
+// - **The object table against the heap** (`Heaped`): the present heap group
+//   as it is, but for the roots' apartness, which the footprints replace.
+// - **The checker's state well formed** (`CSt::Wf`, `sound_wf`).
+//
+// The entry for evaluation is `InvLocal::holds_b`, with the indices `Inv`
+// takes and a decider of equality at each named type (`DEq`).
+import logic;
+import bool;
+import nat;
+import option;
+import list;
+import bitvec;
+import span_set;
+import store;
+import atom;
+import steps;
+import shape;
+import body;
+import level2;
+import run;
+import verdict;
+import checker;
+import linux_world;
+import sound_paths;
+import sound_state;
+import sound_heap;
+import sound_inv;
+import sound_wf;
+
+// ---------------------------------------------------------------------------
+// Levels: what a level's cell reads, and what it means
+
+fn CSt::cell_at(tys: Nat → Type, s: CSt, m: Mach(tys), l: Nat) → Cell(tys) { REnv::get(tys, m.env, s.var_at(l)) }
+
+fn CSt::val_at(tys: Nat → Type, strs: Strs(tys), s: CSt, m: Mach(tys), l: Nat) → Option<Dyn(tys)> { Value::get(tys, strs, m.heap, (CSt::cell_at(tys, s, m, l)).v, Nil) }
+
+fn CSt::mean_at(tys: Nat → Type, s: CSt, e: Env(tys), l: Nat) → Dyn(tys) { Env::get(tys, e, s.var_at(l)) }
+
+// A level the checker holds live: below the next level, and not gone.
+fn CSt::live(self s: CSt, l: Nat) → Bool { (l + 1).leb(s.count()) && !(s.role(l)).same(KGone) }
+
+// The live views to write opened on `l`: its write children.
+fn CSt::wkids(self s: CSt, l: Nat) → List<VEnt> { s.views.filter(λ en => en.par.same(l) && !en.lvl.same(l) && en.mode.writes()) }
+
+// An entry's place in its parent, as selections at the run's words.
+fn VEnt::place(self en: VEnt, s: CSt, ws: List<Ix>) → List<Sel> { Steps::sels(s.unsteps(en.at), ws) }
+
+// The write children's places as references into one block (0), so that the
+// frame's fold of puts reads them.
+fn CSt::slots_at(s: CSt, ws: List<Ix>, l: Nat) → List<Ref> { (s.wkids(l)).map(λ en => Ref(0, en.place(s, ws))) }
+
+// `d` with what `a` holds at each write child's place put there.
+fn CSt::puts_at(tys: Nat → Type, strs: Strs(tys), s: CSt, ws: List<Ix>, l: Nat, a, d: Dyn(tys)) → Dyn(tys) { Sel::put_lent(tys, strs, CSt::slots_at(s, ws, l), 0, a, d) }
+
+// ---------------------------------------------------------------------------
+// Agreement, per level
+
+fn CSt::Agrees(tys: Nat → Type, strs: Strs(tys), s: CSt, e: Env(tys), m: Mach(tys), l: Nat) → Type {
+    match CSt::val_at(tys, strs, s, m, l) { Some(v) => v = CSt::puts_at(tys, strs, s, Mach::ixs(tys, strs, m), l, v, CSt::mean_at(tys, s, e, l)), None => False }
+}
+
+record Agree(tys: Nat → Type, strs: Strs(tys), s: CSt, e: Env(tys), m: Mach(tys)) {
+    eargs: e.args.len() = s.na,
+    margs: (m.env).args.len() = s.na,
+    elocs: e.locs.len() = s.nd,
+    mlocs: (m.env).locs.len() = s.nd,
+    codes: (l: Nat) → l < s.count() → (CSt::mean_at(tys, s, e, l)).code = (s.var(l)).code,
+    vals: (l: Nat) → s.live(l) = True → CSt::Agrees(tys, strs, s, e, m, l),
+}
+
+// ---------------------------------------------------------------------------
+// Sync, per view
+
+// What an entry's write-back establishes: its view's meaning is its parent's
+// at its place; and where the parent's cell is a copy, its value is too (a
+// referring view's is, by where its cell lives).
+fn VEnt::Sync(tys: Nat → Type, strs: Strs(tys), s: CSt, e: Env(tys), m: Mach(tys), en: VEnt) → Type {
+    let pl = en.place(s, Mach::ixs(tys, strs, m));
+    (Sel::read_at(tys, strs, pl, CSt::mean_at(tys, s, e, en.par)) = CSt::mean_at(tys, s, e, en.lvl)) ∧
+        (Value::ref_of(tys, (CSt::cell_at(tys, s, m, en.par)).v) = None →
+            (CSt::val_at(tys, strs, s, m, en.par)).and_then(λ vp => Sel::get(tys, strs, pl, vp)) = CSt::val_at(tys, strs, s, m, en.lvl))
+}
+
+// A view to read is synced at one of its entries (after a join that chose it,
+// its entries are of each arm, and the run took one); a view to write at each
+// entry that is written back.
+fn CSt::SyncedW(tys: Nat → Type, strs: Strs(tys), s: CSt, e: Env(tys), m: Mach(tys), l: Nat) → Type {
+    (en: VEnt) → Mem(en, s.ents(l)) → en.back = True → VEnt::Sync(tys, strs, s, e, m, en)
+}
+
+fn CSt::SyncedV(tys: Nat → Type, strs: Strs(tys), s: CSt, e: Env(tys), m: Mach(tys), l: Nat, w: Bool) → Type {
+    match w { True => CSt::SyncedW(tys, strs, s, e, m, l), False => VEnt::Any(s.ents(l), λ en => VEnt::Sync(tys, strs, s, e, m, en)) }
+}
+
+fn CSt::Synced(tys: Nat → Type, strs: Strs(tys), s: CSt, e: Env(tys), m: Mach(tys), l: Nat) → Type {
+    match s.role(l) {
+        KView => CSt::SyncedV(tys, strs, s, e, m, l, (s.ents(l)).any_bit(λ en => en.mode.writes())),
+        KHold(_, _) => True,
+        KPlain => True,
+        KGone => True,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Where a cell lives
+
+fn Bool::same_b(a, b: Bool) → Bool { match a { True => b, False => !b } }
+
+fn Acc::owns(self a: Acc) → Bool { match a { AcOwn => True, AcRead => False, AcWrite => False } }
+
+fn Value::refers_b(tys: Nat → Type, v: Value(tys)) → Bool { match v { Plain(_) => False, Refer(_) => True } }
+
+fn CSt::Lives(tys: Nat → Type, strs: Strs(tys), s: CSt, m: Mach(tys), root: Nat → Option<Ref>, l: Nat) → Type {
+    let c = CSt::cell_at(tys, s, m, l);
+    match s.role(l) {
+        KPlain => (Value::refers_b(tys, c.v) = False) ∧ (c.own = False),
+        KHold(o, a) => (Value::ref_of(tys, c.v) = root(o)) ∧ ((c.own = (a.owns() && Value::refers_b(tys, c.v))) ∧ (a.owns() = True → (r: Ref) → root(o) = Some(r) → r.sels = Nil)),
+        KView => (c.own = False) ∧ VEnt::Any(s.ents(l), λ en =>
+            Value::ref_of(tys, c.v) = (Value::ref_of(tys, (CSt::cell_at(tys, s, m, en.par)).v)).map(λ rp => rp.narrow(Mach::ixs(tys, strs, m), s.unsteps(en.at)))),
+        KGone => True,
+    }
+}
+
+record Cells(tys: Nat → Type, strs: Strs(tys), s: CSt, m: Mach(tys), root: Nat → Option<Ref>) {
+    lives: (l: Nat) → l < s.count() → CSt::Lives(tys, strs, s, m, root, l),
+    args: CSt::ARoot(tys, s, root, m.env),
+}
+
+// ---------------------------------------------------------------------------
+// Footprints
+
+// A block at selections; or a copy: the level whose cell the chain of copies
+// starts at, and the selections from there.
+inductive Foot { FHeap(r: Ref), FCopy(l: Nat, sels: List<Sel>) }
+
+fn Foot::narrow(self f: Foot, ss: List<Sel>) → Foot { match f { FHeap(r) => FHeap(Ref(r.b, r.sels ++ ss)), FCopy(l, xs) => FCopy(l, xs ++ ss) } }
+
+// A level's footprints: a holder's is its object's root, or its own cell
+// where the object has none; a plain variable's its own cell; a view's each
+// of its entries' parent's narrowed at the entry's place. A parent is at a
+// lower level (`chain`), so the level count bounds the walk.
+fn CSt::foots(self s: CSt, root: Nat → Option<Ref>, ws: List<Ix>, l: Nat, fuel: Nat) → List<Foot> {
+    match fuel {
+        Zero => Nil,
+        Succ(f) => match s.role(l) {
+            KHold(o, _) => match root(o) { Some(r) => [FHeap(r)], None => [FCopy(l, Nil)] },
+            KPlain => [FCopy(l, Nil)],
+            KGone => Nil,
+            KView => (s.ents(l)).foldr(λ (en: VEnt) (acc: List<Foot>) => (s.foots(root, ws, en.par, f)).map(λ (g: Foot) => g.narrow(en.place(s, ws))) ++ acc, Nil),
+        },
+    }
+}
+
+fn CSt::foot(self s: CSt, root: Nat → Option<Ref>, ws: List<Ix>, l: Nat) → List<Foot> { s.foots(root, ws, l, s.count() + 1) }
+
+// Two footprints apart: references apart, or selections apart from one copy;
+// a copy is apart from every block, and from every other copy.
+fn Foot::Apart(tys: Nat → Type, strs: Strs(tys), f, g: Foot) → Type {
+    match f {
+        FHeap(r) => match g { FHeap(q) => Ref::Apart(tys, strs, r, q), FCopy(_, _) => True },
+        FCopy(a, xs) => match g { FHeap(_) => True, FCopy(b, ys) => a = b → Sel::Apart(tys, strs, xs, ys) },
+    }
+}
+
+// A level through which something may be written: a holder lent to write or
+// owning, a view with an entry to write, a plain variable.
+fn CSt::may_write(self s: CSt, l: Nat) → Bool {
+    match s.role(l) { KHold(_, a) => a.writes(), KView => (s.ents(l)).any_bit(λ en => en.mode.writes()), KPlain => True, KGone => False }
+}
+
+fn Foot::AllApart(tys: Nat → Type, strs: Strs(tys), s: CSt, root: Nat → Option<Ref>, ws: List<Ix>) → Type {
+    (l1, l2: Nat) → l1 < s.count() → l2 < s.count() → ¬(l1 = l2) → s.related(l1, l2) = False → (s.may_write(l1) || s.may_write(l2)) = True →
+        (f1, f2: Foot) → Mem(f1, s.foot(root, ws, l1)) → Mem(f2, s.foot(root, ws, l2)) → Foot::Apart(tys, strs, f1, f2)
+}
+
+// ---------------------------------------------------------------------------
+// Like-ness
+
+// Two values alike: one code, one length (what `RFits` asks of a write).
+fn Dyn::Like(tys: Nat → Type, strs: Strs(tys), a, b: Dyn(tys)) → Type { (a.code = b.code) ∧ (Dyn::len(tys, strs, a) = Dyn::len(tys, strs, b)) }
+
+fn CSt::LikeVal(tys: Nat → Type, strs: Strs(tys), s: CSt, e: Env(tys), m: Mach(tys), l: Nat) → Type {
+    (v: Dyn(tys)) → CSt::val_at(tys, strs, s, m, l) = Some(v) → Dyn::Like(tys, strs, v, CSt::mean_at(tys, s, e, l))
+}
+
+// A live view to write fits its parent at its place, and its value and its
+// meaning are like what its parent's read there (so a write-back is a write
+// that keeps every other place fitting).
+fn VEnt::LikeAt(tys: Nat → Type, strs: Strs(tys), s: CSt, e: Env(tys), m: Mach(tys), en: VEnt) → Type {
+    let pl = en.place(s, Mach::ixs(tys, strs, m));
+    (vp: Dyn(tys)) → CSt::val_at(tys, strs, s, m, en.par) = Some(vp) → (Sel::fit(tys, strs, pl, vp) = True) ∧
+        (((v: Dyn(tys)) → CSt::val_at(tys, strs, s, m, en.lvl) = Some(v) → Dyn::Like(tys, strs, v, Sel::read_at(tys, strs, pl, vp))) ∧
+            Dyn::Like(tys, strs, CSt::mean_at(tys, s, e, en.lvl), Sel::read_at(tys, strs, pl, CSt::mean_at(tys, s, e, en.par))))
+}
+
+record Likes(tys: Nat → Type, strs: Strs(tys), s: CSt, e: Env(tys), m: Mach(tys)) {
+    vals: (l: Nat) → s.live(l) = True → CSt::LikeVal(tys, strs, s, e, m, l),
+    views: (en: VEnt) → Mem(en, s.views) → en.mode.writes() = True → VEnt::LikeAt(tys, strs, s, e, m, en),
+}
+
+// ---------------------------------------------------------------------------
+// The object table against the heap (the present group, but for `apart`)
+
+record Heaped(tys: Nat → Type, strs: Strs(tys), s: CSt, m: Mach(tys), h0: Heap(tys), lent: List<Ref>, root: Nat → Option<Ref>) {
+    inheap: (o: Nat) → (r: Ref) → root(o) = Some(r) → r.b < m.heap.len(),
+    owned: (o: Nat) → s.Changes(o) → (r: Ref) → root(o) = Some(r) → Mem(r, lent) ∨ (h0.len() <= r.b),
+    frame: LentFrame(tys, strs, h0, m.heap, lent),
+    grows: h0.len() <= m.heap.len(),
+    young: (o: Nat) → s.nobj <= o → root(o) = None,
+    bare: (o: Nat) → (r: Ref) → root(o) = Some(r) → (ob: Obj(tys)) → Heap::obj(tys, m.heap, r.b) = Some(ob) → ob.holes = Nil,
+    made: (o: Nat) → s.na <= o → (r: Ref) → root(o) = Some(r) → (h0.len() <= r.b) ∧ (r.sels = Nil),
+    stays: Heap::Stays(tys, h0, m.heap),
+}
+
+// ---------------------------------------------------------------------------
+// The invariant
+
+record InvLocal(tys: Nat → Type, strs: Strs(tys), s: CSt, e: Env(tys), m: Mach(tys), h0: Heap(tys), lent: List<Ref>, root: Nat → Option<Ref>) {
+    wf: s.Wf(),
+    agree: Agree(tys, strs, s, e, m),
+    sync: (l: Nat) → s.live(l) = True → CSt::Synced(tys, strs, s, e, m, l),
+    cells: Cells(tys, strs, s, m, root),
+    apart: Foot::AllApart(tys, strs, s, root, Mach::ixs(tys, strs, m)),
+    likes: Likes(tys, strs, s, e, m),
+    heap: Heaped(tys, strs, s, m, h0, lent, root),
+}
+
+// ---------------------------------------------------------------------------
+// The deciders (for evaluation at closed data; not proved)
+//
+// Equality of two values needs equality at each named type, which the
+// structures do not carry: the caller gives it (`DEq`). The other clauses
+// quantify over the levels, the entries, the objects below `nobj` (`young`
+// says none past it has a root; only the next one is checked), and the
+// blocks below the entry heap's length.
+
+fn DEq(tys: Nat → Type) → Type { (k: Nat) → tys(k) → tys(k) → Bool }
+
+fn Word::eq_b(w: Width) → Word(w) → Word(w) → Bool { match w { WNat => λ x y => x.same(y), WBits(_) => λ x y => x.toNat().same(y.toNat()) } }
+
+fn El::eq_b(tys: Nat → Type, eqn: DEq(tys), c: Shape) → El(tys, c) → El(tys, c) → Bool { match c { SWord(w) => Word::eq_b(w), SNamed(k) => λ x y => eqn(k, x, y) } }
+
+fn Dyn::eq_b(tys: Nat → Type, eqn: DEq(tys), a, b: Dyn(tys)) → Bool {
+    match Shape::dec(a.code, b.code) { Inl(h) => El::eq_b(tys, eqn, b.code)(Shape::cast(tys, h, a.val), b.val), Inr(_) => False }
+}
+
+fn Dyn::opt_eq_b(tys: Nat → Type, eqn: DEq(tys), a, b: Option<Dyn(tys)>) → Bool {
+    match a { Some(x) => match b { Some(y) => Dyn::eq_b(tys, eqn, x, y), None => False }, None => match b { Some(_) => False, None => True } }
+}
+
+fn Ref::same_b(a, b: Ref) → Bool { a.b.same(b.b) && Sel::starts(a.sels, b.sels) && Sel::starts(b.sels, a.sels) }
+
+fn Ref::opt_same_b(a, b: Option<Ref>) → Bool { match a { Some(x) => match b { Some(y) => Ref::same_b(x, y), None => False }, None => match b { Some(_) => False, None => True } } }
+
+fn CSt::levels(self s: CSt) → List<Nat> { List::range(s.count()) }
+
+// Agreement.
+fn CSt::agrees_b(tys: Nat → Type, strs: Strs(tys), eqn: DEq(tys), s: CSt, e: Env(tys), m: Mach(tys), l: Nat) → Bool {
+    match CSt::val_at(tys, strs, s, m, l) { Some(v) => Dyn::eq_b(tys, eqn, v, CSt::puts_at(tys, strs, s, Mach::ixs(tys, strs, m), l, v, CSt::mean_at(tys, s, e, l))), None => False }
+}
+
+fn Agree::holds_b(tys: Nat → Type, strs: Strs(tys), eqn: DEq(tys), s: CSt, e: Env(tys), m: Mach(tys)) → Bool {
+    e.args.len().same(s.na) && (m.env).args.len().same(s.na) && e.locs.len().same(s.nd) && (m.env).locs.len().same(s.nd) &&
+        s.levels().all_bit(λ l => (CSt::mean_at(tys, s, e, l)).code.same((s.var(l)).code) && (!s.live(l) || CSt::agrees_b(tys, strs, eqn, s, e, m, l)))
+}
+
+// Sync.
+fn VEnt::sync_b(tys: Nat → Type, strs: Strs(tys), eqn: DEq(tys), s: CSt, e: Env(tys), m: Mach(tys), en: VEnt) → Bool {
+    let pl = en.place(s, Mach::ixs(tys, strs, m));
+    Dyn::eq_b(tys, eqn, Sel::read_at(tys, strs, pl, CSt::mean_at(tys, s, e, en.par)), CSt::mean_at(tys, s, e, en.lvl)) &&
+        match Value::ref_of(tys, (CSt::cell_at(tys, s, m, en.par)).v) {
+            Some(_) => True,
+            None => Dyn::opt_eq_b(tys, eqn, (CSt::val_at(tys, strs, s, m, en.par)).and_then(λ vp => Sel::get(tys, strs, pl, vp)), CSt::val_at(tys, strs, s, m, en.lvl)),
+        }
+}
+
+fn CSt::synced_b(tys: Nat → Type, strs: Strs(tys), eqn: DEq(tys), s: CSt, e: Env(tys), m: Mach(tys), l: Nat) → Bool {
+    match s.role(l) {
+        KView => match (s.ents(l)).any_bit(λ en => en.mode.writes()) {
+            True => (s.ents(l)).all_bit(λ en => !en.back || VEnt::sync_b(tys, strs, eqn, s, e, m, en)),
+            False => (s.ents(l)).any_bit(λ en => VEnt::sync_b(tys, strs, eqn, s, e, m, en)),
+        },
+        KHold(_, _) => True,
+        KPlain => True,
+        KGone => True,
+    }
+}
+
+fn CSt::sync_b(tys: Nat → Type, strs: Strs(tys), eqn: DEq(tys), s: CSt, e: Env(tys), m: Mach(tys)) → Bool { s.levels().all_bit(λ l => !s.live(l) || CSt::synced_b(tys, strs, eqn, s, e, m, l)) }
+
+// Where a cell lives.
+fn CSt::lives_b(tys: Nat → Type, strs: Strs(tys), s: CSt, m: Mach(tys), root: Nat → Option<Ref>, l: Nat) → Bool {
+    let c = CSt::cell_at(tys, s, m, l);
+    match s.role(l) {
+        KPlain => !Value::refers_b(tys, c.v) && !c.own,
+        KHold(o, a) => Ref::opt_same_b(Value::ref_of(tys, c.v), root(o)) && Bool::same_b(c.own, a.owns() && Value::refers_b(tys, c.v)) &&
+            (!a.owns() || match root(o) { Some(r) => match r.sels { Nil => True, Cons(_, _) => False }, None => True }),
+        KView => !c.own && (s.ents(l)).any_bit(λ en =>
+            Ref::opt_same_b(Value::ref_of(tys, c.v), (Value::ref_of(tys, (CSt::cell_at(tys, s, m, en.par)).v)).map(λ rp => rp.narrow(Mach::ixs(tys, strs, m), s.unsteps(en.at))))),
+        KGone => True,
+    }
+}
+
+fn Cells::holds_b(tys: Nat → Type, strs: Strs(tys), s: CSt, m: Mach(tys), root: Nat → Option<Ref>) → Bool {
+    s.levels().all_bit(λ l => CSt::lives_b(tys, strs, s, m, root, l)) &&
+        (List::range(s.na)).all_bit(λ i => Ref::opt_same_b(root(i), Value::ref_of(tys, (REnv::get(tys, m.env, Arg(i))).v)))
+}
+
+// Footprints apart: the first selection where two paths differ is apart.
+fn Sel::paths_apart_b(xs, ys: List<Sel>) → Bool {
+    match xs { Nil => False, Cons(a, xr) => match ys { Nil => False, Cons(b, yr) => match a.same(b) { True => Sel::paths_apart_b(xr, yr), False => a.apart(b) } } }
+}
+
+fn Foot::apart_b(f, g: Foot) → Bool {
+    match f {
+        FHeap(r) => match g { FHeap(q) => !r.b.same(q.b) || Sel::paths_apart_b(r.sels, q.sels), FCopy(_, _) => True },
+        FCopy(a, xs) => match g { FHeap(_) => True, FCopy(b, ys) => !a.same(b) || Sel::paths_apart_b(xs, ys) },
+    }
+}
+
+fn Foot::holds_b(tys: Nat → Type, strs: Strs(tys), s: CSt, m: Mach(tys), root: Nat → Option<Ref>) → Bool {
+    let ws = Mach::ixs(tys, strs, m);
+    s.levels().all_bit(λ l1 => s.levels().all_bit(λ l2 =>
+        l1.same(l2) || s.related(l1, l2) || !(s.may_write(l1) || s.may_write(l2)) ||
+            (s.foot(root, ws, l1)).all_bit(λ f1 => (s.foot(root, ws, l2)).all_bit(λ f2 => Foot::apart_b(f1, f2)))))
+}
+
+// Like-ness.
+fn Dyn::like_b(tys: Nat → Type, strs: Strs(tys), a, b: Dyn(tys)) → Bool { a.code.same(b.code) && Dyn::len(tys, strs, a).same(Dyn::len(tys, strs, b)) }
+
+fn CSt::like_val_b(tys: Nat → Type, strs: Strs(tys), s: CSt, e: Env(tys), m: Mach(tys), l: Nat) → Bool {
+    match CSt::val_at(tys, strs, s, m, l) { Some(v) => Dyn::like_b(tys, strs, v, CSt::mean_at(tys, s, e, l)), None => True }
+}
+
+fn VEnt::like_at_b(tys: Nat → Type, strs: Strs(tys), s: CSt, e: Env(tys), m: Mach(tys), en: VEnt) → Bool {
+    let pl = en.place(s, Mach::ixs(tys, strs, m));
+    match CSt::val_at(tys, strs, s, m, en.par) {
+        None => True,
+        Some(vp) => Sel::fit(tys, strs, pl, vp) &&
+            match CSt::val_at(tys, strs, s, m, en.lvl) { Some(v) => Dyn::like_b(tys, strs, v, Sel::read_at(tys, strs, pl, vp)), None => True } &&
+            Dyn::like_b(tys, strs, CSt::mean_at(tys, s, e, en.lvl), Sel::read_at(tys, strs, pl, CSt::mean_at(tys, s, e, en.par))),
+    }
+}
+
+fn Likes::holds_b(tys: Nat → Type, strs: Strs(tys), s: CSt, e: Env(tys), m: Mach(tys)) → Bool {
+    s.levels().all_bit(λ l => !s.live(l) || CSt::like_val_b(tys, strs, s, e, m, l)) && s.views.all_bit(λ en => !en.mode.writes() || VEnt::like_at_b(tys, strs, s, e, m, en))
+}
+
+// The heap group.
+fn CSt::changes_b(self s: CSt, o: Nat) → Bool {
+    s.levels().any_bit(λ l => match s.role(l) { KHold(o2, a) => o2.same(o) && a.writes(), KPlain => False, KView => False, KGone => False }) ||
+        s.views.any_bit(λ en => en.obj.same(o) && en.mode.writes())
+}
+
+fn Heap::obj_holes_nil(tys: Nat → Type, h: Heap(tys), b: Nat) → Bool { match Heap::obj(tys, h, b) { Some(ob) => match ob.holes { Nil => True, Cons(_, _) => False }, None => True } }
+
+fn LentFrame::eq_b(tys: Nat → Type, strs: Strs(tys), eqn: DEq(tys), h0, h: Heap(tys), lent: List<Ref>) → Bool {
+    (List::range(h0.len())).all_bit(λ b => lent.any_bit(λ (r: Ref) => r.b.same(b) && match r.sels { Nil => True, Cons(_, _) => False }) || match Heap::obj(tys, h0, b) {
+        None => True,
+        Some(ob) => match Heap::obj(tys, h, b) { None => False, Some(ob2) => Dyn::eq_b(tys, eqn, ob2.val, Sel::put_lent(tys, strs, lent, b, ob2.val, ob.val)) },
+    })
+}
+
+fn Ref::pairwise_b(rs: List<Ref>) → Bool {
+    match rs { Nil => True, Cons(r, rest) => rest.all_bit(λ (q: Ref) => !r.b.same(q.b) || Sel::paths_apart_b(r.sels, q.sels)) && Ref::pairwise_b(rest) }
+}
+
+fn LentFrame::like_b(tys: Nat → Type, strs: Strs(tys), h0, h: Heap(tys), lent: List<Ref>) → Bool {
+    lent.all_bit(λ (r: Ref) => lent.any_bit(λ (r2: Ref) => r2.b.same(r.b) && match r2.sels { Nil => True, Cons(_, _) => False }) || match Heap::obj(tys, h0, r.b) {
+        None => True,
+        Some(ob) => match Heap::obj(tys, h, r.b) {
+            None => True,
+            Some(ob2) => Sel::fit(tys, strs, r.sels, ob.val) && Dyn::like_b(tys, strs, Sel::read_at(tys, strs, r.sels, ob2.val), Sel::read_at(tys, strs, r.sels, ob.val)),
+        },
+    })
+}
+
+fn Heap::stays_b(tys: Nat → Type, h0, h: Heap(tys)) → Bool {
+    (List::range(h0.len())).all_bit(λ b => match Heap::obj(tys, h, b) {
+        None => True,
+        Some(ob2) => match Heap::obj(tys, h0, b) { None => False, Some(ob) => !Heap::obj_holes_nil(tys, h0, b) || match ob2.holes { Nil => True, Cons(_, _) => False } },
+    })
+}
+
+fn Heaped::holds_b(tys: Nat → Type, strs: Strs(tys), eqn: DEq(tys), s: CSt, m: Mach(tys), h0: Heap(tys), lent: List<Ref>, root: Nat → Option<Ref>) → Bool {
+    let objs = List::range(s.nobj);
+    objs.all_bit(λ o => match root(o) {
+        None => True,
+        Some(r) => (r.b + 1).leb(m.heap.len()) && (!s.changes_b(o) || lent.any_bit(λ (q: Ref) => Ref::same_b(q, r)) || h0.len().leb(r.b)) &&
+            Heap::obj_holes_nil(tys, m.heap, r.b) && (!s.na.leb(o) || (h0.len().leb(r.b) && match r.sels { Nil => True, Cons(_, _) => False })),
+    }) && LentFrame::eq_b(tys, strs, eqn, h0, m.heap, lent) && Ref::pairwise_b(lent) && LentFrame::like_b(tys, strs, h0, m.heap, lent) &&
+        h0.len().leb(m.heap.len()) && Ref::opt_same_b(root(s.nobj), None) && Heap::stays_b(tys, h0, m.heap)
+}
+
+// The whole invariant, group by group.
+record LocalVerdict { wf: Bool, agree: Bool, sync: Bool, cells: Bool, apart: Bool, likes: Bool, heap: Bool }
+
+fn InvLocal::check_b(tys: Nat → Type, strs: Strs(tys), eqn: DEq(tys), s: CSt, e: Env(tys), m: Mach(tys), h0: Heap(tys), lent: List<Ref>, root: Nat → Option<Ref>) → LocalVerdict {
+    LocalVerdict(s.wf_b(), Agree::holds_b(tys, strs, eqn, s, e, m), CSt::sync_b(tys, strs, eqn, s, e, m), Cells::holds_b(tys, strs, s, m, root), Foot::holds_b(tys, strs, s, m, root),
+        Likes::holds_b(tys, strs, s, e, m), Heaped::holds_b(tys, strs, eqn, s, m, h0, lent, root))
+}
+
+fn LocalVerdict::every(v: LocalVerdict) → Bool { v.wf && v.agree && v.sync && v.cells && v.apart && v.likes && v.heap }
+
+fn InvLocal::holds_b(tys: Nat → Type, strs: Strs(tys), eqn: DEq(tys), s: CSt, e: Env(tys), m: Mach(tys), h0: Heap(tys), lent: List<Ref>, root: Nat → Option<Ref>) → Bool {
+    LocalVerdict::every(InvLocal::check_b(tys, strs, eqn, s, e, m, h0, lent, root))
+}

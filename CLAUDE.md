@@ -73,6 +73,11 @@ the lanes are cut this way is `docs/infrastructure/testing-architecture-design.m
 - **`--pr`** runs only the test files its diff from `origin/master` can
   affect, and one smoke of the native gates unless the diff touches what they
   check. `HEATHER_PR_AFFECTED=all` and `HEATHER_PR_NATIVE=all` force the rest.
+  `HEATHER_PR_BASE=<ref>` measures the round from that ref instead of
+  `origin/master`: for a round on top of a long-lived branch, the branch's
+  last verified commit, so the round runs what it can affect and not what the
+  whole branch can. The branch's own merge is still verified against
+  `origin/master`.
 - **A change to what the elaborator infers re-elaborates the whole library
   before it merges**: motive synthesis, the unifier, instance choice,
   defaults, any tactic or rewrite the library already calls. The fast and PR

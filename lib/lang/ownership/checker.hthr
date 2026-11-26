@@ -24,9 +24,10 @@
 //   the variable itself and the views it is a view of (its ancestors) do
 //   not count. Apart is `Steps::apart`: closed, decided; open, owed as
 //   `RApart` naming its two sides.
-// - **The write-back** `Write(Place(p, at), w)` of a view `w` to write onto
-//   its own parent and place stores nothing in the run: it is licensed as
-//   it is, marks `w` written back, and changes `p`.
+// - **The write-back** `Back(Place(p, at), w)` of a view `w` to write onto
+//   its own parent and place stores nothing in the run where `w` refers: it
+//   is licensed as it is, marks `w` written back, and changes `p`. A
+//   `Write` of that shape is refused, a `Back` of any other.
 // - **Residuals**: an accessor's precondition at every element or window
 //   step of a place read, written, taken or viewed (`RAccess`, one per such
 //   prefix); `RFits` at a write of a sequence; `RPre` at a call and a
@@ -317,6 +318,8 @@ fn Stmt::code_ok(self st: Stmt, tys: Nat → Type, strs: Strs(tys), sigs: Nat �
         Lit(_, _) => True,
         Read(p) => s.place_ok(tys, strs, p),
         Write(p, v) => match Shape::steps_ok(tys, strs, p.steps, s.code(p.root)) { Some(c) => s.code(v).same(c), None => False },
+        Back(p, v) => match Shape::steps_ok(tys, strs, p.steps, s.code(p.root)) { Some(c) => s.code(v).same(c), None => False },
+        Len(p, _) => match Shape::steps_ok(tys, strs, p.steps, s.code(p.root)) { Some(c) => Shape::is_seq(tys, strs, c), None => False },
         View(p, _) => s.place_ok(tys, strs, p),
         Take(p) => s.place_ok(tys, strs, p),
         Fresh(c, n, v) => match c {
@@ -443,6 +446,12 @@ record Next { st: CSt, rs: List<Residual> }
 // own parent and place.
 fn CSt::is_back(self s: CSt, root: Nat, xs: List<Step>, v: Nat) → Bool {
     match s.ents(v) { Cons(e, Nil) => e.mode.writes() && e.par.same(root) && Steps::same(e.at, xs) && !v.same(root), _ => False }
+}
+
+// Whether `Back(p, v)` is a write-back: `v` a view to write on `p`'s root at
+// `p`'s steps. `Write` is refused where it would be one, `Back` where not.
+fn CSt::back_of(self s: CSt, p: Place, v: Var) → Bool {
+    match s.lvl(p.root) { Some(l) => match s.lvl(v) { Some(lv) => match s.steps(p.steps) { Some(xs) => s.is_back(l, xs, lv), None => False }, None => False }, None => False }
 }
 
 // The write's outcome, its root, steps, code and the residuals read so far
@@ -622,13 +631,10 @@ fn CSt::result(self s: CSt, tys: Nat → Type, strs: Strs(tys), s0: CSt, sig: Si
     match r.origin {
         OFresh => match Shape::plain(tys, strs, r.code) { True => Some(s.push(CVar(r.code, KPlain))), False => Some(s.push(CVar(r.code, KHold(s.nobj, AcOwn))).fresh_obj()) },
         OParam(i) => match (sig.params.nth(i).unwrap_or(Param(SWord(WNat), ByRead))).mode {
-            ByTake => match Shape::moves(tys, strs, (sig.params.nth(i).unwrap_or(Param(SWord(WNat), ByRead))).code) {
-                False => Some(s.push(CVar(r.code, KPlain))),
-                True => xs.nth(i).and_then(λ x => s0.lvl(x)).and_then(λ l => match s0.role(l) {
-                    KHold(o, a) => match a { AcOwn => Some(s.push(CVar(r.code, KHold(o, AcOwn)))), AcRead => None, AcWrite => None },
-                    _ => None,
-                }),
-            },
+            ByTake => xs.nth(i).and_then(λ x => s0.lvl(x)).and_then(λ l => match s0.role(l) {
+                KHold(o, a) => match a { AcOwn => Some(s.push(CVar(r.code, KHold(o, AcOwn)))), AcRead => None, AcWrite => None },
+                _ => None,
+            }),
             ByRead => None,
             ByWrite => None,
         },
@@ -683,7 +689,7 @@ fn CSt::slots(self s: CSt, s0: CSt, sig: Sig, xs: List<Var>, ws: List<Nat>) → 
 fn Result::ok(tys: Nat → Type, strs: Strs(tys), ps: List<Param>, r: Result, k: Nat) → Bool {
     match r.origin {
         OFresh => True,
-        OParam(i) => match ps.nth(i) { Some(p) => (match p.mode { ByTake => True, ByRead => False, ByWrite => False }) && r.code.same(p.code), None => False },
+        OParam(i) => match ps.nth(i) { Some(p) => (match p.mode { ByTake => Shape::moves(tys, strs, p.code), ByRead => False, ByWrite => False }) && r.code.same(p.code), None => False },
         OView(i, xs) => (match ps.nth(i) {
             Some(p) => (match p.mode { ByRead => True, ByTake => False, ByWrite => False }) && (match Shape::steps_ok(tys, strs, xs, p.code) { Some(c) => r.code.same(c), None => False }),
             None => False,
@@ -695,7 +701,22 @@ fn Sig::ok_from(tys: Nat → Type, strs: Strs(tys), ps: List<Param>, rs: List<Re
     match rs { Nil => True, Cons(r, rest) => Result::ok(tys, strs, ps, r, k) && Sig::ok_from(tys, strs, ps, rest, k + 1) }
 }
 
-fn Sig::ok(tys: Nat → Type, strs: Strs(tys), sg: Sig) → Bool { Sig::ok_from(tys, strs, sg.params, sg.results, 0) }
+// No parameter is answered twice (§23.23): two holders of one object would
+// be bound where it was passed plain, which `OwnedApart` cannot exclude (it
+// speaks of results that refer). `OParam` names a parameter whose code moves
+// (`Result::ok`); a plain value handed back is `OFresh`.
+fn Sig::once(tys: Nat → Type, strs: Strs(tys), ps: List<Param>, rs: List<Result>) → Bool {
+    match rs {
+        Nil => True,
+        Cons(r, rest) => (match r.origin {
+            OParam(i) => rest.all_bit(λ (q: Result) => match q.origin { OParam(j) => !j.same(i), OFresh => True, OView(_, _) => True }),
+            OFresh => True,
+            OView(_, _) => True,
+        }) && Sig::once(tys, strs, ps, rest),
+    }
+}
+
+fn Sig::ok(tys: Nat → Type, strs: Strs(tys), sg: Sig) → Bool { Sig::ok_from(tys, strs, sg.params, sg.results, 0) && Sig::once(tys, strs, sg.params, sg.results) }
 
 // The measure a call owes: where the caller is measured and the callee has a body.
 fn Residual::measure(owed: Bool, g: Nat, xs: List<Var>) → List<Residual> { match owed { True => [RMeasure(g, xs)], False => Nil } }
@@ -712,12 +733,17 @@ fn CSt::call(self s: CSt, tys: Nat → Type, strs: Strs(tys), sigs: Nat → Sig,
 // A measured function's call of an unmeasured one: refused (`WMeasure`).
 fn Stmt::unmeasured(self st: Stmt, prim, meas: Nat → Bool, me: Nat) → Bool { match st { Call(g, _, _) => meas(me) && !prim(g) && !meas(g), _ => False } }
 
+// What a length read owes: at a bounded width that the length fits.
+fn Residual::len_fits(p: Place, w: Width) → List<Residual> { match w { WNat => Nil, WBits(_) => [RLen(p, w)] } }
+
 fn Stmt::verdict(self st: Stmt, tys: Nat → Type, strs: Strs(tys), sigs: Nat → Sig, prim: Nat → Bool, mo: Bool, s: CSt) → Option<Next> {
     match st {
         Op(_, a, b) => s.read_var(tys, strs, a).and_then(λ ga => s.read_var(tys, strs, b).map(λ gb => Next(s.push(CVar(ga.code, KPlain)), ga.rs ++ gb.rs))),
         Lit(w, _) => Some(Next(s.push(CVar(SWord(w), KPlain)), Nil)),
         Read(p) => s.read(tys, strs, p).map(λ g => Next(s.push(CVar(g.code, KPlain)), g.rs)),
-        Write(p, v) => s.write(tys, strs, p, v),
+        Write(p, v) => (!s.back_of(p, v)).then(s.write(tys, strs, p, v)),
+        Back(p, v) => s.back_of(p, v).then(s.write(tys, strs, p, v)),
+        Len(p, w) => s.read(tys, strs, p).map(λ g => Next(s.push(CVar(SWord(w), KPlain)), g.rs ++ Residual::len_fits(p, w))),
         View(p, md) => s.view(tys, strs, p, md),
         Take(p) => s.take(tys, strs, p),
         Fresh(c, n, v) => s.read_var(tys, strs, n).and_then(λ gn => s.read_var(tys, strs, v).map(λ gv => Next(s.push(CVar(c, KHold(s.nobj, AcOwn))).fresh_obj(), gn.rs ++ gv.rs))),
@@ -730,7 +756,7 @@ fn Stmt::verdict(self st: Stmt, tys: Nat → Type, strs: Strs(tys), sigs: Nat �
 // deaths of views already written back.
 fn CSt::writes_back(self s: CSt, st: Stmt) → Bool {
     match st {
-        Write(p, v) => match s.lvl(p.root) {
+        Back(p, v) => match s.lvl(p.root) {
             Some(l) => match s.lvl(v) { Some(lv) => match s.steps(p.steps) { Some(xs) => s.is_back(l, xs, lv) && (s.ents(lv)).any_bit(λ e => !e.back), None => False }, None => False },
             None => False,
         },

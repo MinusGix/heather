@@ -61,6 +61,7 @@ inductive Residual {
     RPre(g: Nat, args: List<Var>),
     RAccess(p: Place),
     RFits(p: Place, v: Var),
+    RLen(p: Place, w: Width),
     RMeasure(g: Nat, args: List<Var>),
 }
 
@@ -98,6 +99,11 @@ fn Dyn::Fits(tys: Nat → Type, strs: Strs(tys), old, new: Dyn(tys)) → Type { 
 // arguments, which a measure is compared against.
 record Ctx(tys: Nat → Type) { strs: Strs(tys), w: Callees(tys), me: Nat, pres: Pres(tys), need: Need(tys), args: List<Dyn(tys)> }
 
+// A number a word of the width holds as itself: every one at `WNat`, one
+// below `2^k` at `k` bits (`Len` owes it, so its word is the length and never
+// a truncation of it).
+fn Width::Holds(w: Width, n: Nat) → Type { match w { WNat => True, WBits(k) => n < Nat::pow(2, k) } }
+
 fn Residual::Holds(self r: Residual, tys: Nat → Type, cx: Ctx(tys), env: Env(tys)) → Type {
     match r {
         RApart(lo1, n1, lo2, n2) => {
@@ -110,6 +116,7 @@ fn Residual::Holds(self r: Residual, tys: Nat → Type, cx: Ctx(tys), env: Env(t
             None => True,
         },
         RFits(p, v) => Dyn::Fits(tys, cx.strs, p.val(tys, cx.strs, env), Env::get(tys, env, v)),
+        RLen(p, w) => Width::Holds(w, Dyn::len(tys, cx.strs, p.val(tys, cx.strs, env))),
         RMeasure(g, args) => cx.need(g, args.map(λ x => Env::get(tys, env, x))) < cx.need(cx.me, cx.args),
     }
 }
@@ -193,8 +200,8 @@ fn Value::ReadAll(tys: Nat → Type, strs: Strs(tys), h: Heap(tys), fuel: Nat, v
     }
 }
 
-// Whether a callee may change what it is passed at this parameter.
-fn PMode::changes(self m: PMode) → Bool { match m { ByTake => True, ByRead => False, ByWrite => True } }
+// `PMode::changes` and `Value::lent` are `run.hthr`'s: the run's stores are
+// stuck outside what the activation was lent to change (`Act`).
 
 // Two selection paths of one value apart: a modification through either
 // leaves the other's read and whether it fits (a run's read is stuck where
@@ -371,18 +378,6 @@ fn Heap::Stays(tys: Nat → Type, before, after: Heap(tys)) → Type {
 
 // The heap a call leaves: no shorter, and its old blocks `Stays`.
 fn Heap::Kept(tys: Nat → Type, before, after: Heap(tys)) → Type { (before.len() <= after.len()) ∧ Heap::Stays(tys, before, after) }
-
-// The references lent to a parameter that may change them: what a call may
-// write or kill. One lent only to read is the frame's, unchanged.
-fn Value::lent(tys: Nat → Type, ps: List<Param>, vs: List<Value(tys)>) → List<Ref> {
-    match vs {
-        Nil => Nil,
-        Cons(v, rest) => match ps {
-            Nil => Nil,
-            Cons(p, pr) => match v { Refer(r) => match p.mode.changes() { True => Cons(r, Value::lent(tys, pr, rest)), False => Value::lent(tys, pr, rest) }, Plain(_) => Value::lent(tys, pr, rest) },
-        },
-    }
-}
 
 // A function's safety at one fuel: what its run owes at every input that
 // reads as the meaning's arguments, meets the function's precondition and

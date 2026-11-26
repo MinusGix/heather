@@ -3735,6 +3735,10 @@ Retired: `value_steps.hthr`, `coded.hthr` and their probes, and
     `Sel::same`. Probes: `view_clause` (a view narrowed at `IWord(64, i)`)
     and `view_of_plain` (a view of a by-value parameter owes `False`).
   - `CheckSound` quantifies over a checker, since the checker is not built.
+  - **The body's statements, later (§23.23):** a write-back is its own
+    statement `Back(p, x)` (a `Write` of that shape is refused), and
+    `Len(p, w)` reads a place's length as a word, owing `RLen` at a bounded
+    width. Bodies that wrote back with `Write` say `Back`.
 
 ### 22.3 What was measured
 
@@ -3837,7 +3841,9 @@ Probes: `lib/_tests/lang/ownership/{run,checker}_tests.hthr`.
   write stores where the place is: in the block the root refers to, or in a
   plain root's own value. A death of an owner kills its block; any other is
   nothing. So the eager write-back the reflector places after each change
-  of a view stores, in the run, what the block already holds.
+  of a view stores nothing in the run: its source is the very place
+  (§23.22). A store is stuck outside what the activation may change, and a
+  written argument that refers comes back as itself (§23.22).
 - **Calls** run the callee's body at one less fuel (`Run::calls`): a taken
   argument the caller owns is passed on, unless it is a word; a word and one
   it does not own are copied; a read or written argument is passed as it
@@ -5173,6 +5179,19 @@ the code at `steps` in its parameter's, by `Shape::steps_ok` (the function
 by the parameter's code. Probes: `obj_as_word`, `word_as_obj` and
 `view_as_point`, each refused where it is written and at the call.
 
+**A gap in the proof's own invariant, fixed: an owner's cell is owned**
+(`Inv.hown`, `CSt::HOwn`). Binding a moved argument answered back needs the
+caller's holder to have handed the reference over, which the run does only
+from an owned cell (`Cell::pass`); from an unowned one the argument goes as
+a plain copy, the result comes back plain (`ViewIs`) while the object's root
+keeps the block, and `href` breaks. It does not follow from `own` (the
+converse), `href` or `args`, so it is a clause: a level holding an object
+to own whose object has a root has an owned cell. It holds at every builder:
+`Cell::args` owns a taken argument that refers (`Cell::args_owned`), `Fresh`
+and a call's fresh result push owned cells, `Take` of a whole holder pushes
+the same cell, and the rest keep the cells (`CSt::hown_push`, `hown_sub`,
+`hown_gone`, as `href`'s).
+
 **C. A signature's results are a telescope.** A view result's steps name
 parameters and earlier results only, as a dependent answer is scoped
 (`(i: Nat, v: view of xs[i])`). A clause of `Sig::ok`, so tested where the
@@ -5190,6 +5209,142 @@ substituted steps name, in the binding state (the arguments' levels, and the
 earlier results', which the telescope puts there). One rule for an atom,
 wherever a region is formed. `at_by_view0_refused` passes a view of a word as
 `at`'s index; `at_by_copy0_checked` copies the word into a plain local first.
+
+### 23.22 The run as the machine's reading (2026-11-26, twelfth session)
+
+The coordinating session's ruling, after a slice carried three programs from
+their bodies to x86 and its translation to the bytes level grew syntactic
+copies of ownership rules to do it: **level 2's run is the machine's
+reading.** Where the run transported, stored or allowed a store the machine
+does not, the run changed once, and `check_sound` says the change of every
+checked program. Three changes (`run.hthr`), each probed by evaluation first
+(`run_tests.hthr`, the section "The run as the machine's reading"):
+
+1. **A referring written parameter is not transported back.** After a call
+   the caller binds `Value::slots`: the callee's results, then for each
+   written parameter `Value::back` of the argument as passed and the
+   callee's answer: the argument itself where it refers, the callee's value
+   where it was passed plain (`Value::backs`; anything answered past the
+   written slots binds as answered). `Answer` and `SafeAt`'s `Written`
+   clause keep their shape: the callee still shows its slot is the argument,
+   which is how a caller knows what the argument's block reads after, and
+   the caller's slot is now the argument's own reference by the run. Probes:
+   `slot_is_argument` (a callee answering its read parameter's reference as
+   its written slot: before, the caller's slot referred to that block) and
+   `plain_slot_back` (passed plain, the callee's copy comes back, as before).
+2. **A write-back through a reference stores nothing.** (Superseded by
+   `Back`, §23.23: the run below decided it by a test the bytes level cannot
+   make.) The run cannot see
+   the checker's state, so the test is dynamic and exact: `Write(p, x)` with
+   `p`'s root referring to `r` and `x`'s cell `Refer(q)` with `q` the very
+   place, `r.narrow(ws, p.steps)` (`Value::is_ref`, a decided equality on
+   references, sound by `Ref::same_sound` down to `Ix::same_sound` and
+   `BitVec::toNat_inj`), continues at the machine unchanged. Every other
+   write stores, a view of one place written into another of the same block
+   included (`view_into_other_stores`). In this fragment a block is bare and
+   a put of what a place reads is the identity, so the change is visible only
+   with 3: `back_read_done` writes a view back through a list lent only to
+   read, where a write of a copy at the same place is stuck
+   (`back_copy_read_stuck`). Of the write-back stage's four cases (the chain
+   refers, the child pending or not; the chain is copies, the parent a
+   holder or a view) the two where the chain refers changed, through
+   `Stmt::back_runs_ref`, which now reaches `write_runs_self` and needs no
+   bareness and no put-back law; the copy cases did not change. The ordinary
+   write stages through a reference (`stage_write_hold`'s referring case,
+   `write_view_ref`) go through `Stmt::write_runs_store`, which covers the
+   case of a source that happens to be the very place by the identity above.
+3. **A store is stuck outside what the activation may change.** `Act`
+   (`lent`, `h0`) is a parameter of `Stmt::run` and `Body::run`, made by
+   `Func::run` at the entry: `Value::lent` of the parameters and the values
+   passed, and the heap's length. A store at block `b` and path `ps` is
+   allowed by `Act::may`: `h0 <= b` (made since the entry) or a lent
+   reference into `b` whose selections start `ps` (`Sel::starts`). A store
+   elsewhere is stuck: a block lent only to read, or not lent, is never
+   stored to, which is what the bytes level's contract needs and what
+   `Heap::Frame` alone did not say (it says such a block keeps its value).
+   `Stepped.runs` is at `Act(lent, h0.len())`, the invariant's own indices,
+   so no stage statement changed; the run lemmas take the `Act` as a
+   parameter, and each write stage through a reference has one new
+   obligation, met by `Inv.owned` (the changing object's root is lent or
+   made, `Act::may_owned`). `Value::lent` and `PMode::changes` moved from
+   `verdict.hthr` to `run.hthr`. A death is not a store and is unchanged: it
+   kills only a block its frame owns. Probes: `set_x_unlent_stuck`,
+   `set_x_read_stuck`, `under_lent_done` (a store under a lent element);
+   `set_x` and `join_two` now carry signatures that lend the list to write.
+
+The cost in the proved stages was a handful of new obligations, each met
+from a clause the invariant already had, beside the decided equality's
+soundness lemmas; the write-back's referring cases became shorter.
+
+### 23.23 The write-back as its own statement, and three smaller changes (2026-11-26, twelfth session)
+
+**`Back(p, x)`** (the coordinating session's ruling, replacing §23.22's
+item 2). The translation to the bytes level must know from the text alone
+whether to emit nothing or a copy, so the run may not decide a write-back by
+comparing references. A write-back is now its own statement: in the meaning
+the write of `x`'s value at `p` (as `Write`); in the checker what `Write`
+did in its write-back cases (`CSt::back_of`: `x` a view to write on `p`'s
+root at `p`'s steps), `Write` refused where it would be one and `Back`
+refused where it is not; in the run the identity where `x`'s cell refers (no
+test of where) and `Stmt::write_run`, the write, under `Act::may`, where it
+is a copy. `Write(p, x)` always stores. `CSt::writes_back` (the only
+statement while a write-back is pending) names `Back`. The decided equality
+on references and its soundness lemmas are gone; `Sel::same_self` stays for
+`Act::may`. In the proof the write-back stages are about `Back` and their
+referring cases reach the identity by the cell alone (`Stmt::back_runs_ref`;
+the copy case through `Stmt::back_runs_copy`, `Back` of a copy running as
+`Write`); the ordinary write stages lost the case of a source that is the
+very place. Probes: `back_read_done` (a write-back through a list lent only
+to read), `write_self_read_stuck` (the same text as a `Write`),
+`back_copy_read_stuck`, `back_copy_plain_writes` (`run_tests`);
+`back_as_write_refused`, `back_not_back_refused`, `back_one_checked`
+(`checker_tests`, whose write-backs are now written `Back`).
+
+**`Inv.cfit` covers views to write only** (a gap in the proof's own
+invariant). It said of every live view whose parent's cell is a copy that its
+place fits the copy and its own copy is like what the place reads. Only views
+to write consume it (a write-back's `Like`, the write-back of a copy), and a
+read view result over an argument passed plain cannot meet it: `SafeAt`'s
+`ViewIs` asks such a result only to be plain, and no clause relates it to the
+argument's part. Restricted to views to write it holds at every builder as
+before.
+
+**A parameter whose code moves is answered at most once** (`Sig::once`, a
+clause of `Sig::ok`; the coordinating session's ruling on a finding against
+§23.21's B). B's argument that no safe callee answers one taken parameter
+twice (`OwnedApart` against `ViewIs`) holds only where the argument refers.
+Where it is passed plain, `ViewIs` asks each result only to be plain and
+`owned_b` is `None`: the table entry `twice: Sig([Param(Buf, ByTake)],
+[Result(Buf, OParam(0)), Result(Buf, OParam(0))])`, with a world answering two
+copies, is safe, and its caller `h(a: Buf take) { Call(twice, [a], 2); … }`
+run with `a` plain bound both results `KHold(o_a, AcOwn)`, two levels holding
+one object, against `Inv.one`. Probes: `twice_param_refused` (where
+written), `twice_caller_refused` (at the call).
+
+**An `OParam(i)` result names a taken parameter whose code moves**
+(`Result::ok`, the coordinating session's ruling on the loose end above). A
+plain value answered back is a copy either way and means nothing `OFresh` of
+its code does not; no checked body could answer it (`CSt::returns` asks a
+parameter answered back to be held as an owner); and it forced `Sig::once`
+and `CSt::result` to carry a "moves or not" case. Now `Sig::once` is one
+`OParam` per parameter, `CSt::result`'s plain `OParam` case is gone, and a
+signature handing a plain parameter's value back says `OFresh`. Probes:
+`twice_plain_callee_refused`, `twice_plain_caller_refused`,
+`once_plain_callee_refused`, `once_plain_caller_refused`, and the neighbours
+`once_fresh_checked`, `once_fresh_caller_checked`.
+
+**`Len(p, w)`, a place's length as a word** (issues/ownership-branch-on-
+object-length.md): meaning `Width::of_nat(w, Dyn::len(value at p))`, the
+sequence instance's own length; checked as `Read(p)` with `p`'s code a
+sequence (refused for its codes otherwise); at a bounded width it owes
+`RLen(p, w)` (`Width::Holds`: the length is below `2^k`), so the word is the
+length and never its truncation, at `WNat` nothing; the run reads the place
+as `Read` does (`Mach::place`), stuck where it is; the stage is
+`Stmt::stage_len`, `Read`'s with the word pushed. `RLen` is a new residual
+kind: none of the existing ones can say a length is below a bound.
+Probes: `len_runs`, `len_means`, `len_win_runs` (`run_tests`);
+`len_nat_owes`, `len_u64_owes`, `len_word_refused`, `len_guard_checked` (a
+branch on an index below the length, the read under it).
 
 ## 24. How the build is organised (2026-11-26, the coordinating session)
 
@@ -5254,3 +5409,153 @@ Three rules of working follow from what went wrong in practice:
 
 Every branch is merged into the coordinating branch only through the gated
 verification, as before.
+
+### 26.6 The restatement as definitions, evaluated (2026-11-26, the thirteenth session)
+
+(§26.1–§26.5 are on the coordinating branch; this section continues them.)
+The restated invariant is `InvLocal` in `lib/lang/ownership/sound_local.hthr`,
+the state-alone clauses `CSt::Wf` (record `StWf`) in `sound_wf.hthr`, and
+the driver that evaluates them along runs in `sound_trace.hthr`. Nothing is
+proved over them; the present `Inv`, its builders and its stages are
+untouched. The groups, as written against the real types:
+
+- **Levels.** `val(l)` is `CSt::val_at` (`Value::get` of the level's cell at
+  no selections), `d(l)` is `CSt::mean_at`, a level is live where it is
+  below the next one and not gone (`CSt::live`), its write children are the
+  live entries to write whose parent is it (`CSt::wkids`), and an entry's
+  place is its `at` read at the run's words (`VEnt::place`; the `words`
+  clause makes them the meaning's).
+- **Agreement** (`Agree`): the environments' lengths, every level's meaning
+  at its recorded code, and for every live level
+  `val(l) = puts(slots, val(l), d(l))` where the slots are the write
+  children's places as references into one block and `puts` is the
+  frame's `Sel::put_lent`, no second fold.
+- **Sync** (`CSt::Synced`, `VEnt::Sync`): an entry's view's meaning is its
+  parent's meaning at its place, and where the parent's cell is a copy, its
+  value is the parent's value read there. Asked of every entry to write that
+  is written back, and of *one* entry of a view to read.
+- **Where a cell lives** (`Cells`, `CSt::Lives`): a holder's cell refers
+  exactly to its object's root (`ref_of(cell) = root(o)`, so a holder of an
+  object held by value is a copy and its object has no root); it is owned
+  exactly where the holder owns and refers, and an owned root has no
+  selections; a view's cell is, at *one* of its entries, its parent's
+  narrowed at its place (`ref_of(cell) = ref_of(parent).map(narrow)`, so a
+  view of a copy is a copy); a plain variable's is a copy, not owned; and
+  `args` as before. This one clause says what `refs`, `uni`, `href`, `hown`,
+  `own`'s first part and `args` said.
+- **Footprints** (`Foot`, `CSt::foot`, `Foot::AllApart`): `FHeap(r)` or
+  `FCopy(l, sels)`. A holder's is its root, or `FCopy(itself, Nil)` where
+  its object has none; a plain variable's `FCopy(itself, Nil)`; a view's,
+  each entry's parent's footprint narrowed at the entry's place. Two live
+  levels, unrelated by the checker's ancestry (`CSt::related`), one of which
+  may write (`CSt::may_write`: a holder lent to write or owning, a view with
+  an entry to write, a plain variable), have every pair of footprints apart
+  (`Ref::Apart`; for two copies from one level, `Sel::Apart` of their
+  selections; a copy and a block, or two copies of different levels,
+  always). This replaces `apart`, `excl`, `sib`, `own`'s block clause and the
+  writing half of `one`.
+- **Like-ness** (`Likes`): every live level's value has its meaning's code
+  and length (`Dyn::Like`), and every live view to write fits its parent's
+  value at its place, its value and its meaning like what its parent's read
+  there. This replaces `cfit`, `Like` and `LentFrame`'s use of it inside a
+  function.
+- **The heap group** (`Heaped`): `inheap`, `owned`, `frame` (the present
+  `LentFrame`, its like-ness at entry included), `grows`, `young`, `bare`,
+  `made`, `stays`, as they are; `apart` (roots) is gone.
+- **The state** (`StWf`): `one`, `words`, `held`, `vents`, `chain`, `wpar`,
+  `nbase`, as they are.
+
+**Departures from §26.2, each with the program that forces it** (all in
+`lib/_tests/lang/ownership/sound_local_tests.hthr`):
+
+1. *A copy's footprint is not its own cell.* Two views opened on one copy
+   (`loan` with `x` passed by value: `t` to read and `w` to write, both
+   copies of windows of `x`'s copy) meet where their places do: writing `w`
+   back stores into `x`'s copy at `w`'s window, and `t`'s sync needs that
+   window apart from `t`'s. So a copy's footprint is the level its chain of
+   copies starts at with the selections from there (`FCopy(l, sels)`);
+   `meet_fails_copy` is the control (a state with `t` moved onto `w`'s
+   window fails `Foot::AllApart`). With this, `sib` is the footprints'
+   clause for copies.
+2. *A view to read is synced, and its cell lives, at one entry, not each.*
+   After a join that chose it, a read view has one entry per arm
+   (`join_read`: a view of `a[0]` in one arm, of `b[1]` in the other). The
+   run took one arm, so the view's meaning is its parent's at that entry's
+   place only (`sync_every_fails`), and its cell is narrowed from that
+   entry's parent only. **The present invariant's `uni` is false there**
+   (`uni_fails_yes`, `uni_fails_no`: `a` refers, `b` is passed by value, so
+   the view refers in one arm and is a copy in the other, while `uni` asks
+   every entry's parent to refer as the view does). No present stage
+   reaches a join, so no proof is wrong; the restatement takes `Any` as the
+   present `refs` already does.
+3. *Like-ness is the top code and length, not the deep shape.* A checked
+   write changes nested lengths: `bag_set` writes a whole record holding a
+   list with one whose list is longer (no `RFits` is owed: it is owed only
+   at a write of a sequence, and asks only its top length). So "every
+   block's value keeps the shape it had when made or lent", with the shape
+   the code and every nested length, is false of a checked program
+   (`deep_changes`). What the stages use is the top code and length (a
+   fit reads only the lengths along its path, `fits_len`; a write keeps each
+   owner's length, `len_set`; a live view's place is never under a write,
+   by the licence), so that is what is kept. `Dyn::shape` is not defined.
+4. *"Kept since made or lent" is not a state clause.* For a lent block it is
+   `LentFrame.like` (against `h0`); for a made block nothing in the state
+   records what it was made with, so it would need a ghost record. It is
+   dropped: per-level like-ness and the like-ness of each view to write
+   against its parent are what a write-back and a later fit need, and a
+   store keeping like-ness is a lemma (item 3), not a clause.
+5. *The roots' `apart` is dropped.* Footprints are over live levels; an
+   object with a root and no live level (its holder taken into a call, or
+   dead) is never read or written through again, and the frame speaks of the
+   heap outside every lent reference anyway.
+6. *Equality of values is the caller's.* The structures carry no equality,
+   so the deciders take a `DEq(tys)` (an equality at each named type) beside
+   the indices `Inv` takes: `InvLocal::holds_b(tys, strs, eqn, s, e, m, h0,
+   lent, root)`. `young` is decided at the next object only.
+7. *An entry with no parent below it* (`par = lvl`) is not a write child and
+   has no footprint through itself; `chain` says none is live.
+
+**Evaluated.** `sound_trace.hthr` steps the checker (`Stmt::verdict` under
+`Body::verdict`'s conditions), the meaning (`Stmt::eval`) and the run
+(`Stmt::run`, its machine handed back encoded in an `Answer`) together, a
+made object's root taken from its holder's cell; a join traces both arms
+and continues from the arm the run's test picks, the checker at the meet.
+`Body::trace_with` records any function of the state at each state. The
+probes, each with its object passed by reference and, where the parameter
+allows, by value (a copy chain): `loan` (a read view beside a loan, writes
+through the loan each written back, the owner read beside it, the loan's
+death), `written` (a call that lends a view to write; its slot written back
+onto the view, the view onto the owner), `back_under` (a view of a view
+written whole, written back up the chain), `lend_plain_back`, `lend_under`
+(a call lending a part), `copy_caller` (a call of a recursive callee that
+`Jump`s), `nested_two` (two pending chains under one view), `join_two`
+(both tests), `join_read` (both tests), `made` (a callee's fresh object, a
+take of it, a view of it written and written back, its death), `bag_set`.
+Every group holds at every state of each (one `refl` per group and trace:
+the kernel's budget fits one group, not seven); the negative controls
+(`whole_fails_ref`, `sync_all_fails`, `meet_fails`, `meet_fails_copy`,
+`rootless_fails`, `other_fails`, `short_fails`, `selfish_fails`,
+`grown_fails`, `sync_every_fails`) each fail at some state, so each group's
+decider can fail. `whole_holds_copy`: along copies `val = d` holds whole,
+as expected (nothing is shared).
+
+A definition spelled as a Π inside a nested match arm crashed the
+elaborator while it reported a kernel error
+([elab-kernel-error-report-panics-subst](../../issues/elab-kernel-error-report-panics-subst.md));
+`CSt::SyncedW` lifts that arm into a function of its own.
+
+**The rulings** (the coordinating session, on the above). The coordinating session accepted 1, 2, 4, 5, 6 and 7. It asked for a `¬` probe of the old `uni` at `join_read`. On 3 it accepted `Likes` as the invariant's clause, but ruled `bag_set` a finding against the checker. A block's value has a fixed extent in this fragment, so a checked store must not grow it. **`RFits` is to owe the deep shape:**
+- `DShape { DWord(w), DNamed(k, len, parts) }`, with `Dyn::shape` as a function. Its fuel comes from a new stratification law of `Strs`: a kind's field and element codes are words or names below it.
+- `Dyn::Fits(old, new)` becomes the code the same and the shapes equal. It is owed at every `Write` and `Back` of a non-word, and `Dyn::shape_flat` keeps today's discharges one line.
+- A sequence's elements are read at `INat(i)`. That is exact for numbered instances (`SeqNum`), which the deep lemma will take as a premise.
+- The lemma "a checked write keeps the deep shape" is restricted at windows to word elements. The missing window law is named as owed.
+
+This is to be built after item 3's libraries.
+
+**`CSt::Wf`'s transitions** (item 3, begun). `StWf` gained `lens` (`s.args.len() = s.na`, `s.locs.len() = s.nd`): a role set at a level reads back as set only then (`CSt::role_set_here`), and no other state-alone clause says it. Proved so far:
+- `StWf::pushed`: a push of a non-view role; a holder only of an existing object no level holds.
+- `StWf::fresh_obj`.
+- `StWf::fresh`.
+- `StWf::reset`: a role set under `SetOk`, which says the holder's object exists and is held once, a region's level stays plain, a view's level stays a view, and a parent keeps its role.
+
+The views' transitions and the meet are next (the issue's handoff).

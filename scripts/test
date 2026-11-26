@@ -40,7 +40,9 @@
 # Cargo's dep-info per binary and per family member, every test that reads
 # lib/ or spawns at run time, and everything when a changed path cannot be
 # placed; docs/infrastructure/testing-architecture-design.md §2.2.1).
-# HEATHER_PR_AFFECTED=all runs every one.
+# HEATHER_PR_AFFECTED=all runs every one. HEATHER_PR_BASE=<ref> measures the
+# round from that ref instead of origin/master (a round on top of a
+# long-lived branch: the branch's verified commit).
 # No lane samples the kernel's slow self-checks (crates/kernel/src/checks.rs,
 # off by default): a check walks the whole term a skip stepped over, and on
 # the library's `runtime fn` generator modules one check in sixteen was over
@@ -144,12 +146,16 @@ elif [[ "${1:-}" == --pr ]]; then
   # per binary and family member, plus every test that reads lib/ or spawns
   # at run time). Anything it cannot place runs everything.
   # HEATHER_PR_AFFECTED=all runs every test file.
+  # HEATHER_PR_BASE names the ref the round is measured from in place of
+  # origin/master: a long-lived branch's own base, so a round on top of it
+  # runs what that round can affect and not what the whole branch can.
+  pr_ref=${HEATHER_PR_BASE:-origin/master}
   if (( $# == 0 )) && [[ "${HEATHER_PR_AFFECTED:-}" != all ]]; then
-    PR_BASE=$(git merge-base HEAD origin/master 2>/dev/null) ||
-      echo "pr lane: no merge base with origin/master; every test file runs"
+    PR_BASE=$(git merge-base HEAD "$pr_ref" 2>/dev/null) ||
+      echo "pr lane: no merge base with $pr_ref; every test file runs"
   fi
   if (( $# == 0 )) && [[ "${HEATHER_PR_NATIVE:-}" != all ]] &&
-     base=$(git merge-base HEAD origin/master 2>/dev/null); then
+     base=$(git merge-base HEAD "$pr_ref" 2>/dev/null); then
     touched=$( { git diff --name-only "$base"; git ls-files --others --exclude-standard; } |
                grep -E "$native_paths" | head -3 || true)
     if [[ -z "$touched" ]]; then

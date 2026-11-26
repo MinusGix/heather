@@ -1,0 +1,638 @@
+// The restated invariant evaluated along runs (lib/lang/ownership/sound_local.hthr,
+// sound_trace.hthr; docs/language/ownership-design.md §26.6): checked
+// programs of `checker_tests.hthr`, each traced from closed arguments with
+// the checker, the meaning and the run stepped together, and the invariant's
+// decider at every state they pass through (`Bad::first` of the log is
+// `None`, by `refl`: no state fails a group). Each with its object lent by
+// reference (a block) and, where the parameter allows it, by value (a copy,
+// so every view of it is a copy and every write-back stores).
+//
+// The environment is `checker_tests.hthr`'s: a point record, a list of
+// points, a list of numbers.
+import logic;
+import bool;
+import nat;
+import option;
+import list;
+import bitvec;
+import span_set;
+import store;
+import atom;
+import steps;
+import shape;
+import sequences;
+import body;
+import level2;
+import run;
+import verdict;
+import checker;
+import linux_world;
+import sound_wf;
+import sound_local;
+import sound_trace;
+
+// ---------------------------------------------------------------------------
+// The environment
+
+record Point { x: Nat, y: Nat }
+
+fn Point::origin() → Point { Point(0, 0) }
+
+// A record holding a sequence, for a write that changes a nested length.
+record Bag { n: Nat, xs: List<Nat> }
+
+fn tys() → Nat → Type { λ k => match k { Zero => Point, Succ(k1) => match k1 { Zero => List<Point>, Succ(k2) => match k2 { Zero => List<Nat>, Succ(k3) => match k3 { Zero => Bag, Succ(_) => True } } } } }
+
+fn pt_s() → Shape { SNamed(0) }
+
+fn pts_s() → Shape { SNamed(1) }
+
+fn nx() → Shape { SNamed(2) }
+
+fn nat_s() → Shape { SWord(WNat) }
+
+fn Point::fx() → Field(tys(), Point) { Field(nat_s(), λ (p: Point) => p.x, λ (p: Point) => λ (v: Nat) => Point(v, p.y)) }
+
+fn Point::fy() → Field(tys(), Point) { Field(nat_s(), λ (p: Point) => p.y, λ (p: Point) => λ (v: Nat) => Point(p.x, v)) }
+
+fn bag_s() → Shape { SNamed(3) }
+
+fn Bag::fn() → Field(tys(), Bag) { Field(nat_s(), λ (b: Bag) => b.n, λ (b: Bag) => λ (v: Nat) => Bag(v, b.xs)) }
+
+fn Bag::fxs() → Field(tys(), Bag) { Field(nx(), λ (b: Bag) => b.xs, λ (b: Bag) => λ (v: List<Nat>) => Bag(b.n, v)) }
+
+fn strs() → Strs(tys()) {
+    λ k => match k {
+        Zero => Struct(Plain, Some(Point::origin()), Record([Point::fx(), Point::fy()])),
+        Succ(k1) => match k1 {
+            Zero => Struct(Object, None, Sequence(Seq::list(tys(), pt_s(), Point::origin(), Some(Seq::list_win(tys(), pt_s(), pts_s(), λ (l: List<Point>) => l, λ (l: List<Point>) => l))))),
+            Succ(k2) => match k2 {
+                Zero => Struct(Object, None, Sequence(Seq::list(tys(), nat_s(), 0, Some(Seq::list_win(tys(), nat_s(), nx(), λ (l: List<Nat>) => l, λ (l: List<Nat>) => l))))),
+                Succ(k3) => match k3 { Zero => Struct(Plain, Some(Bag(0, Nil)), Record([Bag::fn(), Bag::fxs()])), Succ(_) => Struct(Plain, None, Opaque) },
+            },
+        },
+    }
+}
+
+// Equality at each named type.
+fn Point::eq_b(a, b: Point) → Bool { a.x.same(b.x) && a.y.same(b.y) }
+
+fn pts_eq(a, b: List<Point>) → Bool { match a { Nil => match b { Nil => True, Cons(_, _) => False }, Cons(p, ar) => match b { Nil => False, Cons(q, br) => Point::eq_b(p, q) && pts_eq(ar, br) } } }
+
+fn nats_eq(a, b: List<Nat>) → Bool { match a { Nil => match b { Nil => True, Cons(_, _) => False }, Cons(p, ar) => match b { Nil => False, Cons(q, br) => p.same(q) && nats_eq(ar, br) } } }
+
+fn bag_eq(a, b: Bag) → Bool { a.n.same(b.n) && nats_eq(a.xs, b.xs) }
+
+fn eqn() → DEq(tys()) {
+    λ k => match k as λ k2 => tys()(k2) → tys()(k2) → Bool {
+        Zero => Point::eq_b,
+        Succ(k1) => match k1 as λ k3 => tys()(Succ(k3)) → tys()(Succ(k3)) → Bool { Zero => pts_eq, Succ(k2) => match k2 as λ k4 => tys()(Succ(Succ(k4))) → tys()(Succ(Succ(k4))) → Bool {
+            Zero => nats_eq,
+            Succ(k3) => match k3 as λ k5 => tys()(Succ(Succ(Succ(k5)))) → tys()(Succ(Succ(Succ(k5)))) → Bool { Zero => bag_eq, Succ(_) => λ _ _ => True },
+        } },
+    }
+}
+
+fn nat(n: Nat) → Dyn(tys()) { Dyn(nat_s(), n) }
+
+fn nats(ns: List<Nat>) → Dyn(tys()) { Dyn(nx(), ns) }
+
+fn pts(ps: List<Point>) → Dyn(tys()) { Dyn(pts_s(), ps) }
+
+fn w(n: Nat) → Value(tys()) { Plain(nat(n)) }
+
+fn obj0() → Value(tys()) { Refer(Ref(0, Nil)) }
+
+// A program's functions; no primitives; every function measured.
+fn fns_of(fs: List<Func>) → Nat → Func { λ g => fs.nth(g).unwrap_or(Func(Sig(Nil, Nil), Ret(Nil))) }
+
+// The meaning's world: each function's denotation, its callees' at one
+// level less (deep enough for the probes, which call at most two deep).
+fn world_at(fs: List<Func>, depth: Nat) → Callees(tys()) {
+    match depth { Zero => λ _ _ => Nil, Succ(d) => λ g ds => (fns_of(fs)(g)).denote(tys(), strs(), world_at(fs, d), g, ds) }
+}
+
+fn cx_of(fs: List<Func>, g: Nat, vs: List<Value(tys())>, h: Heap(tys())) → TCx(tys()) {
+    let f = fns_of(fs)(g);
+    TCx(strs(), eqn(), fns_of(fs), λ _ => False, λ _ => True, g, world_at(fs, 5), Run::calls(tys(), strs(), fns_of(fs), world_at(fs, 5), λ _ => False, 5),
+        Act(Value::lent(tys(), f.sig.params, vs), h.len()), h, Value::lent(tys(), f.sig.params, vs))
+}
+
+// The log of a function's trace from its arguments: the run's values, the
+// meaning's, and the heap.
+fn trace(fs: List<Func>, g: Nat, vs: List<Value(tys())>, ds: List<Dyn(tys())>, h: Heap(tys()), io: Io) → TOut(tys(), LocalVerdict) { (fns_of(fs)(g)).trace(tys(), cx_of(fs, g, vs, h), vs, ds, h, io) }
+
+fn bad(fs: List<Func>, g: Nat, vs: List<Value(tys())>, ds: List<Dyn(tys())>, h: Heap(tys()), io: Io) → Option<Bad> { Bad::first((trace(fs, g, vs, ds, h, io)).log) }
+
+// How many states the trace passed through, and whether it reached a leaf.
+fn states(fs: List<Func>, g: Nat, vs: List<Value(tys())>, ds: List<Dyn(tys())>, h: Heap(tys()), io: Io) → Nat { ((trace(fs, g, vs, ds, h, io)).log).len() }
+
+// ---------------------------------------------------------------------------
+// The programs (as `checker_tests.hthr`)
+
+fn words(n: Nat) → List<Param> { List::replicate(Param(nat_s(), ByTake), n) }
+
+fn wsig(n: Nat) → Sig { Sig(Cons(Param(nx(), ByWrite), words(n)), [Result(nat_s(), OFresh)]) }
+
+fn el(r: Var, i: Atom) → Place { Place(r, [SElem(i)]) }
+
+fn win(r: Var, lo, n: Atom) → Place { Place(r, [SWindow(lo, n)]) }
+
+fn whole(r: Var) → Place { Place(r, Nil) }
+
+fn x() → Var { Arg(0) }
+
+// A loan held across statements: a read view beside a view to write, writes
+// through the loan each written back, the owner read beside it, the loan's
+// death, and a read of the owner where it was.
+fn loan() → Func {
+    Func(wsig(2), seq([
+        View(win(x(), Lit(0), Var(1)), Reading),
+        View(win(x(), Var(1), Var(2)), Writing),
+        Lit(WNat, 7),
+        Write(el(Loc(1), Lit(0)), Loc(0)),
+        Back(win(x(), Var(1), Var(2)), Loc(1)),
+        Read(el(x(), Lit(0))),
+        Lit(WNat, 4),
+        Write(el(Loc(3), Lit(1)), Loc(0)),
+        Back(win(x(), Var(1), Var(2)), Loc(3)),
+        Read(el(Loc(3), Lit(0))),
+        Read(el(Loc(5), Lit(0))),
+        Death(whole(Loc(5))),
+        Read(el(x(), Var(1))),
+    ], Ret([Loc(0), x()])))
+}
+
+fn ns5() → List<Nat> { [10, 11, 12, 13, 14] }
+
+fn loan_args() → List<Dyn(tys())> { [nats(ns5()), nat(1), nat(3)] }
+
+fn heap_ns() → Heap(tys()) { [Live(Obj(nats(ns5()), Nil))] }
+
+theorem loan_ref_states(io: Io): states([loan()], 0, [obj0(), w(1), w(3)], loan_args(), heap_ns(), io) = 14 { refl }
+
+fn io0() → Io { Io(World::piped(Nil), Nil) }
+
+// ---------------------------------------------------------------------------
+// More programs (as `checker_tests.hthr`)
+
+fn x_of(r: Var, i: Atom) → Place { Place(r, [SElem(i), SField(0)]) }
+
+fn fill() → Func { Func(wsig(1), seq([Write(el(x(), Lit(0)), Arg(1)), Read(el(x(), Lit(0)))], Ret([Loc(0), x()]))) }
+
+// A call that lends a view to write: `fill`'s written parameter comes back
+// as a view to write of `w`, written back onto it, `w` then onto `x`.
+fn written() → Func {
+    Func(wsig(2), seq([
+        View(win(x(), Lit(0), Var(1)), Reading),
+        View(win(x(), Var(1), Var(2)), Writing),
+        Lit(WNat, 7),
+        Call(0, [Loc(1), Loc(0)], 2),
+        Back(whole(Loc(3)), Loc(0)),
+        Death(whole(Loc(0))),
+        Back(win(x(), Var(1), Var(2)), Loc(3)),
+        Death(whole(Loc(3))),
+        Read(el(Loc(4), Lit(0))),
+    ], Ret([Loc(0), x()])))
+}
+
+// A view of a view, written whole, written back up the chain.
+fn back_under() → Func {
+    Func(Sig([Param(pts_s(), ByWrite)], Nil), seq([View(el(Arg(0), Lit(0)), Writing), View(Place(Loc(0), [SField(0)]), Writing), Lit(WNat, 7), Write(whole(Loc(1)), Loc(0)),
+        Back(Place(Loc(2), [SField(0)]), Loc(1)), Death(whole(Loc(1))), Back(el(Arg(0), Lit(0)), Loc(2)), Death(whole(Loc(2)))], Ret([Arg(0)])))
+}
+
+fn pt_w() → Func { Func(Sig([Param(pt_s(), ByWrite)], Nil), Ret([Arg(0)])) }
+
+fn lend_plain_back() → Func {
+    Func(Sig([Param(pt_s(), ByWrite)], Nil), seq([Call(0, [Arg(0)], 1), Back(whole(Arg(0)), Loc(0)), Death(whole(Loc(0)))], Ret([Arg(0)])))
+}
+
+fn lend_under() → Func {
+    Func(Sig([Param(pts_s(), ByWrite)], Nil), seq([View(el(Arg(0), Lit(0)), Writing), Call(0, [Loc(0)], 1), Back(whole(Loc(1)), Loc(0)), Death(whole(Loc(0))),
+        Back(el(Arg(0), Lit(0)), Loc(1)), Death(whole(Loc(1)))], Ret([Arg(0)])))
+}
+
+fn copy_sig() → Sig { Sig([Param(nx(), ByWrite), Param(nx(), ByRead), Param(nat_s(), ByTake), Param(nat_s(), ByTake)], Nil) }
+
+fn copy_loop() → Func {
+    Func(copy_sig(), Join(TLt(Arg(2), Arg(3)),
+        seq([Read(el(Arg(1), Var(2))), Write(el(x(), Var(2)), Loc(0)), Lit(WNat, 1), Op(PAdd, Arg(2), Loc(0))], Jump([x(), Arg(1), Loc(0), Arg(3)])),
+        Ret([x()]),
+        Ret([x()])))
+}
+
+fn copy_caller() → Func {
+    Func(Sig([Param(nx(), ByWrite), Param(nx(), ByRead), Param(nat_s(), ByTake)], Nil), seq([
+        View(win(x(), Lit(0), Var(2)), Writing),
+        View(win(Arg(1), Lit(0), Var(2)), Reading),
+        Lit(WNat, 0),
+        Call(0, [Loc(2), Loc(1), Loc(0), Arg(2)], 1),
+        Back(whole(Loc(3)), Loc(0)),
+        Death(whole(Loc(0))),
+        Back(win(x(), Lit(0), Var(2)), Loc(3)),
+        Death(whole(Loc(3))),
+        Death(whole(Loc(2))),
+    ], Ret([x()])))
+}
+
+fn two_nat_w() → Func { Func(Sig([Param(nat_s(), ByWrite), Param(nat_s(), ByWrite)], Nil), Ret([Arg(0), Arg(1)])) }
+
+// Two pending chains under one view.
+fn nested_two() → Func {
+    Func(Sig([Param(pts_s(), ByWrite)], Nil), seq([View(el(Arg(0), Lit(0)), Writing), View(Place(Loc(0), [SField(0)]), Writing), View(Place(Loc(1), [SField(1)]), Writing), Call(0, [Loc(1), Loc(0)], 2),
+        Back(whole(Loc(2)), Loc(0)), Death(whole(Loc(0))), Back(Place(Loc(4), [SField(1)]), Loc(2)),
+        Back(whole(Loc(3)), Loc(1)), Death(whole(Loc(1))), Back(Place(Loc(4), [SField(0)]), Loc(3)), Death(whole(Loc(2))), Death(whole(Loc(3))),
+        Back(el(Arg(0), Lit(0)), Loc(4)), Death(whole(Loc(4)))], Ret([Arg(0)])))
+}
+
+fn len_fn() → Func { Func(Sig([Param(pts_s(), ByRead)], [Result(nat_s(), OFresh)]), Ret(Nil)) }
+
+// A join assigning two variables, one an object an arm writes.
+fn join_two() → Func {
+    Func(Sig([Param(pts_s(), ByTake), Param(nat_s(), ByTake), Param(nat_s(), ByTake)], [Result(nat_s(), OFresh)]), Join(TLt(Arg(1), Arg(2)),
+        seq([Write(x_of(Arg(0), Var(1)), Arg(2)), Lit(WNat, 1), Op(PAdd, Arg(2), Loc(0))], Yield([Arg(0), Loc(0)])),
+        seq([Lit(WNat, 0)], Yield([Arg(0), Loc(0)])),
+        seq([Read(x_of(Loc(1), Var(3))), Op(PAdd, Loc(0), Loc(1))], Ret([Loc(0)]))))
+}
+
+// A read view chosen by a join, of a different parent in each arm.
+fn join_read() → Func {
+    Func(Sig([Param(pts_s(), ByRead), Param(pts_s(), ByRead), Param(nat_s(), ByTake), Param(nat_s(), ByTake)], [Result(nat_s(), OFresh)]), Join(TLt(Arg(2), Arg(3)),
+        seq([View(el(Arg(0), Lit(0)), Reading)], Yield([Loc(0)])),
+        seq([View(el(Arg(1), Lit(1)), Reading)], Yield([Loc(0)])),
+        seq([Read(Place(Loc(0), [SField(0)]))], Ret([Loc(0)]))))
+}
+
+fn ps2() → List<Point> { [Point(1, 2), Point(5, 3)] }
+
+fn heap_pts() → Heap(tys()) { [Live(Obj(pts(ps2()), Nil))] }
+
+fn pt12() → Dyn(tys()) { Dyn(pt_s(), Point(1, 2)) }
+
+fn src3() → List<Nat> { [1, 2, 3] }
+
+fn heap_two() → Heap(tys()) { [Live(Obj(nats(ns5()), Nil)), Live(Obj(nats(src3()), Nil))] }
+
+// A callee that makes a list of `n` copies of a point; a caller that takes
+// it whole, opens a view to write of its first point, writes it, writes it
+// back, and reads it after the view's death and the holder's.
+fn mk() → Func { Func(Sig([Param(nat_s(), ByTake), Param(pt_s(), ByTake)], [Result(pts_s(), OFresh)]), seq([Fresh(pts_s(), Arg(0), Arg(1))], Ret([Loc(0)]))) }
+
+fn made() → Func {
+    Func(Sig([Param(nat_s(), ByTake), Param(pt_s(), ByTake)], [Result(nat_s(), OFresh)]), seq([
+        Call(0, [Arg(0), Arg(1)], 1),
+        Take(whole(Loc(0))),
+        View(el(Loc(0), Lit(1)), Writing),
+        Lit(WNat, 9),
+        Write(Place(Loc(1), [SField(1)]), Loc(0)),
+        Back(el(Loc(2), Lit(1)), Loc(1)),
+        Death(whole(Loc(1))),
+        Read(x_of(Loc(2), Lit(1))),
+        Death(whole(Loc(3))),
+    ], Ret([Loc(0)])))
+}
+
+// A bag lent to write, overwritten whole by one whose list is longer: no
+// `RFits` is owed (a record), so the nested length changes; the checker
+// accepts it, and what is like before and after is the code and the top
+// length only.
+fn bag_set() → Func { Func(Sig([Param(bag_s(), ByWrite), Param(bag_s(), ByTake)], Nil), seq([Write(whole(Arg(0)), Arg(1)), Read(Place(Arg(0), [SField(1), SElem(Lit(2))]))], Ret([Arg(0)]))) }
+
+fn bag12() → Dyn(tys()) { Dyn(bag_s(), Bag(1, [1, 2])) }
+
+fn bag123() → Dyn(tys()) { Dyn(bag_s(), Bag(2, [1, 2, 3])) }
+
+// ---------------------------------------------------------------------------
+// The traces
+
+fn left(o: TOut(tys(), LocalVerdict)) → Bool { match o.end { TLeft => True, TYield(_, _) => False, THalt(_) => False } }
+
+inductive Group { GWf, GAgree, GSync, GCells, GApart, GLikes, GHeap }
+
+fn Group::of(self g: Group, v: LocalVerdict) → Bool {
+    match g { GWf => v.wf, GAgree => v.agree, GSync => v.sync, GCells => v.cells, GApart => v.apart, GLikes => v.likes, GHeap => v.heap }
+}
+
+// One group at every state of a trace that reached its leaf.
+fn holds(g: Group, o: TOut(tys(), LocalVerdict)) → Bool { (o.log).all_bit(λ v => g.of(v)) && left(o) }
+
+fn loan_ref() → TOut(tys(), LocalVerdict) { trace([loan()], 0, [obj0(), w(1), w(3)], loan_args(), heap_ns(), io0()) }
+
+fn loan_copy() → TOut(tys(), LocalVerdict) { trace([loan()], 0, [Plain(nats(ns5())), w(1), w(3)], loan_args(), Nil, io0()) }
+
+fn written_ref() → TOut(tys(), LocalVerdict) { trace([fill(), written()], 1, [obj0(), w(1), w(2)], [nats(ns5()), nat(1), nat(2)], heap_ns(), io0()) }
+
+fn written_copy() → TOut(tys(), LocalVerdict) { trace([fill(), written()], 1, [Plain(nats(ns5())), w(1), w(2)], [nats(ns5()), nat(1), nat(2)], Nil, io0()) }
+
+fn back_under_ref() → TOut(tys(), LocalVerdict) { trace([back_under()], 0, [obj0()], [pts(ps2())], heap_pts(), io0()) }
+
+fn back_under_copy() → TOut(tys(), LocalVerdict) { trace([back_under()], 0, [Plain(pts(ps2()))], [pts(ps2())], Nil, io0()) }
+
+fn lend_plain_back_copy() → TOut(tys(), LocalVerdict) { trace([pt_w(), lend_plain_back()], 1, [Plain(pt12())], [pt12()], Nil, io0()) }
+
+fn lend_plain_back_ref() → TOut(tys(), LocalVerdict) { trace([pt_w(), lend_plain_back()], 1, [obj0()], [pt12()], [Live(Obj(pt12(), Nil))], io0()) }
+
+fn lend_under_ref() → TOut(tys(), LocalVerdict) { trace([pt_w(), lend_under()], 1, [obj0()], [pts(ps2())], heap_pts(), io0()) }
+
+fn lend_under_copy() → TOut(tys(), LocalVerdict) { trace([pt_w(), lend_under()], 1, [Plain(pts(ps2()))], [pts(ps2())], Nil, io0()) }
+
+fn copy_caller_ref() → TOut(tys(), LocalVerdict) { trace([copy_loop(), copy_caller()], 1, [obj0(), Refer(Ref(1, Nil)), w(2)], [nats(ns5()), nats(src3()), nat(2)], heap_two(), io0()) }
+
+fn nested_two_ref() → TOut(tys(), LocalVerdict) { trace([two_nat_w(), nested_two()], 1, [obj0()], [pts(ps2())], heap_pts(), io0()) }
+
+fn nested_two_copy() → TOut(tys(), LocalVerdict) { trace([two_nat_w(), nested_two()], 1, [Plain(pts(ps2()))], [pts(ps2())], Nil, io0()) }
+
+fn ps4() → List<Point> { [Point(1, 2), Point(5, 3), Point(7, 7), Point(9, 4)] }
+
+// The yes arm answers 2, read as an index after the join: four points.
+fn join_two_ref() → TOut(tys(), LocalVerdict) { trace([len_fn(), join_two()], 1, [obj0(), w(0), w(1)], [pts(ps4()), nat(0), nat(1)], [Live(Obj(pts(ps4()), Nil))], io0()) }
+
+fn join_two_no() → TOut(tys(), LocalVerdict) { trace([len_fn(), join_two()], 1, [obj0(), w(1), w(0)], [pts(ps2()), nat(1), nat(0)], heap_pts(), io0()) }
+
+fn join_read_yes() → TOut(tys(), LocalVerdict) { trace([join_read()], 0, [obj0(), Plain(pts(ps2())), w(0), w(1)], [pts(ps2()), pts(ps2()), nat(0), nat(1)], heap_pts(), io0()) }
+
+fn join_read_no() → TOut(tys(), LocalVerdict) { trace([join_read()], 0, [obj0(), Plain(pts(ps2())), w(1), w(0)], [pts(ps2()), pts(ps2()), nat(1), nat(0)], heap_pts(), io0()) }
+
+fn made_run() → TOut(tys(), LocalVerdict) { trace([mk(), made()], 1, [w(3), Plain(pt12())], [nat(3), pt12()], Nil, io0()) }
+
+fn bag_ref() → TOut(tys(), LocalVerdict) { trace([bag_set()], 0, [obj0(), Plain(bag123())], [bag12(), bag123()], [Live(Obj(bag12(), Nil))], io0()) }
+
+fn bag_copy() → TOut(tys(), LocalVerdict) { trace([bag_set()], 0, [Plain(bag12()), Plain(bag123())], [bag12(), bag123()], Nil, io0()) }
+
+// Each group at every state of each trace (one conversion each).
+
+theorem loan_ref_wf(): holds(GWf, loan_ref()) = True { refl }
+theorem loan_ref_agree(): holds(GAgree, loan_ref()) = True { refl }
+theorem loan_ref_sync(): holds(GSync, loan_ref()) = True { refl }
+theorem loan_ref_cells(): holds(GCells, loan_ref()) = True { refl }
+theorem loan_ref_apart(): holds(GApart, loan_ref()) = True { refl }
+theorem loan_ref_likes(): holds(GLikes, loan_ref()) = True { refl }
+theorem loan_ref_heap(): holds(GHeap, loan_ref()) = True { refl }
+
+theorem loan_copy_wf(): holds(GWf, loan_copy()) = True { refl }
+theorem loan_copy_agree(): holds(GAgree, loan_copy()) = True { refl }
+theorem loan_copy_sync(): holds(GSync, loan_copy()) = True { refl }
+theorem loan_copy_cells(): holds(GCells, loan_copy()) = True { refl }
+theorem loan_copy_apart(): holds(GApart, loan_copy()) = True { refl }
+theorem loan_copy_likes(): holds(GLikes, loan_copy()) = True { refl }
+theorem loan_copy_heap(): holds(GHeap, loan_copy()) = True { refl }
+
+theorem written_ref_wf(): holds(GWf, written_ref()) = True { refl }
+theorem written_ref_agree(): holds(GAgree, written_ref()) = True { refl }
+theorem written_ref_sync(): holds(GSync, written_ref()) = True { refl }
+theorem written_ref_cells(): holds(GCells, written_ref()) = True { refl }
+theorem written_ref_apart(): holds(GApart, written_ref()) = True { refl }
+theorem written_ref_likes(): holds(GLikes, written_ref()) = True { refl }
+theorem written_ref_heap(): holds(GHeap, written_ref()) = True { refl }
+
+theorem written_copy_wf(): holds(GWf, written_copy()) = True { refl }
+theorem written_copy_agree(): holds(GAgree, written_copy()) = True { refl }
+theorem written_copy_sync(): holds(GSync, written_copy()) = True { refl }
+theorem written_copy_cells(): holds(GCells, written_copy()) = True { refl }
+theorem written_copy_apart(): holds(GApart, written_copy()) = True { refl }
+theorem written_copy_likes(): holds(GLikes, written_copy()) = True { refl }
+theorem written_copy_heap(): holds(GHeap, written_copy()) = True { refl }
+
+theorem back_under_ref_wf(): holds(GWf, back_under_ref()) = True { refl }
+theorem back_under_ref_agree(): holds(GAgree, back_under_ref()) = True { refl }
+theorem back_under_ref_sync(): holds(GSync, back_under_ref()) = True { refl }
+theorem back_under_ref_cells(): holds(GCells, back_under_ref()) = True { refl }
+theorem back_under_ref_apart(): holds(GApart, back_under_ref()) = True { refl }
+theorem back_under_ref_likes(): holds(GLikes, back_under_ref()) = True { refl }
+theorem back_under_ref_heap(): holds(GHeap, back_under_ref()) = True { refl }
+
+theorem back_under_copy_wf(): holds(GWf, back_under_copy()) = True { refl }
+theorem back_under_copy_agree(): holds(GAgree, back_under_copy()) = True { refl }
+theorem back_under_copy_sync(): holds(GSync, back_under_copy()) = True { refl }
+theorem back_under_copy_cells(): holds(GCells, back_under_copy()) = True { refl }
+theorem back_under_copy_apart(): holds(GApart, back_under_copy()) = True { refl }
+theorem back_under_copy_likes(): holds(GLikes, back_under_copy()) = True { refl }
+theorem back_under_copy_heap(): holds(GHeap, back_under_copy()) = True { refl }
+
+theorem lend_plain_back_copy_wf(): holds(GWf, lend_plain_back_copy()) = True { refl }
+theorem lend_plain_back_copy_agree(): holds(GAgree, lend_plain_back_copy()) = True { refl }
+theorem lend_plain_back_copy_sync(): holds(GSync, lend_plain_back_copy()) = True { refl }
+theorem lend_plain_back_copy_cells(): holds(GCells, lend_plain_back_copy()) = True { refl }
+theorem lend_plain_back_copy_apart(): holds(GApart, lend_plain_back_copy()) = True { refl }
+theorem lend_plain_back_copy_likes(): holds(GLikes, lend_plain_back_copy()) = True { refl }
+theorem lend_plain_back_copy_heap(): holds(GHeap, lend_plain_back_copy()) = True { refl }
+
+theorem lend_plain_back_ref_wf(): holds(GWf, lend_plain_back_ref()) = True { refl }
+theorem lend_plain_back_ref_agree(): holds(GAgree, lend_plain_back_ref()) = True { refl }
+theorem lend_plain_back_ref_sync(): holds(GSync, lend_plain_back_ref()) = True { refl }
+theorem lend_plain_back_ref_cells(): holds(GCells, lend_plain_back_ref()) = True { refl }
+theorem lend_plain_back_ref_apart(): holds(GApart, lend_plain_back_ref()) = True { refl }
+theorem lend_plain_back_ref_likes(): holds(GLikes, lend_plain_back_ref()) = True { refl }
+theorem lend_plain_back_ref_heap(): holds(GHeap, lend_plain_back_ref()) = True { refl }
+
+theorem lend_under_ref_wf(): holds(GWf, lend_under_ref()) = True { refl }
+theorem lend_under_ref_agree(): holds(GAgree, lend_under_ref()) = True { refl }
+theorem lend_under_ref_sync(): holds(GSync, lend_under_ref()) = True { refl }
+theorem lend_under_ref_cells(): holds(GCells, lend_under_ref()) = True { refl }
+theorem lend_under_ref_apart(): holds(GApart, lend_under_ref()) = True { refl }
+theorem lend_under_ref_likes(): holds(GLikes, lend_under_ref()) = True { refl }
+theorem lend_under_ref_heap(): holds(GHeap, lend_under_ref()) = True { refl }
+
+theorem lend_under_copy_wf(): holds(GWf, lend_under_copy()) = True { refl }
+theorem lend_under_copy_agree(): holds(GAgree, lend_under_copy()) = True { refl }
+theorem lend_under_copy_sync(): holds(GSync, lend_under_copy()) = True { refl }
+theorem lend_under_copy_cells(): holds(GCells, lend_under_copy()) = True { refl }
+theorem lend_under_copy_apart(): holds(GApart, lend_under_copy()) = True { refl }
+theorem lend_under_copy_likes(): holds(GLikes, lend_under_copy()) = True { refl }
+theorem lend_under_copy_heap(): holds(GHeap, lend_under_copy()) = True { refl }
+
+theorem copy_caller_ref_wf(): holds(GWf, copy_caller_ref()) = True { refl }
+theorem copy_caller_ref_agree(): holds(GAgree, copy_caller_ref()) = True { refl }
+theorem copy_caller_ref_sync(): holds(GSync, copy_caller_ref()) = True { refl }
+theorem copy_caller_ref_cells(): holds(GCells, copy_caller_ref()) = True { refl }
+theorem copy_caller_ref_apart(): holds(GApart, copy_caller_ref()) = True { refl }
+theorem copy_caller_ref_likes(): holds(GLikes, copy_caller_ref()) = True { refl }
+theorem copy_caller_ref_heap(): holds(GHeap, copy_caller_ref()) = True { refl }
+
+theorem nested_two_ref_wf(): holds(GWf, nested_two_ref()) = True { refl }
+theorem nested_two_ref_agree(): holds(GAgree, nested_two_ref()) = True { refl }
+theorem nested_two_ref_sync(): holds(GSync, nested_two_ref()) = True { refl }
+theorem nested_two_ref_cells(): holds(GCells, nested_two_ref()) = True { refl }
+theorem nested_two_ref_apart(): holds(GApart, nested_two_ref()) = True { refl }
+theorem nested_two_ref_likes(): holds(GLikes, nested_two_ref()) = True { refl }
+theorem nested_two_ref_heap(): holds(GHeap, nested_two_ref()) = True { refl }
+
+theorem nested_two_copy_wf(): holds(GWf, nested_two_copy()) = True { refl }
+theorem nested_two_copy_agree(): holds(GAgree, nested_two_copy()) = True { refl }
+theorem nested_two_copy_sync(): holds(GSync, nested_two_copy()) = True { refl }
+theorem nested_two_copy_cells(): holds(GCells, nested_two_copy()) = True { refl }
+theorem nested_two_copy_apart(): holds(GApart, nested_two_copy()) = True { refl }
+theorem nested_two_copy_likes(): holds(GLikes, nested_two_copy()) = True { refl }
+theorem nested_two_copy_heap(): holds(GHeap, nested_two_copy()) = True { refl }
+
+theorem join_two_ref_wf(): holds(GWf, join_two_ref()) = True { refl }
+theorem join_two_ref_agree(): holds(GAgree, join_two_ref()) = True { refl }
+theorem join_two_ref_sync(): holds(GSync, join_two_ref()) = True { refl }
+theorem join_two_ref_cells(): holds(GCells, join_two_ref()) = True { refl }
+theorem join_two_ref_apart(): holds(GApart, join_two_ref()) = True { refl }
+theorem join_two_ref_likes(): holds(GLikes, join_two_ref()) = True { refl }
+theorem join_two_ref_heap(): holds(GHeap, join_two_ref()) = True { refl }
+
+theorem join_two_no_wf(): holds(GWf, join_two_no()) = True { refl }
+theorem join_two_no_agree(): holds(GAgree, join_two_no()) = True { refl }
+theorem join_two_no_sync(): holds(GSync, join_two_no()) = True { refl }
+theorem join_two_no_cells(): holds(GCells, join_two_no()) = True { refl }
+theorem join_two_no_apart(): holds(GApart, join_two_no()) = True { refl }
+theorem join_two_no_likes(): holds(GLikes, join_two_no()) = True { refl }
+theorem join_two_no_heap(): holds(GHeap, join_two_no()) = True { refl }
+
+theorem join_read_yes_wf(): holds(GWf, join_read_yes()) = True { refl }
+theorem join_read_yes_agree(): holds(GAgree, join_read_yes()) = True { refl }
+theorem join_read_yes_sync(): holds(GSync, join_read_yes()) = True { refl }
+theorem join_read_yes_cells(): holds(GCells, join_read_yes()) = True { refl }
+theorem join_read_yes_apart(): holds(GApart, join_read_yes()) = True { refl }
+theorem join_read_yes_likes(): holds(GLikes, join_read_yes()) = True { refl }
+theorem join_read_yes_heap(): holds(GHeap, join_read_yes()) = True { refl }
+
+theorem join_read_no_wf(): holds(GWf, join_read_no()) = True { refl }
+theorem join_read_no_agree(): holds(GAgree, join_read_no()) = True { refl }
+theorem join_read_no_sync(): holds(GSync, join_read_no()) = True { refl }
+theorem join_read_no_cells(): holds(GCells, join_read_no()) = True { refl }
+theorem join_read_no_apart(): holds(GApart, join_read_no()) = True { refl }
+theorem join_read_no_likes(): holds(GLikes, join_read_no()) = True { refl }
+theorem join_read_no_heap(): holds(GHeap, join_read_no()) = True { refl }
+
+theorem made_run_wf(): holds(GWf, made_run()) = True { refl }
+theorem made_run_agree(): holds(GAgree, made_run()) = True { refl }
+theorem made_run_sync(): holds(GSync, made_run()) = True { refl }
+theorem made_run_cells(): holds(GCells, made_run()) = True { refl }
+theorem made_run_apart(): holds(GApart, made_run()) = True { refl }
+theorem made_run_likes(): holds(GLikes, made_run()) = True { refl }
+theorem made_run_heap(): holds(GHeap, made_run()) = True { refl }
+
+theorem bag_ref_wf(): holds(GWf, bag_ref()) = True { refl }
+theorem bag_ref_agree(): holds(GAgree, bag_ref()) = True { refl }
+theorem bag_ref_sync(): holds(GSync, bag_ref()) = True { refl }
+theorem bag_ref_cells(): holds(GCells, bag_ref()) = True { refl }
+theorem bag_ref_apart(): holds(GApart, bag_ref()) = True { refl }
+theorem bag_ref_likes(): holds(GLikes, bag_ref()) = True { refl }
+theorem bag_ref_heap(): holds(GHeap, bag_ref()) = True { refl }
+
+theorem bag_copy_wf(): holds(GWf, bag_copy()) = True { refl }
+theorem bag_copy_agree(): holds(GAgree, bag_copy()) = True { refl }
+theorem bag_copy_sync(): holds(GSync, bag_copy()) = True { refl }
+theorem bag_copy_cells(): holds(GCells, bag_copy()) = True { refl }
+theorem bag_copy_apart(): holds(GApart, bag_copy()) = True { refl }
+theorem bag_copy_likes(): holds(GLikes, bag_copy()) = True { refl }
+theorem bag_copy_heap(): holds(GHeap, bag_copy()) = True { refl }
+
+// ---------------------------------------------------------------------------
+// Negative controls: each group's decider fails where its clause is weakened
+// or the state is broken, at some state of a trace above.
+
+fn trace_with(fs: List<Func>, g: Nat, f: Tri(tys()) → Bool, vs: List<Value(tys())>, ds: List<Dyn(tys())>, h: Heap(tys())) → Bool {
+    (((fns_of(fs)(g)).trace_with(tys(), cx_of(fs, g, vs, h), f, vs, ds, h, io0())).log).all_bit(λ b => b)
+}
+
+fn on_loan_ref(f: Tri(tys()) → Bool) → Bool { trace_with([loan()], 0, f, [obj0(), w(1), w(3)], loan_args(), heap_ns()) }
+
+fn on_loan_copy(f: Tri(tys()) → Bool) → Bool { trace_with([loan()], 0, f, [Plain(nats(ns5())), w(1), w(3)], loan_args(), Nil) }
+
+// Agreement as `val = d` whole, the patch's absence: false while a view to
+// write through a reference is pending (its parent's value already holds
+// what its meaning holds only after the write-back); true along the copies,
+// where nothing is shared.
+fn whole_b(t: Tri(tys())) → Bool {
+    (t.s).levels().all_bit(λ l => !(t.s).live(l) || Dyn::opt_eq_b(tys(), eqn(), CSt::val_at(tys(), strs(), t.s, t.m, l), Some(CSt::mean_at(tys(), t.s, t.e, l))))
+}
+
+theorem whole_fails_ref(): on_loan_ref(whole_b) = False { refl }
+
+theorem whole_holds_copy(): on_loan_copy(whole_b) = True { refl }
+
+// Sync at every entry to write, written back or not: false while pending.
+fn sync_all_b(t: Tri(tys())) → Bool {
+    let ws = Mach::ixs(tys(), strs(), t.m);
+    (t.s).views.all_bit(λ en => Dyn::eq_b(tys(), eqn(), Sel::read_at(tys(), strs(), en.place(t.s, ws), CSt::mean_at(tys(), t.s, t.e, en.par)), CSt::mean_at(tys(), t.s, t.e, en.lvl)))
+}
+
+theorem sync_all_fails(): on_loan_ref(sync_all_b) = False { refl }
+
+// Footprints with every view to read moved onto the view to write's place:
+// the loan's window and `t`'s then meet.
+fn VEnt::onto(self en: VEnt, at: List<Step>, reg: List<Step>) → VEnt { VEnt(en.lvl, en.obj, reg, en.mode, en.par, at, en.back) }
+
+fn meet_b(t: Tri(tys())) → Bool {
+    let s = t.s;
+    let moved = match s.views.find(λ en => en.mode.writes()) {
+        Some(wv) => s.views.map(λ en => match en.mode { Reading => en.onto(wv.at, wv.reg), Writing => en }),
+        None => s.views,
+    };
+    Foot::holds_b(tys(), strs(), CSt(s.args, s.locs, s.na, s.nd, moved, s.nobj, s.touched, s.wrote), t.m, t.root)
+}
+
+theorem meet_fails(): on_loan_ref(meet_b) = False { refl }
+
+// Cells against roots none of which is there.
+fn rootless_b(t: Tri(tys())) → Bool { Cells::holds_b(tys(), strs(), t.s, t.m, λ _ => None) }
+
+theorem rootless_fails(): on_loan_ref(rootless_b) = False { refl }
+
+// Agreement against a meaning whose object is another list.
+fn other_b(t: Tri(tys())) → Bool { Agree::holds_b(tys(), strs(), eqn(), t.s, Env(Cons(nats([0]), (t.e).args.drop(1)), (t.e).locs), t.m) }
+
+theorem other_fails(): on_loan_ref(other_b) = False { refl }
+
+// Like-ness against a meaning whose object is shorter.
+fn short_b(t: Tri(tys())) → Bool { Likes::holds_b(tys(), strs(), t.s, Env(Cons(nats([0]), (t.e).args.drop(1)), (t.e).locs), t.m) }
+
+theorem short_fails(): on_loan_ref(short_b) = False { refl }
+
+// The state with every entry's parent its own level: `chain` fails.
+fn selfish_b(t: Tri(tys())) → Bool {
+    let s = t.s;
+    CSt(s.args, s.locs, s.na, s.nd, s.views.map(λ en => VEnt(en.lvl, en.obj, en.reg, en.mode, en.lvl, en.at, en.back)), s.nobj, s.touched, s.wrote).wf_b()
+}
+
+theorem selfish_fails(): on_loan_ref(selfish_b) = False { refl }
+
+// The heap group against an entry heap with a block more than the run's.
+fn grown_b(t: Tri(tys())) → Bool { Heaped::holds_b(tys(), strs(), eqn(), t.s, t.m, heap_ns() ++ heap_ns(), Nil, t.root) }
+
+theorem grown_fails(): on_loan_ref(grown_b) = False { refl }
+
+// Sync of a view to read at every entry, not one: a read view chosen by a
+// join has an entry of the arm the run did not take, whose parent's meaning
+// at its place is not the view's.
+fn sync_every_b(t: Tri(tys())) → Bool {
+    let ws = Mach::ixs(tys(), strs(), t.m);
+    (t.s).views.all_bit(λ en => en.mode.writes() ||
+        Dyn::eq_b(tys(), eqn(), Sel::read_at(tys(), strs(), en.place(t.s, ws), CSt::mean_at(tys(), t.s, t.e, en.par)), CSt::mean_at(tys(), t.s, t.e, en.lvl)))
+}
+
+fn on_join_read(f: Tri(tys()) → Bool, i, k: Nat) → Bool {
+    trace_with([join_read()], 0, f, [obj0(), Plain(pts(ps2())), w(i), w(k)], [pts(ps2()), pts(ps2()), nat(i), nat(k)], heap_pts())
+}
+
+theorem sync_every_fails(): on_join_read(sync_every_b, 0, 1) = False { refl }
+
+// The present invariant's `uni` (a view's cell refers iff its parent's does,
+// at every entry) is false there: one parent refers, the other is a copy.
+fn uni_b(t: Tri(tys())) → Bool {
+    (t.s).views.all_bit(λ en => Bool::same_b(Value::refers_b(tys(), (CSt::cell_at(tys(), t.s, t.m, en.lvl)).v), Value::refers_b(tys(), (CSt::cell_at(tys(), t.s, t.m, en.par)).v)))
+}
+
+theorem uni_fails_yes(): on_join_read(uni_b, 0, 1) = False { refl }
+
+theorem uni_fails_no(): on_join_read(uni_b, 1, 0) = False { refl }
+
+// Two views of one copy meet where their places do: a copy's footprint is
+// the level its chain of copies starts at, with the selections from there.
+theorem meet_fails_copy(): on_loan_copy(meet_b) = False { refl }
+
+// The bag's nested length is not what it was lent with: the deep shape is
+// not kept by a checked write (so like-ness is the top code and length).
+fn deep_b(t: Tri(tys())) → Bool {
+    match Heap::obj(tys(), (t.m).heap, 0) {
+        Some(ob) => Dyn::len(tys(), strs(), Sel::read_at(tys(), strs(), [OnField(1)], ob.val)).same(2),
+        None => True,
+    }
+}
+
+theorem deep_changes(): trace_with([bag_set()], 0, deep_b, [obj0(), Plain(bag123())], [bag12(), bag123()], [Live(Obj(bag12(), Nil))]) = False { refl }

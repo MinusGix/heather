@@ -71,6 +71,14 @@ inductive Stmt {
     Read(p: Place),
     // A write of a variable's value at a place.
     Write(p: Place, v: Var),
+    // A view's write-back onto its parent at its place (§15.2's eager
+    // write-back, §23.23): in the meaning the write of its value there; at
+    // level 2 nothing where the view refers into the block, a write where it
+    // is a copy.
+    Back(p: Place, v: Var),
+    // A place's length as a word of a width: a sequence's own `len`
+    // (`Dyn::len`), read as `Read` reads (§23.23).
+    Len(p: Place, w: Width),
     // A view of a place, to read or to write: its value, written back by
     // the writes the reflector places after each statement that changes it
     // (§15.2's eager write-back).
@@ -322,6 +330,8 @@ fn Stmt::eval(self s: Stmt, R: Type, tys: Nat → Type, strs: Strs(tys), w: Call
         Lit(wd, n) => k(Env::push(tys, e, Dyn(SWord(wd), Width::of_nat(wd, n)))),
         Read(p) => k(Env::push(tys, e, p.val(tys, strs, e))),
         Write(p, v) => k(Env::set(tys, e, p.root, λ d => Dyn::write(tys, strs, Env::ixs(tys, e), p.steps, λ _ => Env::get(tys, e, v), d))),
+        Back(p, v) => k(Env::set(tys, e, p.root, λ d => Dyn::write(tys, strs, Env::ixs(tys, e), p.steps, λ _ => Env::get(tys, e, v), d))),
+        Len(p, wd) => k(Env::push(tys, e, Dyn(SWord(wd), Width::of_nat(wd, Dyn::len(tys, strs, p.val(tys, strs, e)))))),
         View(p, _) => k(Env::push(tys, e, p.val(tys, strs, e))),
         Take(p) => k(Env::push(tys, e, p.val(tys, strs, e))),
         Fresh(c, n, v) => k(Env::push(tys, e, Dyn::fresh(tys, strs, c, Env::get(tys, e, n), Env::get(tys, e, v)))),
@@ -370,7 +380,7 @@ theorem Stmt::eval_is(self s: Stmt, R: Type, tys: Nat → Type, strs: Strs(tys),
     s.eval(R, tys, strs, w, e, k) = k(s.eval(Env(tys), tys, strs, w, e, λ x => x))
 {
     match s as λ x => x.eval(R, tys, strs, w, e, k) = k(x.eval(Env(tys), tys, strs, w, e, λ y => y)) {
-        Op(_, _, _) => refl, Lit(_, _) => refl, Read(_) => refl, Write(_, _) => refl, View(_, _) => refl,
+        Op(_, _, _) => refl, Lit(_, _) => refl, Read(_) => refl, Write(_, _) => refl, Back(_, _) => refl, Len(_, _) => refl, View(_, _) => refl,
         Take(_) => refl, Fresh(_, _, _) => refl, Call(_, _, _) => refl, Death(_) => refl,
     }
 }

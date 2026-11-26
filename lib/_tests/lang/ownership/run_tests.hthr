@@ -92,7 +92,11 @@ fn gap_r() → Func {
 
 fn get_x_r() → Func { Func(sig0(), seq([Read(x_of(Arg(0), Var(1)))], Ret([Loc(0)]))) }
 
-fn set_x_r() → Func { Func(sig0(), seq([Write(x_of(Arg(0), Var(1)), Arg(2))], Ret([Arg(0)]))) }
+// The list lent to write, the index and the value read: the run stores only
+// where the activation was lent to change (§23.22).
+fn set_sig() → Sig { Sig([Param(pts_s(), ByWrite), Param(nat_s(), ByRead), Param(nat_s(), ByRead)], Nil) }
+
+fn set_x_r() → Func { Func(set_sig(), seq([Write(x_of(Arg(0), Var(1)), Arg(2))], Ret([Arg(0)]))) }
 
 fn guarded_r() → Func {
     Func(sig0(), seq([Call(1, [Arg(0)], 1)], Join(TLt(Arg(1), Loc(0)), seq([Read(x_of(Arg(0), Var(1)))], Yield([Loc(0)])), seq([Lit(WNat, 0)], Yield([Loc(0)])), Ret([Loc(0)]))))
@@ -108,7 +112,7 @@ fn after_join_r() → Func {
 }
 
 fn join_two_r() → Func {
-    Func(sig0(), Join(TLt(Arg(1), Arg(2)),
+    Func(set_sig(), Join(TLt(Arg(1), Arg(2)),
         seq([Write(x_of(Arg(0), Var(1)), Arg(2)), Lit(WNat, 1), Op(PAdd, Arg(2), Loc(0))], Yield([Arg(0), Loc(0)])),
         seq([Lit(WNat, 0)], Yield([Arg(0), Loc(0)])),
         seq([Read(x_of(Loc(1), Var(3))), Op(PAdd, Loc(0), Loc(1))], Ret([Loc(0)]))))
@@ -251,3 +255,103 @@ theorem live_view_done(io: Io): one_fn(live_view_r(), 1, 0, Nil, Nil, io) = Done
 fn no_field_r() → Func { Func(sig0(), seq([Read(Place(Arg(0), [SElem(Lit(0)), SField(2)]))], Ret([Loc(0)]))) }
 
 theorem no_field_stuck(io: Io): stuck(one_fn(no_field_r(), 1, 0, [obj0()], heap1(ps2()), io)) = True { refl }
+
+// ---------------------------------------------------------------------------
+// The run as the machine's reading (§23.22)
+
+// A store outside what the activation may change is stuck: `set_x`'s body
+// with nothing lent (its parameters unlisted), and with the list lent only
+// to read. Before §23.22 both stored.
+fn set_x_unlent_r() → Func { Func(sig0(), seq([Write(x_of(Arg(0), Var(1)), Arg(2))], Ret([Arg(0)]))) }
+
+fn set_x_read_r() → Func { Func(Sig([Param(pts_s(), ByRead), Param(nat_s(), ByRead), Param(nat_s(), ByRead)], Nil), seq([Write(x_of(Arg(0), Var(1)), Arg(2))], Ret([Arg(0)]))) }
+
+theorem set_x_unlent_stuck(io: Io): stuck(one_fn(set_x_unlent_r(), 1, 0, [obj0(), w(1), w(8)], heap1(ps2()), io)) = True { refl }
+
+theorem set_x_read_stuck(io: Io): stuck(one_fn(set_x_read_r(), 1, 0, [obj0(), w(1), w(8)], heap1(ps2()), io)) = True { refl }
+
+// Lent to write it stores, as before (`set_x_stored`).
+
+// A reference lent to write one element: a store under it is the
+// activation's (the run of a written element's field).
+fn pt_r() → Func { Func(Sig([Param(pt_s(), ByWrite), Param(nat_s(), ByRead)], Nil), seq([Write(Place(Arg(0), [SField(0)]), Arg(1))], Ret([Arg(0)]))) }
+
+fn elem1() → Value(tys()) { Refer(Ref(0, [OnSeq(SeqOne(INat(1)))])) }
+
+theorem under_lent_done(io: Io): one_fn(pt_r(), 1, 0, [elem1(), w(9)], heap1(ps2()), io) = Done(Answer([elem1()], heap1([Point(1, 2), Point(9, 3)]), io)) { refl }
+
+// A view's write-back onto its parent (`Back`) stores nothing where the view
+// refers: through a list lent only to read it is done, the block unchanged.
+// The same text as a `Write` stores, and so is stuck there; so is a `Back`
+// of a copy, which is a write (§23.22, §23.23).
+fn back_read_r() → Func {
+    Func(Sig([Param(pts_s(), ByRead)], Nil), seq([View(Place(Arg(0), [SElem(Lit(0))]), Writing), Back(Place(Arg(0), [SElem(Lit(0))]), Loc(0))], Ret(Nil)))
+}
+
+fn write_self_read_r() → Func {
+    Func(Sig([Param(pts_s(), ByRead)], Nil), seq([View(Place(Arg(0), [SElem(Lit(0))]), Writing), Write(Place(Arg(0), [SElem(Lit(0))]), Loc(0))], Ret(Nil)))
+}
+
+fn back_copy_read_r() → Func {
+    Func(Sig([Param(pts_s(), ByRead)], Nil), seq([Read(Place(Arg(0), [SElem(Lit(0))])), Back(Place(Arg(0), [SElem(Lit(0))]), Loc(0))], Ret(Nil)))
+}
+
+theorem back_read_done(io: Io): one_fn(back_read_r(), 1, 0, [obj0()], heap1(ps2()), io) = Done(Answer(Nil, heap1(ps2()), io)) { refl }
+
+theorem write_self_read_stuck(io: Io): stuck(one_fn(write_self_read_r(), 1, 0, [obj0()], heap1(ps2()), io)) = True { refl }
+
+theorem back_copy_read_stuck(io: Io): stuck(one_fn(back_copy_read_r(), 1, 0, [obj0()], heap1(ps2()), io)) = True { refl }
+
+// A `Back` of a copy onto a plain root writes the copy there, as `Write`.
+fn back_copy_plain_r() → Func {
+    Func(Sig([Param(pts_s(), ByWrite), Param(pt_s(), ByRead)], Nil), seq([Back(Place(Arg(0), [SElem(Lit(1))]), Arg(1))], Ret([Arg(0)])))
+}
+
+theorem back_copy_plain_writes(io: Io):
+    one_fn(back_copy_plain_r(), 1, 0, [Plain(pts(ps2())), Plain(Dyn(pt_s(), Point(4, 4)))], Nil, io) = Done(Answer([Plain(pts([Point(1, 2), Point(4, 4)]))], Nil, io)) { refl }
+
+// A view of one element written into another place of the same block
+// stores, as every `Write` does.
+fn view_into_other_r() → Func {
+    Func(Sig([Param(pts_s(), ByWrite)], Nil), seq([View(Place(Arg(0), [SElem(Lit(0))]), Reading), Write(Place(Arg(0), [SElem(Lit(1))]), Loc(0))], Ret([Arg(0)])))
+}
+
+theorem view_into_other_stores(io: Io): one_fn(view_into_other_r(), 1, 0, [obj0()], heap1(ps2()), io) = Done(Answer([obj0()], heap1([Point(1, 2), Point(1, 2)]), io)) { refl }
+
+// A written parameter's slot after a call is the caller's own argument
+// where it refers, whatever the callee answered: `wrong_slot` answers its
+// read parameter's reference as its written slot. Before §23.22 the
+// caller's slot referred to block 1.
+fn wrong_slot_r() → Func { Func(Sig([Param(pts_s(), ByWrite), Param(pts_s(), ByRead)], Nil), Ret([Arg(1)])) }
+
+fn slot_caller_r() → Func { Func(sig0(), seq([Call(0, [Arg(0), Arg(1)], 1)], Ret([Loc(0)]))) }
+
+fn two_fns() → Nat → Func { λ g => match g { Zero => wrong_slot_r(), Succ(_) => slot_caller_r() } }
+
+fn two_fn(fuel, g: Nat, vs: List<Value(tys())>, h: Heap(tys()), io: Io) → Ran(tys()) { Run::of(tys(), strs(), two_fns(), world(), λ _ => False, fuel, g, vs, h, io) }
+
+fn heap2() → Heap(tys()) { [Live(Obj(pts(ps2()), Nil)), Live(Obj(pts(ps4()), Nil))] }
+
+theorem slot_is_argument(io: Io): two_fn(2, 1, [obj0(), Refer(Ref(1, Nil))], heap2(), io) = Done(Answer([obj0()], heap2(), io)) { refl }
+
+// Passed plain, the slot is the callee's value, as before: `set_x` on a
+// copy, its caller binding the written copy back.
+fn plain_slot_caller_r() → Func { Func(sig0(), seq([Call(0, [Arg(0), Arg(1), Arg(2)], 1)], Ret([Loc(0)]))) }
+
+fn set_fns() → Nat → Func { λ g => match g { Zero => set_x_r(), Succ(_) => plain_slot_caller_r() } }
+
+theorem plain_slot_back(io: Io):
+    Run::of(tys(), strs(), set_fns(), world(), λ _ => False, 2, 1, [Plain(pts(ps2())), w(1), w(8)], Nil, io) = Done(Answer([Plain(pts([Point(1, 2), Point(8, 3)]))], Nil, io)) { refl }
+
+// A list's length read as a word (§23.23): the run reads it through the
+// block, the meaning from the value; both the number.
+fn len_r() → Func { Func(Sig([Param(pts_s(), ByRead)], [Result(nat_s(), OFresh)]), seq([Len(Place(Arg(0), Nil), WNat)], Ret([Loc(0)]))) }
+
+theorem len_runs(io: Io): one_fn(len_r(), 1, 0, [obj0()], heap1(ps4()), io) = Done(Answer([w(4)], heap1(ps4()), io)) { refl }
+
+theorem len_means(): (len_r()).denote(tys(), strs(), world(), 0, [pts(ps4())]) = [nat(4)] { refl }
+
+// Of a window: its own length.
+fn len_win_r() → Func { Func(Sig([Param(pts_s(), ByRead)], [Result(nat_s(), OFresh)]), seq([Len(Place(Arg(0), [SWindow(Lit(1), Lit(2))]), WNat)], Ret([Loc(0)]))) }
+
+theorem len_win_runs(io: Io): one_fn(len_win_r(), 1, 0, [obj0()], heap1(ps4()), io) = Done(Answer([w(2)], heap1(ps4()), io)) { refl }
