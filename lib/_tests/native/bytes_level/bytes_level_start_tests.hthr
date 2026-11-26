@@ -1,0 +1,102 @@
+// Probes of the start code (bytes_level_start; issues/bytes-level-out-of-room.md
+// step 3 item 5), by evaluation on the guard probes' machine (`mach_go`).
+//
+// - The start's bytes are the bytes its items would assemble to after the
+//   program (`start_items`), so the machine runs the items.
+// - `down` from the start within its budget exits with its answer; at a
+//   budget short of its run's room it exits with the reserved status; below
+//   its room by routine and return address the lowering refuses it.
+// - An acyclic program exits with its answer, the start's choice of status.
+import bytes_level::{run};
+import bytes_memory;
+import bytes_level_lower;
+import bytes_level_routines;
+import bytes_level_routines_tests;
+import bytes_level_guard_tests;
+import bytes_level_start;
+import x86_64_memory_contract;
+import x86_64_call_contract;
+import function_ir_lower;
+import function_ir_lower_calls;
+import x86_64;
+import x86_64_asm;
+import x86_64_asm_runs;
+import x86_64_stack;
+import x86_64_layout;
+import linux_world;
+import bitvec;
+import bool;
+import list;
+import logic;
+import nat;
+import option;
+
+// The start as items after the program: what its bytes assemble from.
+fn start_items(program: Prog, entry, budget: Nat) → Prog {
+    At(At(At(At(program, 0, Block(start_head(budget))), 0, CallTo(entry + 1)), 0, Block(start_tail())), 0, Syscall)
+}
+
+fn start_same_bytes(p: Program, placement: List<Place>, entry, budget: Nat) → Bool {
+    match p.lower_started(placement, entry, budget) {
+        None => False,
+        Some(started) => nats_same(assemble(no_fills(), started.program, started.start).map(λ (b: BitVec(8)) => b.toNat()),
+            assemble(no_fills(), start_items(started.program, entry, budget), []).map(λ (b: BitVec(8)) => b.toNat())),
+    }
+}
+
+// The process from the start: the stack pointer `budget` bytes above the
+// floor, the arguments in their registers, RBP zero (the start sets it).
+fn mach_start(program: Prog, entry, budget: Nat, args: List<Nat>, floor, fuel: Nat) → Halt {
+    let items = prog_items(start_items(program, entry, budget), []);
+    let sp = BitVec::ofNat(floor + budget, n := 64);
+    let entered = write_gpr(Rsp, sp, load_words(argument_registers(), args.map(λ (a: Nat) => BitVec::ofNat(a)), x86_64::zero_gprs()));
+    mach_go(items, floor, fuel, Mach(entered, clear_flags(), prog_items(program, []).len(), [], [], floor + budget))
+}
+
+fn start_run(p: Program, placement: List<Place>, entry, budget: Nat, args: List<Nat>) → Halt {
+    match p.lower_started(placement, entry, budget) { None => Fault(0, 9), Some(started) => mach_start(started.program, entry, budget, args, 4096, 2000) }
+}
+
+fn starts(p: Program, placement: List<Place>, entry, budget: Nat) → Bool { p.lower_started(placement, entry, budget).is_some() }
+
+// ---------------------------------------------------------------------------
+// The verdicts
+
+// The start's bytes are its items'.
+theorem down_start_bytes(): start_same_bytes(down_program(), down_places(), 0, 416) = True { refl }
+
+// The budget the corollary reads: the stop's table at the run's peak (two
+// calls deep from two) and the return address. There it exits with its
+// answer (zero), nothing stored below the floor.
+theorem down_start_budget_is(): (stop_rooms(down_program().routines)(0, 2) + 8).same(416) = True { refl }
+
+theorem down_start_exits(): halt_is(start_run(down_program(), down_places(), 0, 416, [2]), [0, 0, 4360]) = True { refl }
+
+// The code's exact edge, the routine's (272, bytes_level_guard_tests) and
+// the return address: at it, the answer; one byte short, the reserved
+// status, after a store of the frames above the depth it stopped at.
+theorem down_start_edge(): halt_is(start_run(down_program(), down_places(), 0, 280, [2]), [0, 0, 4224]) = True { refl }
+
+theorem down_start_spent(): halt_is(start_run(down_program(), down_places(), 0, 279, [2]), [0, 139, 4295]) = True { refl }
+
+// One table frame (136) below that edge, the reserved status too.
+theorem down_start_spent_frame(): halt_is(start_run(down_program(), down_places(), 0, 144, [2]), [0, 139, 4232]) = True { refl }
+
+// The static check: the room by routine and the return address, 120. At
+// it the lowering takes the program; a byte below, it refuses.
+theorem down_start_least(): (routine_rooms(down_program().routines)(0) + 8).same(120) = True { refl }
+
+theorem down_start_takes(): starts(down_program(), down_places(), 0, 120) = True { refl }
+
+theorem down_start_refused(): starts(down_program(), down_places(), 0, 119) = False { refl }
+
+// At the least budget, from zero (no call) it exits with its answer, its
+// only store the return address.
+theorem down_start_least_zero(): halt_is(start_run(down_program(), down_places(), 0, 120, [0]), [0, 0, 4208]) = True { refl }
+
+// An acyclic program: the answer becomes the status (three plus one).
+fn inc_program() → Program { Program([inc()]) }
+
+fn inc_places() → List<Place> { into([Rcx, Rax]) }
+
+theorem inc_start_exits(): halt_is(start_run(inc_program(), inc_places(), 0, 64, [3]), [0, 4, 4152]) = True { refl }

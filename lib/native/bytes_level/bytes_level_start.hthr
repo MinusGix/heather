@@ -1,0 +1,509 @@
+// The start code (issues/bytes-level-out-of-room.md step 3 item 5,
+// docs/language/ownership-design.md §17.10): what a process runs first,
+// at the generic `Site`/`Stack` level. The concrete image (its ELF, its
+// entry point, the stack Linux hands it) is
+// issues/call-contract-whole-program.md's.
+//
+//     MOV RAX, budget; MOV RBP, RSP; SUB RBP, RAX   ; the floor
+//     CALL entry
+//     MOV RDI, RAX; MOV RAX, 60; SYSCALL            ; exit with the answer
+//
+// - Where it lies: right after the lowered program, as the site's `last`
+//   (the open-ended piece nothing is placed after), so no label of the
+//   program and none of its bytes move (`Program::lower` is unchanged and
+//   its theorem is cited at the site whose `last` is the start's bytes).
+// - The floor: the stack pointer it is entered with, less the budget, in
+//   RBP, the register the guards read (`floor_register()`). The model's
+//   SUB takes registers only, so the budget goes through RAX first.
+// - The one premise about the system (`Site::GivenStack`): the `budget`
+//   bytes below the stack pointer the process is entered with are the
+//   process's to write: the stack is `budget` bytes and the stack pointer
+//   is at its top. Nothing else is asked of the system, and nothing of the
+//   program or its input.
+// - The static check (`Program::lower_started`): refused where the entry's
+//   room by routine and its return address do not fit in the budget
+//   (`routine_rooms(entry) + 8 > budget`), or the CALL does not land.
+// - The exit: the answer's first word in RAX becomes the exit status. That
+//   is this start code's choice (the recursion gate's programs exit with
+//   their result), not a law of the contract: the contract ends at the
+//   routine's return.
+import bytes_level::{run};
+import bytes_memory;
+import bytes_level_lower;
+import bytes_level_scope;
+import bytes_level_routines;
+import bytes_level_whole;
+import x86_64_memory_contract;
+import x86_64_call_contract;
+import function_ir_lower;
+import function_ir_lower_calls;
+import x86_64;
+import x86_64_block;
+import x86_64_fetch;
+import x86_64_fetched_code;
+import x86_64_data_read;
+import x86_64_store;
+import x86_64_layout;
+import x86_64_stack;
+import x86_64_kept;
+import x86_64_asm;
+import x86_64_asm_runs;
+import x86_64_stack_runs;
+import linux_calls;
+import linux_world;
+import linux_x86_64_io;
+import bitvec;
+import bool;
+import list;
+import logic;
+import nat;
+import option;
+import omega;
+
+// ---------------------------------------------------------------------------
+// The code
+
+// The floor: RBP the stack pointer less the budget.
+fn start_head(budget: Nat) → List<Instruction> { [MovRI(Rax, BitVec::ofNat(budget)), MovRR(Rbp, Rsp), SubRR(Rbp, Rax)] }
+
+// The exit with the answer's first word.
+fn start_tail() → List<Instruction> { [MovRR(Rdi, Rax), MovRI(Rax, BitVec::ofNat(60))] }
+
+// Where the start begins: right after the program.
+fn start_at(program: Prog) → Nat { prog_len(program) }
+
+// The CALL's offset, and the CALL to the entry routine's label.
+fn start_call_at(program: Prog, budget: Nat) → Nat { start_at(program) + block_length(start_head(budget)) }
+
+fn start_call(program: Prog, entry, budget: Nat) → StackForm {
+    CallNear(near_rel(start_call_at(program, budget) + 5, asm_labels(program)(entry + 1)))
+}
+
+// The start's bytes, laid after the program.
+fn start_code(program: Prog, entry, budget: Nat) → List<BitVec(8)> {
+    canonical_block_bytes(start_head(budget)) ++ (start_call(program, entry, budget).bytes() ++ (canonical_block_bytes(start_tail()) ++ syscall_bytes()))
+}
+
+// The CALL lands on the entry's label, behind it.
+fn start_lands(program: Prog, entry, budget: Nat) → Bool {
+    asm_same(start_call_at(program, budget) + 5 + near_rel(start_call_at(program, budget) + 5, asm_labels(program)(entry + 1)).sign_extend(32).toNat(),
+        asm_labels(program)(entry + 1) + Nat::pow(2, 64))
+}
+
+// A program lowered with its start: the lowered program and the start's
+// bytes after it.
+record Started { program: Prog, start: List<BitVec(8)> }
+
+// The static check: the entry is a routine, its room by routine and its
+// return address fit in the budget, and the start's CALL lands (the
+// program has no holes, as `Program::lower` lays it out).
+fn start_fits(p: Program, program: Prog, entry, budget: Nat) → Bool {
+    (entry + 1).leb(p.routines.len()) && ((routine_rooms(p.routines)(entry) + 8).leb(budget) && (start_lands(program, entry, budget) && program.no_holes()))
+}
+
+// The lowering with its start: `Program::lower`, then the start after it,
+// refused where it does not fit.
+fn Program::lower_started(self p: Program, placement: List<Place>, entry, budget: Nat) → Option<Started> {
+    match p.lower(placement) {
+        None => None,
+        Some(program) => match start_fits(p, program, entry, budget) { False => None, True => Some(Started(program, start_code(program, entry, budget))) },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The statement
+
+// The one premise about the system: the process is entered with `budget`
+// bytes below its stack pointer that are its own to write. At this level,
+// the stack is those bytes (`stack.size = budget`) and the stack pointer is
+// at their top; `Stack`'s laws say what owning them is.
+fn Site::GivenStack<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), budget: Nat, s: MachineState<M>) → Type {
+    (stack.size = budget) ∧ (read_gpr(Rsp, s.gprs) = stack.at(budget))
+}
+
+// The status the start exits with where the meaning is done: its answer's
+// first word, lowered (where it has none, whatever RAX held). This start
+// code's choice, not the contract's.
+fn ExitWordOf(spans: Spans, words: List<Value>, status: BitVec(64)) → Type {
+    match words { Nil => True, Cons(v, _) => status = v.lower(spans) }
+}
+
+fn ExitWord(spans: Spans, a: Answer, status: BitVec(64)) → Type { ExitWordOf(spans, a.words, status) }
+
+// The end the start comes to by the meaning's outcome, as the Linux model
+// reads a process: done, the exit call with the answer's word in the
+// answer's world; exited, the exit call with its status in its world;
+// going, the world reached; stuck, anything.
+fn Site::StartEnds<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), spans: Spans, outcome: Ran<Answer>) → Running<M, Io> → Type {
+    match outcome {
+        Done(a) => λ r => Exists<BitVec(64)>(λ status => ((LinuxSyscallAt(site.linux(stack), r.state) ∧ LinuxExits(r.state, status)) ∧
+            ExitWord(spans, a, status)) ∧ (r.io = a.io)),
+        Exited(status, o) => λ r => (LinuxSyscallAt(site.linux(stack), r.state) ∧ LinuxExits(r.state, status)) ∧ (r.io = o),
+        Going(o) => λ r => r.io = o,
+        Stuck(_) => λ r => True,
+    }
+}
+
+// The whole program from the start code: entered at the start, on the
+// stack the system gives (`GivenStack`), the stack and the spans lent
+// under the lending laws, the entry's arguments passed, the heap injected,
+// at every fuel and in every world whose answers Linux may give, the
+// process runs, as the Linux model reads it, to the end the meaning's
+// outcome reads (`StartEnds`), or to the spent stop where the run's room by
+// depth is not there (`OutOfRoom`, at the entry's offset `budget - 8`).
+// `RunsAsMeaning`'s reading, from the start; no room premise: the room is
+// the static check's.
+fn Site::StartRuns<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), spans: Spans, lent: Type, room: Nat → Nat → Nat,
+    peak: Nat → Nat → List<Value> → Heap → Io → Nat, bound: Nat, meaning: Nat → x86_64_call_contract::Calls(), entry, budget: Nat) → Type {
+    Loan<M>(site.fetch, site.data, stack, budget, spans) → lent → entry + 1 <= bound → (args: List<Value>) → (heap: Heap) → (io: Io) →
+    (s: MachineState<M>) → s.rip = next_rip(site.origin, start_at(site.program)) → site.Resident(s.memory) →
+    site.GivenStack(stack, budget, s) → stack.Passed(lower_values(spans, args), budget - 8, s) → Injected<M>(site.data, spans, heap, s.memory) →
+    (n: Nat) → io.Answerable() →
+    Exists<Nat>(λ calls => site.LinuxRuns(stack, λ r => site.StartEnds(stack, spans, meaning(n, entry, args, heap, io), r) ∨
+        site.OutOfRoom(stack, room, peak, meaning, entry, args, heap, io, budget - 8, n, r), calls, Running(s, io)))
+}
+
+// And where the run's room by depth is there with the return address
+// (`room(entry, peak) + 8 <= budget`), no stop: the end the meaning reads.
+fn Site::StartRunsAt<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), spans: Spans, lent: Type, room: Nat → Nat → Nat,
+    peak: Nat → Nat → List<Value> → Heap → Io → Nat, bound: Nat, meaning: Nat → x86_64_call_contract::Calls(), entry, budget: Nat) → Type {
+    Loan<M>(site.fetch, site.data, stack, budget, spans) → lent → entry + 1 <= bound → (args: List<Value>) → (heap: Heap) → (io: Io) →
+    (s: MachineState<M>) → s.rip = next_rip(site.origin, start_at(site.program)) → site.Resident(s.memory) →
+    site.GivenStack(stack, budget, s) → stack.Passed(lower_values(spans, args), budget - 8, s) → Injected<M>(site.data, spans, heap, s.memory) →
+    (n: Nat) → room(entry, peak(n, entry, args, heap, io)) + 8 <= budget → io.Answerable() →
+    Exists<Nat>(λ calls => site.LinuxRuns(stack, site.StartEnds(stack, spans, meaning(n, entry, args, heap, io)), calls, Running(s, io)))
+}
+
+// ---------------------------------------------------------------------------
+// Stage lemmas
+
+// The floor: the top of a stack of `budget` bytes less the budget is its
+// lowest address.
+theorem Stack::top_less_budget<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), budget: Nat,
+    size: stack.size = budget, eight: 8 <= budget): stack.at(budget).sub(BitVec::ofNat(budget)) = stack.low {
+    let small = stack.offset_small(budget - 8, { omega });
+    let top: (Nat::pow(2, 47) < Nat::pow(2, 64)) = Nat::leb_sound(Nat::pow(2, 47) + 1, Nat::pow(2, 64), trivial);
+    let count: (BitVec::ofNat(budget, n := 64).toNat() = budget) = BitVec::toNat_ofNat(64, budget, { omega });
+    trans(sym(BitVec::iter_sub_eq_sub(64, stack.at(budget), BitVec::ofNat(budget))),
+        trans(cong_fn<Nat, BitVec(64)>(λ k => stack.at(budget).iterate_decrement(k), count), BitVec::iterate_add_sub_cancel(64, budget, stack.low)))
+}
+
+// The start's pieces, resident after the program: the head, the CALL, the
+// tail and the SYSCALL, each at its offset.
+theorem start_resident<M>(fetch: FetchAccess<M>, memory: M, origin: BitVec(64), program: Prog, entry, budget: Nat, last: List<BitVec(8)>,
+    holes: program.no_holes().IsTrue(),
+    resident: CodeResident(fetch, memory, assemble(no_fills(), program, start_code(program, entry, budget) ++ last), next_rip(origin, 0))):
+    (CodeResident(fetch, memory, canonical_block_bytes(start_head(budget)), next_rip(origin, start_at(program))) ∧
+        CodeResident(fetch, memory, start_call(program, entry, budget).bytes(), next_rip(origin, start_call_at(program, budget)))) ∧
+    (CodeResident(fetch, memory, canonical_block_bytes(start_tail()), next_rip(origin, start_call_at(program, budget) + 5)) ∧
+        CodeResident(fetch, memory, syscall_bytes(), next_rip(origin, (start_call_at(program, budget) + 5) + block_length(start_tail())))) {
+    let head = canonical_block_bytes(start_head(budget));
+    let call = start_call(program, entry, budget).bytes();
+    let tail = canonical_block_bytes(start_tail());
+    let after = asm_last_resident(fetch, memory, origin, no_fills(), asm_labels(program), program, program.no_holes_fit(holes),
+        start_code(program, entry, budget) ++ last, resident);
+    let moved: CodeResident(fetch, memory, head ++ (call ++ (tail ++ (syscall_bytes() ++ last))), next_rip(origin, prog_len(program))) =
+        j(cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ l => head ++ (call ++ l), List::append_assoc(tail, syscall_bytes(), last)),
+            λ l _ => CodeResident(fetch, memory, l, next_rip(origin, prog_len(program))),
+            j(cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ l => head ++ l, List::append_assoc(call, tail ++ syscall_bytes(), last)),
+                λ l _ => CodeResident(fetch, memory, l, next_rip(origin, prog_len(program))),
+                j(List::append_assoc(head, call ++ (tail ++ syscall_bytes()), last), λ l _ => CodeResident(fetch, memory, l, next_rip(origin, prog_len(program))),
+                    after)));
+    let one = resident_split_at(fetch, memory, head, call ++ (tail ++ (syscall_bytes() ++ last)), origin, prog_len(program), moved);
+    let at_call: CodeResident(fetch, memory, call ++ (tail ++ (syscall_bytes() ++ last)), next_rip(origin, start_call_at(program, budget))) =
+        j(block_length_is(start_head(budget)), λ k _ => CodeResident(fetch, memory, call ++ (tail ++ (syscall_bytes() ++ last)), next_rip(origin, prog_len(program) + k)),
+            one.right);
+    let two = resident_split_at(fetch, memory, call, tail ++ (syscall_bytes() ++ last), origin, start_call_at(program, budget), at_call);
+    let three = resident_split_at(fetch, memory, tail, syscall_bytes() ++ last, origin, start_call_at(program, budget) + 5, two.right);
+    let at_sys: CodeResident(fetch, memory, syscall_bytes() ++ last, next_rip(origin, (start_call_at(program, budget) + 5) + block_length(start_tail()))) =
+        three.right;
+    ⟨⟨one.left, two.left⟩, ⟨three.left, resident_split_at(fetch, memory, syscall_bytes(), last, origin,
+        (start_call_at(program, budget) + 5) + block_length(start_tail()), at_sys).left⟩⟩
+}
+
+// The head's registers: RAX the budget, RBP the stack pointer less it.
+theorem start_head_gprs<M>(budget: Nat, s: MachineState<M>): execute_block_normal(start_head(budget), s).gprs =
+    write_gpr(Rbp, read_gpr(Rsp, s.gprs).sub(BitVec::ofNat(budget)), write_gpr(Rbp, read_gpr(Rsp, s.gprs), write_gpr(Rax, BitVec::ofNat(budget), s.gprs))) {
+    refl
+}
+
+// The tail's registers: RDI the answer's word, RAX the exit's number.
+theorem start_tail_exits<M>(r: MachineState<M>): LinuxExits(execute_block_normal(start_tail(), r), read_gpr(Rax, r.gprs)) { ⟨refl, refl⟩ }
+
+// The answer's words returned, RAX holds the first.
+theorem exit_word_of(spans: Spans, rest: List<Gpr>, g: Gprs): (words: List<Value>) → ArgsIn(lower_values(spans, words), Cons(Rax, rest), g) →
+    ExitWordOf(spans, words, read_gpr(Rax, g)) {
+    λ words => match words {
+        Nil => λ _ => trivial,
+        Cons(v, more) => λ held => held.left,
+    }
+}
+
+// From what the entry routine's code reaches, the start's end: returned,
+// the tail and the exit call with the answer's word; otherwise where it is.
+theorem start_ends_after<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, program: Prog, last: List<BitVec(8)>, origin: BitVec(64), entry, budget: Nat,
+    stack: Stack<M>(fetch, data), spans: Spans, holes: program.no_holes().IsTrue(), s: MachineState<M>, i: Nat, ret: BitVec(64),
+    ret_at: ret = next_rip(origin, start_call_at(program, budget) + 5)):
+    (outcome: Ran<Answer>) → (r: Running<M, Io>) →
+    Site<M>(fetch, data, program, start_code(program, entry, budget) ++ last, origin).Reached(stack, spans, s, i, ret, outcome, r) →
+    Exists<MachineState<M>>(λ t => MachineSteps(fetch, data, stack.writes, r.state, t) ∧
+        Site<M>(fetch, data, program, start_code(program, entry, budget) ++ last, origin).StartEnds(stack, spans, outcome, Running(t, r.io))) {
+    λ outcome => match outcome {
+        Done(a) => λ r returned => {
+            let rr = r.state;
+            let pieces = start_resident(fetch, rr.memory, origin, program, entry, budget, last, holes, returned.left.right.left);
+            let at_ret: (rr.rip = next_rip(origin, start_call_at(program, budget) + 5)) = trans(returned.left.left, ret_at);
+            let tail = canonical_block_bytes(start_tail());
+            let ran = block_steps(fetch, data, start_tail(), rr, j(sym(at_ret), λ x _ => CodeResident(fetch, rr.memory, tail, x), pieces.right.left),
+                block_reads_from_none(start_tail(), refl, rr.flags.defined));
+            let v = execute_block_normal(start_tail(), rr);
+            let v_rip: (v.rip = next_rip(origin, (start_call_at(program, budget) + 5) + block_length(start_tail()))) =
+                trans(ran.right.left, trans(cong_fn<BitVec(64), BitVec(64)>(λ x => next_rip(x, block_length(start_tail())), at_ret),
+                    rip_compose(origin, start_call_at(program, budget) + 5, block_length(start_tail()))));
+            let sys: LinuxSyscallAt(LinuxIo(fetch, data, stack.writes.writable, stack.writes.store), v) =
+                FetchedFrom(resident_readable(fetch, v.memory, syscall_bytes(), v.rip,
+                    resident_state(fetch, syscall_bytes(), rr.memory, next_rip(origin, (start_call_at(program, budget) + 5) + block_length(start_tail())), v,
+                        ran.right.right, v_rip, pieces.right.right)));
+            Exists(v, ⟨machine_steps_of_fetched(fetch, data, stack.writes, rr, v, ran.left), Exists(read_gpr(Rax, rr.gprs),
+                ⟨⟨⟨sys, start_tail_exits(rr)⟩, exit_word_of(spans, answer_registers(), rr.gprs, a.words, returned.right.left.left)⟩,
+                    returned.right.right.right⟩)⟩)
+        },
+        Exited(status, o) => λ r exited => Exists(r.state, ⟨machine_steps_refl(fetch, data, stack.writes, r.state), exited⟩),
+        Going(o) => λ r going => Exists(r.state, ⟨machine_steps_refl(fetch, data, stack.writes, r.state), going⟩),
+        Stuck(_) => λ r _ => Exists(r.state, ⟨machine_steps_refl(fetch, data, stack.writes, r.state), trivial⟩),
+    }
+}
+
+// The head and the CALL: from the start, on the given stack, the entry
+// routine entered at offset `budget - 8` with the return address to the
+// tail, the arguments passed, the heap injected and the floor in RBP.
+fn StartEnters<M>(site: Site<M>, stack: Stack<M>(site.fetch, site.data), spans: Spans, args: List<Value>, heap: Heap, entry, budget: Nat,
+    s, u: MachineState<M>) → Type {
+    MachineSteps(site.fetch, site.data, stack.writes, s, u) ∧
+    ((u.rip = next_rip(site.origin, asm_labels(site.program)(entry + 1))) ∧ (site.Resident(u.memory) ∧
+        ((read_gpr(Rsp, u.gprs) = stack.at(budget - 8)) ∧ (stack.Passed(lower_values(spans, args), budget - 8, u) ∧
+            (Injected<M>(site.data, spans, heap, u.memory) ∧
+                ((read_word(site.data, u.memory, stack.at(budget - 8)) = Some(next_rip(site.origin, start_call_at(site.program, budget) + 5))) ∧
+                    (read_gpr(Rbp, u.gprs) = stack.low)))))))
+}
+
+theorem start_enters<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, program: Prog, last: List<BitVec(8)>, origin: BitVec(64), entry, budget: Nat,
+    stack: Stack<M>(fetch, data), spans: Spans, loan: Loan<M>(fetch, data, stack, budget, spans), holes: program.no_holes().IsTrue(),
+    lands: start_lands(program, entry, budget) = True, eight: 8 <= budget, args: List<Value>, heap: Heap, s: MachineState<M>,
+    here: s.rip = next_rip(origin, start_at(program)),
+    resident: Site<M>(fetch, data, program, start_code(program, entry, budget) ++ last, origin).Resident(s.memory),
+    given: Site<M>(fetch, data, program, start_code(program, entry, budget) ++ last, origin).GivenStack(stack, budget, s),
+    passed: stack.Passed(lower_values(spans, args), budget - 8, s), injected: Injected<M>(data, spans, heap, s.memory)):
+    Exists<MachineState<M>>(λ u => StartEnters<M>(Site<M>(fetch, data, program, start_code(program, entry, budget) ++ last, origin), stack, spans, args, heap,
+        entry, budget, s, u)) {
+    let site = Site<M>(fetch, data, program, start_code(program, entry, budget) ++ last, origin);
+    let size: (stack.size = budget) = given.left;
+    let i = budget - 8;
+    let room: (i + 8 <= stack.size) = { omega };
+    let pieces = start_resident(fetch, s.memory, origin, program, entry, budget, last, holes, resident);
+    // The head.
+    let ran = block_steps(fetch, data, start_head(budget), s,
+        j(sym(here), λ x _ => CodeResident(fetch, s.memory, canonical_block_bytes(start_head(budget)), x), pieces.left.left),
+        block_reads_from_none(start_head(budget), refl, s.flags.defined));
+    let t = execute_block_normal(start_head(budget), s);
+    let t_rip: (t.rip = next_rip(origin, start_call_at(program, budget))) = trans(ran.right.left, site.rip_after(s, start_at(program), block_length(start_head(budget)), here));
+    let t_mem: (t.memory = s.memory) = ran.right.right;
+    let t_gprs = start_head_gprs<M>(budget, s);
+    let back8: (budget = i + 8) = { omega };
+    let at_top: (stack.at(budget) = stack.at(i + 8)) = cong_fn<Nat, BitVec(64)>(λ k => stack.at(k), back8);
+    let t_rsp: (read_gpr(Rsp, t.gprs) = stack.at(i + 8)) =
+        trans(cong_fn<Gprs, BitVec(64)>(λ g => read_gpr(Rsp, g), t_gprs), trans(given.right, at_top));
+    let t_rbp: (read_gpr(Rbp, t.gprs) = stack.low) =
+        trans(cong_fn<Gprs, BitVec(64)>(λ g => read_gpr(Rbp, g), t_gprs),
+            trans(cong_fn<BitVec(64), BitVec(64)>(λ x => x.sub(BitVec::ofNat(budget)), given.right), stack.top_less_budget(budget, size, eight)));
+    // The CALL.
+    let displacement = near_rel(start_call_at(program, budget) + 5, asm_labels(program)(entry + 1));
+    let u = call_near_after(stack.writes, displacement, t);
+    let ret = next_rip(t.rip, 5);
+    let pushed: (push_address(t.gprs) = stack.at(i)) = trans(cong_fn<BitVec(64), BitVec(64)>(λ a => a.sub(BitVec::ofNat(8)), t_rsp), push_at(stack.low, i));
+    let executes: CallNear(displacement).Executes(data, stack.writes, t, u) =
+        ⟨j(sym(pushed), λ a _ => WordCanonical(a), stack.canonical(i, room)),
+         ⟨j(sym(pushed), λ a _ => stack.writes.writable(t.memory, a, 8), stack.writable(t.memory, i, room)), refl⟩⟩;
+    let t_resident: site.Resident(t.memory) = j(sym(t_mem), λ m _ => site.Resident(m), resident);
+    let call_bytes: CodeResident(fetch, t.memory, CallNear(displacement).bytes(), t.rip) =
+        resident_state(fetch, CallNear(displacement).bytes(), s.memory, next_rip(origin, start_call_at(program, budget)), t, t_mem, t_rip, pieces.left.right);
+    let call = stack_step_machine(fetch, data, stack.writes, CallNear(displacement), t, u,
+        FetchedFrom(resident_readable(fetch, t.memory, CallNear(displacement).bytes(), t.rip, call_bytes)), executes);
+    let back = asm_lands_back(start_call_at(program, budget), 5, displacement, asm_labels(program)(entry + 1), lands);
+    let u_rip: (u.rip = next_rip(origin, asm_labels(program)(entry + 1))) =
+        trans(cong_fn<BitVec(64), BitVec(64)>(λ a => near_branch_target(a, 5, displacement), t_rip),
+            jumps_back(origin, start_call_at(program, budget), 5, displacement, asm_labels(program)(entry + 1), back));
+    let u_resident: site.Resident(u.memory) =
+        j(sym(pushed), λ a _ => site.Resident(stack.writes.store(t.memory, a, word_bytes(ret))),
+            stack.keeps_code(t.memory, i, room, ret, assemble(no_fills(), site.program, site.last), next_rip(origin, 0), t_resident));
+    let u_rsp: (read_gpr(Rsp, u.gprs) = stack.at(i)) = trans(read_gpr_after_write(Rsp, push_address(t.gprs), t.gprs), pushed);
+    let u_ret: (read_word(data, u.memory, stack.at(i)) = Some(ret)) =
+        j(sym(pushed), λ a _ => read_word(data, stack.writes.store(t.memory, a, word_bytes(ret)), stack.at(i)) = Some(ret),
+            stack.stored(t.memory, i, room, ret));
+    let ret_at: (ret = next_rip(origin, start_call_at(program, budget) + 5)) = site.rip_after(t, start_call_at(program, budget), 5, t_rip);
+    let u_injected: Injected<M>(data, spans, heap, u.memory) =
+        j(sym(pushed), λ a _ => Injected<M>(data, spans, heap, stack.writes.store(t.memory, a, word_bytes(ret))),
+            loan.injected_own(heap, t.memory, j(sym(t_mem), λ m _ => Injected<M>(data, spans, heap, m), injected), i, { omega }, ret));
+    // The arguments: the head and the CALL write no argument register, and
+    // nothing of the stack is above the return address.
+    let words = lower_values(spans, args);
+    let at_t: stack.Passes(words, argument_registers(), i + 8, t.gprs, s.memory) =
+        j(sym(t_gprs), λ g _ => stack.Passes(words, argument_registers(), i + 8, g, s.memory),
+            stack.passes_after_write(words, argument_registers(), i + 8, write_gpr(Rbp, read_gpr(Rsp, s.gprs), write_gpr(Rax, BitVec::ofNat(budget), s.gprs)),
+                s.memory, Rbp, read_gpr(Rsp, s.gprs).sub(BitVec::ofNat(budget)), trivial,
+                stack.passes_after_write(words, argument_registers(), i + 8, write_gpr(Rax, BitVec::ofNat(budget), s.gprs), s.memory, Rbp, read_gpr(Rsp, s.gprs), trivial,
+                    stack.passes_after_write(words, argument_registers(), i + 8, s.gprs, s.memory, Rax, BitVec::ofNat(budget), trivial, passed))));
+    let unchanged: stack.Unchanged(i + 8, t.memory, u.memory) = λ k above fits => false_elim({ omega });
+    let u_passed: stack.Passed(words, i, u) =
+        stack.passes_after_write(words, argument_registers(), i + 8, t.gprs, u.memory, Rsp, push_address(t.gprs), trivial,
+            stack.passes_unchanged(i + 8, t.memory, u.memory, unchanged, words, argument_registers(), i + 8, t.gprs, Nat::le_refl(i + 8),
+                j(sym(t_mem), λ m _ => stack.Passes(words, argument_registers(), i + 8, t.gprs, m), at_t)));
+    let u_rbp: (read_gpr(Rbp, u.gprs) = stack.low) = t_rbp;
+    Exists(u, ⟨machine_steps_trans(fetch, data, stack.writes, s, t, u, machine_steps_of_fetched(fetch, data, stack.writes, s, t, ran.left), call),
+        ⟨u_rip, ⟨u_resident, ⟨u_rsp, ⟨u_passed, ⟨u_injected, ⟨j(ret_at, λ x _ => read_word(data, u.memory, stack.at(i)) = Some(x), u_ret), u_rbp⟩⟩⟩⟩⟩⟩⟩)
+}
+
+// A weaker end.
+theorem Site::linux_runs_weaken<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), End, End2: Running<M, Io> → Type,
+    implies: (t: Running<M, Io>) → End(t) → End2(t), calls: Nat):
+    (from: Running<M, Io>) → site.LinuxRuns(stack, End, calls, from) → site.LinuxRuns(stack, End2, calls, from) {
+    match calls {
+        Zero => λ from p => Exists(p.witness, ⟨p.proof.left, implies(Running(p.witness, from.io), p.proof.right)⟩),
+        Succ(more) => λ from p => Exists(p.witness, ⟨p.proof.left, match p.proof.right {
+            Inl(ended) => Inl(implies(Running(p.witness, from.io), ended)),
+            Inr(called) => {
+                let c = called.witness;
+                let answered = called.proof.right;
+                Inr(Exists(c, ⟨called.proof.left, ⟨answered.left, ⟨answered.right.left, λ junk leaves rcx r11 =>
+                    site.linux_runs_weaken(stack, End, End2, implies, more,
+                        Running(linux_answered(site.linux(stack), p.witness, c, from.io.answer(c), junk, rcx, r11), from.io.exchanged(c, from.io.answer(c))),
+                        answered.right.right(junk, leaves, rcx, r11))⟩⟩⟩))
+            },
+        }⟩),
+    }
+}
+
+// The start code's theorem: from `Tracks` at the site whose `last` is the
+// start's bytes, with the entry's room by routine and its return address
+// in the budget, `StartRuns`.
+theorem start_runs<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, program: Prog, last: List<BitVec(8)>, origin: BitVec(64), entry, budget: Nat,
+    stack: Stack<M>(fetch, data), spans: Spans, lent: Type, rooms: Nat → Nat, floored: Bool, room: Nat → Nat → Nat,
+    peak: Nat → Nat → List<Value> → Heap → Io → Nat, bound: Nat, meaning: Nat → x86_64_call_contract::Calls(),
+    holes: program.no_holes().IsTrue(), lands: start_lands(program, entry, budget) = True, roomy: rooms(entry) + 8 <= budget,
+    tracks: Site<M>(fetch, data, program, start_code(program, entry, budget) ++ last, origin).Tracks(stack, spans, budget, lent, rooms, floored, room, peak,
+        bound, meaning)):
+    Site<M>(fetch, data, program, start_code(program, entry, budget) ++ last, origin).StartRuns(stack, spans, lent, room, peak, bound, meaning, entry, budget) {
+    λ loan law below args heap io s here resident given passed injected n answerable => {
+        let site = Site<M>(fetch, data, program, start_code(program, entry, budget) ++ last, origin);
+        let eight: (8 <= budget) = { omega };
+        let i = budget - 8;
+        let size: (stack.size = budget) = given.left;
+        let entered = start_enters<M>(fetch, data, program, last, origin, entry, budget, stack, spans, loan, holes, lands, eight, args, heap, s, here, resident,
+            given, passed, injected);
+        let u = entered.witness;
+        let at = entered.proof;
+        let ret = next_rip(origin, start_call_at(program, budget) + 5);
+        let outcome = meaning(n, entry, args, heap, io);
+        let esc = site.OutOfRoom(stack, room, peak, meaning, entry, args, heap, io, i, n);
+        let room_i: (rooms(entry) <= i) = { omega };
+        let tracked = tracks(loan, law, entry, below, args, heap, io, u, at.right.left, at.right.right.left, i, at.right.right.right.left, { omega },
+            at.right.right.right.right.left, { omega }, at.right.right.right.right.right.left, ret, at.right.right.right.right.right.right.left,
+            λ _ => at.right.right.right.right.right.right.right, room_i, n, answerable);
+        let calls = tracked.witness;
+        let least = going_least(n, outcome);
+        let ended = site.performs_or_then_steps(stack.writes, site.linux_kernel(stack), site.Reached(stack, spans, u, i, ret, outcome),
+            site.StartEnds(stack, spans, outcome), esc,
+            start_ends_after<M>(fetch, data, program, last, origin, entry, budget, stack, spans, holes, u, i, ret, refl, outcome), calls, least,
+            Running(u, io), tracked.proof);
+        let from_start = site.performs_or_after(stack.writes, site.linux_kernel(stack), site.StartEnds(stack, spans, outcome), esc, calls, least,
+            Running(s, io), u, at.left, ended);
+        Exists(calls, site.linux_runs_of(stack, site.StartEnds(stack, spans, outcome), esc, λ r => site.StartEnds(stack, spans, outcome, r) ∨ esc(r),
+            λ t g => Inl(g), λ t e => Inr(e), calls, least, Running(s, io), from_start))
+    }
+}
+
+// Its corollary: where the run's room by depth and the return address fit
+// in the budget, no stop.
+theorem start_runs_at<M>(site: Site<M>, stack: Stack<M>(site.fetch, site.data), spans: Spans, lent: Type, room: Nat → Nat → Nat,
+    peak: Nat → Nat → List<Value> → Heap → Io → Nat, bound: Nat, meaning: Nat → x86_64_call_contract::Calls(), entry, budget: Nat,
+    runs: site.StartRuns(stack, spans, lent, room, peak, bound, meaning, entry, budget)):
+    site.StartRunsAt(stack, spans, lent, room, peak, bound, meaning, entry, budget) {
+    λ loan law below args heap io s here resident given passed injected n fits answerable => {
+        let ran = runs(loan, law, below, args, heap, io, s, here, resident, given, passed, injected, n, answerable);
+        let inside: (room(entry, peak(n, entry, args, heap, io)) <= budget - 8) = { omega };
+        Exists(ran.witness, site.linux_runs_weaken(stack,
+            λ r => site.StartEnds(stack, spans, meaning(n, entry, args, heap, io), r) ∨
+                site.OutOfRoom(stack, room, peak, meaning, entry, args, heap, io, budget - 8, n, r),
+            site.StartEnds(stack, spans, meaning(n, entry, args, heap, io)),
+            λ r e => match e { Inl(ends) => ends, Inr(out) => false_elim(out.left(inside)) }, ran.witness, Running(s, io), ran.proof))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The lowering with its start
+
+// The meaning and its peak, as the lowering's theorem reads them.
+fn program_meaning(p: Program, blocks: Blocks) → Nat → x86_64_call_contract::Calls() {
+    λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run(p, blocks, n, f, args, heap, io)
+}
+
+fn program_peak(p: Program, blocks: Blocks) → Nat → Nat → List<Value> → Heap → Io → Nat {
+    λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run_peak(p, blocks, n, f, args, heap, io)
+}
+
+// What `Program::lower_started` returns, and why.
+theorem Program::lower_started_of(self p: Program, placement: List<Place>, entry, budget: Nat, started: Started,
+    lowered: p.lower_started(placement, entry, budget) = Some(started)):
+    Exists<Prog>(λ program => (p.lower(placement) = Some(program)) ∧ ((start_fits(p, program, entry, budget) = True) ∧
+        (started = Started(program, start_code(program, entry, budget))))) {
+    (match e: p.lower(placement) as λ o => (match o {
+        None => None,
+        Some(program) => match start_fits(p, program, entry, budget) { False => None, True => Some(Started(program, start_code(program, entry, budget))) },
+    }) = Some(started) → Exists<Prog>(λ program => (o = Some(program)) ∧ ((start_fits(p, program, entry, budget) = True) ∧
+        (started = Started(program, start_code(program, entry, budget))))) {
+        None => λ never => absurd(never),
+        Some(program) => λ found => (match f: start_fits(p, program, entry, budget) as λ b =>
+            (match b { False => None, True => Some(Started(program, start_code(program, entry, budget))) }) = Some(started) →
+            Exists<Prog>(λ q => (Some(program) = Some(q)) ∧ ((start_fits(p, q, entry, budget) = True) ∧ (started = Started(q, start_code(q, entry, budget))))) {
+            False => λ never => absurd(never),
+            True => λ same => Exists(program, ⟨refl, ⟨f, sym(Option::some_inj(Started(program, start_code(program, entry, budget)), started, same))⟩⟩),
+        })(found),
+    })(lowered)
+}
+
+// The whole program from the start, for every program `lower_started`
+// takes: `StartRuns` at the stop's table, with no room premise.
+theorem lower_started_runs<M>(p: Program, placement: List<Place>, entry, budget: Nat, started: Started,
+    lowered: p.lower_started(placement, entry, budget) = Some(started), fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>,
+    origin: BitVec(64), stack: Stack<M>(fetch, data), spans: Spans, blocks: Blocks):
+    Site<M>(fetch, data, started.program, started.start ++ last, origin).StartRuns(stack, spans, blocks.Lent(spans), stop_rooms(p.routines),
+        program_peak(p, blocks), p.routines.len(), program_meaning(p, blocks), entry, budget) {
+    let found = p.lower_started_of(placement, entry, budget, started, lowered);
+    let program = found.witness;
+    let fits = found.proof.right.left;
+    let parts = Bool::is_true_and((entry + 1).leb(p.routines.len()),
+        (routine_rooms(p.routines)(entry) + 8).leb(budget) && (start_lands(program, entry, budget) && program.no_holes()),
+        j(sym(fits), λ b _ => b.IsTrue(), trivial)).right;
+    let room = Bool::is_true_and((routine_rooms(p.routines)(entry) + 8).leb(budget), start_lands(program, entry, budget) && program.no_holes(), parts);
+    let laid = Bool::is_true_and(start_lands(program, entry, budget), program.no_holes(), room.right);
+    let roomy: (routine_rooms(p.routines)(entry) + 8 <= budget) = Nat::leb_sound(routine_rooms(p.routines)(entry) + 8, budget, room.left);
+    j(sym(found.proof.right.right), λ st _ => Site<M>(fetch, data, st.program, st.start ++ last, origin).StartRuns(stack, spans, blocks.Lent(spans),
+        stop_rooms(p.routines), program_peak(p, blocks), p.routines.len(), program_meaning(p, blocks), entry, budget),
+        start_runs<M>(fetch, data, program, last, origin, entry, budget, stack, spans, blocks.Lent(spans), routine_rooms(p.routines),
+            any_guard(program_guards(p.routines)), stop_rooms(p.routines), program_peak(p, blocks), p.routines.len(), program_meaning(p, blocks),
+            laid.right, eq_true_of_is_true(start_lands(program, entry, budget), laid.left), roomy,
+            lower_program_tracks<M>(p, placement, program, found.proof.left, fetch, data, start_code(program, entry, budget) ++ last, origin, stack, budget,
+                spans, blocks)))
+}
+
+// And where the run's room by depth at the stop's table and the return
+// address fit in the budget, no stop.
+theorem lower_started_runs_at<M>(p: Program, placement: List<Place>, entry, budget: Nat, started: Started,
+    lowered: p.lower_started(placement, entry, budget) = Some(started), fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>,
+    origin: BitVec(64), stack: Stack<M>(fetch, data), spans: Spans, blocks: Blocks):
+    Site<M>(fetch, data, started.program, started.start ++ last, origin).StartRunsAt(stack, spans, blocks.Lent(spans), stop_rooms(p.routines),
+        program_peak(p, blocks), p.routines.len(), program_meaning(p, blocks), entry, budget) {
+    start_runs_at<M>(Site<M>(fetch, data, started.program, started.start ++ last, origin), stack, spans, blocks.Lent(spans), stop_rooms(p.routines),
+        program_peak(p, blocks), p.routines.len(), program_meaning(p, blocks), entry, budget,
+        lower_started_runs<M>(p, placement, entry, budget, started, lowered, fetch, data, last, origin, stack, spans, blocks))
+}

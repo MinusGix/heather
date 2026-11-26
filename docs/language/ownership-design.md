@@ -3082,6 +3082,69 @@ with them `lower_plain_tracks_at`.
   meaning's `StopsExtend` and `HistoryExtends` give the regions'
   `GoesExtend` and `AnswersExtend`.
 
+**Step 3, part 3, item 5: the start code** (`bytes_level_start`, probes in
+`bytes_level_start_tests`). What a process runs first, at the generic
+`Site`/`Stack` level; the concrete image (ELF, entry point, the stack Linux
+hands over) stays `issues/call-contract-whole-program.md`'s.
+
+- **The code**: `MOV RAX, budget; MOV RBP, RSP; SUB RBP, RAX; CALL entry;
+  MOV RDI, RAX; MOV RAX, 60; SYSCALL`. The model's SUB takes registers
+  only (there is no SUB r, imm), so the budget goes through RAX, which the
+  CALL clobbers anyway. RBP becomes `stack.low`
+  (`Stack::top_less_budget`), the floor the guards read.
+- **Where it lies**: the start's bytes (`start_code`) are the site's `last`,
+  the open-ended piece after the program and so after the stop.
+  `Program::lower` is unchanged: no label and no byte of a lowered program
+  moves, and `lower_program_tracks`, generic in `last`, is cited at the
+  site whose `last` is the start. `Program::lower_started(placement,
+  entry, budget)` returns the program and the start's bytes.
+- **The static refusal** (`start_fits`): the entry is a routine, its room by
+  routine and its return address fit (`routine_rooms(entry) + 8 <=
+  budget`), the start's backward CALL lands (`asm_same` by evaluation, as
+  the layout checks are), and the program has no holes.
+- **The one premise about the system** is `Site::GivenStack(stack, budget,
+  s)`: `stack.size = budget` and RSP at `stack.at(budget)`. It says that the
+  `budget` bytes below the stack pointer the process is entered with are the
+  process's to write; `Stack`'s laws (writable, read back, apart from the
+  code) are what owning them means. Nothing is asked of the program or its
+  input. The lending's top is the whole budget (`Loan` at `budget`), since
+  the entry's `i + 8 <= top` asks it at `i = budget - 8`. The arguments are
+  `Stack::Passed` at `budget - 8`, which with no stack above the return
+  address means six words or fewer, in their registers.
+- **The statement** is `RunsAsMeaning`'s reading from the start
+  (`Site::StartRuns`): at every fuel, in every world whose answers Linux may
+  give, `LinuxRuns` to `StartEnds` of the meaning's outcome or to
+  `OutOfRoom` at the entry's offset `budget - 8`, with no room premise but
+  the static check. `StartEnds` is `Ends` except where the meaning is done:
+  there the routine's return is followed by the tail and the end is the
+  exit call. `lower_started_runs` proves it for every program
+  `lower_started` takes, from `start_runs` (any site whose `last` is the
+  start, given `Tracks` there) and `lower_program_tracks`. Its corollary
+  `lower_started_runs_at` (`Site::StartRunsAt`, by `start_runs_at`): where
+  `stop_rooms(entry, peak) + 8 <= budget`, no stop.
+- **The exit status is this start code's choice**: the answer's first word
+  in RAX becomes the status (`ExitWord`; where the answer has no word,
+  whatever RAX held). The contract ends at the routine's return and says
+  nothing of a status; the recursion gate's programs exit with their result,
+  which is why this start does.
+- **The proof** is four stage lemmas and the composition: `start_resident`
+  (the start's pieces resident after the program, from
+  `asm_last_resident`), `start_enters` (the head and the CALL: the entry's
+  premises at offset `budget - 8`, the floor, the arguments kept because no
+  instruction writes an argument register and no stack word lies above the
+  return address), `start_ends_after` (from what the routine reaches, the
+  tail and the exit call where it returned), then `performs_or_then_steps`,
+  `performs_or_after` and `linux_runs_of`. The corollary weakens the end
+  (`Site::linux_runs_weaken`).
+- **The probe, by evaluation** (on the guard probes' machine; the start run
+  as items whose assembly is checked equal to the start's bytes): `down`
+  from 2 exits 0 at budget 416 (`stop_rooms(0, 2) + 8`, the corollary's
+  budget) and at 280 (the code's exact edge, 272, and the return address);
+  exits 139 at 279 and at 144 (one table frame below the edge);
+  `lower_started` takes budget 120 (`routine_rooms(0) + 8`) and refuses
+  119; at 120 from 0 it exits 0. The acyclic `inc` from 3 exits 4: the
+  answer is the status.
+
 ## 18. The world, termination, and level 2 fixed (2026-11-25)
 
 Round six of the design review. Where this section and §15.4, §15.5 or §17
