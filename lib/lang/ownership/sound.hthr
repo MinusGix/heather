@@ -4761,7 +4761,6 @@ theorem WriteInv::val(tys: Nat → Type, cx: Ctx(tys), {s: CSt}, {e: Env(tys)}, 
     WriteVal(trans(vcode, sym(rc)), wlen)
 }
 
-
 // ---------------------------------------------------------------------------
 // A block stored: what it reads, what every other block reads
 
