@@ -4526,6 +4526,25 @@ cannot exist to answer the signature any other way. The rest:
   §24 on the coordinating branch): no program it generates should be
   refused by this test alone.
 
+**B′. A result's code is what its origin gives** (a clause of `Sig::ok`,
+found building P5's binding). The caller's `CSt::result` bound a parameter
+answered back by `Shape::moves(r.code)`, the result's code, while the run
+hands it back by the parameter's (`Cell::pass` copies a taken argument of
+a plain code; `Lendable.plain` and `.whole` speak of `p.code`). With
+`Sig([Param(nx, ByTake)], [Result(nat_s, OParam(0))])` in the table, the
+caller pushed `KPlain` for the argument's reference, which `Cell::Agrees`
+does not allow; the other direction held a plain copy as an object. A view
+is the same question by the other origin: the caller forms places through
+it from `r.code` while the run reads through the parameter's. No checked
+callee differs (its `Ret` code check compares with the holder's or the
+view's code), but the table is arbitrary, and `Coded`/`ViewIs` do not
+exclude it for a callee whose block is taken whole. So `Sig::ok` says it:
+an `OParam(i)` result has its parameter's code, an `OView(i, steps)` result
+the code at `steps` in its parameter's, by `Shape::steps_ok` (the function
+`View` finds a place's code with). `CSt::result` now decides a moved result
+by the parameter's code. Probes: `obj_as_word`, `word_as_obj` and
+`view_as_point`, each refused where it is written and at the call.
+
 **C. A signature's results are a telescope.** A view result's steps name
 parameters and earlier results only, as a dependent answer is scoped
 (`(i: Nat, v: view of xs[i])`). A clause of `Sig::ok`, so tested where the
