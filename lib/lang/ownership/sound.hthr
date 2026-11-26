@@ -9054,3 +9054,143 @@ theorem Like::start(tys: Nat → Type, strs: Strs(tys), sig: Sig, ds: List<Dyn(t
         λ k _ _ => refl,
         λ en no => false_elim(no))
 }
+
+// What the checker's `Ret` found, split once.
+record RetInv(tys: Nat → Type, strs: Strs(tys), s: CSt, sig: Sig, xs: List<Var>) {
+    ls: List<Nat>,
+    lvls: s.lvls(xs) = Some(ls),
+    reads: s.read_vars(tys, strs, xs) = Some(Nil),
+    none: s.pending() = False,
+    rets: s.returns_all(tys, strs, ls, ls, sig.results) = True,
+    gives: s.gives_back(ls.drop(sig.results.len()), sig.written()) = True,
+}
+
+theorem CSt::ret_inv(self s: CSt, tys: Nat → Type, strs: Strs(tys), sig: Sig, xs: List<Var>, ok: s.ret(tys, strs, sig, xs) = True): RetInv(tys, strs, s, sig, xs) {
+    (match s.read_vars(tys, strs, xs) as λ o => s.read_vars(tys, strs, xs) = o →
+            (match o { Some(rs) => match rs { Nil => match s.lvls(xs) { Some(ls) => !s.pending() && s.returns_all(tys, strs, ls, ls, sig.results) && s.gives_back(ls.drop(sig.results.len()), sig.written()), None => False },
+                Cons(_, _) => False }, None => False }) = True → RetInv(tys, strs, s, sig, xs) {
+        None => λ _ no => absurd(no),
+        Some(rs) => λ hr => (match rs as λ q => s.read_vars(tys, strs, xs) = Some(q) →
+                (match q { Nil => match s.lvls(xs) { Some(ls) => !s.pending() && s.returns_all(tys, strs, ls, ls, sig.results) && s.gives_back(ls.drop(sig.results.len()), sig.written()), None => False },
+                    Cons(_, _) => False }) = True → RetInv(tys, strs, s, sig, xs) {
+            Cons(_, _) => λ _ no => absurd(no),
+            Nil => λ hr2 => (match s.lvls(xs) as λ q => s.lvls(xs) = q →
+                    (match q { Some(ls) => !s.pending() && s.returns_all(tys, strs, ls, ls, sig.results) && s.gives_back(ls.drop(sig.results.len()), sig.written()), None => False }) = True →
+                    RetInv(tys, strs, s, sig, xs) {
+                None => λ _ no => absurd(no),
+                Some(ls) => λ hl c => {
+                    let p1 = Bool::and_true_parts(!s.pending() && s.returns_all(tys, strs, ls, ls, sig.results), s.gives_back(ls.drop(sig.results.len()), sig.written()), c);
+                    let p2 = Bool::and_true_parts(!s.pending(), s.returns_all(tys, strs, ls, ls, sig.results), p1.left);
+                    RetInv(ls, hl, hr2, Bool::false_of_not_true(s.pending(), p2.left), p2.right, p1.right)
+                },
+            })(refl),
+        })(hr),
+    })(refl, ok)
+}
+
+theorem CSt::lvls_drop(self s: CSt, xs: List<Var>): (ls: List<Nat>) → (n: Nat) → s.lvls(xs) = Some(ls) → s.lvls(xs.drop(n)) = Some(ls.drop(n)) {
+    match xs {
+        Nil => λ ls n h => j(Option::some_inj(Nil, ls, h), λ q _ => s.lvls(Nil) = Some(q.drop(n)), refl),
+        Cons(x, rest) => λ ls n h => match n {
+            Zero => j(sym(List::drop_zero(ls)), λ q _ => s.lvls(Cons(x, rest)) = Some(q), h),
+            Succ(k) => {
+                let a = Option::and_then_some(s.lvl(x), λ l => s.lvls(rest).map(λ lt => Cons(l, lt)), ls, h);
+                match Option::map_some_inv(s.lvls(rest), λ (lt: List<Nat>) => Cons(a.witness, lt), ls, a.proof.right) {
+                    ⟨lr, pl⟩ => j(pl.right, λ q _ => s.lvls(rest.drop(k)) = Some(q.drop(Succ(k))), CSt::lvls_drop(s, rest, lr, k, pl.left)),
+                }
+            },
+        },
+    }
+}
+
+theorem List::map_drop<A, B>(self xs: List<A>, f: A → B): (n: Nat) → xs.map(f).drop(n) = xs.drop(n).map(f) {
+    match xs { Nil => λ n => refl, Cons(h, t) => λ n => match n { Zero => refl, Succ(k) => t.map_drop(f, k) } }
+}
+
+// The indices a signature writes: parameters it has, each written.
+fn Param::AllW(ps: List<Param>, na: Nat, is: List<Nat>) → Type {
+    match is { Nil => True, Cons(i, rest) => ((i < na) ∧ Exists<Param>(λ p => (ps.nth(i) = Some(p)) ∧ (p.mode = ByWrite))) ∧ Param::AllW(ps, na, rest) }
+}
+
+theorem Param::written_all(all: List<Param>, ps: List<Param>): (k: Nat) → ((i: Nat) → (p: Param) → ps.nth(i) = Some(p) → all.nth(i + k) = Some(p)) → ps.len() + k <= all.len() →
+    Param::AllW(all, all.len(), Param::written_from(ps)(k))
+{
+    match ps {
+        Nil => λ k _ _ => trivial,
+        Cons(p, rest) => λ k at ln => {
+            let ih = Param::written_all(all, rest, k + 1, λ i q h => {
+                let ee: (i + 1 + k = i + (k + 1)) = omega();
+                j(ee, λ n _ => all.nth(n) = Some(q), at(i + 1, q, h))
+            }, omega(ln));
+            let hk: (all.nth(k) = Some(p)) = { let ee: (0 + k = k) = omega(); j(ee, λ n _ => all.nth(n) = Some(p), at(0, p, refl)) };
+            (match p.mode as λ md => p.mode = md → Param::AllW(all, all.len(),
+                    match md { ByWrite => Cons(k, Param::written_from(rest)(k + 1)), ByRead => Param::written_from(rest)(k + 1), ByTake => Param::written_from(rest)(k + 1) }) {
+                ByWrite => λ em => ⟨⟨omega(ln), Exists(p, ⟨hk, em⟩)⟩, ih⟩,
+                ByRead => λ _ => ih,
+                ByTake => λ _ => ih,
+            })(refl)
+        },
+    }
+}
+
+theorem CSt::gives_hold(self s: CSt, l, i: Nat, h: (match s.role(l) { KHold(o, _) => o.same(i) && !s.unsynced(o), _ => False }) = True): Exists<Acc>(λ a => s.role(l) = KHold(i, a)) {
+    (match s.role(l) as λ r => s.role(l) = r → (match r { KHold(o, _) => o.same(i) && !s.unsynced(o), _ => False }) = True → Exists<Acc>(λ a => s.role(l) = KHold(i, a)) {
+        KHold(o, a) => λ e c => Exists(a, trans(e, cong_fn(λ (q: Nat) => KHold(q, a), Nat::same_sound(o, i, (Bool::and_true_parts(o.same(i), !s.unsynced(o), c)).left)))),
+        KPlain => λ _ no => absurd(no),
+        KView => λ _ no => absurd(no),
+        KGone => λ _ no => absurd(no),
+    })(refl, h)
+}
+
+// Each written parameter at `Ret`: its slot is its holder, which refers to
+// the argument as passed where that referred (`href`, `Inv::arg_root`), and
+// its meaning is like the argument (`Like.held`, the holder being the
+// parameter's own, to write: `Like.acc`).
+theorem Inv::ret_written(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: Nat → Bool}, inv: Inv(tys, strs, s, e, m, h0, lent),
+    ps: List<Param>, ds: List<Dyn(tys)>, lk: Like(tys, strs, ps, ds, s, e), vs: List<Value(tys)>, ent: REnv::ArgsKept(tys, m.env, REnv(Cell::args(tys, ps, vs), Nil)), is: List<Nat>):
+    Param::AllW(ps, s.na, is) → (xs: List<Var>) → (ls: List<Nat>) → s.lvls(xs) = Some(ls) → s.gives_back(ls, is) = True →
+    Value::Written(tys, strs, vs, ds, is, xs.map(λ x => (REnv::get(tys, m.env, x)).v), xs.map(λ x => Env::get(tys, e, x)))
+{
+    match is {
+        Nil => λ _ xs ls _ _ => trivial,
+        Cons(i, rest) => λ aw xs => match xs {
+            Nil => λ ls hl gb => absurd(j(sym(Option::some_inj(Nil, ls, hl)), λ q _ => s.gives_back(q, Cons(i, rest)) = True, gb)),
+            Cons(x, xr) => λ ls hl gb => {
+                let a = Option::and_then_some(s.lvl(x), λ l => s.lvls(xr).map(λ lt => Cons(l, lt)), ls, hl);
+                let l = a.witness;
+                match Option::map_some_inv(s.lvls(xr), λ (lt: List<Nat>) => Cons(l, lt), ls, a.proof.right) {
+                    ⟨lr, pl⟩ => {
+                        let gb2: (s.gives_back(Cons(l, lr), Cons(i, rest)) = True) = j(sym(pl.right), λ q _ => s.gives_back(q, Cons(i, rest)) = True, gb);
+                        let parts = Bool::and_true_parts(match s.role(l) { KHold(o, _) => o.same(i) && !s.unsynced(o), _ => False }, s.gives_back(lr, rest), gb2);
+                        let lt: (i < s.na) = aw.left.left;
+                        match CSt::gives_hold(s, l, i, parts.left) {
+                            ⟨a0, hr⟩ => match aw.left.right {
+                                ⟨p, pp⟩ => {
+                                    let below = s.lvl_below(x, l, a.proof.left);
+                                    let ro: (CSt::role_of(tys, strs, p, i) = KHold(i, a0)) = lk.acc(l, i, a0, below, hr, lt, p, pp.left);
+                                    let aw0: (KHold(i, AcWrite) = KHold(i, a0)) = j(pp.right, λ md _ =>
+                                        (match md { ByTake => match Shape::plain(tys, strs, p.code) { True => KPlain, False => KHold(i, AcOwn) }, ByRead => KHold(i, AcRead), ByWrite => KHold(i, AcWrite) }) = KHold(i, a0), ro);
+                                    let ae: (AcWrite = a0) = cong_fn(λ (q: Role) => match q { KHold(_, y) => y, KPlain => AcRead, KView => AcRead, KGone => AcRead }, aw0);
+                                    let hrw: (s.role(l) = KHold(i, AcWrite)) = trans(hr, cong_fn(λ (y: Acc) => KHold(i, y), sym(ae)));
+                                    let lkx = lk.held(x, l, i, a.proof.left, hrw);
+                                    let fits: Dyn::Fits(tys, strs, Dyn::arg(tys, ds, i), Env::get(tys, e, x)) =
+                                        ⟨j(lkx.left, λ c _ => (Env::get(tys, e, x)).code.same(c) = True, Shape::same_self((Env::get(tys, e, x)).code)), lkx.right⟩;
+                                    let rp: (match vs.nth(i).unwrap_or(level2::Plain(Dyn::none(tys))) as λ _ => Type { Refer(r) => (REnv::get(tys, m.env, x)).v = Refer(r), Plain(_) => True }) =
+                                        (match vs.nth(i) as λ ov => vs.nth(i) = ov →
+                                                (match ov.unwrap_or(level2::Plain(Dyn::none(tys))) as λ _ => Type { Refer(r) => (REnv::get(tys, m.env, x)).v = Refer(r), Plain(_) => True }) {
+                                            None => λ _ => trivial,
+                                            Some(v) => λ hv => (match v as λ u => vs.nth(i) = Some(u) → (match u as λ _ => Type { Refer(r) => (REnv::get(tys, m.env, x)).v = Refer(r), Plain(_) => True }) {
+                                                Plain(_) => λ _ => trivial,
+                                                Refer(r) => λ hv2 => inv.href(x, l, i, a0, a.proof.left, hr, r, Inv::arg_root(tys, strs, inv, ps, vs, ent, i, lt, Refer(r), hv2)),
+                                            })(hv),
+                                        })(refl);
+                                    ⟨rp, ⟨fits, Inv::ret_written(tys, strs, inv, ps, ds, lk, vs, ent, rest, aw.right, xr, lr, pl.left, parts.right)⟩⟩
+                                },
+                            },
+                        }
+                    },
+                }
+            },
+        },
+    }
+}

@@ -738,11 +738,14 @@ fn CSt::sig_steps(self s: CSt, ls: List<Nat>, xs: List<Step>) → Option<List<St
     match xs { Nil => Some(Nil), Cons(a, rest) => s.sig_step(ls, a).and_then(λ b => s.sig_steps(ls, rest).map(λ bs => Cons(b, bs))) }
 }
 
+fn Result::param(self r: Result) → List<Nat> { match r.origin { OParam(i) => [i], OView(i, _) => [i], OFresh => Nil } }
+
 // A result as its origin promises: a plain value or an object made by
 // this call (not an argument's: `Value::ViewIs`); the parameter's object; a read view of the parameter at the
-// steps named.
+// steps named. A parameter named is one of the function's (an object made
+// here is no argument the caller can compare with).
 fn CSt::returns(self s: CSt, tys: Nat → Type, strs: Strs(tys), ls: List<Nat>, l: Nat, r: Result) → Bool {
-    match r.origin {
+    r.param().all_bit(λ i => (i + 1).leb(s.na)) && match r.origin {
         OFresh => match s.role(l) { KPlain => True, KHold(o, a) => !Shape::plain(tys, strs, r.code) && s.na.leb(o) && (match a { AcOwn => True, AcRead => False, AcWrite => False }), KView => False, KGone => False },
         OParam(i) => match s.role(l) { KHold(o, _) => o.same(i), _ => False },
         OView(i, xs) => match s.sig_steps(ls, xs) {
@@ -784,7 +787,6 @@ fn CSt::keeps_place(self s: CSt, xs: List<Var>, i: Nat) → Bool {
     match xs.nth(i).and_then(λ x => s.lvl(x)) { Some(l) => match s.role(l) { KHold(o, _) => o.same(i), _ => False }, None => False }
 }
 
-fn Result::param(self r: Result) → List<Nat> { match r.origin { OParam(i) => [i], OView(i, _) => [i], OFresh => Nil } }
 
 fn CSt::jump(self s: CSt, tys: Nat → Type, strs: Strs(tys), sig: Sig, mo: Bool, me: Nat, xs: List<Var>) → Option<List<Residual>> {
     let kept = (sig.written() ++ sig.results.foldr(λ (r: Result) (acc: List<Nat>) => r.param() ++ acc, Nil)).all_bit(λ i => s.keeps_place(xs, i));

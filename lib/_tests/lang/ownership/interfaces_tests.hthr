@@ -232,7 +232,9 @@ theorem view_clause(xs: List<Nat>, i: u64, b: Nat, out: Value(tys())):
     = ((out = Refer(Ref(b, [OnSeq(SeqOne(IWord(64, i)))]))) ∧ True)
 { refl }
 
-// The control: a view of a parameter passed by value owes `False`.
+// A view of a parameter passed by value is a copy: a plain value (it owed
+// `False`, so `at` at a plain list was checked and not safe; §23.13).
 theorem view_of_plain(xs: List<Nat>, i: u64, out: Value(tys())):
-    Value::Views(tys(), strs(), 1, [Plain(nats(xs)), Plain(Dyn(SWord(WBits(64)), i))], Dyn::ixs(tys(), [nats(xs), Dyn(SWord(WBits(64)), i)]), at_sig().results, [out]) = (False ∧ True)
+    Value::Views(tys(), strs(), 1, [Plain(nats(xs)), Plain(Dyn(SWord(WBits(64)), i))], Dyn::ixs(tys(), [nats(xs), Dyn(SWord(WBits(64)), i)]), at_sig().results, [out])
+    = ((Value::refers(tys(), out) = False) ∧ True)
 { refl }

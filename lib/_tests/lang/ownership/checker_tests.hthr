@@ -465,6 +465,15 @@ theorem keep_by_value(): Value::ViewIs(tys(), strs(), 0, [plain_list([1])], Nil,
 // A returned view of a read parameter passed by value is a copy: `at` at a
 // plain list answers a plain value, which `Value::ViewIs` accepts (it asked
 // a reference of it, so `at` was checked and not safe there).
+// A result named as a parameter that the function does not have, its
+// object one made here: refused (there is no argument the caller could
+// compare it with); named as the fresh result it is, checked.
+fn not_param(o: Origin) → Func { Func(Sig([Param(nx(), ByRead)], [Result(nx(), o)]), seq([Lit(WNat, 2), Lit(WNat, 0), Fresh(nx(), Loc(1), Loc(0))], Ret([Loc(0)]))) }
+
+theorem not_param_refused(): refusal_in([not_param(OParam(1))], 0) = Some(WOwn) { refl }
+
+theorem not_param_fresh(): refusal_in([not_param(OFresh)], 0) = None { refl }
+
 fn plain_word(n: Nat) → Value(tys()) { Plain(Dyn(nat_s(), n)) }
 
 theorem at_by_value(): Value::ViewIs(tys(), strs(), 0, [plain_list([1, 2]), plain_word(1)], Nil, nx(), OView(0, [SWindow(Var(1), Lit(1))]), plain_list([2])) { refl }
