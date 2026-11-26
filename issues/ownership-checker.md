@@ -29,87 +29,93 @@ Items 1 and 2 are definitions and evaluation; item 3 waits for the coordinating 
 
 `CheckSound` has an inhabitant for the fragment, the experiments' programs are probes or theorems of the real modules, and the experiment modules are gone.
 
-## Handoff (2026-11-26, end of the ninth session: P4 built but for the swap)
+## Handoff (2026-11-26, end of the tenth session: P4 done, P5's builders, three questions open)
 
-Continue on branch `claude/ownership-checker-sound`. Read design §23.19 (this
-session: the callee's heap as puts) after §23.17–§23.18. Everything is at the
-end of `lib/lang/ownership/sound.hthr`, after `LentFrame::call`, in the
-order the parts are listed below.
+Continue on branch `claude/ownership-checker-sound`. Read design §23.20
+(this session) after §23.17–§23.19. The call's parts are at the end of
+`lib/lang/ownership/sound.hthr`, after `LentFrame::call`.
 
-**Done this session (P4 but its last two steps):**
-- The lends: `CSt::lend_gone`, `Inv::lend_one`, `Inv::lends` (generic in
-  meaning and machine).
-- The frame's premises: `Value::lent_mem_p`, `Inv::call_un`,
-  `Inv::call_lk` (`LentFrame::call`'s `lk` now only under a selection).
-- `Inv::heap_rest`: the invariant on any heap with `Sim` there, a
-  `LentFrame` there and `Heap::Stays`/growth from the current one.
-- The licence across the lends: `Thin` records `na`/`nd`;
-  `CSt::unatom_eq`, `owed_all_eq`, `against_eq`, `against_all_eq`,
-  `meets_eq`, `license_eq`. `Inv::view_off_by` (the licence as the
-  descendants' apartness); `Inv::view_off` is its wrapper.
-- One put: `Inv::put_view_upat`, `Inv::put_view`, `Inv::put_view_mean`,
-  `Inv::put_hold`, `CSt::put_mean`, `Heap::put_at`, `Inv::put_arg`.
-- The puts in turn: `Heap::puts`, `CSt::puts_mean`, `Inv::puts` over
-  `PutAt`; `Nat::Incr`, `Param::written_in`, `Param::written_incr`;
-  `Heap::put_at_apart`, `Heap::put_at_holes`.
-- Each `PutAt` from the lend: `CSt::lend_all_res`, `CSt::lend_write_rw`,
-  `Inv::put_at_arg`.
-- The swap's block lemmas: `Sel::put_lent_whole_in`, `Value::wrefs`,
-  `Value::OutsRead`, `Heap::puts_block`; the list lemmas `Value::wlent`,
-  `Value::wrefs_wlent` (the written list's references are the written
-  parameters', by position), `Value::lent_put_w` (at a block no taken
-  argument reaches, `Value::lent` puts as `Value::wlent`).
+**Done this session:**
+- **P4 complete.** The swap is `Inv::call_swap` (block by block via
+  `Heap::call_block`; `Inv::call_untaken` over `CSt::lend_all_take`,
+  `lend_all_gone`, `lend_all_thin`, `lend_take`). The assembly is
+  `Inv::call_after`: from `SafeAt`'s Done conclusions, the invariant at
+  `nl.st`, meaning `s.puts_mean(…)`, machine `Mach(a.heap, m.env, a.io)`,
+  the same `root`.
+- **Roots are an index of `Inv` and `Stepped`** (`Inv(tys, strs, s, e, m,
+  h0, lent, root)`), no longer a field. Every builder states its roots.
+  Theorems take `{root: Nat → Option<Ref>}` beside `{lent}`.
+- **`Inv::fresh` is heap growth then `Inv::bind_fresh`** (`Inv::heap_rest_ws`
+  takes the region words directly). Also `Inv::bump`.
+- **P5's builders**: `Inv::bind_fresh` (a fresh result at the callee's
+  block), `Inv::bind_fresh_plain` (passed by value), `Inv::bind_moved` (a
+  moved argument answered back; `CSt::holds_none`). A plain result is
+  `Inv::push_plain`; a read view will be `Inv::push_view`.
+- **A checker defect fixed**: a moved parameter answered twice gave the
+  caller two owners (`CSt::holds` in `CSt::result`; probes
+  `twice_param_refused`, `once_param_checked`).
+- `issues/native-linked-gate-fails-under-load.md` filed: the gate's
+  compiles were OOM-killed (empty stderr) while a `heather check` ran
+  beside the suite.
+- `issues/ownership-sound-consolidate.md` filed (the coordinating
+  session's item 3). The roots-as-index step is its first piece.
+
+**Open questions, sent to the coordinating session (wait for the answers
+where they decide P5):**
+1. **A result's code**: `SafeAt` never says a result's meaning has the
+   result's code (`Sim.codes`); a primitive's world answer is arbitrary.
+   Until decided, take "the results are coded" as a hypothesis.
+2. **Forward atoms**: a view result's region may name a later result
+   (`found_sig`'s `Var(3)`; `beside_found_checked`). The results cannot be
+   bound one `Inv` at a time: a view's entries would read an unbound
+   level. P5 needs either a builder pushing all the results' variables
+   before the view entries are owed, or the view results bound after the
+   others in the proof's order (the levels are the checker's, so the
+   former).
+3. **Non-plain atoms**: a view result's region may name the caller's level
+   of a by-value argument that is itself a view of a word (`View(b[0])`
+   passed to `at`'s `ByTake` index: the probe `at_by_view0` was checked
+   and is not committed). `Inv.words` then fails at that level. Either the
+   call refuses it (as `View` does through `atoms_ok`) or the invariant
+   reads such a word from the meaning. This is a checker or invariant
+   decision; ask before changing either.
 
 **Next, in this order:**
-1. **P4's swap.** `Sim(nl.st, e_K, Mach(a.heap, m.env, a.io))` from the
-   puts' `Sim(nl.st, e_K, Mach(h_K, m.env, m.io))` (`h_K =
-   Heap::puts(m.heap, vs, sig.written(), outs)`, `outs = (w(g, ds)).drop(nres)`):
-   for every block a live variable of `nl.st` reads, the callee's block
-   equals the puts' block (both bare), then `Cell::agrees_store`'s pattern.
-   At a block `b`:
-   - no reference of `ks = Value::lent(ps, vs)` whole into `b`: the frame's
-     equation gives `put_lent(ks, b, aa_b, mm_b)`; `Heap::puts_block` gives
-     `put_lent(Value::wrefs(vs, written_from(ps)(0)), b, aa_b, mm_b)`. The two
-     lists put alike at `b`: the taken references are whole (`Lendable.whole`),
-     so none is into `b`, and the rest are the written ones in the same order.
-     Needs a list lemma with an offset (say `Value::wlent(ps, vs)` beside
-     `Value::lent`, and `wrefs(vsf, written_from(ps)(k)) = wlent(ps, vsf.drop(k))`).
-   - a written whole reference into `b`: both are `aa_b`
-     (`Sel::put_lent_whole_in`; `aa_b` live by `ReadAll`).
-   - a taken reference into `b`: no live variable of `nl.st` reads `b`
-     (the moved holder is gone, `own` puts no other root there, and the
-     lend saw no view of it).
-   `OutsRead` comes as in `Inv::call_lk` (slot = argument by `Written`,
-   `ReadAll` at the callee's heap, no holes by `Heap::Stays`).
-2. **P4's assembly** (`Inv::call_after`): `Sim::pass_all` (P1),
-   `Inv::lendable` (P2: `apart` gives `Inv::puts`' `apb`, `live` its
-   bareness), the callee's `SafeAt` parts (P3), `Inv::puts` with `arg :=
-   Inv::put_at_arg`, `rd` from `ReadAll` at the call (`Value::get_of_read`),
-   `written_incr`/`written_in`; then `Inv::lends`; then `Inv::heap_rest`
-   with `LentFrame::call(inv.frame, aa, ks, frame, Inv::call_un, Inv::call_lk)`
-   and `Heap::Stays(h_K, aa)` from `Heap::Kept` (the puts keep length,
-   liveness and holes). Report P4 to the coordinating session.
-3. P5–P9 as planned. **P6's trap (new)**: the meaning after P4 is
-   `CSt::puts_mean`, a fold in the written list's order; the final state's
-   invariant reads `CSt::patched`, a fold by levels. Show they agree at
-   every variable (peel the slots' write-backs with `CSt::patched_back`, or
-   commute walks at places `sib` says are apart). Report after P9.
-4. The consolidation (the coordinating session's item 3:
-   `issues/ownership-sound-consolidate.md` is not filed yet), then the body
-   induction.
+1. P5's binding over `CSt::results` and `Cell::results` (results first,
+   then the slots, the run pushing all `n` cells at once). Carry the facts
+   relating each state to the pre-call `s`:
+   - the same `na`;
+   - the old levels' roles as after the lends;
+   - the old views kept, new entries at new levels, all `Reading` and
+     back;
+   - the roots agreeing below `s.nobj`, each later root a fresh block's.
+   Then the view-result builder from `push_view`, after question 2.
+   `Inv::bind_moved` takes `own`, `owned` and `apart` of the moved holder
+   before the call, and `!s.holds(o)` from the checker.
+2. P6 by peeling (§23.20):
+   - Weaken `BackAt.nk` to pending children. Its uses are `step_keeps`
+     (give it `pend_in` at the level, as `pfold_back` has `pt`) and
+     `CSt::noanc` (thread `pend_in` along the ancestors). A first attempt
+     showed only those two sites break.
+   - Then build `BackAt` at each virtual state up each slot's chain, the
+     slots pushed as written-back views then `Inv::rekin`. The final
+     agreement is `s3.patched(push_all(e, …)) = push_all(eK, …)` pointwise.
+3. P7 (the moved argument: likely already covered by `Inv::lends` and the
+   swap; check), P8 (`Like` at the call with `CallFits`), P9 (the stage).
+   Then the consolidation issue, then the body induction.
 
 **Traps found this session:**
-- A recursive theorem recurses only on a parameter declared before the
-  colon; one bound by a `λ` after it is not a guard (`Inv::puts` takes `is`
-  as a parameter).
-- A `match` on a theorem's parameter takes no nested pattern (`Inl(⟨a, b⟩)`);
-  nest the matches.
-- `absurd(…)` and `⟨…⟩` need an expected type; annotate the `let`.
-- A builder that ends in `j(…)` hides its record's fields (`root`) from
-  conversion; recompute what a later step needs from `inv.refs` at that
-  step, as `Inv::put_arg` does, rather than carrying `root` facts across.
-- `--cache` makes an edit's check take seconds; the whole file uncached is
-  about a minute and a half at this size.
+- A lambda binder typed `Refer(r) = Refer(r2)` cannot infer `tys`. Bind a
+  `let cl: Cell(tys) = …` and type it `cl.v = Refer(r2)`.
+- A theorem declared later in the file is out of scope (`Inv::heap_rest`
+  at the end could not serve `Inv::fresh`). Make a variant taking what the
+  late lemma derived (`heap_rest_ws`).
+- Do not run a whole-file `heather check` while the suite's native gates
+  run: the shared memory limit OOM-kills a compile (the
+  native-linked-gate issue).
+- `--cache` reports "0 declarations kernel-checked" on a rerun after a
+  passing check: the first run checked it. A deliberate break confirms a
+  new theorem is really checked.
 
 ## Log
 
