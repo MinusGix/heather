@@ -160,6 +160,10 @@ fn CSt::has_obj_views(self s: CSt, o: Nat) → Bool { s.views.any_bit(λ e => e.
 
 fn CSt::unsynced(self s: CSt, o: Nat) → Bool { s.views.any_bit(λ e => e.obj.same(o) && e.mode.writes() && !e.back) }
 
+// A view to write changed and not yet written back. §15.2's write-back is
+// eager: while one is pending, the only statement is a write-back.
+fn CSt::pending(self s: CSt) → Bool { s.views.any_bit(λ e => e.mode.writes() && !e.back) }
+
 // The variables an entry is a view of: its parent, and the parent's, while
 // they are views (a view's first entry names its parent's parent).
 fn CSt::anc_of(self s: CSt, e: VEnt, fuel: Nat) → List<Nat> {
@@ -318,8 +322,10 @@ fn CSt::read_at(self s: CSt, l: Nat, xs: List<Step>) → Option<List<Residual>> 
 }
 
 // The atoms of steps at levels, each read as a whole word.
+// The words a place's atoms read are plain variables: their values cannot
+// move under a region (a written one is refused while a region reads it).
 fn CSt::atoms_ok(self s: CSt, ls: List<Nat>) → Option<List<Residual>> {
-    match ls { Nil => Some(Nil), Cons(l, rest) => s.read_at(l, Nil).and_then(λ r1 => s.atoms_ok(rest).map(λ r2 => r1 ++ r2)) }
+    match ls { Nil => Some(Nil), Cons(l, rest) => (s.role(l)).plain().then(s.atoms_ok(rest)) }
 }
 
 // What a read of a place found: its code, its steps at levels, its root's
@@ -540,7 +546,7 @@ fn CSt::subst_steps(self s: CSt, xs: List<Var>, ys: List<Step>) → Option<List<
 // are read), `s` the state binding.
 fn CSt::result(self s: CSt, tys: Nat → Type, strs: Strs(tys), s0: CSt, sig: Sig, xs: List<Var>, r: Result) → Option<CSt> {
     match r.origin {
-        OFresh => Some(s.push(CVar(r.code, KHold(s.nobj, AcOwn))).fresh_obj()),
+        OFresh => match Shape::plain(tys, strs, r.code) { True => Some(s.push(CVar(r.code, KPlain))), False => Some(s.push(CVar(r.code, KHold(s.nobj, AcOwn))).fresh_obj()) },
         OParam(i) => match (sig.params.nth(i).unwrap_or(Param(SWord(WNat), ByRead))).mode {
             ByTake => match Shape::moves(tys, strs, r.code) {
                 False => Some(s.push(CVar(r.code, KPlain))),
@@ -609,6 +615,22 @@ fn Stmt::verdict(self st: Stmt, tys: Nat → Type, strs: Strs(tys), sigs: Nat �
     }
 }
 
+// While a write-back is pending, the only statements are write-backs and
+// deaths of views already written back.
+fn CSt::writes_back(self s: CSt, st: Stmt) → Bool {
+    match st {
+        Write(p, v) => match s.lvl(p.root) {
+            Some(l) => match s.lvl(v) { Some(lv) => match s.steps(p.steps) { Some(xs) => s.is_back(l, xs, lv) && (s.ents(lv)).any_bit(λ e => !e.back), None => False }, None => False },
+            None => False,
+        },
+        Death(p) => match p.steps {
+            Nil => match s.lvl(p.root) { Some(l) => (s.role(l)).same(KView) && (s.ents(l)).all_bit(λ e => e.back), None => False },
+            Cons(_, _) => False,
+        },
+        _ => False,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Leaves: a return, a `Jump`
 
@@ -642,9 +664,9 @@ fn CSt::sig_steps(self s: CSt, ls: List<Nat>, xs: List<Step>) → Option<List<St
 // A result as its origin promises: a plain value or an object made by
 // this call (not an argument's: `Value::ViewIs`); the parameter's object; a read view of the parameter at the
 // steps named.
-fn CSt::returns(self s: CSt, ls: List<Nat>, l: Nat, r: Result) → Bool {
+fn CSt::returns(self s: CSt, tys: Nat → Type, strs: Strs(tys), ls: List<Nat>, l: Nat, r: Result) → Bool {
     match r.origin {
-        OFresh => match s.role(l) { KPlain => True, KHold(o, a) => s.na.leb(o) && (match a { AcOwn => True, AcRead => False, AcWrite => False }), KView => False, KGone => False },
+        OFresh => match s.role(l) { KPlain => True, KHold(o, a) => !Shape::plain(tys, strs, r.code) && s.na.leb(o) && (match a { AcOwn => True, AcRead => False, AcWrite => False }), KView => False, KGone => False },
         OParam(i) => match s.role(l) { KHold(o, _) => o.same(i), _ => False },
         OView(i, xs) => match s.sig_steps(ls, xs) {
             Some(ys) => match s.ents(l) { Cons(e, Nil) => e.obj.same(i) && Steps::same(e.reg, ys) && !e.mode.writes(), _ => False },
@@ -653,8 +675,8 @@ fn CSt::returns(self s: CSt, ls: List<Nat>, l: Nat, r: Result) → Bool {
     }
 }
 
-fn CSt::returns_all(self s: CSt, all, ls: List<Nat>, rs: List<Result>) → Bool {
-    match rs { Nil => True, Cons(r, rest) => match ls { Nil => False, Cons(l, lr) => s.returns(all, l, r) && s.returns_all(all, lr, rest) } }
+fn CSt::returns_all(self s: CSt, tys: Nat → Type, strs: Strs(tys), all, ls: List<Nat>, rs: List<Result>) → Bool {
+    match rs { Nil => True, Cons(r, rest) => match ls { Nil => False, Cons(l, lr) => s.returns(tys, strs, all, l, r) && s.returns_all(tys, strs, all, lr, rest) } }
 }
 
 // Each written parameter's object back, held, and written back.
@@ -672,7 +694,7 @@ fn CSt::lvls(self s: CSt, xs: List<Var>) → Option<List<Nat>> {
 fn CSt::ret(self s: CSt, tys: Nat → Type, strs: Strs(tys), sig: Sig, xs: List<Var>) → Bool {
     match s.read_vars(tys, strs, xs) {
         Some(rs) => match rs {
-            Nil => match s.lvls(xs) { Some(ls) => s.returns_all(ls, ls, sig.results) && s.gives_back(ls.drop(sig.results.len()), sig.written()), None => False },
+            Nil => match s.lvls(xs) { Some(ls) => !s.pending() && s.returns_all(tys, strs, ls, ls, sig.results) && s.gives_back(ls.drop(sig.results.len()), sig.written()), None => False },
             Cons(_, _) => False,
         },
         None => False,
@@ -855,9 +877,9 @@ fn CSt::joined(s0: CSt, oy, on: Option<Yd>) → Option<CSt> {
 fn Body::verdict(self b: Body, tys: Nat → Type, strs: Strs(tys), sigs: Nat → Sig, prim: Nat → Bool, me: Nat, s: CSt) → Option<CRes> {
     match b {
         Ret(xs) => s.ret(tys, strs, sigs(me), xs).then(Some(CRes(OEnd, None))),
-        Yield(xs) => Some(CRes(OEnd, Some(Yd(s, xs)))),
-        Jump(xs) => s.jump(tys, strs, sigs(me), me, xs).map(λ rs => CRes(OJump(rs), None)),
-        Do(st, rest) => st.verdict(tys, strs, sigs, prim, s).and_then(λ nx => rest.verdict(tys, strs, sigs, prim, me, nx.st).map(λ cr => CRes(ODo(nx.rs, cr.owes), cr.yld))),
+        Yield(xs) => (!s.pending()).then(Some(CRes(OEnd, Some(Yd(s, xs))))),
+        Jump(xs) => (!s.pending()).then(s.jump(tys, strs, sigs(me), me, xs).map(λ rs => CRes(OJump(rs), None))),
+        Do(st, rest) => (!s.pending() || s.writes_back(st)).then(st.verdict(tys, strs, sigs, prim, s)).and_then(λ nx => rest.verdict(tys, strs, sigs, prim, me, nx.st).map(λ cr => CRes(ODo(nx.rs, cr.owes), cr.yld))),
         Join(t, yes, no, rest) => {
             let tv = match t as λ _ => List<Var> { TLt(a, c) => [a, c], TLe(a, c) => [a, c] };
             match s.read_vars(tys, strs, tv) {

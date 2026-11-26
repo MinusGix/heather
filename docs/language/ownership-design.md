@@ -3396,3 +3396,54 @@ steps): a match on the two arms' roles, four by four, each arm an
 motive the elaborator spells per arm. Not optimised. Of the
 probes the dearest is `long_checked` (six rounds, 21 apartness residuals,
 102k steps).
+
+### 23.7 `check_sound`, in progress
+
+**Three tightenings of the checker**, each so the invariant needs no case
+the probes do not use:
+
+- **The write-back is eager, as §15.2 says**: after a statement that
+  changes a view to write, the only statements until it is written back are
+  write-backs and deaths of views already written back; a join, a `Yield`,
+  a `Ret` and a `Jump` are refused while one is pending (`CSt::pending`,
+  `CSt::writes_back`; probes `between_refused`, `between_after_checked`). So
+  between statements at most the chain of a just-changed view is stale, and
+  the invariant's patch is only along that chain.
+- **Atoms read plain variables only** (`CSt::atoms_ok`): an index cannot move
+  under a region, the variable being written refused while a region reads
+  it and a plain variable's run value being its meaning's.
+- **A fresh result of a plain code is a plain value**, on both sides
+  (`Value::ViewIs`, the caller's role): a word a call answers is a plain
+  variable, which an atom may read.
+
+**The invariant** (`sound.hthr`'s `Sim`, its first part built): each
+variable's run-time cell agrees with the meaning's value as its role says
+(a plain variable holds the value; a holder or a view reads it through the
+heap, its block live, its selections fitting; a gone variable owes
+nothing). Still to add: each object's root reference, the views' references
+as their objects' narrowed by their regions at the words, objects one of
+which may change apart (`Lendable`'s clause, kept), the frame, codes, and,
+for the one pending chain, the meaning's value as the heap's with the old
+value at the pending place.
+
+**Built** (`sound.hthr`, probes `sound_tests.hthr`): reads, writes and fits
+along appended selection paths; a place's steps as selections at the words;
+levels and variables, and a push keeping every earlier level; `Sim::push`,
+the one lemma every binding statement uses; `Value::get_more`; and
+`Place::fit_from`: a place whose codes have parts and whose accessors'
+residuals hold fits in the run, from `pre_inside`.
+
+**Needed of the interfaces** (proposed): writing back what was read is the
+identity, `over(a, λ _ => at(a, s), s) = s`, the lens law `StepModelLaws`,
+`FieldLaws`, `SeqLaws` and `WinLaws` lack beside `get_set` and `set_set`. The
+write-back stage needs it: the run stores, at the view's place, what the
+block holds there. `Lendable` also needs the arity (as many arguments as
+parameters), since the checker's levels assume it.
+
+**What remains for straight-line bodies and calls**: the invariant's other
+parts and its entry from `ReadAll` and `Lendable`; the stage lemmas for
+`Lit`, `Op`, `Read`, `Take`, `View`, `Fresh`, `Write` (through a holder,
+through a view, a write-back), `Death`, `Call` (each argument's lending,
+`Lendable` at the callee from the licence, the callee's `SafeAt` at less
+fuel, results and written slots) and `Ret` (`ReadAll`, `Written`, `Frame`,
+`Views`); then `SafeAt` for a body with no join and no `Jump`.

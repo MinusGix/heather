@@ -1044,3 +1044,23 @@ theorem both_due(xs: List<Nat>, i, j: Nat, hi: ∥i < xs.len()∥, hj: ∥j < xs
     let below: (1 < 2) = omega();
     ⟨hi, ⟨below, ⟨hj, ⟨below, trivial⟩⟩⟩⟩
 }
+
+// ---------------------------------------------------------------------------
+// 17. The write-back is eager (§15.2): after a view to write changes, the
+//     next statements are its write-backs (and deaths of views already
+//     written back). A read of the owner beside the loan before the
+//     write-back is refused; after it, accepted.
+
+fn between() → Func {
+    Func(wsig(0), seq([View(win(x(), Lit(0), Lit(2)), Writing), Lit(WNat, 7), Write(el(Loc(1), Lit(0)), Loc(0)), Read(el(x(), Lit(5))), Write(win(x(), Lit(0), Lit(2)), Loc(2)),
+        Death(whole(Loc(3)))], Ret([Loc(1), x()])))
+}
+
+theorem between_refused(): verdict([between()], 0) = None { refl }
+
+fn between_after() → Func {
+    Func(wsig(0), seq([View(win(x(), Lit(0), Lit(2)), Writing), Lit(WNat, 7), Write(el(Loc(1), Lit(0)), Loc(0)), Write(win(x(), Lit(0), Lit(2)), Loc(1)), Read(el(x(), Lit(5))),
+        Death(whole(Loc(2)))], Ret([Loc(0), x()])))
+}
+
+theorem between_after_checked(): verdict([between_after()], 0).is_some() = True { refl }

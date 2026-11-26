@@ -232,18 +232,18 @@ fn Value::Written(tys: Nat → Type, strs: Strs(tys), h: Heap(tys), fuel: Nat, v
 // reaches it); a parameter's is the argument itself; a view is the
 // argument's reference narrowed by the steps the signature names, read at
 // the call's words: the arguments', then the results'.
-fn Value::ViewIs(tys: Nat → Type, n: Nat, vs: List<Value(tys)>, ws: List<Ix>, org: Origin, o: Value(tys)) → Type {
+fn Value::ViewIs(tys: Nat → Type, strs: Strs(tys), n: Nat, vs: List<Value(tys)>, ws: List<Ix>, code: Shape, org: Origin, o: Value(tys)) → Type {
     match org {
         OView(i, xs) => match vs.nth(i) { Some(v) => match v { Refer(r) => o = Refer(r.narrow(ws, xs)), Plain(_) => False }, None => False },
-        OFresh => match o { Plain(_) => True, Refer(r) => (n <= r.b) ∧ (r.sels = Nil) },
+        OFresh => match o { Plain(_) => True, Refer(r) => (Shape::plain(tys, strs, code) = False) ∧ (n <= r.b) ∧ (r.sels = Nil) },
         OParam(i) => vs.nth(i) = Some(o),
     }
 }
 
-fn Value::Views(tys: Nat → Type, n: Nat, vs: List<Value(tys)>, ws: List<Ix>, rs: List<Result>) → List<Value(tys)> → Type {
+fn Value::Views(tys: Nat → Type, strs: Strs(tys), n: Nat, vs: List<Value(tys)>, ws: List<Ix>, rs: List<Result>) → List<Value(tys)> → Type {
     match rs {
         Nil => λ _ => True,
-        Cons(r, rest) => λ outs => match outs { Nil => False, Cons(o, orest) => Value::ViewIs(tys, n, vs, ws, r.origin, o) ∧ Value::Views(tys, n, vs, ws, rest, orest) },
+        Cons(r, rest) => λ outs => match outs { Nil => False, Cons(o, orest) => Value::ViewIs(tys, strs, n, vs, ws, r.code, r.origin, o) ∧ Value::Views(tys, strs, n, vs, ws, rest, orest) },
     }
 }
 
@@ -269,7 +269,7 @@ fn SafeAt(tys: Nat → Type, p: Prog(tys), g: Nat, fuel: Nat) → Type {
             Value::ReadAll(tys, p.strs, a.heap, a.heap.len(), a.results, p.w(g, ds)) ∧
             Value::Written(tys, p.strs, a.heap, a.heap.len(), vs, ds, (p.fns(g)).sig.written(), (p.w(g, ds)).drop((p.fns(g)).sig.results.len())) ∧
             Heap::Frame(tys, h, a.heap, λ b => Value::lends(tys, vs, b)) ∧
-            Value::Views(tys, h.len(), vs, Dyn::ixs(tys, ds ++ p.w(g, ds)), (p.fns(g)).sig.results, a.results)) ∧
+            Value::Views(tys, p.strs, h.len(), vs, Dyn::ixs(tys, ds ++ p.w(g, ds)), (p.fns(g)).sig.results, a.results)) ∧
         (match p.need(g) as λ _ => Type { Some(_) => True, None => (io2: Io) → p.run(tys, fuel, g, vs, h, io) = Going(io2) → p.reaches(g, ds, io2.past) })))
 }
 
