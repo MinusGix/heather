@@ -440,19 +440,24 @@ fn CSt::is_back(self s: CSt, root: Nat, xs: List<Step>, v: Nat) → Bool {
     match s.ents(v) { Cons(e, Nil) => e.mode.writes() && e.par.same(root) && Steps::same(e.at, xs) && !v.same(root), _ => False }
 }
 
+// The write's outcome, its root, steps, code and the residuals read so far
+// known: a write-back, or a write the licence allows.
+fn CSt::write_last(self s: CSt, tys: Nat → Type, strs: Strs(tys), p: Place, v: Var, gv: Got, lv, l: Nat, xs: List<Step>, c: Shape, ra: List<Residual>) → Option<Next> {
+    (!s.in_regions(l) && !(s.role(l)).same(KGone)).then(
+        match s.is_back(l, xs, lv) {
+            True => Some(Next(s.backed(lv).wrote_to(l), gv.rs ++ ra)),
+            False => s.write_at(l, xs).map(λ rl =>
+                Next(s.wrote_to(l), gv.rs ++ ra ++ rl ++ p.accesses() ++ match Shape::is_seq(tys, strs, c) { True => [RFits(p, v)], False => Nil })),
+        })
+}
+
 fn CSt::write(self s: CSt, tys: Nat → Type, strs: Strs(tys), p: Place, v: Var) → Option<Next> {
     s.read_var(tys, strs, v).and_then(λ gv =>
         s.lvl(v).and_then(λ lv =>
             s.lvl(p.root).and_then(λ l =>
                 s.steps(p.steps).and_then(λ xs =>
                     Shape::steps_ok(tys, strs, p.steps, (s.var(l)).code).and_then(λ c =>
-                        s.atoms_ok(Steps::lvls(xs)).and_then(λ ra =>
-                            (!s.in_regions(l) && !(s.role(l)).same(KGone)).then(
-                                match s.is_back(l, xs, lv) {
-                                    True => Some(Next(s.backed(lv).wrote_to(l), gv.rs ++ ra)),
-                                    False => s.write_at(l, xs).map(λ rl =>
-                                        Next(s.wrote_to(l), gv.rs ++ ra ++ rl ++ p.accesses() ++ match Shape::is_seq(tys, strs, c) { True => [RFits(p, v)], False => Nil })),
-                                })))))))
+                        s.atoms_ok(Steps::lvls(xs)).and_then(λ ra => s.write_last(tys, strs, p, v, gv, lv, l, xs, c, ra)))))))
 }
 
 fn CSt::view(self s: CSt, tys: Nat → Type, strs: Strs(tys), p: Place, md: Mode) → Option<Next> {

@@ -3584,3 +3584,42 @@ conversion.
 **`CSt::Changes`** (the invariant's "something live may change this object") is
 a proposition over levels and entries, not a Boolean over the lists: a stage
 reasons about it level by level.
+
+### 23.10 Writes: apartness keeps fits, and the plain write (2026-11-26)
+
+**`Sel::Apart` now says a write keeps the other path's fit** (`verdict.hthr`,
+record `SelApart`: `reads`, the old `ApartAt`, and `fit1`/`fit2`). The run's
+read is stuck at a selection that does not fit, so after a write through one
+reference the invariant must show that every other live reference still
+fits, and reads and commuting writes alone do not say that. It is provable
+for every apartness the proof produces: the step model gained the law
+`fits_over` (a modification at any step keeps whether every step fits; for
+`Dyn` a part's fit reads only the length, `PartOk.fits_len`, and a write
+keeps lengths), and `Steps::apart_fit` derives the fit-keeping from the
+decider's verdict beside `Steps::apart_sound` (`Steps::fit_under` under a
+shared step, `Steps::fit_then` after two apart steps). `Lendable`'s apartness
+asks a caller for the same, which its licence gives.
+
+**The checker's write** is split into `CSt::write` and its tail
+`CSt::write_last` (same meaning): an inversion that re-spelled the tail's
+nested match drove the kernel's conversion past the stack.
+
+**Proved**: `Stmt::stage_write_plain` (a write whose root is a plain variable:
+its cell holds the written value, nothing else changes; the words regions
+read are other levels, as `!in_regions(root)` says), with the path lemmas
+`Sel::write_get` (a write along a fitting path keeps it fitting and reads
+back what was written, given the written value's code and length:
+`WriteInv::val`, from the code condition and the `RFits` residual) and
+`Sel::write_keeps`; the run's write (`Stmt::write_runs_plain`,
+`Stmt::write_runs_ref`); cells and words after one variable is set
+(`Env`/`REnv::get_set_*`, `CSt::env_ix`); a block stored
+(`Heap::val_store_here/other`, `Heap::obj_store_holes`); and what an apart
+path reads after a write (`Sel::get_apart`, and `Sel::get_under` for a view
+of the written object, apart below the holder's own selections).
+
+**What the holder's write still needs**: the state after it is
+`s.written(l).unback(l)`, which differs from `s` in `touched`/`wrote` only
+(no entry is the holder's). The functions the invariant reads that recurse
+with the state fixed (`unsteps`, `anc_of`, `Parent`, `up`) do not convert
+between the two, so `Inv` is rebuilt for it with `refok_keep`, `excl_keep`
+and `parent_keep`, as `Inv::gone` does for `CSt::set`.
