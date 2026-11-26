@@ -9,10 +9,7 @@
 // at closed arguments; and `Program::lower` answering `Some`.
 //
 // The environment has one named type, a byte buffer (`List<u8>`) indexed by
-// a word, with windows. `sequences.hthr`'s `Bytes(n)` has no windows (a
-// window's code is one fixed name, and `Bytes(n)`'s length is in its type)
-// and its `List<A>` takes a number as its index, which has no layout: so
-// the instance is written here (§25's finding 3).
+// a word, with windows: `sequences.hthr`'s `Seq::words` (§25.4 item 10).
 import logic;
 import bool;
 import nat;
@@ -26,6 +23,7 @@ import store;
 import atom;
 import steps;
 import shape;
+import sequences;
 import body::{Place, Callees};
 import level2;
 import run;
@@ -57,27 +55,30 @@ fn u64_s() → Shape { SWord(WBits(64)) }
 
 fn u8_s() → Shape { SWord(WBits(8)) }
 
-fn bget(xs: List<u8>, i: Ix) → u8 { xs.nth(i.toNat()).unwrap_or(BitVec::ofNat(0)) }
-
-fn bset(xs: List<u8>, i: Ix, x: u8) → List<u8> { xs.update(i.toNat(), λ _ => x) }
-
-fn binside(xs: List<u8>, i: Ix) → Bool { (i.toNat() + 1).leb(xs.len()) }
-
 fn bwin(xs: List<u8>, lo, n: Ix) → List<u8> { xs.drop(lo.toNat()).take(n.toNat()) }
 
 fn bput_win(xs: List<u8>, lo, n: Ix, ys: List<u8>) → List<u8> {
     match (lo.toNat() + n.toNat()).leb(xs.len()) && ys.len().same(n.toNat()) { True => xs.put_window(lo.toNat(), ys), False => xs }
 }
 
-fn bytes_win() → Win(tys(), List<u8>) {
-    Win(buf_s(), λ (ys: List<u8>) => ys.len(), bwin, bput_win, λ xs lo n => (lo.toNat() + n.toNat()).leb(xs.len()), λ xs lo n => ∥lo.toNat() + n.toNat() <= xs.len()∥)
-}
-
+// The byte buffer: `sequences.hthr`'s list of words indexed by a machine
+// word, with windows of itself.
 fn bytes_seq() → shape::Seq(tys(), List<u8>) {
-    shape::Seq(u8_s(), λ (xs: List<u8>) => xs.len(), bget, bset, binside, λ xs i => ∥i.toNat() < xs.len()∥, λ n x => List::replicate(x, n.toNat()), Some(bytes_win()))
+    Seq::words(tys(), u8_s(), BitVec::ofNat(0), Some(Seq::words_win(tys(), u8_s(), buf_s(), λ (l: List<u8>) => l, λ (l: List<u8>) => l)))
 }
 
 fn strs() → Strs(tys()) { λ k => match k { Zero => Struct(Object, None, Sequence(bytes_seq())), Succ(_) => Struct(Plain, None, Opaque) } }
+
+// The structures are lawful: the instance's laws, its windows', and a
+// window's length read as the environment reads it.
+theorem strs_lawful(): StrsLaws(tys(), strs()) {
+    λ k => match k {
+        Zero => ⟨Seq::words_laws(tys(), u8_s(), BitVec::ofNat(0), Some(Seq::words_win(tys(), u8_s(), buf_s(), λ (l: List<u8>) => l, λ (l: List<u8>) => l))),
+            ⟨Seq::words_win_laws(tys(), u8_s(), BitVec::ofNat(0), buf_s(), λ (l: List<u8>) => l, λ (l: List<u8>) => l, λ l => refl, λ y => refl,
+                Some(Seq::words_win(tys(), u8_s(), buf_s(), λ (l: List<u8>) => l, λ (l: List<u8>) => l))), λ y => refl⟩⟩,
+        Succ(_) => trivial,
+    }
+}
 
 fn buf(xs: List<u8>) → Dyn(tys()) { Dyn(buf_s(), xs) }
 
