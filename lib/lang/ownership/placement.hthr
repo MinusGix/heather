@@ -210,6 +210,57 @@ fn Strs::Laid(tys: Nat → Type, strs: Strs(tys)) → Type {
     ((c: Shape) → (fs: List<Shape>) → Shape::layout(tys, strs, c) = LRecord(fs) → RecLaid(tys, strs, c, fs))
 }
 
+// What an instance owes the layout beyond `StrsLaws`, at its own type, so
+// that an instance is proved where it is defined (`sequences.hthr`) and
+// `Strs::Laid` follows from it and `StrsLaws` (`placement_laid.hthr`): an
+// element is read at the index's number, and is inside only below the
+// length.
+record SeqNum(tys: Nat → Type, T: Type, q: Seq(tys, T)) {
+    get_num: (v: T) → (i, j: Ix) → i.toNat() = j.toNat() → q.get(v, i) = q.get(v, j),
+    inside_lt: (v: T) → (i: Ix) → q.inside(v, i) = True → i.toNat() < q.len(v),
+}
+
+// Its windows, read as the sequence through `to`: inside only within the
+// length, as long as they say, their elements the parent's from the start.
+record WinNum(tys: Nat → Type, T: Type, q: Seq(tys, T), w: Win(tys, T), to: El(tys, w.shape) → T) {
+    win_inside: (v: T) → (lo, n: Ix) → w.inside(v, lo, n) = True → lo.toNat() + n.toNat() <= q.len(v),
+    win_len: (v: T) → (lo, n: Ix) → w.inside(v, lo, n) = True → q.len(to(w.get(v, lo, n))) = n.toNat(),
+    win_get: (v: T) → (lo, n: Ix) → w.inside(v, lo, n) = True → (i, j: Ix) → i.toNat() < n.toNat() → j.toNat() = lo.toNat() + i.toNat() →
+        q.get(to(w.get(v, lo, n)), i) = q.get(v, j),
+}
+
+// A sequence at name `k`'s windows are of `k` itself, `to` reading one as
+// the sequence's own value.
+fn WinsNum(tys: Nat → Type, k: Nat, q: Seq(tys, tys(k)), ow: Option<Win(tys, tys(k))>) → Type {
+    match ow {
+        None => True,
+        Some(w) => (w.shape = SNamed(k)) ∧ Exists<El(tys, w.shape) → tys(k)>(λ to =>
+            ((y: El(tys, w.shape)) → Dyn(w.shape, y) = Dyn(SNamed(k), to(y))) ∧ WinNum(tys, tys(k), q, w, to)),
+    }
+}
+
+// What name `k`'s kind owes: a sequence its positional laws, a record of
+// words its layout's law directly (not yet derived from `RecordLaws`).
+fn KindNum(tys: Nat → Type, strs: Strs(tys), k: Nat, kd: Kind(tys, tys(k))) → Type {
+    match kd {
+        Opaque => True,
+        Record(fs) => RecLaid(tys, strs, SNamed(k), fs.map(λ (f: Field(tys, tys(k))) => f.shape)),
+        Sequence(q) => SeqNum(tys, tys(k), q) ∧ WinsNum(tys, k, q, q.win),
+    }
+}
+
+// A name's layout, by its kind: `Shape::layout` at `SNamed(k)`.
+fn Kind::layout_of(tys: Nat → Type, k: Nat, kd: Kind(tys, tys(k))) → Layout {
+    match kd {
+        Opaque => LNone,
+        Sequence(q) => match q.elem.word_size() { Some(s) => LSeq(q.elem, s, match q.win { Some(w) => Some(w.shape), None => None }), None => LNone },
+        Record(fs) => match fs.all_bit(λ (f: Field(tys, tys(k))) => f.shape.word_size().is_some()) {
+            True => LRecord(fs.map(λ (f: Field(tys, tys(k))) => f.shape)),
+            False => LNone,
+        },
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Slots
 

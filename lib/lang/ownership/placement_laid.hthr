@@ -1,0 +1,249 @@
+// The layout's law from the instances' own (docs/language/ownership-design.md
+// §25.8, F1, and §25.9; issues/ownership-end-to-end-slice.md).
+//
+// `Strs::Laid` (placement.hthr) is stated over the model at a code; an
+// instance is defined at its own type (`sequences.hthr`), where the code's
+// structure is not in sight. So an instance owes its positional laws at its
+// own type (`SeqNum`, and `WinNum` for windows of itself), and this module
+// gives `Strs::Laid` from them and `StrsLaws` (`Strs::laid_of`): an
+// environment is laid out where every sequence name's instance meets them
+// and every record of words is laid out (`KindNum`). A record's law is
+// taken as given, not yet derived from `RecordLaws`.
+import logic;
+import bool;
+import nat;
+import omega;
+import option;
+import list;
+import bitvec;
+import span_set;
+import store;
+import atom;
+import steps;
+import shape;
+import placement;
+
+// ---------------------------------------------------------------------------
+// A sequence named `k`: its parts are its instance's
+
+fn Seq::win_code(tys: Nat → Type, k: Nat, ow: Option<Win(tys, El(tys, SNamed(k)))>) → Option<Shape> { match ow { Some(w) => Some(w.shape), None => None } }
+
+fn Seq::run_part(tys: Nat → Type, k: Nat, ow: Option<Win(tys, El(tys, SNamed(k)))>, lo, n: Ix) → Option<Part(tys, SNamed(k))> {
+    match ow { Some(w) => Some(Seq::win_part(tys, w, lo, n)), None => None }
+}
+
+fn Seq::wins_laws_at(tys: Nat → Type, k: Nat, q: Seq(tys, El(tys, SNamed(k))), ow: Option<Win(tys, El(tys, SNamed(k)))>) → Type {
+    match ow { Some(w) => WinLaws(tys, El(tys, SNamed(k)), q, w), None => True }
+}
+
+fn Seq::win_len_at(tys: Nat → Type, strs: Strs(tys), k: Nat, ow: Option<Win(tys, El(tys, SNamed(k)))>) → Type {
+    match ow { Some(w) => (y: El(tys, w.shape)) → Dyn::len_at(tys, strs, w.shape)(y) = w.len(y), None => True }
+}
+
+theorem Seq::part_at(tys: Nat → Type, strs: Strs(tys), k: Nat, q: Seq(tys, El(tys, SNamed(k))), ek: strs(k).kind = Sequence(q), s: Sel):
+    Dyn::part(tys, strs, s, SNamed(k)) = Kind::part(tys, k, Sequence(q), s)
+{
+    j(ek, λ kd _ => Kind::part(tys, k, strs(k).kind, s) = Kind::part(tys, k, kd, s), refl)
+}
+
+theorem Seq::len_named(tys: Nat → Type, strs: Strs(tys), k: Nat, q: Seq(tys, El(tys, SNamed(k))), ek: strs(k).kind = Sequence(q), v: El(tys, SNamed(k))):
+    Dyn::len(tys, strs, Dyn(SNamed(k), v)) = q.len(v)
+{
+    j(ek, λ kd _ => Kind::len(tys, strs(k).kind, v) = Kind::len(tys, kd, v), refl)
+}
+
+theorem Seq::at_el(tys: Nat → Type, strs: Strs(tys), k: Nat, q: Seq(tys, El(tys, SNamed(k))), ek: strs(k).kind = Sequence(q), v: El(tys, SNamed(k)), i: Ix):
+    Dyn::at(tys, strs, el_sel(i), Dyn(SNamed(k), v)) = Dyn(q.elem, q.get(v, i))
+{
+    cong_fn(λ (o: Option<Part(tys, SNamed(k))>) => Dyn::at_in(tys, o, v), Seq::part_at(tys, strs, k, q, ek, el_sel(i)))
+}
+
+theorem Seq::fits_el(tys: Nat → Type, strs: Strs(tys), k: Nat, q: Seq(tys, El(tys, SNamed(k))), ek: strs(k).kind = Sequence(q), v: El(tys, SNamed(k)), i: Ix):
+    Dyn::fits(tys, strs, el_sel(i), Dyn(SNamed(k), v)) = q.inside(v, i)
+{
+    cong_fn(λ (o: Option<Part(tys, SNamed(k))>) => Dyn::fits_in(tys, o, v), Seq::part_at(tys, strs, k, q, ek, el_sel(i)))
+}
+
+theorem Seq::over_el(tys: Nat → Type, strs: Strs(tys), k: Nat, q: Seq(tys, El(tys, SNamed(k))), ek: strs(k).kind = Sequence(q), v: El(tys, SNamed(k)), i: Ix, g: Dyn(tys) → Dyn(tys)):
+    Dyn::over(tys, strs, el_sel(i), g, Dyn(SNamed(k), v)) = Dyn(SNamed(k), q.set(v, i, Dyn::back(tys, q.elem, g(Dyn(q.elem, q.get(v, i))), q.get(v, i))))
+{
+    cong_fn(λ (o: Option<Part(tys, SNamed(k))>) => Dyn(SNamed(k), Dyn::over_in(tys, o, g, v)), Seq::part_at(tys, strs, k, q, ek, el_sel(i)))
+}
+
+// Two numbers that differ are apart as single elements; a number outside a
+// span is apart from it.
+theorem ix_apart_of(i, l: Ix, ne: ¬(i.toNat() = l.toNat())): Ix::Apart(i, INat(1), l, INat(1)) {
+    let r: Span(i.toNat(), 1).apart(Span(l.toNat(), 1)).IsTrue() = { omega };
+    r
+}
+
+theorem ix_apart_out(i, lo, n: Ix, out: (i.toNat() < lo.toNat()) ∨ (lo.toNat() + n.toNat() <= i.toNat())): Ix::Apart(i, INat(1), lo, n) {
+    match out {
+        Inl(a) => { let r: Span(i.toNat(), 1).apart(Span(lo.toNat(), n.toNat())).IsTrue() = { omega }; r },
+        Inr(b) => { let r: Span(i.toNat(), 1).apart(Span(lo.toNat(), n.toNat())).IsTrue() = { omega }; r },
+    }
+}
+
+// `cong_fn` at a large type (a kind, a window).
+theorem cong_big<A: Type<1>, B>(g: A → B, {a, b: A}, p: a = b): g(a) = g(b) { j(p, λ c _ => g(a) = g(c), refl) }
+
+theorem Shape::same_of(a, b: Shape, e: a = b): a.same(b) = True { j(e, λ c _ => a.same(c) = True, Shape::same_self(a)) }
+
+// ---------------------------------------------------------------------------
+// The elements
+
+theorem Seq::laid(tys: Nat → Type, strs: Strs(tys), sl: StrsLaws(tys, strs), k: Nat, q: Seq(tys, El(tys, SNamed(k))), ek: strs(k).kind = Sequence(q),
+    size: Nat, es: q.elem.word_size() = Some(size), num: SeqNum(tys, El(tys, SNamed(k)), q)): SeqLaid(tys, strs, SNamed(k), q.elem, size)
+{
+    let kl: KindLaws(tys, strs, Sequence(q)) = j(ek, λ kd _ => KindLaws(tys, strs, kd), sl(k));
+    let ql: SeqLaws(tys, El(tys, SNamed(k)), q) = kl.left;
+    SeqLaid(
+        es,
+        λ v i => cong_fn(λ (d: Dyn(tys)) => d.code, Seq::at_el(tys, strs, k, q, ek, v, i)),
+        λ v i i2 e => trans(Seq::at_el(tys, strs, k, q, ek, v, i),
+            trans(cong_fn(λ (y: El(tys, q.elem)) => Dyn(q.elem, y), num.get_num(v, i, i2, e)), sym(Seq::at_el(tys, strs, k, q, ek, v, i2)))),
+        λ v i h => j(sym(Seq::len_named(tys, strs, k, q, ek, v)), λ m _ => i.toNat() < m, num.inside_lt(v, i, trans(sym(Seq::fits_el(tys, strs, k, q, ek, v, i)), h))),
+        λ v i h x xc => {
+            let b = Dyn::back(tys, q.elem, x, q.get(v, i));
+            trans(cong_fn(λ (d: Dyn(tys)) => Dyn::at(tys, strs, el_sel(i), d), Seq::over_el(tys, strs, k, q, ek, v, i, λ _ => x)),
+                trans(Seq::at_el(tys, strs, k, q, ek, q.set(v, i, b), i),
+                    trans(cong_fn(λ (y: El(tys, q.elem)) => Dyn(q.elem, y), ql.get_set(v, i, trans(sym(Seq::fits_el(tys, strs, k, q, ek, v, i)), h), b)),
+                        Dyn::back_like(tys, q.elem, x, q.get(v, i), Shape::same_of(x.code, q.elem, xc)))))
+        },
+        λ v i i2 ne g => {
+            let b = Dyn::back(tys, q.elem, g(Dyn(q.elem, q.get(v, i2))), q.get(v, i2));
+            trans(cong_fn(λ (d: Dyn(tys)) => Dyn::at(tys, strs, el_sel(i), d), Seq::over_el(tys, strs, k, q, ek, v, i2, g)),
+                trans(Seq::at_el(tys, strs, k, q, ek, q.set(v, i2, b), i),
+                    trans(cong_fn(λ (y: El(tys, q.elem)) => Dyn(q.elem, y), ql.get_other(v, i, i2, ix_apart_of(i, i2, ne), b)),
+                        sym(Seq::at_el(tys, strs, k, q, ek, v, i)))))
+        },
+        λ v s g => Dyn::in_len(tys, strs, s, Dyn::len_at(tys, strs, SNamed(k)), Dyn::part(tys, strs, s, SNamed(k)), Dyn::part_ok(tys, strs, sl, s, SNamed(k)), g, v),
+        λ v u s e => Dyn::in_fits_len(tys, strs, s, Dyn::len_at(tys, strs, SNamed(k)), Dyn::part(tys, strs, s, SNamed(k)), Dyn::part_ok(tys, strs, sl, s, SNamed(k)), v, u, e),
+    )
+}
+
+// ---------------------------------------------------------------------------
+// The windows
+
+theorem Seq::wins_laid(tys: Nat → Type, strs: Strs(tys), sl: StrsLaws(tys, strs), k: Nat, q: Seq(tys, El(tys, SNamed(k))), ek: strs(k).kind = Sequence(q),
+    size: Nat, es: q.elem.word_size() = Some(size), wn: WinsNum(tys, k, q, q.win)): WinsLaid(tys, strs, SNamed(k), q.elem, size, Seq::win_code(tys, k, q.win))
+{
+    let kl: KindLaws(tys, strs, Sequence(q)) = j(ek, λ kd _ => KindLaws(tys, strs, kd), sl(k));
+    (match ew: q.win as λ ow => WinsNum(tys, k, q, ow) → WinsLaid(tys, strs, SNamed(k), q.elem, size, Seq::win_code(tys, k, ow)) {
+        None => λ _ => λ v lo n => trans(cong_fn(λ (o: Option<Part(tys, SNamed(k))>) => Dyn::fits_in(tys, o, v), Seq::part_at(tys, strs, k, q, ek, win_sel(lo, n))),
+            cong_big(λ (ow: Option<Win(tys, El(tys, SNamed(k)))>) => Dyn::fits_in(tys, Seq::run_part(tys, k, ow, lo, n), v), ew)),
+        Some(w) => λ wn2 => {
+            let se: (w.shape = SNamed(k)) = wn2.left;
+            let to = wn2.right.witness;
+            let tos = wn2.right.proof.left;
+            let wnum: WinNum(tys, El(tys, SNamed(k)), q, w, to) = wn2.right.proof.right;
+            let wl: WinLaws(tys, El(tys, SNamed(k)), q, w) = j(ew, λ ow _ => Seq::wins_laws_at(tys, k, q, ow), kl.right.left);
+            let wlen: ((y: El(tys, w.shape)) → Dyn::len_at(tys, strs, w.shape)(y) = w.len(y)) = j(ew, λ ow _ => Seq::win_len_at(tys, strs, k, ow), kl.right.right);
+            let wpart = λ (lo: Ix) (n: Ix) => trans(Seq::part_at(tys, strs, k, q, ek, win_sel(lo, n)),
+                cong_big(λ (ow: Option<Win(tys, El(tys, SNamed(k)))>) => Seq::run_part(tys, k, ow, lo, n), ew));
+            let at_win = λ (v: El(tys, SNamed(k))) (lo: Ix) (n: Ix) => cong_fn(λ (o: Option<Part(tys, SNamed(k))>) => Dyn::at_in(tys, o, v), wpart(lo, n));
+            let fits_win = λ (v: El(tys, SNamed(k))) (lo: Ix) (n: Ix) => cong_fn(λ (o: Option<Part(tys, SNamed(k))>) => Dyn::fits_in(tys, o, v), wpart(lo, n));
+            let over_win = λ (v: El(tys, SNamed(k))) (lo: Ix) (n: Ix) (g: Dyn(tys) → Dyn(tys)) =>
+                cong_fn(λ (o: Option<Part(tys, SNamed(k))>) => Dyn(SNamed(k), Dyn::over_in(tys, o, g, v)), wpart(lo, n));
+            // A window read is the sequence at `to`; its length the instance's.
+            let win_len = λ (v: El(tys, SNamed(k))) (lo: Ix) (n: Ix) (ins: w.inside(v, lo, n) = True) =>
+                trans(cong_fn(λ (d: Dyn(tys)) => Dyn::len(tys, strs, d), tos(w.get(v, lo, n))),
+                    trans(Seq::len_named(tys, strs, k, q, ek, to(w.get(v, lo, n))), wnum.win_len(v, lo, n, ins)));
+            let lay: (Shape::layout(tys, strs, SNamed(k)) = LSeq(q.elem, size, Some(w.shape))) =
+                trans(cong_big(λ (kd: Kind(tys, tys(k))) => Kind::layout_of(tys, k, kd), ek),
+                    trans(cong_fn(λ (o: Option<Nat>) => match o { Some(s) => LSeq(q.elem, s, Seq::win_code(tys, k, q.win)), None => LNone }, es),
+                        cong_big(λ (ow: Option<Win(tys, El(tys, SNamed(k)))>) => LSeq(q.elem, size, Seq::win_code(tys, k, ow)), ew)));
+            WinLaid(
+                Exists(Some(w.shape), j(sym(se), λ c _ => Shape::layout(tys, strs, c) = LSeq(q.elem, size, Some(w.shape)), lay)),
+                λ v lo n => cong_fn(λ (d: Dyn(tys)) => d.code, at_win(v, lo, n)),
+                λ v lo n h => j(sym(Seq::len_named(tys, strs, k, q, ek, v)), λ m _ => lo.toNat() + n.toNat() <= m,
+                    wnum.win_inside(v, lo, n, trans(sym(fits_win(v, lo, n)), h))),
+                λ v lo n h => trans(cong_fn(λ (d: Dyn(tys)) => Dyn::len(tys, strs, d), at_win(v, lo, n)), win_len(v, lo, n, trans(sym(fits_win(v, lo, n)), h))),
+                λ v lo n h i i2 lt je => trans(cong_fn(λ (d: Dyn(tys)) => Dyn::at(tys, strs, el_sel(i), d), trans(at_win(v, lo, n), tos(w.get(v, lo, n)))),
+                    trans(Seq::at_el(tys, strs, k, q, ek, to(w.get(v, lo, n)), i),
+                        trans(cong_fn(λ (y: El(tys, q.elem)) => Dyn(q.elem, y), wnum.win_get(v, lo, n, trans(sym(fits_win(v, lo, n)), h), i, i2, lt, je)),
+                            sym(Seq::at_el(tys, strs, k, q, ek, v, i2))))),
+                λ v lo n h x xc xl => {
+                    let ins = trans(sym(fits_win(v, lo, n)), h);
+                    let b = Dyn::back(tys, w.shape, x, w.get(v, lo, n));
+                    let xb: (Dyn(w.shape, b) = x) = Dyn::back_like(tys, w.shape, x, w.get(v, lo, n), Shape::same_of(x.code, w.shape, xc));
+                    let lb: (w.len(b) = n.toNat()) = trans(sym(wlen(b)), trans(cong_fn(λ (d: Dyn(tys)) => Dyn::len(tys, strs, d), xb), xl));
+                    let lg: (w.len(w.get(v, lo, n)) = n.toNat()) = trans(sym(wlen(w.get(v, lo, n))), win_len(v, lo, n, ins));
+                    trans(cong_fn(λ (d: Dyn(tys)) => Dyn::at(tys, strs, win_sel(lo, n), d), over_win(v, lo, n, λ _ => x)),
+                        trans(at_win(w.set(v, lo, n, b), lo, n),
+                            trans(cong_fn(λ (y: El(tys, w.shape)) => Dyn(w.shape, y), wl.get_set(v, lo, n, ins, b, trans(lb, sym(lg)))), xb)))
+                },
+                λ v lo n i out g => {
+                    let b = Dyn::back(tys, w.shape, g(Dyn(w.shape, w.get(v, lo, n))), w.get(v, lo, n));
+                    trans(cong_fn(λ (d: Dyn(tys)) => Dyn::at(tys, strs, el_sel(i), d), over_win(v, lo, n, g)),
+                        trans(Seq::at_el(tys, strs, k, q, ek, w.set(v, lo, n, b), i),
+                            trans(cong_fn(λ (y: El(tys, q.elem)) => Dyn(q.elem, y), wl.elem_get(v, lo, n, i, ix_apart_out(i, lo, n, out), b)),
+                                sym(Seq::at_el(tys, strs, k, q, ek, v, i)))))
+                },
+            )
+        },
+    })(wn)
+}
+
+// ---------------------------------------------------------------------------
+// The environment
+
+fn Layout::laid(tys: Nat → Type, strs: Strs(tys), k: Nat, l: Layout) → Type {
+    match l { LSeq(el, size, wc) => SeqLaid(tys, strs, SNamed(k), el, size) ∧ WinsLaid(tys, strs, SNamed(k), el, size, wc), LRecord(_) => True, LNone => True }
+}
+
+fn Layout::rec_laid(tys: Nat → Type, strs: Strs(tys), k: Nat, l: Layout) → Type {
+    match l { LRecord(fs) => RecLaid(tys, strs, SNamed(k), fs), LSeq(_, _, _) => True, LNone => True }
+}
+
+theorem Kind::laid_seq(tys: Nat → Type, strs: Strs(tys), sl: StrsLaws(tys, strs), k: Nat, kd: Kind(tys, El(tys, SNamed(k)))):
+    strs(k).kind = kd → (el: Shape) → (size: Nat) → (wc: Option<Shape>) → Kind::layout_of(tys, k, kd) = LSeq(el, size, wc) → KindNum(tys, strs, k, kd) →
+    SeqLaid(tys, strs, SNamed(k), el, size) ∧ WinsLaid(tys, strs, SNamed(k), el, size, wc)
+{
+    match kd {
+        Opaque => λ ek el size wc hl kn => absurd(hl),
+        Record(fs) => λ ek el size wc hl kn => (match fs.all_bit(λ (f: Field(tys, tys(k))) => f.shape.word_size().is_some()) as λ b =>
+                (match b { True => LRecord(fs.map(λ (f: Field(tys, tys(k))) => f.shape)), False => LNone }) = LSeq(el, size, wc) →
+                SeqLaid(tys, strs, SNamed(k), el, size) ∧ WinsLaid(tys, strs, SNamed(k), el, size, wc) {
+            True => λ e => absurd(e),
+            False => λ e => absurd(e),
+        })(hl),
+        Sequence(q) => λ ek el size wc hl kn => (match es: q.elem.word_size() as λ o =>
+                (match o { Some(s) => LSeq(q.elem, s, Seq::win_code(tys, k, q.win)), None => LNone }) = LSeq(el, size, wc) →
+                SeqLaid(tys, strs, SNamed(k), el, size) ∧ WinsLaid(tys, strs, SNamed(k), el, size, wc) {
+            None => λ e => absurd(e),
+            Some(s) => λ e => j(e, λ l _ => Layout::laid(tys, strs, k, l),
+                ⟨Seq::laid(tys, strs, sl, k, q, ek, s, es, kn.left), Seq::wins_laid(tys, strs, sl, k, q, ek, s, es, kn.right)⟩),
+        })(hl),
+    }
+}
+
+theorem Kind::laid_rec(tys: Nat → Type, strs: Strs(tys), k: Nat, kd: Kind(tys, El(tys, SNamed(k)))):
+    (fs: List<Shape>) → Kind::layout_of(tys, k, kd) = LRecord(fs) → KindNum(tys, strs, k, kd) → RecLaid(tys, strs, SNamed(k), fs)
+{
+    match kd {
+        Opaque => λ fs hl kn => absurd(hl),
+        Record(fs0) => λ fs hl kn => (match fs0.all_bit(λ (f: Field(tys, tys(k))) => f.shape.word_size().is_some()) as λ b =>
+                (match b { True => LRecord(fs0.map(λ (f: Field(tys, tys(k))) => f.shape)), False => LNone }) = LRecord(fs) → RecLaid(tys, strs, SNamed(k), fs) {
+            True => λ e => j(e, λ l _ => Layout::rec_laid(tys, strs, k, l), kn),
+            False => λ e => absurd(e),
+        })(hl),
+        Sequence(q) => λ fs hl kn => (match q.elem.word_size() as λ o =>
+                (match o { Some(s) => LSeq(q.elem, s, Seq::win_code(tys, k, q.win)), None => LNone }) = LRecord(fs) → RecLaid(tys, strs, SNamed(k), fs) {
+            None => λ e => absurd(e),
+            Some(_) => λ e => absurd(e),
+        })(hl),
+    }
+}
+
+// An environment is laid out where each name's kind owes what it should.
+theorem Strs::laid_of(tys: Nat → Type, strs: Strs(tys), sl: StrsLaws(tys, strs), kn: (k: Nat) → KindNum(tys, strs, k, strs(k).kind)): Strs::Laid(tys, strs) {
+    ⟨λ c el size wc hl => (match c as λ c2 => Shape::layout(tys, strs, c2) = LSeq(el, size, wc) → SeqLaid(tys, strs, c2, el, size) ∧ WinsLaid(tys, strs, c2, el, size, wc) {
+        SWord(_) => λ e => absurd(e),
+        SNamed(k) => λ e => Kind::laid_seq(tys, strs, sl, k, strs(k).kind, refl, el, size, wc, e, kn(k)),
+    })(hl),
+    λ c fs hl => (match c as λ c2 => Shape::layout(tys, strs, c2) = LRecord(fs) → RecLaid(tys, strs, c2, fs) {
+        SWord(_) => λ e => absurd(e),
+        SNamed(k) => λ e => Kind::laid_rec(tys, strs, k, strs(k).kind, fs, e, kn(k)),
+    })(hl)⟩
+}

@@ -32,6 +32,7 @@ import checker;
 import placement;
 import placement_seam;
 import placement_inject;
+import placement_laid;
 import bytes_memory;
 import bytes_level;
 import bytes_level_routines;
@@ -521,3 +522,86 @@ theorem located_in_window(): Sel::locate(tys(), strs(), buf(text()), [win_sel(IN
     = Some(Pair(3, Dyn(u8_s(), BitVec::ofNat(10)))) { refl }
 
 theorem located_bytes(): (Dyn::encode(tys(), strs(), buf(text()))).map(λ (bs: List<u8>) => bs.window(3, 4)) = Some([BitVec::ofNat(10)]) { refl }
+
+// ---------------------------------------------------------------------------
+// The layout's law (§25.8, F1; §25.9): the probes' environment is laid out,
+// from `Seq::words`' positional laws (sequences.hthr) and its laws; the
+// library's lawful number-indexed `Seq::list` is not, and a program over it
+// is checked and placed and answers differently on the two levels.
+
+theorem strs_laid(): Strs::Laid(tys(), strs()) {
+    Strs::laid_of(tys(), strs(), strs_lawful(), λ k => match k {
+        Zero => ⟨Seq::words_num(tys(), u8_s(), BitVec::ofNat(0), Some(Seq::words_win(tys(), u8_s(), buf_s(), λ (l: List<u8>) => l, λ (l: List<u8>) => l))),
+            ⟨refl, Exists(λ (l: List<u8>) => l, ⟨λ y => refl, Seq::words_win_num(tys(), u8_s(), BitVec::ofNat(0), buf_s(), λ (l: List<u8>) => l, λ (l: List<u8>) => l, λ l => refl,
+                Some(Seq::words_win(tys(), u8_s(), buf_s(), λ (l: List<u8>) => l, λ (l: List<u8>) => l)))⟩)⟩⟩,
+        Succ(_) => trivial,
+    })
+}
+
+// The byte buffer as `Seq::list` (a number indexes, a word reads the pad).
+fn strs_list() → Strs(tys()) { λ k => match k { Zero => Struct(Object, None, Sequence(Seq::list(tys(), u8_s(), BitVec::ofNat(0), None))), Succ(_) => Struct(Plain, None, Opaque) } }
+
+theorem list_lawful(): StrsLaws(tys(), strs_list()) {
+    λ k => match k { Zero => ⟨Seq::list_laws(tys(), u8_s(), BitVec::ofNat(0), None), ⟨trivial, trivial⟩⟩, Succ(_) => trivial }
+}
+
+// Not laid out: element 0 read at the number and at the 64-bit word differ.
+theorem list_not_laid(): ¬Strs::Laid(tys(), strs_list()) {
+    λ laid => {
+        let sq: SeqLaid(tys(), strs_list(), buf_s(), u8_s(), 1) = (laid.left(buf_s(), u8_s(), 1, None, refl)).left;
+        let e = sq.elem_num([BitVec::ofNat(5)], INat(0), IWord(64, BitVec::ofNat(0)), refl);
+        let bad: (True = False) = cong_fn(λ (d: Dyn(tys())) => Dyn::index(tys(), d).same(5), e);
+        absurd(bad)
+    }
+}
+
+// `fn first(xs: &[u8]) → u8 { xs[0] }` over it, on [5]: checked and
+// placed; level 2 answers 5, the bytes level the pad its block holds, 0.
+fn first_r() → Func { Func(Sig([rd(0)], [Result(u8_s(), OFresh)]), seq([Stmt::Read(el(Arg(0), Lit(0)))], Ret([Loc(0)]))) }
+
+fn heap_five() → level2::Heap(tys()) { [Live(Obj(buf([BitVec::ofNat(5)]), Nil))] }
+
+fn first_l2() → Option<List<x86_64_call_contract::Value>> {
+    match Run::of(tys(), strs_list(), funcs_at([first_r()]), λ _ _ => Nil, no_prim(), 1, 0, [obj(0)], heap_five(), io0()) {
+        Done(a) => values_lower(tys(), strs_list(), ident(), a.heap, a.results),
+        Exited(_, _) => None, Going(_) => None, Stuck => None,
+    }
+}
+
+fn first_b() → Option<List<x86_64_call_contract::Value>> {
+    let hb = x86_64_memory_contract::Heap([(Dyn::encode(tys(), strs_list(), buf([BitVec::ofNat(5)]))).unwrap_or(Nil)], Nil, Nil);
+    match bytes_level::run(place(tys(), strs_list(), no_prim(), [first_r()]).unwrap_or(Program(Nil)), Blocks(none_written()), 2, 0,
+        values_lower(tys(), strs_list(), ident(), heap_five(), [obj(0)]).unwrap_or(Nil), hb, io0()) {
+        Done(a) => Some(a.words), Exited(_, _) => None, Going(_) => None, Stuck(_) => None,
+    }
+}
+
+theorem first_disagrees(): Pair((first_r()).refusal(tys(), strs_list(), sigs_of([first_r()]), no_prim(), λ _ => True, 0), Pair(first_l2(), first_b()))
+    = Pair(None, Pair(Some([x86_64_call_contract::Word(BitVec::ofNat(5))]), Some([x86_64_call_contract::Word(BitVec::ofNat(0))]))) { refl }
+
+// F2: `fn f(x: u64) → u64 { x + 255 }` at the u8 1 adds at the argument's
+// own width on level 2 (1: the u64 255 reads as zero there) and at 64 bits
+// on the bytes level (256). `Dyn::Coded`, now a premise, refuses the
+// argument.
+fn add255_r() → Func { Func(Sig([word_p()], [word_r()]), seq([Stmt::Lit(WBits(64), 255), Op(PAdd, Arg(0), Loc(0))], Ret([Loc(0)]))) }
+
+fn add255_l2() → Option<List<x86_64_call_contract::Value>> {
+    match run2([add255_r()], λ _ _ => Nil, 1, 0, [Plain(Dyn(u8_s(), BitVec::ofNat(1)))], Nil) {
+        Done(a) => values_lower(tys(), strs(), ident(), a.heap, a.results), Exited(_, _) => None, Going(_) => None, Stuck => None,
+    }
+}
+
+fn add255_b() → Option<List<x86_64_call_contract::Value>> { b_seen(runb([add255_r()], none_written(), 1, 0, [Plain(Dyn(u8_s(), BitVec::ofNat(1)))], Nil)).and_then(λ (s: Seen) => s.words) }
+
+theorem ill_coded(): Pair(why([add255_r()], 0), Pair(Dyn::coded(tys(), [Dyn(u8_s(), BitVec::ofNat(1))], [word_p()]), Pair(add255_l2(), add255_b())))
+    = Pair(None, Pair(False, Pair(Some([x86_64_call_contract::Word(BitVec::ofNat(1))]), Some([x86_64_call_contract::Word(BitVec::ofNat(256))])))) { refl }
+
+// F4: `1u64 + 2u8` reads the u8 as zero on level 2, which answers 1 where
+// the operands sum to 3; `place` compares the codes (`codes_compared`).
+fn mixed_l2() → Option<List<x86_64_call_contract::Value>> {
+    match run2([mixed_r()], λ _ _ => Nil, 1, 0, Nil, Nil) {
+        Done(a) => values_lower(tys(), strs(), ident(), a.heap, a.results), Exited(_, _) => None, Going(_) => None, Stuck => None,
+    }
+}
+
+theorem mixed_reads_zero(): mixed_l2() = Some([x86_64_call_contract::Word(BitVec::ofNat(1))]) { refl }

@@ -35,6 +35,7 @@ import shape;
 import rt;
 import rt_file;
 import bytes;
+import placement;
 
 // ---------------------------------------------------------------------------
 // Unique identity proofs at `Nat` (Hedberg's argument from `Nat::dec`), for
@@ -880,5 +881,47 @@ theorem Seq::words_win_laws(tys: Nat → Type, a: Shape, pad: El(tys, a), me: Sh
         λ v lo n q => l.pre_inside(v, lo.num(), n.num(), q),
         λ v u lo n e => l.inside_len(v, u, lo.num(), n.num(), e),
         λ v lo n => l.put_back(v, lo.num(), n.num()),
+    )
+}
+
+// ---------------------------------------------------------------------------
+// The layout's law for the word instances (docs/language/ownership-design.md
+// §25.8, F1; §25.9): what `placement_laid.hthr` needs of an instance beyond
+// its laws, at its own type. `Seq::words` and `Seq::vec` read an element at
+// the index's number and hold it inside only below the length;
+// `Seq::words`' windows are its elements from the start, as many as they
+// say. `Seq::list` reads only at a number, and does not meet this.
+
+theorem Seq::words_num(tys: Nat → Type, a: Shape, pad: El(tys, a), win: Option<Win(tys, List<El(tys, a)>)>): SeqNum(tys, List<El(tys, a)>, Seq::words(tys, a, pad, win)) {
+    SeqNum(
+        λ v i i2 e => cong_fn(λ (m: Nat) => v.ix_get(INat(m), pad), e),
+        λ v i h => { let h2: ((i.toNat() + 1).leb(v.len()) = True) = h; let r: (i.toNat() < v.len()) = omega(h2); r },
+    )
+}
+
+theorem Seq::words_win_num(tys: Nat → Type, a: Shape, pad: El(tys, a), me: Shape, to: El(tys, me) → List<El(tys, a)>, of: List<El(tys, a)> → El(tys, me),
+    to_of: (l: List<El(tys, a)>) → to(of(l)) = l, win: Option<Win(tys, List<El(tys, a)>)>):
+    WinNum(tys, List<El(tys, a)>, Seq::words(tys, a, pad, win), Seq::words_win(tys, a, me, to, of), to)
+{
+    WinNum(
+        λ v lo n h => { let h2: ((lo.toNat() + n.toNat()).leb(v.len()) = True) = h; let r: (lo.toNat() + n.toNat() <= v.len()) = omega(h2); r },
+        λ v lo n h => {
+            let h2: ((lo.toNat() + n.toNat()).leb(v.len()) = True) = h;
+            trans(cong_fn(λ (l: List<El(tys, a)>) => l.len(), to_of(v.drop(lo.toNat()).take(n.toNat()))), List::win_len(v, lo.toNat(), n.toNat(), omega(h2)))
+        },
+        λ v lo n h i i2 lt je => {
+            let e2: (i.toNat() + lo.toNat() = i2.toNat()) = omega(je);
+            cong_fn(λ (o: Option<El(tys, a)>) => o.unwrap_or(pad),
+                trans(cong_fn(λ (l: List<El(tys, a)>) => l.nth(i.toNat()), to_of(v.drop(lo.toNat()).take(n.toNat()))),
+                    trans(List::nth_take(v.drop(lo.toNat()), n.toNat(), i.toNat(), lt),
+                        trans(List::nth_drop_add(v, lo.toNat(), i.toNat()), cong_fn(λ (m: Nat) => v.nth(m), e2)))))
+        },
+    )
+}
+
+theorem Seq::vec_num(tys: Nat → Type, a: Shape, n: Nat, pad: El(tys, a)): SeqNum(tys, [El(tys, a); n], Seq::vec(tys, a, n, pad)) {
+    SeqNum(
+        λ v i i2 e => cong_fn(λ (m: Nat) => vector_get(v, m, pad), e),
+        λ v i h => { let h2: ((i.toNat() + 1).leb(n) = True) = h; let r: (i.toNat() < n) = omega(h2); r },
     )
 }
