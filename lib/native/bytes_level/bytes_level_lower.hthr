@@ -75,11 +75,24 @@ theorem word_of_one(bytes: List<BitVec(8)>, len: bytes.len() = 1): word_of_bytes
     rewrite(z(1, trivial), z(2, trivial), z(3, trivial), z(4, trivial), z(5, trivial), z(6, trivial), z(7, trivial), refl)
 }
 
-// Four bytes, their doubleword zero-extended: `MOV r32`.
+// Four bytes or fewer, their doubleword zero-extended.
+theorem word_of_few(bytes: List<BitVec(8)>, few: bytes.len() <= 4):
+    word_of_bytes(bytes) = imm32_from_bytes(byte_at(bytes, 0), byte_at(bytes, 1), byte_at(bytes, 2), byte_at(bytes, 3)).zero_extend(32) {
+    let z = λ (k: Nat) (low: 4 <= k) => byte_at_past(bytes, k, omega(few, low));
+    rewrite(z(4, trivial), z(5, trivial), z(6, trivial), z(7, trivial), refl)
+}
+
+// Four bytes: `MOV r32`.
 theorem word_of_four(bytes: List<BitVec(8)>, len: bytes.len() = 4):
     word_of_bytes(bytes) = imm32_from_bytes(byte_at(bytes, 0), byte_at(bytes, 1), byte_at(bytes, 2), byte_at(bytes, 3)).zero_extend(32) {
-    let z = λ (k: Nat) (low: 4 <= k) => byte_at_past(bytes, k, omega(len, low));
-    rewrite(z(4, trivial), z(5, trivial), z(6, trivial), z(7, trivial), refl)
+    word_of_few(bytes, omega(len))
+}
+
+// Read from four bytes or fewer, a word is its 32-bit view widened.
+theorem word_of_bytes_round(bytes: List<BitVec(8)>, few: bytes.len() <= 4): word_of_bytes(bytes).resize(32).resize(64) = word_of_bytes(bytes) {
+    let low = imm32_from_bytes(byte_at(bytes, 0), byte_at(bytes, 1), byte_at(bytes, 2), byte_at(bytes, 3));
+    let wide: (word_of_bytes(bytes) = low.resize(64)) = trans(word_of_few(bytes, few), sym(BitVec::resize_zero_extend(32, 32, low)));
+    j(sym(wide), λ y _ => y.resize(32).resize(64) = y, cong_fn<BitVec(32), BitVec(64)>(λ y => y.resize(64), BitVec::resize_round_trip(32, 64, omega(), low)))
 }
 
 // ---------------------------------------------------------------------------
@@ -228,22 +241,37 @@ theorem emits_now_of_heap<M>(saves: Nat, site: Site<M>, stack: Stack<M>(site.fet
 // ---------------------------------------------------------------------------
 // Loads
 
+// The kind a word is held at for an access's view (`view_ok`): `Word` at
+// 64, `Narrow(view)` at any other width.
+fn view_kind(view: Nat) → Kind { match view.same(64) { True => Word, False => Narrow(view) } }
+
+// A register holding a word at its view's kind holds the view's word.
+theorem view_word_held(values: Valuation(), view, id: Nat, word: BitVec(64)):
+    Held(id, view_kind(view)).Rep(values, word) → view_word(values, view, id) = word {
+    match view.same(64) as λ b => Held(id, match b { True => Word, False => Narrow(view) }).Rep(values, word) →
+        (match b { True => values(64, id), False => values(view, id).resize(64) }) = word {
+        True => λ r => r,
+        False => λ r => r,
+    }
+}
+
 // A load's meaning at the valuation: `place` holds a reference's address,
-// the `n` plain, defined bytes there are read, and `output` is their word.
-fn Loads(spans: Spans, values: Valuation(), heap: Heap, n, output, place: Nat) → Type {
+// the `n` plain, defined bytes there are read, and `output` is held at its
+// view's kind as their word.
+fn Loads(spans: Spans, values: Valuation(), heap: Heap, n, view, output, place: Nat) → Type {
     Exists<Loc>(λ loc => (values(64, place) = loc.address(spans)) ∧
-        Exists<List<BitVec(8)>>(λ bytes => (heap.read_bytes(loc, n) = Some(bytes)) ∧ (values(64, output) = word_of_bytes(bytes))))
+        Exists<List<BitVec(8)>>(λ bytes => (heap.read_bytes(loc, n) = Some(bytes)) ∧ Held(output, view_kind(view)).Rep(values, word_of_bytes(bytes))))
 }
 
 // A word written into a register the body may write, memory untouched: the
 // file names it, and the trail is kept.
 theorem written_leaves<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, saves: Nat, stack: Stack<M>(fetch, data), spans: Spans,
-    Mem: Heap → M → Type, values: Valuation(), d: Nat, s0: MachineState<M>, now: Heap, file: File, destination: Gpr, output: Nat,
+    Mem: Heap → M → Type, values: Valuation(), d: Nat, s0: MachineState<M>, now: Heap, file: File, destination: Gpr, output: Nat, kind: Kind,
     x: BitVec(64), apart: destination.apart(body_kept(saves)).IsTrue(), s: MachineState<M>, flags: Flags, rip: BitVec(64),
-    rep: file.Represents(values, s.gprs), trailed: stack.TrailedBy(saves, spans, Mem, d, s0, now, s), named: values(64, output) = x):
-    file.write(destination, Some(Held(output, Word))).Represents(values, write_gpr(destination, x, s.gprs)) ∧
+    rep: file.Represents(values, s.gprs), trailed: stack.TrailedBy(saves, spans, Mem, d, s0, now, s), named: Held(output, kind).Rep(values, x)):
+    file.write(destination, Some(Held(output, kind))).Represents(values, write_gpr(destination, x, s.gprs)) ∧
         stack.TrailedBy(saves, spans, Mem, d, s0, now, MachineState(write_gpr(destination, x, s.gprs), flags, rip, s.memory)) {
-    ⟨file.represents_write(values, s.gprs, destination, Some(Held(output, Word)), x, rep, named),
+    ⟨file.represents_write(values, s.gprs, destination, Some(Held(output, kind)), x, rep, named),
      ⟨kept_trans(body_kept(saves), s0.gprs, s.gprs, write_gpr(destination, x, s.gprs), trailed.left,
         kept_write(body_kept(saves), destination, x, s.gprs, apart)), trailed.right⟩⟩
 }
@@ -272,13 +300,13 @@ fn HeapPre<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, saves: Nat, st
 // A byte loaded: `MOVZX destination, byte [base]`.
 theorem load_byte_emits<M>(saves: Nat, site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data), top: Nat,
     spans: Spans, loan: Loan<M>(site.fetch, site.data, stack, top, spans), values: Valuation(), d: Nat, s0: MachineState<M>, prog: Prog,
-    file: File, output, place: Nat, base, destination: Gpr, found: FoundAt(file, Held(place, Word), base),
+    file: File, view, output, place: Nat, base, destination: Gpr, found: FoundAt(file, Held(place, Word), base),
     apart: destination.apart(body_kept(saves)).IsTrue(), placement: List<Place>, names: Nat, heap: Heap):
-    EmitsHeap<M>(saves, site, stack, spans, values, d, s0, prog, file, Loads(spans, values, heap, 1, output, place), heap, heap,
-        Emitted(At(prog, 0, LoadByte(ByteLoad(destination, base))), file.write(destination, Some(Held(output, Word))), placement, names)) {
+    EmitsHeap<M>(saves, site, stack, spans, values, d, s0, prog, file, Loads(spans, values, heap, 1, view, output, place), heap, heap,
+        Emitted(At(prog, 0, LoadByte(ByteLoad(destination, base))), file.write(destination, Some(Held(output, view_kind(view)))), placement, names)) {
     let load = ByteLoad(destination, base);
-    let out_file = file.write(destination, Some(Held(output, Word)));
-    let facts = Loads(spans, values, heap, 1, output, place);
+    let out_file = file.write(destination, Some(Held(output, view_kind(view))));
+    let facts = Loads(spans, values, heap, 1, view, output, place);
     ⟨prog.within_then(0, LoadByte(load)),
      λ within => site.moves_load_byte(stack.writes, site.program.laid_out_fits(laid), within.witness, prog, 0, load, within.proof,
         HeapPre<M>(saves, stack, spans, values, d, s0, file, facts, heap),
@@ -295,22 +323,23 @@ theorem load_byte_emits<M>(saves: Nat, site: Site<M>, laid: site.program.laid_ou
             let byte = byte_at(bytes, 0);
             Exists(byte, ⟨j(sym(at), λ x _ => x.toNat() < Nat::pow(2, 47), omega(low)),
                 ⟨j(sym(at), λ x _ => site.data.read(s.memory, x) = Some(byte), got.right),
-                 written_leaves<M>(saves, stack, spans, heap_in<M>(site.data, spans), values, d, s0, heap, file, destination, output, byte.zero_extend(56),
+                 written_leaves<M>(saves, stack, spans, heap_in<M>(site.data, spans), values, d, s0, heap, file, destination, output, view_kind(view), byte.zero_extend(56),
                     apart, s, s.flags, next_rip(s.rip, byte_load_bytes(load).len()), held.left.left, held.right,
-                    trans(loads.proof.right.proof.right, word_of_one(bytes, heap.read_bytes_len(loc, 1, bytes, read))))⟩⟩)
+                    j(word_of_one(bytes, heap.read_bytes_len(loc, 1, bytes, read)), λ x _ => Held(output, view_kind(view)).Rep(values, x),
+                        loads.proof.right.proof.right))⟩⟩)
         })⟩
 }
 
 // Four bytes loaded: `MOV destination32, dword [base]`.
 theorem load_dword_emits<M>(saves: Nat, site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data), top: Nat,
     spans: Spans, loan: Loan<M>(site.fetch, site.data, stack, top, spans), values: Valuation(), d: Nat, s0: MachineState<M>, prog: Prog,
-    file: File, output, place: Nat, base, destination: Gpr, found: FoundAt(file, Held(place, Word), base),
+    file: File, view, output, place: Nat, base, destination: Gpr, found: FoundAt(file, Held(place, Word), base),
     apart: destination.apart(body_kept(saves)).IsTrue(), placement: List<Place>, names: Nat, heap: Heap):
-    EmitsHeap<M>(saves, site, stack, spans, values, d, s0, prog, file, Loads(spans, values, heap, 4, output, place), heap, heap,
-        Emitted(At(prog, 0, asm_dword_load(DwordLoad(destination, base))), file.write(destination, Some(Held(output, Word))), placement, names)) {
+    EmitsHeap<M>(saves, site, stack, spans, values, d, s0, prog, file, Loads(spans, values, heap, 4, view, output, place), heap, heap,
+        Emitted(At(prog, 0, asm_dword_load(DwordLoad(destination, base))), file.write(destination, Some(Held(output, view_kind(view)))), placement, names)) {
     let load = DwordLoad(destination, base);
-    let out_file = file.write(destination, Some(Held(output, Word)));
-    let facts = Loads(spans, values, heap, 4, output, place);
+    let out_file = file.write(destination, Some(Held(output, view_kind(view))));
+    let facts = Loads(spans, values, heap, 4, view, output, place);
     ⟨prog.within_then(0, asm_dword_load(load)),
      λ within => site.moves_dword_load(stack.writes, site.program.laid_out_fits(laid), within.witness, prog, 0, load, within.proof,
         HeapPre<M>(saves, stack, spans, values, d, s0, file, facts, heap),
@@ -326,22 +355,23 @@ theorem load_dword_emits<M>(saves: Nat, site: Site<M>, laid: site.program.laid_o
             let dword = imm32_from_bytes(byte_at(bytes, 0), byte_at(bytes, 1), byte_at(bytes, 2), byte_at(bytes, 3));
             Exists(dword, ⟨j(sym(at), λ x _ => x.toNat() + 4 <= Nat::pow(2, 47), loan.below(loc, 4, got.left)),
                 ⟨j(sym(at), λ x _ => read_dword(site.data, s.memory, x) = Some(dword), got.right),
-                 written_leaves<M>(saves, stack, spans, heap_in<M>(site.data, spans), values, d, s0, heap, file, destination, output, dword.zero_extend(32),
+                 written_leaves<M>(saves, stack, spans, heap_in<M>(site.data, spans), values, d, s0, heap, file, destination, output, view_kind(view), dword.zero_extend(32),
                     apart, s, s.flags, next_rip(s.rip, dword_load_bytes(load).len()), held.left.left, held.right,
-                    trans(loads.proof.right.proof.right, word_of_four(bytes, heap.read_bytes_len(loc, 4, bytes, read))))⟩⟩)
+                    j(word_of_four(bytes, heap.read_bytes_len(loc, 4, bytes, read)), λ x _ => Held(output, view_kind(view)).Rep(values, x),
+                        loads.proof.right.proof.right))⟩⟩)
         })⟩
 }
 
 // Eight bytes loaded: `MOV destination, qword [base]`.
 theorem load_word_emits<M>(saves: Nat, site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data), top: Nat,
     spans: Spans, loan: Loan<M>(site.fetch, site.data, stack, top, spans), values: Valuation(), d: Nat, s0: MachineState<M>, prog: Prog,
-    file: File, output, place: Nat, base, destination: Gpr, found: FoundAt(file, Held(place, Word), base),
+    file: File, view, output, place: Nat, base, destination: Gpr, found: FoundAt(file, Held(place, Word), base),
     apart: destination.apart(body_kept(saves)).IsTrue(), placement: List<Place>, names: Nat, heap: Heap):
-    EmitsHeap<M>(saves, site, stack, spans, values, d, s0, prog, file, Loads(spans, values, heap, 8, output, place), heap, heap,
-        Emitted(At(prog, 0, Load(WordLoad(destination, base))), file.write(destination, Some(Held(output, Word))), placement, names)) {
+    EmitsHeap<M>(saves, site, stack, spans, values, d, s0, prog, file, Loads(spans, values, heap, 8, view, output, place), heap, heap,
+        Emitted(At(prog, 0, Load(WordLoad(destination, base))), file.write(destination, Some(Held(output, view_kind(view)))), placement, names)) {
     let load = WordLoad(destination, base);
-    let out_file = file.write(destination, Some(Held(output, Word)));
-    let facts = Loads(spans, values, heap, 8, output, place);
+    let out_file = file.write(destination, Some(Held(output, view_kind(view))));
+    let facts = Loads(spans, values, heap, 8, view, output, place);
     ⟨prog.within_then(0, Load(load)),
      λ within => site.moves_word_load(stack.writes, site.program.laid_out_fits(laid), within.witness, prog, 0, load, within.proof,
         HeapPre<M>(saves, stack, spans, values, d, s0, file, facts, heap),
@@ -357,7 +387,7 @@ theorem load_word_emits<M>(saves: Nat, site: Site<M>, laid: site.program.laid_ou
             let word = word_of_bytes(bytes);
             Exists(word, ⟨j(sym(at), λ x _ => x.toNat() + 8 <= Nat::pow(2, 47), loan.below(loc, 8, got.left)),
                 ⟨j(sym(at), λ x _ => read_word(site.data, s.memory, x) = Some(word), got.right),
-                 written_leaves<M>(saves, stack, spans, heap_in<M>(site.data, spans), values, d, s0, heap, file, destination, output, word,
+                 written_leaves<M>(saves, stack, spans, heap_in<M>(site.data, spans), values, d, s0, heap, file, destination, output, view_kind(view), word,
                     apart, s, s.flags, next_rip(s.rip, word_load_bytes(load).len()), held.left.left, held.right, loads.proof.right.proof.right)⟩⟩)
         })⟩
 }
@@ -395,7 +425,7 @@ theorem load_ref_emits<M>(saves: Nat, site: Site<M>, laid: site.program.laid_out
             let word = target.address(spans);
             Exists(word, ⟨j(sym(at), λ x _ => x.toNat() + 8 <= Nat::pow(2, 47), loan.below(loc, 8, got.left)),
                 ⟨j(sym(at), λ x _ => read_word(site.data, s.memory, x) = Some(word), got.right),
-                 written_leaves<M>(saves, stack, spans, heap_in<M>(site.data, spans), values, d, s0, heap, file, destination, output, word,
+                 written_leaves<M>(saves, stack, spans, heap_in<M>(site.data, spans), values, d, s0, heap, file, destination, output, Word, word,
                     apart, s, s.flags, next_rip(s.rip, word_load_bytes(load).len()), held.left.left, held.right, loads.proof.right.proof.right)⟩⟩)
         })⟩
 }
@@ -404,10 +434,10 @@ theorem load_ref_emits<M>(saves: Nat, site: Site<M>, laid: site.program.laid_out
 // Stores
 
 // A store's meaning at the valuation: `place` holds a reference's address,
-// and the low `n` bytes of the word `value` are put there.
-fn Stores(spans: Spans, values: Valuation(), blocks: Blocks, heap, after: Heap, n, place, value: Nat) → Type {
+// and the low `n` bytes of `value`'s view at width `view` are put there.
+fn Stores(spans: Spans, values: Valuation(), blocks: Blocks, heap, after: Heap, n, view, place, value: Nat) → Type {
     Exists<Loc>(λ loc => (values(64, place) = loc.address(spans)) ∧
-        (heap.put(blocks.written, loc, Piece::plain(low_bytes(n, values(64, value)))) = Some(after)))
+        (heap.put(blocks.written, loc, Piece::plain(low_bytes(n, view_word(values, view, value)))) = Some(after)))
 }
 
 // A reference's store's: `place` holds a reference's address and `value`
@@ -448,12 +478,12 @@ theorem stored_leaves<M>(saves: Nat, site: Site<M>, stack: Stack<M>(site.fetch, 
 // A byte stored: `MOV byte [base], source8`.
 theorem store_byte_emits<M>(saves: Nat, site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data), top: Nat,
     spans: Spans, loan: Loan<M>(site.fetch, site.data, stack, top, spans), blocks: Blocks, lent: blocks.Lent(spans), values: Valuation(), d: Nat,
-    s0: MachineState<M>, prog: Prog, file: File, place, value: Nat, base, source: Gpr, at_place: FoundAt(file, Held(place, Word), base),
-    at_value: FoundAt(file, Held(value, Word), source), plain: store_base_plain(base) = True, placement: List<Place>, names: Nat, heap, after: Heap):
-    EmitsHeap<M>(saves, site, stack, spans, values, d, s0, prog, file, Stores(spans, values, blocks, heap, after, 1, place, value), heap, after,
+    s0: MachineState<M>, prog: Prog, file: File, view, place, value: Nat, base, source: Gpr, at_place: FoundAt(file, Held(place, Word), base),
+    at_value: FoundAt(file, Held(value, view_kind(view)), source), plain: store_base_plain(base) = True, placement: List<Place>, names: Nat, heap, after: Heap):
+    EmitsHeap<M>(saves, site, stack, spans, values, d, s0, prog, file, Stores(spans, values, blocks, heap, after, 1, view, place, value), heap, after,
         Emitted(At(prog, 0, StoreByte(ByteStore(base, source))), file, placement, names)) {
     let store = ByteStore(base, source);
-    let facts = Stores(spans, values, blocks, heap, after, 1, place, value);
+    let facts = Stores(spans, values, blocks, heap, after, 1, view, place, value);
     ⟨prog.within_then(0, StoreByte(store)),
      λ within => site.moves_store_byte(stack.writes, site.program.laid_out_fits(laid), within.witness, prog, 0, store, within.proof,
         HeapPre<M>(saves, stack, spans, values, d, s0, file, facts, heap),
@@ -462,28 +492,29 @@ theorem store_byte_emits<M>(saves: Nat, site: Site<M>, laid: site.program.laid_o
             let stores = held.left.right;
             let loc = stores.witness;
             let at = Loads::at<M>(spans, values, heap, place, file, base, at_place, s.gprs, held.left.left, loc, stores.proof.left);
-            let word: (values(64, value) = read_gpr(source, s.gprs)) = at_value.rep(values, s.gprs, held.left.left);
+            let word: (view_word(values, view, value) = read_gpr(source, s.gprs)) =
+                view_word_held(values, view, value, read_gpr(source, s.gprs), at_value.rep(values, s.gprs, held.left.left));
             let rip = next_rip(s.rip, 3);
             let goal = λ (x: BitVec(64)) (w: BitVec(64)) => stack.writes.writable(s.memory, x, 1) ∧
                 (site.Resident(stack.writes.store(s.memory, x, low_bytes(1, w))) ∧
                     (file.Represents(values, s.gprs) ∧ stack.TrailedBy(saves, spans, heap_in<M>(site.data, spans), d, s0, after,
                         MachineState(s.gprs, s.flags, rip, stack.writes.store(s.memory, x, low_bytes(1, w))))));
             let left = stored_leaves<M>(saves, site, stack, top, spans, loan, blocks, lent, values, d, s0, heap, after, loc,
-                low_bytes(1, values(64, value)), Nat::le_refl(1), stores.proof.right, s, resident, held.right, s.flags, rip);
-            let done: goal(loc.address(spans), values(64, value)) = ⟨left.left, ⟨left.right.left, ⟨held.left.left, left.right.right⟩⟩⟩;
-            ⟨plain, j(word, λ w _ => goal(read_gpr(base, s.gprs), w), j(sym(at), λ x _ => goal(x, values(64, value)), done))⟩
+                low_bytes(1, view_word(values, view, value)), Nat::le_refl(1), stores.proof.right, s, resident, held.right, s.flags, rip);
+            let done: goal(loc.address(spans), view_word(values, view, value)) = ⟨left.left, ⟨left.right.left, ⟨held.left.left, left.right.right⟩⟩⟩;
+            ⟨plain, j(word, λ w _ => goal(read_gpr(base, s.gprs), w), j(sym(at), λ x _ => goal(x, view_word(values, view, value)), done))⟩
         })⟩
 }
 
 // Four bytes stored: `MOV dword [base], source32`.
 theorem store_dword_emits<M>(saves: Nat, site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data), top: Nat,
     spans: Spans, loan: Loan<M>(site.fetch, site.data, stack, top, spans), blocks: Blocks, lent: blocks.Lent(spans), values: Valuation(), d: Nat,
-    s0: MachineState<M>, prog: Prog, file: File, place, value: Nat, base, source: Gpr, at_place: FoundAt(file, Held(place, Word), base),
-    at_value: FoundAt(file, Held(value, Word), source), plain: store_base_plain(base) = True, placement: List<Place>, names: Nat, heap, after: Heap):
-    EmitsHeap<M>(saves, site, stack, spans, values, d, s0, prog, file, Stores(spans, values, blocks, heap, after, 4, place, value), heap, after,
+    s0: MachineState<M>, prog: Prog, file: File, view, place, value: Nat, base, source: Gpr, at_place: FoundAt(file, Held(place, Word), base),
+    at_value: FoundAt(file, Held(value, view_kind(view)), source), plain: store_base_plain(base) = True, placement: List<Place>, names: Nat, heap, after: Heap):
+    EmitsHeap<M>(saves, site, stack, spans, values, d, s0, prog, file, Stores(spans, values, blocks, heap, after, 4, view, place, value), heap, after,
         Emitted(At(prog, 0, asm_dword_store(DwordStore(base, source))), file, placement, names)) {
     let store = DwordStore(base, source);
-    let facts = Stores(spans, values, blocks, heap, after, 4, place, value);
+    let facts = Stores(spans, values, blocks, heap, after, 4, view, place, value);
     ⟨prog.within_then(0, asm_dword_store(store)),
      λ within => site.moves_dword_store(stack.writes, site.program.laid_out_fits(laid), within.witness, prog, 0, store, within.proof,
         HeapPre<M>(saves, stack, spans, values, d, s0, file, facts, heap),
@@ -492,28 +523,29 @@ theorem store_dword_emits<M>(saves: Nat, site: Site<M>, laid: site.program.laid_
             let stores = held.left.right;
             let loc = stores.witness;
             let at = Loads::at<M>(spans, values, heap, place, file, base, at_place, s.gprs, held.left.left, loc, stores.proof.left);
-            let word: (values(64, value) = read_gpr(source, s.gprs)) = at_value.rep(values, s.gprs, held.left.left);
+            let word: (view_word(values, view, value) = read_gpr(source, s.gprs)) =
+                view_word_held(values, view, value, read_gpr(source, s.gprs), at_value.rep(values, s.gprs, held.left.left));
             let rip = next_rip(s.rip, 3);
             let goal = λ (x: BitVec(64)) (w: BitVec(64)) => stack.writes.writable(s.memory, x, 4) ∧
                 (site.Resident(stack.writes.store(s.memory, x, low_bytes(4, w))) ∧
                     (file.Represents(values, s.gprs) ∧ stack.TrailedBy(saves, spans, heap_in<M>(site.data, spans), d, s0, after,
                         MachineState(s.gprs, s.flags, rip, stack.writes.store(s.memory, x, low_bytes(4, w))))));
             let left = stored_leaves<M>(saves, site, stack, top, spans, loan, blocks, lent, values, d, s0, heap, after, loc,
-                low_bytes(4, values(64, value)), omega(), stores.proof.right, s, resident, held.right, s.flags, rip);
-            let done: goal(loc.address(spans), values(64, value)) = ⟨left.left, ⟨left.right.left, ⟨held.left.left, left.right.right⟩⟩⟩;
-            ⟨plain, j(word, λ w _ => goal(read_gpr(base, s.gprs), w), j(sym(at), λ x _ => goal(x, values(64, value)), done))⟩
+                low_bytes(4, view_word(values, view, value)), omega(), stores.proof.right, s, resident, held.right, s.flags, rip);
+            let done: goal(loc.address(spans), view_word(values, view, value)) = ⟨left.left, ⟨left.right.left, ⟨held.left.left, left.right.right⟩⟩⟩;
+            ⟨plain, j(word, λ w _ => goal(read_gpr(base, s.gprs), w), j(sym(at), λ x _ => goal(x, view_word(values, view, value)), done))⟩
         })⟩
 }
 
 // Eight bytes stored: `MOV qword [base], source`.
 theorem store_word_emits<M>(saves: Nat, site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data), top: Nat,
     spans: Spans, loan: Loan<M>(site.fetch, site.data, stack, top, spans), blocks: Blocks, lent: blocks.Lent(spans), values: Valuation(), d: Nat,
-    s0: MachineState<M>, prog: Prog, file: File, place, value: Nat, base, source: Gpr, at_place: FoundAt(file, Held(place, Word), base),
-    at_value: FoundAt(file, Held(value, Word), source), plain: store_base_plain(base) = True, placement: List<Place>, names: Nat, heap, after: Heap):
-    EmitsHeap<M>(saves, site, stack, spans, values, d, s0, prog, file, Stores(spans, values, blocks, heap, after, 8, place, value), heap, after,
+    s0: MachineState<M>, prog: Prog, file: File, view, place, value: Nat, base, source: Gpr, at_place: FoundAt(file, Held(place, Word), base),
+    at_value: FoundAt(file, Held(value, view_kind(view)), source), plain: store_base_plain(base) = True, placement: List<Place>, names: Nat, heap, after: Heap):
+    EmitsHeap<M>(saves, site, stack, spans, values, d, s0, prog, file, Stores(spans, values, blocks, heap, after, 8, view, place, value), heap, after,
         Emitted(At(prog, 0, asm_word_store(WordStore(base, source))), file, placement, names)) {
     let store = WordStore(base, source);
-    let facts = Stores(spans, values, blocks, heap, after, 8, place, value);
+    let facts = Stores(spans, values, blocks, heap, after, 8, view, place, value);
     ⟨prog.within_then(0, asm_word_store(store)),
      λ within => site.moves_word_store(stack.writes, site.program.laid_out_fits(laid), within.witness, prog, 0, store, within.proof,
         HeapPre<M>(saves, stack, spans, values, d, s0, file, facts, heap),
@@ -522,16 +554,17 @@ theorem store_word_emits<M>(saves: Nat, site: Site<M>, laid: site.program.laid_o
             let stores = held.left.right;
             let loc = stores.witness;
             let at = Loads::at<M>(spans, values, heap, place, file, base, at_place, s.gprs, held.left.left, loc, stores.proof.left);
-            let word: (values(64, value) = read_gpr(source, s.gprs)) = at_value.rep(values, s.gprs, held.left.left);
+            let word: (view_word(values, view, value) = read_gpr(source, s.gprs)) =
+                view_word_held(values, view, value, read_gpr(source, s.gprs), at_value.rep(values, s.gprs, held.left.left));
             let rip = next_rip(s.rip, 3);
             let goal = λ (x: BitVec(64)) (w: BitVec(64)) => stack.writes.writable(s.memory, x, 8) ∧
                 (site.Resident(stack.writes.store(s.memory, x, low_bytes(8, w))) ∧
                     (file.Represents(values, s.gprs) ∧ stack.TrailedBy(saves, spans, heap_in<M>(site.data, spans), d, s0, after,
                         MachineState(s.gprs, s.flags, rip, stack.writes.store(s.memory, x, low_bytes(8, w))))));
             let left = stored_leaves<M>(saves, site, stack, top, spans, loan, blocks, lent, values, d, s0, heap, after, loc,
-                low_bytes(8, values(64, value)), omega(), stores.proof.right, s, resident, held.right, s.flags, rip);
-            let done: goal(loc.address(spans), values(64, value)) = ⟨left.left, ⟨left.right.left, ⟨held.left.left, left.right.right⟩⟩⟩;
-            ⟨plain, j(word, λ w _ => goal(read_gpr(base, s.gprs), w), j(sym(at), λ x _ => goal(x, values(64, value)), done))⟩
+                low_bytes(8, view_word(values, view, value)), omega(), stores.proof.right, s, resident, held.right, s.flags, rip);
+            let done: goal(loc.address(spans), view_word(values, view, value)) = ⟨left.left, ⟨left.right.left, ⟨held.left.left, left.right.right⟩⟩⟩;
+            ⟨plain, j(word, λ w _ => goal(read_gpr(base, s.gprs), w), j(sym(at), λ x _ => goal(x, view_word(values, view, value)), done))⟩
         })⟩
 }
 
@@ -672,14 +705,14 @@ fn MayEmitHeap<M>(saves: Nat, site: Site<M>, stack: Stack<M>(site.fetch, site.da
 
 // A load at its width: one byte, four or eight; any other is refused (a
 // two-byte load waits for the machine's `MOVZX r, word`).
-fn emit_load(prog: Prog, file: File, output, place: Nat, destination, base: Gpr, bytes: Nat, later: List<Place>, names: Nat) → Option<Emitted> {
+fn emit_load(prog: Prog, file: File, view, output, place: Nat, destination, base: Gpr, bytes: Nat, later: List<Place>, names: Nat) → Option<Emitted> {
     match bytes.same(1) {
-        True => Some(Emitted(At(prog, 0, LoadByte(ByteLoad(destination, base))), file.write(destination, Some(Held(output, Word))), later, names)),
+        True => Some(Emitted(At(prog, 0, LoadByte(ByteLoad(destination, base))), file.write(destination, Some(Held(output, view_kind(view)))), later, names)),
         False => match bytes.same(4) {
-            True => Some(Emitted(At(prog, 0, asm_dword_load(DwordLoad(destination, base))), file.write(destination, Some(Held(output, Word))), later,
+            True => Some(Emitted(At(prog, 0, asm_dword_load(DwordLoad(destination, base))), file.write(destination, Some(Held(output, view_kind(view)))), later,
                 names)),
             False => match bytes.same(8) {
-                True => Some(Emitted(At(prog, 0, Load(WordLoad(destination, base))), file.write(destination, Some(Held(output, Word))), later, names)),
+                True => Some(Emitted(At(prog, 0, Load(WordLoad(destination, base))), file.write(destination, Some(Held(output, view_kind(view)))), later, names)),
                 False => None,
             },
         },
@@ -688,17 +721,17 @@ fn emit_load(prog: Prog, file: File, output, place: Nat, destination, base: Gpr,
 
 theorem emit_load_emits<M>(saves: Nat, site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data), top: Nat,
     spans: Spans, loan: Loan<M>(site.fetch, site.data, stack, top, spans), values: Valuation(), d: Nat, s0: MachineState<M>, prog: Prog,
-    file: File, output, place: Nat, base, destination: Gpr, found: FoundAt(file, Held(place, Word), base),
+    file: File, view, output, place: Nat, base, destination: Gpr, found: FoundAt(file, Held(place, Word), base),
     apart: destination.apart(body_kept(saves)).IsTrue(), bytes: Nat, later: List<Place>, names: Nat, heap: Heap):
-    MayEmitHeap<M>(saves, site, stack, spans, values, d, s0, prog, file, Loads(spans, values, heap, bytes, output, place), heap, heap,
-        emit_load(prog, file, output, place, destination, base, bytes, later, names)) {
-    let out_file = file.write(destination, Some(Held(output, Word)));
+    MayEmitHeap<M>(saves, site, stack, spans, values, d, s0, prog, file, Loads(spans, values, heap, bytes, view, output, place), heap, heap,
+        emit_load(prog, file, view, output, place, destination, base, bytes, later, names)) {
+    let out_file = file.write(destination, Some(Held(output, view_kind(view))));
     let at = λ (n: Nat) (e: bytes.same(n) = True) (out: Emitted)
-        (emits: EmitsHeap<M>(saves, site, stack, spans, values, d, s0, prog, file, Loads(spans, values, heap, n, output, place), heap, heap, out)) =>
-        j(sym(bytes.same_sound(n, e)), λ k _ => EmitsHeap<M>(saves, site, stack, spans, values, d, s0, prog, file, Loads(spans, values, heap, k, output, place),
+        (emits: EmitsHeap<M>(saves, site, stack, spans, values, d, s0, prog, file, Loads(spans, values, heap, n, view, output, place), heap, heap, out)) =>
+        j(sym(bytes.same_sound(n, e)), λ k _ => EmitsHeap<M>(saves, site, stack, spans, values, d, s0, prog, file, Loads(spans, values, heap, k, view, output, place),
             heap, heap, out), emits);
     (match bytes.same(1) as λ v => bytes.same(1) = v → MayEmitHeap<M>(saves, site, stack, spans, values, d, s0, prog, file,
-            Loads(spans, values, heap, bytes, output, place), heap, heap, match v {
+            Loads(spans, values, heap, bytes, view, output, place), heap, heap, match v {
                 True => Some(Emitted(At(prog, 0, LoadByte(ByteLoad(destination, base))), out_file, later, names)),
                 False => match bytes.same(4) {
                     True => Some(Emitted(At(prog, 0, asm_dword_load(DwordLoad(destination, base))), out_file, later, names)),
@@ -709,10 +742,10 @@ theorem emit_load_emits<M>(saves: Nat, site: Site<M>, laid: site.program.laid_ou
                 },
             }) {
         True => λ e => at(1, e, Emitted(At(prog, 0, LoadByte(ByteLoad(destination, base))), out_file, later, names),
-            load_byte_emits<M>(saves, site, laid, stack, top, spans, loan, values, d, s0, prog, file, output, place, base, destination, found, apart,
+            load_byte_emits<M>(saves, site, laid, stack, top, spans, loan, values, d, s0, prog, file, view, output, place, base, destination, found, apart,
                 later, names, heap)),
         False => λ _ => (match bytes.same(4) as λ v => bytes.same(4) = v → MayEmitHeap<M>(saves, site, stack, spans, values, d, s0, prog, file,
-                Loads(spans, values, heap, bytes, output, place), heap, heap, match v {
+                Loads(spans, values, heap, bytes, view, output, place), heap, heap, match v {
                     True => Some(Emitted(At(prog, 0, asm_dword_load(DwordLoad(destination, base))), out_file, later, names)),
                     False => match bytes.same(8) {
                         True => Some(Emitted(At(prog, 0, Load(WordLoad(destination, base))), out_file, later, names)),
@@ -720,15 +753,15 @@ theorem emit_load_emits<M>(saves: Nat, site: Site<M>, laid: site.program.laid_ou
                     },
                 }) {
             True => λ e => at(4, e, Emitted(At(prog, 0, asm_dword_load(DwordLoad(destination, base))), out_file, later, names),
-                load_dword_emits<M>(saves, site, laid, stack, top, spans, loan, values, d, s0, prog, file, output, place, base, destination, found, apart,
+                load_dword_emits<M>(saves, site, laid, stack, top, spans, loan, values, d, s0, prog, file, view, output, place, base, destination, found, apart,
                     later, names, heap)),
             False => λ _ => (match bytes.same(8) as λ v => bytes.same(8) = v → MayEmitHeap<M>(saves, site, stack, spans, values, d, s0, prog, file,
-                    Loads(spans, values, heap, bytes, output, place), heap, heap, match v {
+                    Loads(spans, values, heap, bytes, view, output, place), heap, heap, match v {
                         True => Some(Emitted(At(prog, 0, Load(WordLoad(destination, base))), out_file, later, names)),
                         False => None,
                     }) {
                 True => λ e => at(8, e, Emitted(At(prog, 0, Load(WordLoad(destination, base))), out_file, later, names),
-                    load_word_emits<M>(saves, site, laid, stack, top, spans, loan, values, d, s0, prog, file, output, place, base, destination, found,
+                    load_word_emits<M>(saves, site, laid, stack, top, spans, loan, values, d, s0, prog, file, view, output, place, base, destination, found,
                         apart, later, names, heap)),
                 False => λ _ => trivial,
             })(refl),
@@ -755,28 +788,28 @@ fn emit_store(prog: Prog, file: File, base, source: Gpr, bytes: Nat, later: List
 
 theorem emit_store_emits<M>(saves: Nat, site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data), top: Nat,
     spans: Spans, loan: Loan<M>(site.fetch, site.data, stack, top, spans), blocks: Blocks, lent: blocks.Lent(spans), values: Valuation(), d: Nat,
-    s0: MachineState<M>, prog: Prog, file: File, place, value: Nat, base, source: Gpr, at_place: FoundAt(file, Held(place, Word), base),
-    at_value: FoundAt(file, Held(value, Word), source), bytes: Nat, later: List<Place>, names: Nat, heap, after: Heap):
-    MayEmitHeap<M>(saves, site, stack, spans, values, d, s0, prog, file, Stores(spans, values, blocks, heap, after, bytes, place, value), heap, after,
+    s0: MachineState<M>, prog: Prog, file: File, view, place, value: Nat, base, source: Gpr, at_place: FoundAt(file, Held(place, Word), base),
+    at_value: FoundAt(file, Held(value, view_kind(view)), source), bytes: Nat, later: List<Place>, names: Nat, heap, after: Heap):
+    MayEmitHeap<M>(saves, site, stack, spans, values, d, s0, prog, file, Stores(spans, values, blocks, heap, after, bytes, view, place, value), heap, after,
         emit_store(prog, file, base, source, bytes, later, names)) {
     let at = λ (n: Nat) (e: bytes.same(n) = True) (out: Emitted)
-        (emits: EmitsHeap<M>(saves, site, stack, spans, values, d, s0, prog, file, Stores(spans, values, blocks, heap, after, n, place, value), heap,
+        (emits: EmitsHeap<M>(saves, site, stack, spans, values, d, s0, prog, file, Stores(spans, values, blocks, heap, after, n, view, place, value), heap,
             after, out)) =>
         j(sym(bytes.same_sound(n, e)), λ k _ => EmitsHeap<M>(saves, site, stack, spans, values, d, s0, prog, file,
-            Stores(spans, values, blocks, heap, after, k, place, value), heap, after, out), emits);
+            Stores(spans, values, blocks, heap, after, k, view, place, value), heap, after, out), emits);
     match plain: store_base_plain(base) {
         False => trivial,
         True => match one: bytes.same(1) {
             True => at(1, one, Emitted(At(prog, 0, StoreByte(ByteStore(base, source))), file, later, names),
-                store_byte_emits<M>(saves, site, laid, stack, top, spans, loan, blocks, lent, values, d, s0, prog, file, place, value, base, source,
+                store_byte_emits<M>(saves, site, laid, stack, top, spans, loan, blocks, lent, values, d, s0, prog, file, view, place, value, base, source,
                     at_place, at_value, plain, later, names, heap, after)),
             False => match four: bytes.same(4) {
                 True => at(4, four, Emitted(At(prog, 0, asm_dword_store(DwordStore(base, source))), file, later, names),
-                    store_dword_emits<M>(saves, site, laid, stack, top, spans, loan, blocks, lent, values, d, s0, prog, file, place, value, base, source,
+                    store_dword_emits<M>(saves, site, laid, stack, top, spans, loan, blocks, lent, values, d, s0, prog, file, view, place, value, base, source,
                         at_place, at_value, plain, later, names, heap, after)),
                 False => match eight: bytes.same(8) {
                     True => at(8, eight, Emitted(At(prog, 0, asm_word_store(WordStore(base, source))), file, later, names),
-                        store_word_emits<M>(saves, site, laid, stack, top, spans, loan, blocks, lent, values, d, s0, prog, file, place, value, base,
+                        store_word_emits<M>(saves, site, laid, stack, top, spans, loan, blocks, lent, values, d, s0, prog, file, view, place, value, base,
                             source, at_place, at_value, plain, later, names, heap, after)),
                     False => trivial,
                 },
@@ -811,14 +844,14 @@ theorem Place::destination_apart(self p: Place, saves: Nat, register: Gpr, named
 
 // A load through the register the file says holds the reference, into the
 // register the placement names.
-fn emit_load_at(saves: Nat, prog: Prog, file: File, output, place, bytes: Nat, placement: List<Place>, names: Nat) → Option<Emitted> {
+fn emit_load_at(saves: Nat, prog: Prog, file: File, view, output, place, bytes: Nat, placement: List<Place>, names: Nat) → Option<Emitted> {
     match placement {
         Nil => None,
         Cons(p, later) => match p.destination(saves) {
             None => None,
             Some(destination) => match file.find(Held(place, Word)) {
                 None => None,
-                Some(found) => emit_load(prog, file, output, place, destination, found.register, bytes, later, names),
+                Some(found) => emit_load(prog, file, view, output, place, destination, found.register, bytes, later, names),
             },
         },
     }
@@ -826,16 +859,16 @@ fn emit_load_at(saves: Nat, prog: Prog, file: File, output, place, bytes: Nat, p
 
 theorem emit_load_at_emits<M>(saves: Nat, site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data), top: Nat,
     spans: Spans, loan: Loan<M>(site.fetch, site.data, stack, top, spans), values: Valuation(), d: Nat, s0: MachineState<M>, prog: Prog,
-    file: File, output, place, bytes: Nat, placement: List<Place>, names: Nat, heap: Heap):
-    MayEmitHeap<M>(saves, site, stack, spans, values, d, s0, prog, file, Loads(spans, values, heap, bytes, output, place), heap, heap,
-        emit_load_at(saves, prog, file, output, place, bytes, placement, names)) {
+    file: File, view, output, place, bytes: Nat, placement: List<Place>, names: Nat, heap: Heap):
+    MayEmitHeap<M>(saves, site, stack, spans, values, d, s0, prog, file, Loads(spans, values, heap, bytes, view, output, place), heap, heap,
+        emit_load_at(saves, prog, file, view, output, place, bytes, placement, names)) {
     match placement {
         Nil => trivial,
         Cons(p, later) => match named: p.destination(saves) {
             None => trivial,
             Some(destination) => match file.find(Held(place, Word)) {
                 None => trivial,
-                Some(found) => emit_load_emits<M>(saves, site, laid, stack, top, spans, loan, values, d, s0, prog, file, output, place, found.register,
+                Some(found) => emit_load_emits<M>(saves, site, laid, stack, top, spans, loan, values, d, s0, prog, file, view, output, place, found.register,
                     destination, found.at, p.destination_apart(saves, destination, named), bytes, later, names, heap),
             },
         },
@@ -877,12 +910,12 @@ theorem emit_load_ref_at_emits<M>(saves: Nat, site: Site<M>, laid: site.program.
 
 // A store from the register holding the word through the one holding the
 // reference; the placement's entry for it is passed over.
-fn emit_store_at(prog: Prog, file: File, place, value, bytes: Nat, placement: List<Place>, names: Nat) → Option<Emitted> {
+fn emit_store_at(prog: Prog, file: File, view, place, value, bytes: Nat, placement: List<Place>, names: Nat) → Option<Emitted> {
     match placement {
         Nil => None,
         Cons(skipped, later) => match file.find(Held(place, Word)) {
             None => None,
-            Some(base) => match file.find(Held(value, Word)) {
+            Some(base) => match file.find(Held(value, view_kind(view))) {
                 None => None,
                 Some(source) => emit_store(prog, file, base.register, source.register, bytes, later, names),
             },
@@ -892,25 +925,25 @@ fn emit_store_at(prog: Prog, file: File, place, value, bytes: Nat, placement: Li
 
 theorem emit_store_at_emits<M>(saves: Nat, site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data),
     top: Nat, spans: Spans, loan: Loan<M>(site.fetch, site.data, stack, top, spans), blocks: Blocks, lent: blocks.Lent(spans), values: Valuation(),
-    d: Nat, s0: MachineState<M>, prog: Prog, file: File, place, value, bytes: Nat, placement: List<Place>, names: Nat, heap, after: Heap):
-    MayEmitHeap<M>(saves, site, stack, spans, values, d, s0, prog, file, Stores(spans, values, blocks, heap, after, bytes, place, value), heap, after,
-        emit_store_at(prog, file, place, value, bytes, placement, names)) {
-    let facts = Stores(spans, values, blocks, heap, after, bytes, place, value);
+    d: Nat, s0: MachineState<M>, prog: Prog, file: File, view, place, value, bytes: Nat, placement: List<Place>, names: Nat, heap, after: Heap):
+    MayEmitHeap<M>(saves, site, stack, spans, values, d, s0, prog, file, Stores(spans, values, blocks, heap, after, bytes, view, place, value), heap, after,
+        emit_store_at(prog, file, view, place, value, bytes, placement, names)) {
+    let facts = Stores(spans, values, blocks, heap, after, bytes, view, place, value);
     match placement {
         Nil => trivial,
         Cons(skipped, later) => (match file.find(Held(place, Word)) as λ o => MayEmitHeap<M>(saves, site, stack, spans, values, d, s0, prog, file, facts,
                 heap, after, match o {
                     None => None,
-                    Some(base) => match file.find(Held(value, Word)) {
+                    Some(base) => match file.find(Held(value, view_kind(view))) {
                         None => None,
                         Some(source) => emit_store(prog, file, base.register, source.register, bytes, later, names),
                     },
                 }) {
             None => trivial,
-            Some(base) => (match file.find(Held(value, Word)) as λ o => MayEmitHeap<M>(saves, site, stack, spans, values, d, s0, prog, file, facts,
+            Some(base) => (match file.find(Held(value, view_kind(view))) as λ o => MayEmitHeap<M>(saves, site, stack, spans, values, d, s0, prog, file, facts,
                     heap, after, match o { None => None, Some(source) => emit_store(prog, file, base.register, source.register, bytes, later, names) }) {
                 None => trivial,
-                Some(source) => emit_store_emits<M>(saves, site, laid, stack, top, spans, loan, blocks, lent, values, d, s0, prog, file, place, value,
+                Some(source) => emit_store_emits<M>(saves, site, laid, stack, top, spans, loan, blocks, lent, values, d, s0, prog, file, view, place, value,
                     base.register, source.register, base.at, source.at, bytes, later, names, heap, after),
             }),
         }),
@@ -979,8 +1012,8 @@ theorem emit_store_ref_at_emits<M>(saves: Nat, site: Site<M>, laid: site.program
 fn Instr::Holds(self instr: Instr, spans: Spans, blocks: Blocks, values: Valuation(), before, after: Heap) → Type {
     match instr {
         Compute(node) => NodeHolds(values, node) ∧ (after = before),
-        Load(bytes, output, place) => Loads(spans, values, before, bytes, output, place) ∧ (after = before),
-        Store(bytes, place, value) => Stores(spans, values, blocks, before, after, bytes, place, value),
+        Load(bytes, view, output, place) => Loads(spans, values, before, bytes, view, output, place) ∧ (after = before),
+        Store(bytes, view, place, value) => Stores(spans, values, blocks, before, after, bytes, view, place, value),
         LoadRef(output, place) => LoadsRef(spans, values, before, output, place) ∧ (after = before),
         StoreRef(place, value) => StoresRef(spans, values, blocks, before, after, place, value),
         Offset(output, place, amount) => Offsets(spans, values, output, place, amount) ∧ (after = before),
@@ -994,8 +1027,8 @@ fn Instr::Holds(self instr: Instr, spans: Spans, blocks: Blocks, values: Valuati
 fn Instr::emit(self instr: Instr, saves: Nat, prog: Prog, file: File, placement: List<Place>, names: Nat) → Option<Emitted> {
     match instr {
         Compute(node) => emit_word_nodes(saves, prog, file, [node], placement, names),
-        Load(bytes, output, place) => emit_load_at(saves, prog, file, output, place, bytes, placement, names),
-        Store(bytes, place, value) => emit_store_at(prog, file, place, value, bytes, placement, names),
+        Load(bytes, view, output, place) => emit_load_at(saves, prog, file, view, output, place, bytes, placement, names),
+        Store(bytes, view, place, value) => emit_store_at(prog, file, view, place, value, bytes, placement, names),
         LoadRef(output, place) => emit_load_ref_at(saves, prog, file, output, place, placement, names),
         StoreRef(place, value) => emit_store_ref_at(prog, file, place, value, placement, names),
         Offset(output, place, amount) => emit_word_nodes(saves, prog, file, [Add(64, output, place, amount)], placement, names),
@@ -1017,15 +1050,15 @@ theorem Instr::emit_emits<M>(self instr: Instr, saves: Nat, site: Site<M>, laid:
                 NodeHolds(values, node) ∧ (after = before), λ h => ⟨h.left, trivial⟩, before, before,
                 emit_word_nodes(saves, prog, file, [node], placement, names),
                 emit_word_nodes_emits<M>(saves, site, laid, stack, spans, values, d, s0, prog, file, [node], placement, names, before))),
-        Load(bytes, output, place) => may_emit_by_still<M, Heap>(saves, site, stack, spans, mem, values, d, s0, prog, file,
-            Loads(spans, values, before, bytes, output, place) ∧ (after = before), before, after, λ h => h.right,
-            emit_load_at(saves, prog, file, output, place, bytes, placement, names),
-            may_emit_by_weaken<M, Heap>(saves, site, stack, spans, mem, values, d, s0, prog, file, Loads(spans, values, before, bytes, output, place),
-                Loads(spans, values, before, bytes, output, place) ∧ (after = before), λ h => h.left, before, before,
-                emit_load_at(saves, prog, file, output, place, bytes, placement, names),
-                emit_load_at_emits<M>(saves, site, laid, stack, top, spans, loan, values, d, s0, prog, file, output, place, bytes, placement, names,
+        Load(bytes, view, output, place) => may_emit_by_still<M, Heap>(saves, site, stack, spans, mem, values, d, s0, prog, file,
+            Loads(spans, values, before, bytes, view, output, place) ∧ (after = before), before, after, λ h => h.right,
+            emit_load_at(saves, prog, file, view, output, place, bytes, placement, names),
+            may_emit_by_weaken<M, Heap>(saves, site, stack, spans, mem, values, d, s0, prog, file, Loads(spans, values, before, bytes, view, output, place),
+                Loads(spans, values, before, bytes, view, output, place) ∧ (after = before), λ h => h.left, before, before,
+                emit_load_at(saves, prog, file, view, output, place, bytes, placement, names),
+                emit_load_at_emits<M>(saves, site, laid, stack, top, spans, loan, values, d, s0, prog, file, view, output, place, bytes, placement, names,
                     before))),
-        Store(bytes, place, value) => emit_store_at_emits<M>(saves, site, laid, stack, top, spans, loan, blocks, lent, values, d, s0, prog, file, place,
+        Store(bytes, view, place, value) => emit_store_at_emits<M>(saves, site, laid, stack, top, spans, loan, blocks, lent, values, d, s0, prog, file, view, place,
             value, bytes, placement, names, before, after),
         LoadRef(output, place) => may_emit_by_still<M, Heap>(saves, site, stack, spans, mem, values, d, s0, prog, file,
             LoadsRef(spans, values, before, output, place) ∧ (after = before), before, after, λ h => h.right,
@@ -1246,10 +1279,30 @@ theorem Locals::word_set(self l: Locals, spans: Spans, values: Valuation(), boun
         trans(cong_fn<Locals, BitVec(64)>(λ x => x.words(64, out), sym(set)), Valuation::set_here(before.words, out, word_value(word), 64)))
 }
 
-theorem load_holds(bytes, output, place: Nat, blocks: Blocks, spans: Spans, values: Valuation(), kinds, bound: List<Typed>, c, after: Config,
-    checked: Instr::Load(bytes, output, place).check(kinds) = Some(bound), stepped: Instr::Load(bytes, output, place).step(blocks, c) = Some(after),
+// A loaded word held at its view's kind (`view_ok`): at 64 the word itself;
+// at 32 its view widened back, which is the word, since it was read from
+// four bytes or fewer.
+theorem load_view_held(values: Valuation(), bytes, view, output: Nat, list: List<BitVec(8)>, len: list.len() = bytes,
+    viewed: view_ok(bytes, view) = True, at_width: (w: Nat) → values(w, output) = word_value(word_of_bytes(list))(w)):
+    Held(output, view_kind(view)).Rep(values, word_of_bytes(list)) {
+    (match view.same(64) as λ b => (match b { True => True, False => view.same(32) && bytes.leb(4) }) = True →
+            Held(output, match b { True => Word, False => Narrow(view) }).Rep(values, word_of_bytes(list)) {
+        True => λ _ => at_width(64),
+        False => λ narrow => {
+            let parts = Bool::and_true_parts(view.same(32), bytes.leb(4), narrow);
+            let is32: (view = 32) = view.same_sound(32, parts.left);
+            let few: (bytes <= 4) = bytes.leb_sound(4, is_true_of_eq(bytes.leb(4), parts.right));
+            j(sym(is32), λ v _ => values(v, output).resize(64) = word_of_bytes(list),
+                trans(cong_fn<BitVec(32), BitVec(64)>(λ y => y.resize(64), at_width(32)), word_of_bytes_round(list, omega(len, few))))
+        },
+    })(viewed)
+}
+
+theorem load_holds(bytes, view, output, place: Nat, blocks: Blocks, spans: Spans, values: Valuation(), kinds, bound: List<Typed>, c, after: Config,
+    checked: Instr::Load(bytes, view, output, place).check(kinds) = Some(bound),
+    stepped: Instr::Load(bytes, view, output, place).step(blocks, c) = Some(after),
     agrees: c.locals.Agrees(spans, values, kinds), later: after.locals.Agrees(spans, values, bound)):
-    Loads(spans, values, c.memory, bytes, output, place) ∧ (after.memory = c.memory) {
+    Loads(spans, values, c.memory, bytes, view, output, place) ∧ (after.memory = c.memory) {
     let first = Option::and_then_some(c.locals.refs(place), λ (loc: Loc) =>
         c.memory.load(loc, bytes).and_then(λ (x: BitVec(64)) => Some(Config(c.locals.set_word(output, word_value(x)), c.memory, c.io))), after, stepped);
     let loc = first.witness;
@@ -1259,38 +1312,46 @@ theorem load_holds(bytes, output, place: Nat, blocks: Blocks, spans: Spans, valu
     let e: (Config(c.locals.set_word(output, word_value(x)), c.memory, c.io) = after) =
         Option::some_inj(Config(c.locals.set_word(output, word_value(x)), c.memory, c.io), after, second.proof.right);
     let read = c.memory.load_some(loc, bytes, x, second.proof.left);
-    match ok: width_ok(bytes) && has_kind(kinds, place, RefKind) {
+    match ok: access_ok(bytes, view) && has_kind(kinds, place, RefKind) {
         False => absurd(j(ok, λ v _ => (match v { False => None, True => bind_kind(kinds, word_id(output)) }) = Some(bound), checked)),
         True => {
             let bind: (bind_kind(kinds, word_id(output)) = Some(bound)) =
                 j(ok, λ v _ => (match v { False => None, True => bind_kind(kinds, word_id(output)) }) = Some(bound), checked);
-            let has = Bool::and_true_parts(width_ok(bytes), has_kind(kinds, place, RefKind), ok).right;
-            let named: (values(64, output) = x) = after.locals.word_set(spans, values, bound, output, bind_kind_has(word_id(output), kinds, bound, bind),
-                later, c.locals, x, cong_fn<Config, Locals>(λ y => y.locals, e));
-            ⟨Exists(loc, ⟨c.locals.ref_at(spans, values, kinds, place, has, agrees, loc, first.proof.left),
-                Exists(read.witness, ⟨read.proof.left, trans(named, sym(read.proof.right))⟩)⟩),
+            let parts = Bool::and_true_parts(access_ok(bytes, view), has_kind(kinds, place, RefKind), ok);
+            let viewed = Bool::and_true_parts(width_ok(bytes), view_ok(bytes, view), parts.left).right;
+            let set: (c.locals.set_word(output, word_value(x)) = after.locals) = cong_fn<Config, Locals>(λ y => y.locals, e);
+            let list = read.witness;
+            let at_width = λ (w: Nat) => trans(
+                after.locals.agrees_word(spans, values, bound, output, bind_kind_has(word_id(output), kinds, bound, bind), later, w),
+                trans(cong_fn<Locals, BitVec(w)>(λ y => y.words(w, output), sym(set)), Valuation::set_here(c.locals.words, output, word_value(x), w)));
+            let held = load_view_held(values, bytes, view, output, list, c.memory.read_bytes_len(loc, bytes, list, read.proof.left), viewed,
+                λ w => j(sym(read.proof.right), λ y _ => values(w, output) = word_value(y)(w), at_width(w)));
+            ⟨Exists(loc, ⟨c.locals.ref_at(spans, values, kinds, place, parts.right, agrees, loc, first.proof.left),
+                Exists(list, ⟨read.proof.left, held⟩)⟩),
              cong_fn<Config, Heap>(λ y => y.memory, sym(e))⟩
         },
     }
 }
 
-theorem store_holds(bytes, place, value: Nat, blocks: Blocks, spans: Spans, values: Valuation(), kinds, bound: List<Typed>, c, after: Config,
-    checked: Instr::Store(bytes, place, value).check(kinds) = Some(bound), stepped: Instr::Store(bytes, place, value).step(blocks, c) = Some(after),
-    agrees: c.locals.Agrees(spans, values, kinds)): Stores(spans, values, blocks, c.memory, after.memory, bytes, place, value) {
+theorem store_holds(bytes, view, place, value: Nat, blocks: Blocks, spans: Spans, values: Valuation(), kinds, bound: List<Typed>, c, after: Config,
+    checked: Instr::Store(bytes, view, place, value).check(kinds) = Some(bound),
+    stepped: Instr::Store(bytes, view, place, value).step(blocks, c) = Some(after),
+    agrees: c.locals.Agrees(spans, values, kinds)): Stores(spans, values, blocks, c.memory, after.memory, bytes, view, place, value) {
     let piece = λ (w: BitVec(64)) => Piece::plain(low_bytes(bytes, w));
     let first = Option::and_then_some(c.locals.refs(place), λ (loc: Loc) =>
-        c.memory.put(blocks.written, loc, piece(c.locals.word(value))).and_then(λ (m: Heap) => Some(Config(c.locals, m, c.io))), after, stepped);
+        c.memory.put(blocks.written, loc, piece(c.locals.view(view, value))).and_then(λ (m: Heap) => Some(Config(c.locals, m, c.io))), after, stepped);
     let loc = first.witness;
-    let second = Option::and_then_some(c.memory.put(blocks.written, loc, piece(c.locals.word(value))), λ (m: Heap) => Some(Config(c.locals, m, c.io)),
+    let second = Option::and_then_some(c.memory.put(blocks.written, loc, piece(c.locals.view(view, value))), λ (m: Heap) => Some(Config(c.locals, m, c.io)),
         after, first.proof.right);
     let e: (Config(c.locals, second.witness, c.io) = after) = Option::some_inj(Config(c.locals, second.witness, c.io), after, second.proof.right);
-    let ok = width_ok(bytes) && (has_kind(kinds, place, RefKind) && has_kind(kinds, value, WordKind));
+    let ok = access_ok(bytes, view) && (has_kind(kinds, place, RefKind) && has_kind(kinds, value, WordKind));
     match yes: ok {
         False => absurd(j(yes, λ v _ => (match v { False => None, True => Some(kinds) }) = Some(bound), checked)),
         True => {
             let parts = Bool::and_true_parts(has_kind(kinds, place, RefKind), has_kind(kinds, value, WordKind),
-                Bool::and_true_parts(width_ok(bytes), has_kind(kinds, place, RefKind) && has_kind(kinds, value, WordKind), yes).right);
-            let word: (values(64, value) = c.locals.word(value)) = c.locals.agrees_word(spans, values, kinds, value, parts.right, agrees, 64);
+                Bool::and_true_parts(access_ok(bytes, view), has_kind(kinds, place, RefKind) && has_kind(kinds, value, WordKind), yes).right);
+            let word: (view_word(values, view, value) = c.locals.view(view, value)) = view_word_agrees(values, c.locals.words, view, value,
+                λ w => c.locals.agrees_word(spans, values, kinds, value, parts.right, agrees, w));
             Exists(loc, ⟨c.locals.ref_at(spans, values, kinds, place, parts.left, agrees, loc, first.proof.left),
                 j(sym(word), λ w _ => c.memory.put(blocks.written, loc, piece(w)) = Some(after.memory),
                     trans(second.proof.left, cong_fn<Config, Option<Heap>>(λ y => Some(y.memory), e)))⟩)
@@ -1420,8 +1481,8 @@ theorem Instr::holds_of(self instr: Instr, blocks: Blocks, spans: Spans, values:
     instr.Holds(spans, blocks, values, c.memory, after.memory) {
     match instr {
         Compute(node) => compute_holds(node, blocks, spans, values, kinds, bound, c, after, checked, stepped, agrees, later),
-        Load(bytes, output, place) => load_holds(bytes, output, place, blocks, spans, values, kinds, bound, c, after, checked, stepped, agrees, later),
-        Store(bytes, place, value) => store_holds(bytes, place, value, blocks, spans, values, kinds, bound, c, after, checked, stepped, agrees),
+        Load(bytes, view, output, place) => load_holds(bytes, view, output, place, blocks, spans, values, kinds, bound, c, after, checked, stepped, agrees, later),
+        Store(bytes, view, place, value) => store_holds(bytes, view, place, value, blocks, spans, values, kinds, bound, c, after, checked, stepped, agrees),
         LoadRef(output, place) => load_ref_holds(output, place, blocks, spans, values, kinds, bound, c, after, checked, stepped, agrees, later),
         StoreRef(place, value) => store_ref_holds(place, value, blocks, spans, values, kinds, bound, c, after, checked, stepped, agrees),
         Offset(output, place, amount) => offset_holds(output, place, amount, blocks, spans, values, kinds, bound, c, after, checked, stepped, agrees, later),

@@ -13,10 +13,13 @@
 //   (function_ir_lower_reads). A loop's pass has the homes its state
 //   carries unchanged (`loop_carried`), and after the loop the scope has
 //   them under the outputs' names too (`StructuredRegion::lends`).
-// - A byte load is an `Offset` and a `Load(1)`, a wide load at 1, 2, 4 or
-//   8 bytes an `Offset` and a `Load` at that width.
-// - A byte store is an `Offset`, a `Store(1)` and the byte loaded back,
-//   which is what the old node's output names. A wide store is the same
+// - A byte load is an `Offset` and a `Load(1)` held as a word, a wide load
+//   at 1, 2, 4 or 8 bytes an `Offset` and a `Load` at that width held at
+//   its `8 · bytes`-bit view (`wide_view`), as the old lowering holds
+//   `WideLoad(4)` narrow.
+// - A byte store is an `Offset`, a `Store(1)` from the 64-bit view and the
+//   byte loaded back, which is what the old node's output names. A wide
+//   store stores from its `8 · bytes`-bit view and is otherwise the same
 //   without the load back, where the function reads nothing at the output
 //   (the old lowering leaves it unheld, so no lowered program reads it).
 // - Word nodes are wrapped in `Compute`; a `Move` of a reference is a
@@ -227,8 +230,15 @@ inductive Memory { Plain(instrs: List<Instr>), Guarded(test: Nat, instrs: List<I
 
 fn wide_bytes(bytes: Nat) → Bool { bytes.same(1) || (bytes.same(2) || (bytes.same(4) || bytes.same(8))) }
 
+// The view a wide access of `bytes` bytes uses: its `8 · bytes` bits, the
+// width FunctionIR reads and writes its value at (the old lowering's
+// `Narrow(32)` at four bytes, `Word` at eight).
+fn wide_view(bytes: Nat) → Nat { 8 * bytes }
+
 // A wide store's output loaded back, where the function reads it.
-fn reload(bytes, output, t: Nat, reads: List<Nat>) → List<Instr> { match mem_nat(output, reads) { True => [Load(bytes, output, t)], False => [] } }
+fn reload(bytes, output, t: Nat, reads: List<Nat>) → List<Instr> {
+    match mem_nat(output, reads) { True => [Load(bytes, wide_view(bytes), output, t)], False => [] }
+}
 
 // A node that touches a buffer, at the fresh id `t` (the reference to the
 // bytes) and `t + 1` (a guard's bit); `reads` is what the function reads.
@@ -237,29 +247,29 @@ fn Scope::memory(self s: Scope, node: Node, t: Nat, reads: List<Nat>) → Memory
         BufferLoad(output, buffer, index) => match home_of(s.homes, buffer) {
             None => Refused,
             Some(h) => match s.inside(index, h, 0) {
-                True => Plain([Offset(t, h.base, index), Load(1, output, t)]),
-                False => Guarded(t + 1, [Offset(t, h.base, index), Load(1, output, t)]),
+                True => Plain([Offset(t, h.base, index), Load(1, 64, output, t)]),
+                False => Guarded(t + 1, [Offset(t, h.base, index), Load(1, 64, output, t)]),
             },
         },
         BufferStore(output, buffer, index, value) => match home_of(s.homes, buffer) {
             None => Refused,
             Some(h) => match s.inside(index, h, 0) {
                 False => Refused,
-                True => Plain([Offset(t, h.base, index), Store(1, t, value), Load(1, output, t)]),
+                True => Plain([Offset(t, h.base, index), Store(1, 64, t, value), Load(1, 64, output, t)]),
             },
         },
         WideLoad(bytes, output, buffer, index) => match home_of(s.homes, buffer) {
             None => Refused,
             Some(h) => match wide_bytes(bytes) && s.inside(index, h, bytes - 1) {
                 False => Refused,
-                True => Plain([Offset(t, h.base, index), Load(bytes, output, t)]),
+                True => Plain([Offset(t, h.base, index), Load(bytes, wide_view(bytes), output, t)]),
             },
         },
         WideStore(bytes, output, buffer, index, value) => match home_of(s.homes, buffer) {
             None => Refused,
             Some(h) => match wide_bytes(bytes) && s.inside(index, h, bytes - 1) {
                 False => Refused,
-                True => Plain([Offset(t, h.base, index), Store(bytes, t, value)] ++ reload(bytes, output, t, reads)),
+                True => Plain([Offset(t, h.base, index), Store(bytes, wide_view(bytes), t, value)] ++ reload(bytes, output, t, reads)),
             },
         },
         // A copy of a reference is a reference: an offset of zero (`t` the

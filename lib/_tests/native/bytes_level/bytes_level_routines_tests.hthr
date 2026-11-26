@@ -52,7 +52,7 @@ fn lowers(p: Program, placement: List<Place>) → Bool { p.lower(placement).is_s
 // nothing, so its code answers zero in RAX.
 fn fill() → Routine {
     Routine([ref_id(0), word_id(1)],
-        Leaf([Compute(Const(64, 2, 42)), Store(1, 0, 2), Compute(Const(64, 3, 1)), Compute(Sub(64, 4, 1, 3)), Offset(5, 0, 4), Store(1, 5, 2)]),
+        Leaf([Compute(Const(64, 2, 42)), Store(1, 64, 0, 2), Compute(Const(64, 3, 1)), Compute(Sub(64, 4, 1, 3)), Offset(5, 0, 4), Store(1, 64, 5, 2)]),
         [])
 }
 
@@ -62,8 +62,8 @@ fn lend(length: Nat) → Routine {
     Routine([ref_id(0)],
         Seq(Leaf([Compute(Const(64, 1, 4)), Offset(2, 0, 1), Compute(Const(64, 3, length))]),
             Seq(Call(0, [ref_id(2), word_id(3)], []),
-                Leaf([Load(1, 4, 2), Compute(Const(64, 5, 1)), Offset(6, 2, 5), Load(1, 7, 6), Compute(Const(64, 8, 2)), Offset(9, 2, 8),
-                    Load(1, 10, 9)]))),
+                Leaf([Load(1, 64, 4, 2), Compute(Const(64, 5, 1)), Offset(6, 2, 5), Load(1, 64, 7, 6), Compute(Const(64, 8, 2)), Offset(9, 2, 8),
+                    Load(1, 64, 10, 9)]))),
         [word_id(4), word_id(7), word_id(10)])
 }
 
@@ -101,12 +101,12 @@ theorem lend_rooms_grow(): depth_rooms(lend_program(3).routines)(1, 0) < depth_r
 // Two windows of one block written by one callee
 
 fn two() → Routine {
-    Routine([ref_id(0), ref_id(1)], Leaf([Compute(Const(64, 2, 1)), Store(1, 0, 2), Compute(Const(64, 3, 2)), Store(1, 1, 3)]), [])
+    Routine([ref_id(0), ref_id(1)], Leaf([Compute(Const(64, 2, 1)), Store(1, 64, 0, 2), Compute(Const(64, 3, 2)), Store(1, 64, 1, 3)]), [])
 }
 
 fn both(apart: Nat) → Routine {
     Routine([ref_id(0)],
-        Seq(Leaf([Compute(Const(64, 1, apart)), Offset(2, 0, 1)]), Seq(Call(0, [ref_id(0), ref_id(2)], []), Leaf([Load(1, 3, 0), Load(1, 4, 2)]))),
+        Seq(Leaf([Compute(Const(64, 1, apart)), Offset(2, 0, 1)]), Seq(Call(0, [ref_id(0), ref_id(2)], []), Leaf([Load(1, 64, 3, 0), Load(1, 64, 4, 2)]))),
         [word_id(3), word_id(4)])
 }
 
@@ -399,7 +399,7 @@ fn echo(asked, back: Nat) → Routine {
     Routine([ref_id(0)],
         Seq(Leaf([Compute(Const(64, 1, 0)), Compute(Const(64, 2, asked))]),
             Seq(Sys(Read(1, 0, 2, 3)),
-                Seq(Leaf([Compute(Const(64, 4, 1)), Compute(Const(64, 5, back))]), Seq(Sys(Write(4, 0, 5, 6)), Leaf([Load(1, 7, 0)]))))),
+                Seq(Leaf([Compute(Const(64, 4, 1)), Compute(Const(64, 5, back))]), Seq(Sys(Write(4, 0, 5, 6)), Leaf([Load(1, 64, 7, 0)]))))),
         [word_id(3), word_id(7)])
 }
 
@@ -438,7 +438,7 @@ theorem echo_meets<M>(back: Nat, program: Prog, lowered: echo_program(back).lowe
 // bytes_level_tests' `read_then_load`: read into block 0, load its first
 // byte.
 fn read_then_load() → Routine {
-    Routine([ref_id(0)], Seq(Leaf([Compute(Const(64, 1, 0)), Compute(Const(64, 2, 4))]), Seq(Sys(Read(1, 0, 2, 3)), Leaf([Load(1, 4, 0)]))),
+    Routine([ref_id(0)], Seq(Leaf([Compute(Const(64, 1, 0)), Compute(Const(64, 2, 4))]), Seq(Sys(Read(1, 0, 2, 3)), Leaf([Load(1, 64, 4, 0)]))),
         [word_id(3), word_id(4)])
 }
 

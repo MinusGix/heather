@@ -737,8 +737,8 @@ theorem routine_stops_at<M>(r: Routine, sigs: Nat → Option<Signature>, used: L
 // ---------------------------------------------------------------------------
 // A region's code holds the code before it
 
-theorem emit_load_grows(prog: Prog, file: File, output, place: Nat, destination, base: Gpr, bytes: Nat, later: List<Place>, names: Nat):
-    Grows(prog, emit_load(prog, file, output, place, destination, base, bytes, later, names)) {
+theorem emit_load_grows(prog: Prog, file: File, view, output, place: Nat, destination, base: Gpr, bytes: Nat, later: List<Place>, names: Nat):
+    Grows(prog, emit_load(prog, file, view, output, place, destination, base, bytes, later, names)) {
     match bytes.same(1) {
         True => prog.within_then(0, LoadByte(ByteLoad(destination, base))),
         False => match bytes.same(4) {
@@ -774,21 +774,21 @@ theorem Instr::emit_grows(self instr: Instr, saves: Nat, prog: Prog, file: File,
     Grows(prog, instr.emit(saves, prog, file, placement, names)) {
     match instr {
         Compute(node) => emit_word_nodes_grows(saves, prog, file, [node], placement, names),
-        Load(bytes, output, place) => match placement {
+        Load(bytes, view, output, place) => match placement {
             Nil => trivial,
             Cons(p, later) => match p.destination(saves) {
                 None => trivial,
                 Some(destination) => match file.find(Held(place, Word)) {
                     None => trivial,
-                    Some(found) => emit_load_grows(prog, file, output, place, destination, found.register, bytes, later, names),
+                    Some(found) => emit_load_grows(prog, file, view, output, place, destination, found.register, bytes, later, names),
                 },
             },
         },
-        Store(bytes, place, value) => match placement {
+        Store(bytes, view, place, value) => match placement {
             Nil => trivial,
             Cons(skipped, later) => match file.find(Held(place, Word)) {
                 None => trivial,
-                Some(base) => match file.find(Held(value, Word)) {
+                Some(base) => match file.find(Held(value, view_kind(view))) {
                     None => trivial,
                     Some(source) => emit_store_grows(prog, file, base.register, source.register, bytes, later, names),
                 },
