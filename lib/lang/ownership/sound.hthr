@@ -5430,22 +5430,26 @@ theorem VEnt::unbacked_kin(self en: VEnt, l: Nat): Kin(en.unbacked(l), en) {
     })
 }
 
-theorem CSt::pre_unback(self s: CSt, l: Nat, x: VEnt, mx: Mem(x, (s.written(l).unback(l)).views)): Exists<VEnt>(λ en => Mem(en, s.views) ∧ Kin(x, en)) {
-    match List::mem_map_inv(s.views, λ (y: VEnt) => y.unbacked(l), x, mx) {
-        ⟨en, pen⟩ => Exists(en, ⟨pen.left, j(sym(pen.right), λ q _ => Kin(q, en), en.unbacked_kin(l))⟩),
+// A state whose entries are mapped by , alike but perhaps for whether
+// they are written back, its other lists set.
+fn CSt::rekin(self s: CSt, f: VEnt → VEnt, tl, wl: List<Nat>) → CSt { CSt(s.args, s.locs, s.na, s.nd, s.views.map(f), s.nobj, tl, wl) }
+
+theorem CSt::pre_rekin(self s: CSt, f: VEnt → VEnt, kf: (x: VEnt) → Kin(f(x), x), tl, wl: List<Nat>, x: VEnt, mx: Mem(x, s.rekin(f, tl, wl).views)): Exists<VEnt>(λ en => Mem(en, s.views) ∧ Kin(x, en)) {
+    match List::mem_map_inv(s.views, f, x, mx) {
+        ⟨en, pen⟩ => Exists(en, ⟨pen.left, j(sym(pen.right), λ q _ => Kin(q, en), kf(en))⟩),
     }
 }
 
-theorem VEnt::ents_unback(self es: List<VEnt>, l, k: Nat):
-    (es.map(λ (e: VEnt) => e.unbacked(l))).filter(λ e => e.lvl.same(k)) = (es.filter(λ e => e.lvl.same(k))).map(λ (e: VEnt) => e.unbacked(l))
+theorem VEnt::ents_map(self es: List<VEnt>, f: VEnt → VEnt, kf: (x: VEnt) → Kin(f(x), x), k: Nat):
+    (es.map(f)).filter(λ e => e.lvl.same(k)) = (es.filter(λ e => e.lvl.same(k))).map(f)
 {
     match es {
         Nil => refl,
         Cons(e0, rest) => {
-            let u = λ (e: VEnt) => e.unbacked(l);
-            let ih = VEnt::ents_unback(rest, l, k);
+            let u = f;
+            let ih = VEnt::ents_map(rest, f, kf, k);
             let br = λ (b: Bool) => match b as λ _ => List<VEnt> { True => Cons(u(e0), (rest.map(u)).filter(λ e => e.lvl.same(k))), False => (rest.map(u)).filter(λ e => e.lvl.same(k)) };
-            let kl: ((u(e0)).lvl.same(k) = e0.lvl.same(k)) = cong_fn(λ (n: Nat) => n.same(k), (e0.unbacked_kin(l)).lvl);
+            let kl: ((u(e0)).lvl.same(k) = e0.lvl.same(k)) = cong_fn(λ (n: Nat) => n.same(k), (kf(e0)).lvl);
             (match e0.lvl.same(k) as λ c => e0.lvl.same(k) = c →
                     br((u(e0)).lvl.same(k)) = (match c as λ _ => List<VEnt> { True => Cons(e0, rest.filter(λ e => e.lvl.same(k))), False => rest.filter(λ e => e.lvl.same(k)) }).map(u) {
                 True => λ ec => trans(cong_fn(br, trans(kl, ec)), cong_fn(λ (t: List<VEnt>) => Cons(u(e0), t), ih)),
@@ -5479,53 +5483,52 @@ theorem CSt::anc_kin(self f: Nat, s: CSt, a, b: VEnt, kp: a.par = b.par, kl: a.l
     }
 }
 
-theorem CSt::anc_unback(self f: Nat, s: CSt, l: Nat): (e: VEnt) → (s.written(l).unback(l)).anc_of(e, f) = s.anc_of(e, f) {
-    match f {
+theorem CSt::anc_rekin(self fu: Nat, s: CSt, f: VEnt → VEnt, kf: (x: VEnt) → Kin(f(x), x), tl, wl: List<Nat>): (e: VEnt) → (s.rekin(f, tl, wl)).anc_of(e, fu) = s.anc_of(e, fu) {
+    match fu {
         Zero => λ e => refl,
         Succ(f1) => λ e => match e.par.same(e.lvl) {
             True => refl,
             False => {
-                let s1 = s.written(l).unback(l);
-                let u = λ (x: VEnt) => x.unbacked(l);
-                cong_fn(λ (t: List<Nat>) => Cons(e.par, t),
-                    trans(cong_fn(λ (q: List<VEnt>) => q.foldr(λ (pe: VEnt) (acc: List<Nat>) => s1.anc_of(pe, f1) ++ acc, Nil), VEnt::ents_unback(s.views, l, e.par)),
-                        trans(VEnt::foldr_map(s.ents(e.par), u, λ pe => s1.anc_of(pe, f1)),
-                            VEnt::foldr_anc(s.ents(e.par), λ pe => s1.anc_of(u(pe), f1), λ pe => s.anc_of(pe, f1), λ pe _ =>
-                                trans(CSt::anc_unback(f1, s, l, u(pe)), CSt::anc_kin(f1, s, u(pe), pe, (pe.unbacked_kin(l)).par, (pe.unbacked_kin(l)).lvl))))))
+                let s1 = s.rekin(f, tl, wl);
+                cong_fn(λ (q: List<Nat>) => Cons(e.par, q),
+                    trans(cong_fn(λ (q: List<VEnt>) => q.foldr(λ (pe: VEnt) (acc: List<Nat>) => s1.anc_of(pe, f1) ++ acc, Nil), VEnt::ents_map(s.views, f, kf, e.par)),
+                        trans(VEnt::foldr_map(s.ents(e.par), f, λ pe => s1.anc_of(pe, f1)),
+                            VEnt::foldr_anc(s.ents(e.par), λ pe => s1.anc_of(f(pe), f1), λ pe => s.anc_of(pe, f1), λ pe _ =>
+                                trans(CSt::anc_rekin(f1, s, f, kf, tl, wl, f(pe)), CSt::anc_kin(f1, s, f(pe), pe, (kf(pe)).par, (kf(pe)).lvl))))))
             },
         },
     }
 }
 
-theorem CSt::regions_unback(self s: CSt, l, k: Nat): (s.written(l).unback(l)).in_regions(k) = s.in_regions(k) {
-    VEnt::any_bit_map(s.views, λ (x: VEnt) => x.unbacked(l), λ e => k.member(Steps::lvls(e.reg)) || k.member(Steps::lvls(e.at)), λ e => {
-        let kk = e.unbacked_kin(l);
-        trans(cong_fn(λ (r: List<Step>) => k.member(Steps::lvls(r)) || k.member(Steps::lvls((e.unbacked(l)).at)), kk.reg),
+theorem CSt::regions_rekin(self s: CSt, f: VEnt → VEnt, kf: (x: VEnt) → Kin(f(x), x), tl, wl: List<Nat>, k: Nat): s.rekin(f, tl, wl).in_regions(k) = s.in_regions(k) {
+    VEnt::any_bit_map(s.views, f, λ e => k.member(Steps::lvls(e.reg)) || k.member(Steps::lvls(e.at)), λ e => {
+        let kk = kf(e);
+        trans(cong_fn(λ (r: List<Step>) => k.member(Steps::lvls(r)) || k.member(Steps::lvls(f(e).at)), kk.reg),
             cong_fn(λ (a: List<Step>) => k.member(Steps::lvls(e.reg)) || k.member(Steps::lvls(a)), kk.at))
     })
 }
 
-theorem CSt::changes_unback(self s: CSt, l, o: Nat, h: (s.written(l).unback(l)).Changes(o)): s.Changes(o) {
+theorem CSt::changes_rekin(self s: CSt, f: VEnt → VEnt, kf: (x: VEnt) → Kin(f(x), x), tl, wl: List<Nat>, o: Nat, h: s.rekin(f, tl, wl).Changes(o)): s.Changes(o) {
     match h {
         Inl(x) => Inl(x),
         Inr(ex) => match ex {
-            ⟨x, px⟩ => match s.pre_unback(l, x, px.left) {
+            ⟨x, px⟩ => match s.pre_rekin(f, kf, tl, wl, x, px.left) {
                 ⟨en, pe⟩ => Inr(Exists(en, ⟨pe.left, ⟨trans(sym(pe.right.obj), px.right.left), trans(cong_fn(λ (md: Mode) => md.writes(), sym(pe.right.mode)), px.right.right)⟩⟩)),
             },
         },
     }
 }
 
-theorem CSt::refok_unback(self s: CSt, l: Nat, root: Nat → Option<Ref>, ws: List<Ix>, k: Nat, r: Ref, ok: s.RefOk(root, ws, k, r)): (s.written(l).unback(l)).RefOk(root, ws, k, r) {
-    let s1 = s.written(l).unback(l);
-    let u = λ (x: VEnt) => x.unbacked(l);
+theorem CSt::refok_rekin(self s: CSt, f: VEnt → VEnt, kf: (x: VEnt) → Kin(f(x), x), tl, wl: List<Nat>, root: Nat → Option<Ref>, ws: List<Ix>, k: Nat, r: Ref, ok: s.RefOk(root, ws, k, r)): s.rekin(f, tl, wl).RefOk(root, ws, k, r) {
+    let s1 = s.rekin(f, tl, wl);
+    let u = f;
     let kv1 = VEnt::Any(s1.ents(k), λ en => (root(en.obj)).map(λ r0 => r0.narrow(ws, s1.unsteps(en.reg))) = Some(r));
     let kv = VEnt::Any(s.ents(k), λ en => (root(en.obj)).map(λ r0 => r0.narrow(ws, s.unsteps(en.reg))) = Some(r));
-    let to: (kv → kv1) = λ h => j(sym(VEnt::ents_unback(s.views, l, k)), λ es _ => VEnt::Any(es, λ en => (root(en.obj)).map(λ r0 => r0.narrow(ws, s1.unsteps(en.reg))) = Some(r)),
+    let to: (kv → kv1) = λ h => j(sym(VEnt::ents_map(s.views, f, kf, k)), λ es _ => VEnt::Any(es, λ en => (root(en.obj)).map(λ r0 => r0.narrow(ws, s1.unsteps(en.reg))) = Some(r)),
         VEnt::any_map(s.ents(k), u, λ en => (root(en.obj)).map(λ r0 => r0.narrow(ws, s.unsteps(en.reg))) = Some(r),
             λ en => (root(en.obj)).map(λ r0 => r0.narrow(ws, s1.unsteps(en.reg))) = Some(r),
             λ en _ p => {
-                let kk = en.unbacked_kin(l);
+                let kk = kf(en);
                 j(sym(kk.reg), λ rg _ => (root((u(en)).obj)).map(λ r0 => r0.narrow(ws, s.unsteps(rg))) = Some(r),
                     j(sym(kk.obj), λ ob _ => (root(ob)).map(λ r0 => r0.narrow(ws, s.unsteps(en.reg))) = Some(r), p))
             }, h));
@@ -5535,9 +5538,9 @@ theorem CSt::refok_unback(self s: CSt, l: Nat, root: Nat → Option<Ref>, ws: Li
     })(ok)
 }
 
-theorem CSt::parent_unback(self s: CSt, l: Nat, x, en: VEnt, kk: Kin(x, en), p: s.Parent(en)): (s.written(l).unback(l)).Parent(x) {
-    let s1 = s.written(l).unback(l);
-    let u = λ (y: VEnt) => y.unbacked(l);
+theorem CSt::parent_rekin(self s: CSt, f: VEnt → VEnt, kf: (x: VEnt) → Kin(f(x), x), tl, wl: List<Nat>, x, en: VEnt, kk: Kin(x, en), p: s.Parent(en)): s.rekin(f, tl, wl).Parent(x) {
+    let s1 = s.rekin(f, tl, wl);
+    let u = f;
     let q1 = λ (pe: VEnt) => (pe.obj = x.obj) ∧ (x.reg = pe.reg ++ x.at);
     let p1 = λ (r: Role) => match r { KHold(o, _) => (o = x.obj) ∧ (x.reg = x.at), KView => VEnt::Any(s1.ents(x.par), q1), KPlain => False, KGone => False };
     let p0 = λ (r: Role) => match r { KHold(o, _) => (o = en.obj) ∧ (en.reg = en.at), KView => VEnt::Any(s.ents(en.par), λ pe => (pe.obj = en.obj) ∧ (en.reg = pe.reg ++ en.at)), KPlain => False, KGone => False };
@@ -5545,11 +5548,11 @@ theorem CSt::parent_unback(self s: CSt, l: Nat, x, en: VEnt, kk: Kin(x, en), p: 
         KHold(_, _) => λ h => ⟨trans(h.left, sym(kk.obj)), trans(kk.reg, trans(h.right, sym(kk.at)))⟩,
         KView => λ h => {
             let a1 = VEnt::any_map(s.ents(en.par), u, λ pe => (pe.obj = en.obj) ∧ (en.reg = pe.reg ++ en.at), q1, λ pe _ hp => {
-                let kp = pe.unbacked_kin(l);
+                let kp = kf(pe);
                 ⟨trans(kp.obj, trans(hp.left, sym(kk.obj))),
                  trans(kk.reg, trans(hp.right, trans(cong_fn(λ (t: List<Step>) => t ++ en.at, sym(kp.reg)), cong_fn(λ (t: List<Step>) => (u(pe)).reg ++ t, sym(kk.at)))))⟩
             }, h);
-            j(sym(kk.par), λ q _ => VEnt::Any(s1.ents(q), q1), j(sym(VEnt::ents_unback(s.views, l, en.par)), λ es _ => VEnt::Any(es, q1), a1))
+            j(sym(kk.par), λ q _ => VEnt::Any(s1.ents(q), q1), j(sym(VEnt::ents_map(s.views, f, kf, en.par)), λ es _ => VEnt::Any(es, q1), a1))
         },
         KPlain => λ h => h,
         KGone => λ h => h,
@@ -5575,24 +5578,27 @@ theorem CSt::pend_unback(self s: CSt, l: Nat, none: s.pending() = False, x: VEnt
     }
 }
 
-// The invariant at a write's state, from its clauses at the state before
+// The invariant at a state whose entries differ at most in being written
+// back, from its clauses at the state before (any meaning: they do not read
+// it),  against the new patch, and its pending entries at one level.
+// Formerly at a write's state only:
 // (any meaning: they do not read it) and `Sim` against the new patch.
-theorem Inv::unback(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {ex: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: Nat → Bool}, inv: Inv(tys, strs, s, ex, m, h0, lent),
-    none: s.pending() = False, l: Nat, e2: Env(tys), sim1: Sim(tys, strs, s.written(l).unback(l), (s.written(l).unback(l)).patched(tys, strs, e2, m), m)):
-    Inv(tys, strs, s.written(l).unback(l), e2, m, h0, lent)
+theorem Inv::rekin(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {ex: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: Nat → Bool}, inv: Inv(tys, strs, s, ex, m, h0, lent),
+    f: VEnt → VEnt, kf: (x: VEnt) → Kin(f(x), x), tl, wl: List<Nat>, e2: Env(tys), pone: (s.rekin(f, tl, wl)).POne(), sim1: Sim(tys, strs, s.rekin(f, tl, wl), s.rekin(f, tl, wl).patched(tys, strs, e2, m), m)):
+    Inv(tys, strs, s.rekin(f, tl, wl), e2, m, h0, lent)
 {
-    let s1 = s.written(l).unback(l);
+    let s1 = s.rekin(f, tl, wl);
     let ws = Mach::ixs(tys, strs, m);
     let nl = s.na + s.nd;
     Inv(sim1, inv.root,
-        λ y k hy r cr => s.refok_unback(l, inv.root, ws, k, r, inv.refs(y, k, hy, r, cr)),
-        λ o1 o2 ne ch => inv.apart(o1, o2, ne, s.changes_unback(l, o1, ch)),
+        λ y k hy r cr => s.refok_rekin(f, kf, tl, wl, inv.root, ws, k, r, inv.refs(y, k, hy, r, cr)),
+        λ o1 o2 ne ch => inv.apart(o1, o2, ne, s.changes_rekin(f, kf, tl, wl, o1, ch)),
         inv.inheap,
-        λ o ch => inv.owned(o, s.changes_unback(l, o, ch)),
+        λ o ch => inv.owned(o, s.changes_rekin(f, kf, tl, wl, o, ch)),
         inv.own, inv.one,
-        λ k w => inv.words(k, trans(sym(s.regions_unback(l, k)), w)),
+        λ k w => inv.words(k, trans(sym(s.regions_rekin(f, kf, tl, wl, k)), w)),
         inv.frame, inv.grows, inv.young, inv.held,
-        λ x mx => match s.pre_unback(l, x, mx) {
+        λ x mx => match s.pre_rekin(f, kf, tl, wl, x, mx) {
             ⟨en, pe⟩ => {
                 let vv = inv.vents(en, pe.left);
                 let kk = pe.right;
@@ -5600,20 +5606,20 @@ theorem Inv::unback(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {ex: Env(tys)}
             },
         },
         inv.bare,
-        λ x mx => match s.pre_unback(l, x, mx) {
+        λ x mx => match s.pre_rekin(f, kf, tl, wl, x, mx) {
             ⟨en, pe⟩ => {
                 let cc = inv.chain(en, pe.left);
                 let kk = pe.right;
-                ⟨j(sym(kk.par), λ n _ => n < x.lvl, j(sym(kk.lvl), λ n _ => en.par < n, cc.left)), s.parent_unback(l, x, en, kk, cc.right)⟩
+                ⟨j(sym(kk.par), λ n _ => n < x.lvl, j(sym(kk.lvl), λ n _ => en.par < n, cc.left)), s.parent_rekin(f, kf, tl, wl, x, en, kk, cc.right)⟩
             },
         },
-        λ x1 x2 m1 m2 w eo ne a1 a2 => match s.pre_unback(l, x1, m1) {
-            ⟨en1, p1⟩ => match s.pre_unback(l, x2, m2) {
+        λ x1 x2 m1 m2 w eo ne a1 a2 => match s.pre_rekin(f, kf, tl, wl, x1, m1) {
+            ⟨en1, p1⟩ => match s.pre_rekin(f, kf, tl, wl, x2, m2) {
                 ⟨en2, p2⟩ => {
                     let k1 = p1.right;
                     let k2 = p2.right;
-                    let anc2: (s1.anc_of(x2, nl) = s.anc_of(en2, nl)) = trans(CSt::anc_unback(nl, s, l, x2), CSt::anc_kin(nl, s, x2, en2, k2.par, k2.lvl));
-                    let anc1: (s1.anc_of(x1, nl) = s.anc_of(en1, nl)) = trans(CSt::anc_unback(nl, s, l, x1), CSt::anc_kin(nl, s, x1, en1, k1.par, k1.lvl));
+                    let anc2: (s1.anc_of(x2, nl) = s.anc_of(en2, nl)) = trans(CSt::anc_rekin(nl, s, f, kf, tl, wl, x2), CSt::anc_kin(nl, s, x2, en2, k2.par, k2.lvl));
+                    let anc1: (s1.anc_of(x1, nl) = s.anc_of(en1, nl)) = trans(CSt::anc_rekin(nl, s, f, kf, tl, wl, x1), CSt::anc_kin(nl, s, x1, en1, k1.par, k1.lvl));
                     let b1: (en1.lvl.member(s.anc_of(en2, nl)) = False) = trans(cong_fn(λ (n: Nat) => n.member(s.anc_of(en2, nl)), sym(k1.lvl)), j(anc2, λ q _ => x1.lvl.member(q) = False, a1));
                     let b2: (en2.lvl.member(s.anc_of(en1, nl)) = False) = trans(cong_fn(λ (n: Nat) => n.member(s.anc_of(en1, nl)), sym(k2.lvl)), j(anc1, λ q _ => x2.lvl.member(q) = False, a2));
                     let ap = inv.excl(en1, en2, p1.left, p2.left, trans(cong_fn(λ (md: Mode) => md.writes(), sym(k1.mode)), w), trans(sym(k1.obj), trans(eo, k2.obj)),
@@ -5623,19 +5629,28 @@ theorem Inv::unback(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {ex: Env(tys)}
                 },
             },
         },
-        λ x mx w => match s.pre_unback(l, x, mx) {
+        λ x mx w => match s.pre_rekin(f, kf, tl, wl, x, mx) {
             ⟨en, pe⟩ => {
                 let kk = pe.right;
                 λ rv => match inv.wpar(en, pe.left, trans(cong_fn(λ (md: Mode) => md.writes(), sym(kk.mode)), w))(trans(cong_fn(λ (q: Nat) => s.role(q), sym(kk.par)), rv)) {
-                    ⟨pw, pp⟩ => Exists(pw.unbacked(l), ⟨trans(cong_fn(λ (q: Nat) => s1.ents(q), kk.par), trans(VEnt::ents_unback(s.views, l, en.par), cong_fn(λ (es: List<VEnt>) => es.map(λ (y: VEnt) => y.unbacked(l)), pp.left))),
-                        trans(cong_fn(λ (md: Mode) => md.writes(), (pw.unbacked_kin(l)).mode), pp.right)⟩),
+                    ⟨pw, pp⟩ => Exists(f(pw), ⟨trans(cong_fn(λ (q: Nat) => s1.ents(q), kk.par), trans(VEnt::ents_map(s.views, f, kf, en.par), cong_fn(λ (es: List<VEnt>) => es.map(f), pp.left))),
+                        trans(cong_fn(λ (md: Mode) => md.writes(), (kf(pw)).mode), pp.right)⟩),
                 }
             },
         },
-        λ x mx y z hy hz => match s.pre_unback(l, x, mx) {
+        λ x mx y z hy hz => match s.pre_rekin(f, kf, tl, wl, x, mx) {
             ⟨en, pe⟩ => inv.uni(en, pe.left, y, z, trans(hy, cong_fn(λ (n: Nat) => Some(n), pe.right.lvl)), trans(hz, cong_fn(λ (n: Nat) => Some(n), pe.right.par))),
         },
-        λ x1 x2 m1 m2 w1 w2 => trans(s.pend_unback(l, none, x1, m1, w1), sym(s.pend_unback(l, none, x2, m2, w2))))
+        pone)
+}
+
+// The invariant at a write's state.
+theorem Inv::unback(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {ex: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: Nat → Bool}, inv: Inv(tys, strs, s, ex, m, h0, lent),
+    none: s.pending() = False, l: Nat, e2: Env(tys), sim1: Sim(tys, strs, s.written(l).unback(l), (s.written(l).unback(l)).patched(tys, strs, e2, m), m)):
+    Inv(tys, strs, s.written(l).unback(l), e2, m, h0, lent)
+{
+    Inv::rekin(tys, strs, inv, λ (y: VEnt) => y.unbacked(l), λ x => x.unbacked_kin(l), Cons(l, s.touched), Cons(l, s.wrote), e2,
+        λ x1 x2 m1 m2 w1 w2 => trans(s.pend_unback(l, none, x1, m1, w1), sym(s.pend_unback(l, none, x2, m2, w2))), sim1)
 }
 
 theorem VEnt::mem_filter_lvl(self es: List<VEnt>, l: Nat, a: VEnt, h: a.lvl.same(l) = True): Mem(a, es) → Mem(a, es.filter(λ e => e.lvl.same(l))) {
@@ -6259,7 +6274,7 @@ theorem CSt::up_sim(self f: Nat, tys: Nat → Type, strs: Strs(tys), sl: StrsLaw
             let lc = UpAt::lvl(tys, strs, u);
             let kin = en.unbacked_kin(l);
             let x = en.unbacked(l);
-            let hx: (s1.ents(c) = Cons(x, Nil)) = trans(VEnt::ents_unback(s.views, l, c), cong_fn(λ (es: List<VEnt>) => es.map(λ (y: VEnt) => y.unbacked(l)), u.he));
+            let hx: (s1.ents(c) = Cons(x, Nil)) = trans(VEnt::ents_map(s.views, λ (y: VEnt) => y.unbacked(l), λ x => x.unbacked_kin(l), c), cong_fn(λ (es: List<VEnt>) => es.map(λ (y: VEnt) => y.unbacked(l)), u.he));
             let pc: (en.par < c) = j(lc, λ n _ => en.par < n, cc.left);
             let np: (x.par.same(c) = False) = Nat::same_false(x.par, c, λ eq => Nat::lt_irrefl(c, omega(pc, eq, kin.par)));
             let wr = λ (pp: Nat) (aa: List<Step>) => s1.up(tys, strs, Env::set(tys, ee, s.var_at(pp), λ d => Dyn::write(tys, strs, Env::ixs(tys, ee), s.unsteps(aa), λ _ => Env::get(tys, ee, s.var_at(c)), d)), pp, f1);
@@ -6269,7 +6284,7 @@ theorem CSt::up_sim(self f: Nat, tys: Nat → Type, strs: Strs(tys), sl: StrsLaw
             let e1 = Env::set(tys, ee, s.var_at(en.par), fw);
             let rest: Sim(tys, strs, s, s1.up(tys, strs, e1, en.par, f1), m2) = (match s.role(en.par) as λ rr => s.role(en.par) = rr → Sim(tys, strs, s, s1.up(tys, strs, e1, en.par, f1), m2) {
                 KHold(o2, a2) => λ rh => {
-                    let ehn1: (s1.ents(en.par) = Nil) = trans(VEnt::ents_unback(s.views, l, en.par),
+                    let ehn1: (s1.ents(en.par) = Nil) = trans(VEnt::ents_map(s.views, λ (y: VEnt) => y.unbacked(l), λ x => x.unbacked_kin(l), en.par),
                         cong_fn(λ (es: List<VEnt>) => es.map(λ (y: VEnt) => y.unbacked(l)), s.ents_hold_nil(λ y my => (inv.vents(y, my)).right.right, en.par, o2, a2, rh)));
                     j(sym(CSt::up_nil(f1, s1, tys, strs, e1, en.par, ehn1)), λ q _ => Sim(tys, strs, s, q, m2), CSt::up_last(tys, strs, sl, inv, none, h2, blk, ob, b2, g, hv, hv2, c, ee, en, qc, t, u, o2, a2, rh))
                 },
