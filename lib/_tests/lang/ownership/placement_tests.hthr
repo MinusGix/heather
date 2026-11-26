@@ -189,6 +189,9 @@ theorem count_newlines_pin(): nl_world()(1, [buf(text()), w64(BitVec::ofNat(6))]
 
 theorem count_newlines_value(): count_newlines(text(), BitVec::ofNat(6)) = BitVec::ofNat(3) { refl }
 
+// Each signature is well formed (`Sig::ok`, §23.21).
+theorem nl_sigs_ok(): nl_fns().all_bit(λ (f: Func) => Sig::ok(tys(), strs(), f.sig)) = True { refl }
+
 theorem nl_placed(): (placed(nl_fns())).is_some() = True { refl }
 
 // ---------------------------------------------------------------------------
@@ -360,6 +363,8 @@ theorem copy_window_pin(): cw_world()(1, [buf(outb()), buf(text()), w64(BitVec::
 theorem copy_window_value(): copy_window(outb(), text(), BitVec::ofNat(1), BitVec::ofNat(4))
     = Pair([BitVec::ofNat(0), BitVec::ofNat(10), BitVec::ofNat(98), BitVec::ofNat(10), BitVec::ofNat(0), BitVec::ofNat(0)], BitVec::ofNat(3)) { refl }
 
+theorem cw_sigs_ok(): cw_fns().all_bit(λ (f: Func) => Sig::ok(tys(), strs(), f.sig)) = True { refl }
+
 theorem cw_placed(): (placed(cw_fns())).is_some() = True { refl }
 
 // `out` is block 0, lent to write; `text` block 1.
@@ -405,6 +410,8 @@ fn sum_world() → Callees(tys()) { λ g ds => match g { Zero => [w64(sum(as_w64
 theorem sum_checked(): why(sum_fns(), 0) = None { refl }
 
 theorem sum_pin(): sum_world()(0, [w64(BitVec::ofNat(4))]) = means(sum_fns(), sum_world(), 0, [w64(BitVec::ofNat(4))]) { refl }
+
+theorem sum_sigs_ok(): sum_fns().all_bit(λ (f: Func) => Sig::ok(tys(), strs(), f.sig)) = True { refl }
 
 theorem sum_placed(): (placed(sum_fns())).is_some() = True { refl }
 

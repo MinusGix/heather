@@ -5331,7 +5331,8 @@ nothing is proved over `place`. Three modules:
   code returns (`Site::Tracked` at `Done`) an answer whose words lower values
   that read as `p.w(g, ds)` (the pinned meaning) and whose heap injects
   level 2's after. **`EndToEndAll`** states it from `PlacementSoundAll` and
-  `CheckSound(check)` for every checked program `place` answers and
+  `CheckSound(check)` for every pinned program whose primitives answer coded
+  (`Prog::Coded`, §23.21) and whose functions are all checked `place` answers and
   `Program::lower` lowers. It typechecks: every premise `SafeAt` needs is a
   premise the machine side can be given, and `Tracks` supplies the rest.
   Its proof is the composition (strong induction on fuel from `Safety` to
@@ -5346,7 +5347,8 @@ nothing is proved over `place`. Three modules:
 | `copy_window` (lends a window to write to `copy_span`) | `why = None` | yes | `Some` | at fuel 5 vs 6 | `Some` |
 | `sum` (recursion) | `why = None` | yes | `Some` | at fuel 4 vs 5; both going at 3 vs 4 | `Some` |
 
-The placement is the probes' own (`*_places`), written by a per-path
+Each program's signatures are `Sig::ok` (§23.21), by `refl`. The
+placement is the probes' own (`*_places`), written by a per-path
 linear scan; the bytes level has no planner yet. What the lowering asks of
 a placement, learned on the way: one place per node, none per call but an
 optional `Spilling(mask)` (what the call saves), `CallSlots(k)` at the head
@@ -5444,7 +5446,7 @@ arms.
     results (the words are the meaning's), the measure clause (done past the
     measure), and through 2 the referring part of `Value::Written` (the
     written buffer's bytes after are the heap injection's). Not used:
-    `Heap::Frame`, `Heap::Kept`, `Value::Views`, `FreshApart` (the machine
+    `Heap::Frame`, `Heap::Kept`, `Value::Views`, `OwnedApart`, the results' codes (the machine
     side states its own frame as `Site::Returned`'s `WroteIn`). Not there and
     needed: only the run-level form of item 2, here replaced by a syntactic
     check.

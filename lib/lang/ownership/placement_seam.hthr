@@ -218,10 +218,11 @@ fn PlacementSoundAll(tys: Nat → Type, strs: Strs(tys), w: Callees(tys), prim: 
 // ---------------------------------------------------------------------------
 // The composed statement
 
-// A program of listed functions, each checked and owing what it owes: the
-// premises of `CheckSound` for every function at once.
+// A program of listed functions, pinned, its primitives answering coded,
+// each function checked and owing what it owes: the premises of
+// `CheckSound` for every function at once.
 fn prog_checked(tys: Nat → Type, p: verdict::Prog(tys), fs: List<Func>) → Type {
-    ((g: Nat) → p.fns(g) = funcs_at(fs)(g)) ∧ (Prog::Pinned(tys, p) ∧ ((g: Nat) → g < fs.len() → p.prim(g) = False → Exists<Owes>(λ d =>
+    ((g: Nat) → p.fns(g) = funcs_at(fs)(g)) ∧ (Prog::Pinned(tys, p) ∧ Prog::Coded(tys, p) ∧ ((g: Nat) → g < fs.len() → p.prim(g) = False → Exists<Owes>(λ d =>
         (check(tys)(p.strs, λ g2 => (p.fns(g2)).sig, p.prim, λ g2 => p.measured(tys, g2), g, p.fns(g)) = Some(d)) ∧
         ((args: List<Dyn(tys)>) → Dyn::Coded(tys, args, (p.fns(g)).sig.params) → p.pres(g, args) → d.Due(tys, Prog::ctx(tys, p, g, args), p.fns(g))))))
 }
