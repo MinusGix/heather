@@ -5289,3 +5289,206 @@ theorem Stmt::stage_write_hold(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(tys
         },
     })(refl, rd0)
 }
+
+// ---------------------------------------------------------------------------
+// A view written: its entry no longer written back. The invariant's clauses
+// but `sim` read an entry's level, object, region, mode, parent and place,
+// never whether it is written back, so they carry over.
+
+fn VEnt::unbacked(self en: VEnt, l: Nat) → VEnt { match en.lvl.same(l) { True => VEnt(en.lvl, en.obj, en.reg, en.mode, en.par, en.at, False), False => en } }
+
+// Two entries alike but perhaps for whether they are written back.
+record Kin(a, b: VEnt) { lvl: a.lvl = b.lvl, obj: a.obj = b.obj, reg: a.reg = b.reg, mode: a.mode = b.mode, par: a.par = b.par, at: a.at = b.at }
+
+theorem VEnt::unbacked_kin(self en: VEnt, l: Nat): Kin(en.unbacked(l), en) {
+    (match en.lvl.same(l) as λ c => Kin(match c as λ _ => VEnt { True => VEnt(en.lvl, en.obj, en.reg, en.mode, en.par, en.at, False), False => en }, en) {
+        True => Kin(refl, refl, refl, refl, refl, refl),
+        False => Kin(refl, refl, refl, refl, refl, refl),
+    })
+}
+
+theorem CSt::pre_unback(self s: CSt, l: Nat, x: VEnt, mx: Mem(x, (s.written(l).unback(l)).views)): Exists<VEnt>(λ en => Mem(en, s.views) ∧ Kin(x, en)) {
+    match List::mem_map_inv(s.views, λ (y: VEnt) => y.unbacked(l), x, mx) {
+        ⟨en, pen⟩ => Exists(en, ⟨pen.left, j(sym(pen.right), λ q _ => Kin(q, en), en.unbacked_kin(l))⟩),
+    }
+}
+
+theorem VEnt::ents_unback(self es: List<VEnt>, l, k: Nat):
+    (es.map(λ (e: VEnt) => e.unbacked(l))).filter(λ e => e.lvl.same(k)) = (es.filter(λ e => e.lvl.same(k))).map(λ (e: VEnt) => e.unbacked(l))
+{
+    match es {
+        Nil => refl,
+        Cons(e0, rest) => {
+            let u = λ (e: VEnt) => e.unbacked(l);
+            let ih = VEnt::ents_unback(rest, l, k);
+            let br = λ (b: Bool) => match b as λ _ => List<VEnt> { True => Cons(u(e0), (rest.map(u)).filter(λ e => e.lvl.same(k))), False => (rest.map(u)).filter(λ e => e.lvl.same(k)) };
+            let kl: ((u(e0)).lvl.same(k) = e0.lvl.same(k)) = cong_fn(λ (n: Nat) => n.same(k), (e0.unbacked_kin(l)).lvl);
+            (match e0.lvl.same(k) as λ c => e0.lvl.same(k) = c →
+                    br((u(e0)).lvl.same(k)) = (match c as λ _ => List<VEnt> { True => Cons(e0, rest.filter(λ e => e.lvl.same(k))), False => rest.filter(λ e => e.lvl.same(k)) }).map(u) {
+                True => λ ec => trans(cong_fn(br, trans(kl, ec)), cong_fn(λ (t: List<VEnt>) => Cons(u(e0), t), ih)),
+                False => λ ec => trans(cong_fn(br, trans(kl, ec)), ih),
+            })(refl)
+        },
+    }
+}
+
+theorem VEnt::foldr_map(self es: List<VEnt>, u: VEnt → VEnt, F: VEnt → List<Nat>):
+    (es.map(u)).foldr(λ (pe: VEnt) (acc: List<Nat>) => F(pe) ++ acc, Nil) = es.foldr(λ (pe: VEnt) (acc: List<Nat>) => F(u(pe)) ++ acc, Nil)
+{
+    match es { Nil => refl, Cons(e0, rest) => cong_fn(λ (t: List<Nat>) => F(u(e0)) ++ t, VEnt::foldr_map(rest, u, F)) }
+}
+
+theorem VEnt::any_bit_map(self es: List<VEnt>, u: VEnt → VEnt, q: VEnt → Bool, h: (e: VEnt) → q(u(e)) = q(e)): (es.map(u)).any_bit(q) = es.any_bit(q) {
+    match es {
+        Nil => refl,
+        Cons(e0, rest) => trans(cong_fn(λ (b: Bool) => b || (rest.map(u)).any_bit(q), h(e0)), cong_fn(λ (b: Bool) => q(e0) || b, VEnt::any_bit_map(rest, u, q, h))),
+    }
+}
+
+// An ancestry reads an entry's parent and level only.
+theorem CSt::anc_kin(self f: Nat, s: CSt, a, b: VEnt, kp: a.par = b.par, kl: a.lvl = b.lvl): s.anc_of(a, f) = s.anc_of(b, f) {
+    match f {
+        Zero => refl,
+        Succ(f1) => {
+            let g = λ (p: Nat) (lv: Nat) => match p.same(lv) as λ _ => List<Nat> { True => Nil<Nat>(), False => Cons(p, (s.ents(p)).foldr(λ (pe: VEnt) (acc: List<Nat>) => s.anc_of(pe, f1) ++ acc, Nil)) };
+            trans(cong_fn(λ (p: Nat) => g(p, a.lvl), kp), cong_fn(λ (lv: Nat) => g(b.par, lv), kl))
+        },
+    }
+}
+
+theorem CSt::anc_unback(self f: Nat, s: CSt, l: Nat): (e: VEnt) → (s.written(l).unback(l)).anc_of(e, f) = s.anc_of(e, f) {
+    match f {
+        Zero => λ e => refl,
+        Succ(f1) => λ e => match e.par.same(e.lvl) {
+            True => refl,
+            False => {
+                let s1 = s.written(l).unback(l);
+                let u = λ (x: VEnt) => x.unbacked(l);
+                cong_fn(λ (t: List<Nat>) => Cons(e.par, t),
+                    trans(cong_fn(λ (q: List<VEnt>) => q.foldr(λ (pe: VEnt) (acc: List<Nat>) => s1.anc_of(pe, f1) ++ acc, Nil), VEnt::ents_unback(s.views, l, e.par)),
+                        trans(VEnt::foldr_map(s.ents(e.par), u, λ pe => s1.anc_of(pe, f1)),
+                            VEnt::foldr_anc(s.ents(e.par), λ pe => s1.anc_of(u(pe), f1), λ pe => s.anc_of(pe, f1), λ pe _ =>
+                                trans(CSt::anc_unback(f1, s, l, u(pe)), CSt::anc_kin(f1, s, u(pe), pe, (pe.unbacked_kin(l)).par, (pe.unbacked_kin(l)).lvl))))))
+            },
+        },
+    }
+}
+
+theorem CSt::regions_unback(self s: CSt, l, k: Nat): (s.written(l).unback(l)).in_regions(k) = s.in_regions(k) {
+    VEnt::any_bit_map(s.views, λ (x: VEnt) => x.unbacked(l), λ e => k.member(Steps::lvls(e.reg)) || k.member(Steps::lvls(e.at)), λ e => {
+        let kk = e.unbacked_kin(l);
+        trans(cong_fn(λ (r: List<Step>) => k.member(Steps::lvls(r)) || k.member(Steps::lvls((e.unbacked(l)).at)), kk.reg),
+            cong_fn(λ (a: List<Step>) => k.member(Steps::lvls(e.reg)) || k.member(Steps::lvls(a)), kk.at))
+    })
+}
+
+theorem CSt::changes_unback(self s: CSt, l, o: Nat, h: (s.written(l).unback(l)).Changes(o)): s.Changes(o) {
+    match h {
+        Inl(x) => Inl(x),
+        Inr(ex) => match ex {
+            ⟨x, px⟩ => match s.pre_unback(l, x, px.left) {
+                ⟨en, pe⟩ => Inr(Exists(en, ⟨pe.left, ⟨trans(sym(pe.right.obj), px.right.left), trans(cong_fn(λ (md: Mode) => md.writes(), sym(pe.right.mode)), px.right.right)⟩⟩)),
+            },
+        },
+    }
+}
+
+theorem CSt::refok_unback(self s: CSt, l: Nat, root: Nat → Option<Ref>, ws: List<Ix>, k: Nat, r: Ref, ok: s.RefOk(root, ws, k, r)): (s.written(l).unback(l)).RefOk(root, ws, k, r) {
+    let s1 = s.written(l).unback(l);
+    let u = λ (x: VEnt) => x.unbacked(l);
+    let kv1 = VEnt::Any(s1.ents(k), λ en => (root(en.obj)).map(λ r0 => r0.narrow(ws, s1.unsteps(en.reg))) = Some(r));
+    let kv = VEnt::Any(s.ents(k), λ en => (root(en.obj)).map(λ r0 => r0.narrow(ws, s.unsteps(en.reg))) = Some(r));
+    let to: (kv → kv1) = λ h => j(sym(VEnt::ents_unback(s.views, l, k)), λ es _ => VEnt::Any(es, λ en => (root(en.obj)).map(λ r0 => r0.narrow(ws, s1.unsteps(en.reg))) = Some(r)),
+        VEnt::any_map(s.ents(k), u, λ en => (root(en.obj)).map(λ r0 => r0.narrow(ws, s.unsteps(en.reg))) = Some(r),
+            λ en => (root(en.obj)).map(λ r0 => r0.narrow(ws, s1.unsteps(en.reg))) = Some(r),
+            λ en _ p => {
+                let kk = en.unbacked_kin(l);
+                j(sym(kk.reg), λ rg _ => (root((u(en)).obj)).map(λ r0 => r0.narrow(ws, s.unsteps(rg))) = Some(r),
+                    j(sym(kk.obj), λ ob _ => (root(ob)).map(λ r0 => r0.narrow(ws, s.unsteps(en.reg))) = Some(r), p))
+            }, h));
+    (match s.role(k) as λ q => (match q { KHold(o, _) => root(o) = Some(r), KView => kv, KPlain => False, KGone => True }) →
+            (match q { KHold(o, _) => root(o) = Some(r), KView => kv1, KPlain => False, KGone => True }) {
+        KHold(_, _) => λ h => h, KView => to, KPlain => λ h => h, KGone => λ h => h,
+    })(ok)
+}
+
+theorem CSt::parent_unback(self s: CSt, l: Nat, x, en: VEnt, kk: Kin(x, en), p: s.Parent(en)): (s.written(l).unback(l)).Parent(x) {
+    let s1 = s.written(l).unback(l);
+    let u = λ (y: VEnt) => y.unbacked(l);
+    let q1 = λ (pe: VEnt) => (pe.obj = x.obj) ∧ (x.reg = pe.reg ++ x.at);
+    let p1 = λ (r: Role) => match r { KHold(o, _) => (o = x.obj) ∧ (x.reg = x.at), KView => VEnt::Any(s1.ents(x.par), q1), KPlain => False, KGone => False };
+    let p0 = λ (r: Role) => match r { KHold(o, _) => (o = en.obj) ∧ (en.reg = en.at), KView => VEnt::Any(s.ents(en.par), λ pe => (pe.obj = en.obj) ∧ (en.reg = pe.reg ++ en.at)), KPlain => False, KGone => False };
+    let mid: p1(s.role(en.par)) = (match s.role(en.par) as λ r => p0(r) → p1(r) {
+        KHold(_, _) => λ h => ⟨trans(h.left, sym(kk.obj)), trans(kk.reg, trans(h.right, sym(kk.at)))⟩,
+        KView => λ h => {
+            let a1 = VEnt::any_map(s.ents(en.par), u, λ pe => (pe.obj = en.obj) ∧ (en.reg = pe.reg ++ en.at), q1, λ pe _ hp => {
+                let kp = pe.unbacked_kin(l);
+                ⟨trans(kp.obj, trans(hp.left, sym(kk.obj))),
+                 trans(kk.reg, trans(hp.right, trans(cong_fn(λ (t: List<Step>) => t ++ en.at, sym(kp.reg)), cong_fn(λ (t: List<Step>) => (u(pe)).reg ++ t, sym(kk.at)))))⟩
+            }, h);
+            j(sym(kk.par), λ q _ => VEnt::Any(s1.ents(q), q1), j(sym(VEnt::ents_unback(s.views, l, en.par)), λ es _ => VEnt::Any(es, q1), a1))
+        },
+        KPlain => λ h => h,
+        KGone => λ h => h,
+    })(p);
+    j(sym(kk.par), λ q _ => p1(s.role(q)), mid)
+}
+
+// The invariant at a write's state, from its clauses at the state before
+// (any meaning: they do not read it) and `Sim` against the new patch.
+theorem Inv::unback(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {ex: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: Nat → Bool}, inv: Inv(tys, strs, s, ex, m, h0, lent),
+    l: Nat, e2: Env(tys), sim1: Sim(tys, strs, s.written(l).unback(l), (s.written(l).unback(l)).patched(tys, strs, e2, m), m)):
+    Inv(tys, strs, s.written(l).unback(l), e2, m, h0, lent)
+{
+    let s1 = s.written(l).unback(l);
+    let ws = Mach::ixs(tys, strs, m);
+    let nl = s.na + s.nd;
+    Inv(sim1, inv.root,
+        λ y k hy r cr => s.refok_unback(l, inv.root, ws, k, r, inv.refs(y, k, hy, r, cr)),
+        λ o1 o2 ne ch => inv.apart(o1, o2, ne, s.changes_unback(l, o1, ch)),
+        inv.inheap,
+        λ o ch => inv.owned(o, s.changes_unback(l, o, ch)),
+        inv.own, inv.one,
+        λ k w => inv.words(k, trans(sym(s.regions_unback(l, k)), w)),
+        inv.frame, inv.grows, inv.young, inv.held,
+        λ x mx => match s.pre_unback(l, x, mx) {
+            ⟨en, pe⟩ => {
+                let vv = inv.vents(en, pe.left);
+                let kk = pe.right;
+                ⟨j(sym(kk.obj), λ n _ => n < s.nobj, vv.left), ⟨j(sym(kk.lvl), λ n _ => n < nl, vv.right.left), j(sym(kk.lvl), λ n _ => s.role(n) = KView, vv.right.right)⟩⟩
+            },
+        },
+        inv.bare,
+        λ x mx => match s.pre_unback(l, x, mx) {
+            ⟨en, pe⟩ => {
+                let cc = inv.chain(en, pe.left);
+                let kk = pe.right;
+                ⟨j(sym(kk.par), λ n _ => n < x.lvl, j(sym(kk.lvl), λ n _ => en.par < n, cc.left)), s.parent_unback(l, x, en, kk, cc.right)⟩
+            },
+        },
+        λ x1 x2 m1 m2 w eo ne a1 a2 => match s.pre_unback(l, x1, m1) {
+            ⟨en1, p1⟩ => match s.pre_unback(l, x2, m2) {
+                ⟨en2, p2⟩ => {
+                    let k1 = p1.right;
+                    let k2 = p2.right;
+                    let anc2: (s1.anc_of(x2, nl) = s.anc_of(en2, nl)) = trans(CSt::anc_unback(nl, s, l, x2), CSt::anc_kin(nl, s, x2, en2, k2.par, k2.lvl));
+                    let anc1: (s1.anc_of(x1, nl) = s.anc_of(en1, nl)) = trans(CSt::anc_unback(nl, s, l, x1), CSt::anc_kin(nl, s, x1, en1, k1.par, k1.lvl));
+                    let b1: (en1.lvl.member(s.anc_of(en2, nl)) = False) = trans(cong_fn(λ (n: Nat) => n.member(s.anc_of(en2, nl)), sym(k1.lvl)), j(anc2, λ q _ => x1.lvl.member(q) = False, a1));
+                    let b2: (en2.lvl.member(s.anc_of(en1, nl)) = False) = trans(cong_fn(λ (n: Nat) => n.member(s.anc_of(en1, nl)), sym(k2.lvl)), j(anc1, λ q _ => x2.lvl.member(q) = False, a2));
+                    let ap = inv.excl(en1, en2, p1.left, p2.left, trans(cong_fn(λ (md: Mode) => md.writes(), sym(k1.mode)), w), trans(sym(k1.obj), trans(eo, k2.obj)),
+                        λ eq => ne(trans(k1.lvl, trans(eq, sym(k2.lvl)))), b1, b2);
+                    j(sym(k2.reg), λ rg _ => Sel::Apart(tys, strs, Steps::sels(s.unsteps(x1.reg), ws), Steps::sels(s.unsteps(rg), ws)),
+                        j(sym(k1.reg), λ rg _ => Sel::Apart(tys, strs, Steps::sels(s.unsteps(rg), ws), Steps::sels(s.unsteps(en2.reg), ws)), ap))
+                },
+            },
+        },
+        λ x mx w => match s.pre_unback(l, x, mx) {
+            ⟨en, pe⟩ => {
+                let kk = pe.right;
+                λ rv => match inv.wpar(en, pe.left, trans(cong_fn(λ (md: Mode) => md.writes(), sym(kk.mode)), w))(trans(cong_fn(λ (q: Nat) => s.role(q), sym(kk.par)), rv)) {
+                    ⟨pw, pp⟩ => Exists(pw.unbacked(l), ⟨trans(cong_fn(λ (q: Nat) => s1.ents(q), kk.par), trans(VEnt::ents_unback(s.views, l, en.par), cong_fn(λ (es: List<VEnt>) => es.map(λ (y: VEnt) => y.unbacked(l)), pp.left))),
+                        trans(cong_fn(λ (md: Mode) => md.writes(), (pw.unbacked_kin(l)).mode), pp.right)⟩),
+                }
+            },
+        })
+}
