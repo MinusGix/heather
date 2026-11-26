@@ -31,6 +31,14 @@ The composed theorem's type is written and checks with `placement_sound` as its 
 
 ## Handoff (2026-11-26, end of the slice's fourth session)
 
+**Paused at the owner's request.** Where it stopped:
+- F8's clause has landed.
+- Proved: `stage_lit`, `stage_death`, `stage_op`, `stage_test`, the whole-variable cases of Take and Read, and the walk (`walk_sound`).
+- The wider-element probe is added (`placement_widths_tests.hthr`).
+- The coordinating branch (123dec90) is merged; nothing in `placement*` changed.
+- No work in progress outside the tree.
+- The suite run at `HEATHER_PR_BASE=123dec90` was stopped before it finished, so the head has had no suite run. The modules and probes check one by one with `heather check --cache`.
+
 **Done** (design note §25.10; on `claude/ownership-slice`):
 - Stages proved:
   - `stage_lit`, `stage_death`, `stage_op`, `stage_test` (in `placement_stages.hthr`).
@@ -66,3 +74,4 @@ The composed theorem's type is written and checks with `placement_sound` as its 
 - 2026-11-26: Second session: F1-F6 found and ruled (§25.8); the statement corrected in placement_seam.hthr (Strs::Laid and StrsLaws premises, arguments coded, images below 2^64, StageRel with codes and ids below next, leaf stages stuck-or-step), end_to_end re-checked; place compares codes as a marked interim; the injection's lemmas proved in placement_inject.hthr (locate_image, put_image, window_kept, injects_store, injects_kill). Suite at 4678039, HEATHER_PR_BASE=a7965e15 scripts/test --pr: == suite: 847 passed, 0 failed, 1 ignored ==. Handoff rewritten.
 - 2026-11-26: Third session: Strs::Laid from numbered instances (SeqNum/WinNum in sequences.hthr, placement_laid.hthr's Strs::laid_of); F1/F2/F4 probes; F7 (StageRel vs a death of an owner) ruled (b), slot_kill; stage_lit, stage_death; merged 4bf882b and adapted place (three ownership tests gone, Back, Len at 64, word write rebinds, JCopy Yield frame defect fixed), ActWrites in StageRel, StageBack/StageLen; copy_window tests its lengths with Len (138 bytes vs 96 old). Suite at 7c2d5db, HEATHER_PR_BASE=60d3371 scripts/test --pr: == suite: 847 passed, 0 failed, 1 ignored ==.
 - 2026-11-26: Third session, handoff: place's Op as an and_then chain (PEnv::place_op) with Option::bind_some for inverting place; slot_of, cells_at, word_slot; rulings recorded (Len at 64, PlaceComplete waits on §26.5 and loop exits, view_loop_r in bytes-level-loop-exits). Suite at f31b6f6, HEATHER_PR_BASE=60d3371 scripts/test --pr: == suite: 847 passed, 0 failed, 1 ignored ==. Handoff rewritten.
+- 2026-11-26: Fourth session (paused): StageOp, StageTest, the walk, the whole-variable Take and Read proved; scaled fixed with a width-varied probe; F8 ruled (a) and landed; 123dec90 merged. Suite not run at the head (stopped at the pause).
