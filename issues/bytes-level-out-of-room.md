@@ -45,50 +45,49 @@ A routine that calls itself lowers with a guard and a theorem whose premise does
 - 2026-11-26: Step 3.1 at d0733aa: the root generalised (PerformsOr/ClaimsOr with an absorbing escape; 37 lemmas once over it; the old names instances at False; FunctionIR and certificates untouched). HEATHER_PR_NATIVE=all scripts/test --pr: '== suite: 4140 passed, 0 failed, 3 ignored =='; scripts/linked --check unchanged; scripts/lib-closures clean.
 - 2026-11-26: Step 3.2 at ca4885a/1b29c8b: the guarded emission is Program::lower (Body::emit_by with CallGuards; the guard SUB RSP,RBP; CMP RSP,need; JB stop; ADD RSP,RBP at the call's start; lower_plain for acyclic programs; the probe copy deleted). Rulings recorded in ## Handoff: the contract restated with the escape inside the claim; the table goes tight in part 3. scripts/bytes-level-compare: the three rows that differ (copy_window, scan_token, scan_tokens) differ as before (issues/bytes-level-access-view.md), the rest the same.
 - 2026-11-26: Step 3.2 verified at f89545b: HEATHER_PR_NATIVE=all scripts/test --pr '== suite: 4140 passed, 0 failed, 3 ignored =='; scripts/linked --check unchanged; scripts/lib-closures clean. Handoff (second session) below.
+- 2026-11-26: Step 3 item 1 at 057f2f0: the contract restated with the escape inside the claim (Tracked with the escape, SpentAt, OutOfRoom, TracksAt closing it, MeetsDone/MeetsExited at their outcome, tracked_prefix and performs_or_meet over an exiting escape; bytes_level_whole's LinuxRuns and RunsAsMeaning with the alternative at each branch's end). HEATHER_PR_NATIVE=all scripts/test --pr: '== suite: 4140 passed, 0 failed, 3 ignored =='; scripts/linked --check unchanged; scripts/fmt --check, scripts/lib-closures clean.
+- 2026-11-26: Step 3 item 2 at 4a04831: the guard's stage lemma Site::guard_claims (bytes_level_lower), with Stack::offset_small, Stack::room_word, guard_immediate, guard_taken. Item 3 foundations at 44ea99a: Kernel::escaping and its conversions (x86_64_stack_runs), HistoryExtends of the meaning (bytes_level_scope, bytes_level_routines). The coordinating session accepted item 1 as built (RunsAsMeaning as LinuxRuns) and the kernel-step encoding with conditions (below).
 
-## Handoff (2026-11-26, second session, after step 3 parts 1–2)
+## Handoff (2026-11-26, third session, after step 3 items 1–2 and item 3's foundations)
 
 **Done.**
-- **Step 3.1, the root generalised** (d0733aa). `Site::PerformsOr` and `ClaimsOr` (and `EntersClaimOr`, `ReturnsClaimOr`) carry an absorbing escape. Every claim lemma is proved once over it (`performs_or_*`, `claims_or_*`, `performs_or_escape`, `reach_or_map`, `reach_goal`). The old names are instances at `False`, with statements unchanged. FunctionIR and the certificates needed nothing.
-- **Step 3.2, the guarded emission** (ca4885a, 1b29c8b).
-  - `Body::emit_by(g: CallGuards, …)`, with `Body::emit` its instance at none.
-  - The guard is at the call's start: `SUB RSP, RBP; CMP RSP, need; JB stop; ADD RSP, RBP`, with `need = 8·count + 8 + rooms(callee)`, ruled by the coordinating session.
-  - `Routine::emit_by` refuses six saves.
-  - `Program::lower` = `rooms_settled` → acyclic: `lower_plain` (today's bytes); cyclic: `lower_guarded` (labels from `bound + 1`, the stop after the routines).
-  - The probe copy is deleted; the guard probes run `Program::lower`.
-  - `lower_plain_tracks_at` is the plain lowering's theorem. `lower_program_tracks_at` reads it under the **interim hypothesis** `any_guard(…) = False`.
-  - §17.10 has both parts.
+- **Item 1, the contract restated** (057f2f0; suite `== suite: 4140 passed, 0 failed, 3 ignored ==`). Accepted as built by the coordinating session. `Tracked(…, outcome, esc)`, `SpentAt`, `OutOfRoom`, `Tracks` in `LinuxPerformsOr(goal, OutOfRoom)`, `TracksAt` at no escape. `RunsAsMeaning` is `LinuxRuns` (the trace read off each branch's world), with `RunsAs` of one trace as its corollary where the ends pin one world (`linux_runs_as`, `tracked_runs_as`). §17.10 "Step 3, part 3".
+- **Item 2, the guard's stage lemma** (4a04831). `Site::guard_claims` (bytes_level_lower) is a `ClaimsOr` at no call and bound zero. From the call node's start, RSP at `stack.at(d)` and RBP `stack.low`: if `need <= d`, it arrives after the ADD with every register as it was; else it escapes at the stop's SYSCALL (`Site::StopAt`). The arithmetic: `Stack::offset_small`, `Stack::room_word`, `guard_immediate`, `guard_taken`.
+- **Item 3's foundations** (44ea99a).
+  - `Kernel::escaping(kernel, E)`: E's states are calls with nothing owed.
+  - `performs_or_of_escaping` converts a claim at `escaping(E)` into the root's `PerformsOr(goal, E)`, at the same count; `escaping_of_performs_or` and `claims_escaping` go the other way at one call more; `performs_or_kernel` widens a kernel.
+  - `HistoryExtends`, of the meaning alone: `Body::run_extends`, `Routine::call_extends`, `program_extends`.
 
-**The coordinating session's rulings this round** (to build on, not to reopen):
-- **Restate the contract with the escape inside the claim.** `Tracks`: `rooms(f) <= i → n → Answerable → ∃ calls, LinuxPerformsOr(Reached(meaning_n), λ r => ¬(stop_rooms(f, peak_n) <= i) ∧ SpentAt(r), calls, going_least(n, meaning_n), Running(s, io))`.
-  - `Tracked` takes the escape as a parameter; today's is its instance at no escape.
-  - `SpentAt(r)` = the exit at 139 ∧ `MeaningPrefix(…, r.io.past)`, with no `∃ o` outside.
-  - `TracksAt` by closing the escape under the room.
-  - `MeetsDone`/`MeetsExited` at their outcome with the escape; `MeetsGoing`'s prefix straight from `SpentAt`.
-  - `RunsAsMeaning`: the alternative sits at the trace's end (the outcome's end, or TRet(139) at a meaning-prefix world). No determinism lemma is owed.
-  - Amend §17.9's displayed clause in place, pointing to §17.10. Say in §17.10 why the escape is inside: `shout`'s write before the guarded call, and that the conservative table means `¬room` does not decide which end is reached.
-- Guard placement and form: as built (above).
-- **The table goes tight** (ruled after part 2, superseding §17.10's note that keeps 24 at every call). It should be the tightest table that is lawful for the placement built. With the guard before the call's words, counting them in `need`, a guarded call needs nothing of the caller's table: `rooms(f)` = largest frame + the largest over `f`'s *unguarded* calls of `24 + rooms(g)` (§17.9's original). Put it in when part 3 re-proves the table's law (`rooms_round`/`Body::stop_room`, `rooms_settled`, `stop_rooms_lawful`), not as a separate pass. Let the probes' rooms move (`down`'s 408 and its edges, `shout`'s, `pingpong`'s needs, `downh`'s); they follow the definition. Amend §17.9/§17.10 so the note carries one formula and names the placement it belongs to. If the tight table makes `RoomLaw` or `stop_rooms_lawful` harder, keep the present one and give the reason.
+**The coordinating session's conditions on item 3** (ruled; build on them):
+1. The contract's statement does not change: `Tracks` stays in `LinuxPerformsOr(goal, E)`. `K_E = linux_kernel(stack).escaping(E)` is the regions' working form. There is **one** conversion at the routine boundary (`performs_or_of_escaping`), and nothing above the boundary mentions `K_E`.
+2. Counts in the regions may change. Say in §17.10 what read exact counts before (`claims_exact`, `emits_now_exact`, `claims_stop_exact`, `linux_performs_exact`) and where each reading now gets what it needs. Exactness, if still needed, is had at the no-escape instance, not by a second mechanism.
+3. One absorbing alternative. Say which encoding carries the meaning's own exit (`StopExited`). If `K_E` can carry the spent stop and the meaning's exit as escapes with different facts, do so and retire the separate path; otherwise say in one sentence in §17.10 why the meaning's exit stays a goal. Not three ways for a region to end in an exit.
+4. `HistoryExtends` stays of the meaning alone (done).
+5. Write a short paragraph in §17.10 on why two forms exist: the escape is *stated* with `esc` at the contract and *carried* as a kernel step through the regions, with one conversion between them.
+6. The tight table stays. A guarded call's `24 <= d` (FunctionIR's `call_step_claim` asks it at every call): prove "a guarded callee calls, so its table entry holds its largest frame, so `need >= 24`" from `program_guards` and `routine_rooms` if that needs no real graph reasoning. Otherwise an emission check `24 <= need` is acceptable, but then §17.10 must say it is a test standing in for an invariant, and a probe must show it never refuses the guard tests' programs.
+7. Do not restructure `Loop` (issues/bytes-level-loop-exits.md comes after this work).
 
-**Next, in order.**
-1. The contract restated, as ruled (`x86_64_call_contract`: `Tracked` with the escape, `SpentAt`, `Tracks`, `tracks_at`, the readings and `tracked_prefix` over the escape; `bytes_level_whole`: `linux_runs_as` and `RunsAsMeaning` with the alternative end). Then `LowerProgramSpends` and `lower_spends_tracks_at` follow it.
-2. The guard's claim, a stage lemma.
-   - From the call node's start, with RBP = `stack.low` (the floored premise) and RSP = `stack.at(d)`: if `need <= d`, arrive after `ADD RSP, RBP` with gprs and memory unchanged; else the escape, reached at the stop's SYSCALL with RDI = 139, RAX = 60 and the world unchanged.
-   - The arithmetic: `stack.at(d) − stack.low = d` as a word (`Stack::canonical` gives `low + d < 2^47`); `CMP` with imm32 `need < 2^31`; B ⇔ `d < need`.
-   - The guarded call = this then FunctionIR's call claim lifted by `claims_or_weaken` (escape `False` → any).
-3. Re-prove the region claims over the escape at `Body::emit_by` (done side `Body::emit_emits`/`program_returns`, stop side `Body::emit_stops`/`program_stops`).
-   - The ruling: the existing exit (`StopExited`) becomes an escape with its own facts, through the one bind, not a second path.
-   - `¬(stop_rooms(f, peak) <= i)` comes from the guard's `d < need` by `RoomLaw` at depth.
-   - The escape is mapped at each call boundary by `performs_or_weaken`'s escape map (the callee's `SpentAt` → the caller's, via `program_grows`).
-4. `lower_program_tracks` discharging `LowerProgramSpends`. Drop the interim `acyclic` hypothesis of `lower_program_tracks_at`, and the readings' hypotheses (`lower_program_meets`, the probes' `*_meets*`, `echo_runs_as`).
-5. The floor at `_start` (`bytes_level_whole`): RBP from RSP and the budget; the static refusal where `routine_rooms(entry)` exceeds it; a whole-program probe. The export prologue stated, built only if a linked row has a cycle.
-6. Witnesses: `scripts/linked --check` and `scripts/bytes-level-compare`, and the cost of the reach and table computations on `scan_token`, as a shape. Then report step 3 whole; the coordinating session merges only then.
+**The plan for item 3 (designed, not built).**
+- **Counts.** An escape at `K_E` spends one call. So a region's count cannot be `calls_between(before, after)`: a guard firing at a call whose callee makes no exchange has no call to spend. Existential counts do not compose either. FunctionIR's `may_emit_claim_seq` wants one count for every `mid`, which is why today's `emits_now_up` lifts each part to the whole's count.
+- **Ceiling counts.** Fix, for a whole routine's proof, a ceiling world `TOP`: the outcome's world, `a.io` done or the stop's world. Give every region from `before` the count `|TOP.past| − |before.io.past| + 1`.
+  - Every branch makes at most that many kernel steps. A goal branch makes its world's exchanges, at most `TOP`'s. An escape branch makes its world's exchanges and one more, and its world is at most `TOP`'s.
+  - The one new exactness lemma is the ceiling recount at `K_E`, the analogue of `linux_performs_exact`: a claim whose goal's and escape's worlds are no longer than `TOP`'s has the count `|TOP| − |from| + 1`. It needs a "reaches" lemma at `K_E` so that a continuing branch's world stays below `TOP`.
+  - Seq is then today's proof: lift the rest's ceiling count to the first's by `Between`, bind, recount. So is the branch's (both arms at the same ceiling).
+- **The escape `E`** for routine `f` entered at `i` on `(args, heap, io)` at fuel `n`, cap `p`: `E(r) = exit 139 at r ∧ ¬(stop_rooms(f, p) <= i) ∧ Extends(TOP.past, r.io.past)`.
+  - At the top, `Extends(TOP, w)` gives `MeaningPrefix` at fuel `n` (TOP is the outcome's history).
+  - `¬room` at a firing guard: by `RoomLaw(stop_rooms)` at `p`, `cap >= 1` (a call is in the facts), and `stop_rooms_over` (`routine_rooms(h) <= stop_rooms(h, p−1)`). So `room(f, p) <= i` gives `need <= d`.
+  - A callee's E maps to the caller's by RoomLaw at `p` (the callee's `p−1`) and `Extends(TOP, a.io)`.
+- **The world fact at a guard.** Each region's `facts` gain `Extends(TOP.past, after.io.past)`. `may_emit_now_seq` derives the first part's from the rest's `Holds(mid, after)` by a Holds-level `Body::holds_extends`, from `HistoryExtends` of the answers. Put it in bytes_level_scope or routines: lower cannot import scope. At the call region, `Extends(TOP, before)` is facts plus the callee answer's extension.
+- **The region family.** Generalise in place, not beside: `EmitsNow` and `StopsHeap` take `(E, TOP)` and the ceiling count over `Body::emit_by(g)`. The old family is the instance at `E = False`, and there `K_E` is the Linux kernel up to `performs_or_kernel` both ways. Leaves, `Sys` and `Exit` lift by `performs_or_kernel`.
+  - The guarded call is `guard_claims`, then `claims_escaping` (the guard's escape into `K_E`, at one call), then FunctionIR's call claim at `K_E`.
+  - `CalleesReturn` becomes the callee's claim at `K_{E_g}` under `routine_rooms(g) <= i` (not depth), widened to the caller's by `performs_or_kernel`.
+- **The routine induction** (`program_returns`, `program_stops`, `program_tracks`) restated at the routine table: an unguarded callee is entered with `routine_rooms(g) <= i` from the tight table (`rooms_settled`), a guarded one from the guard's `need <= d`. Then `lower_program_tracks` at the boundary by `performs_or_of_escaping`, `lower_program_tracks_at` its corollary by `tracks_at`, and the `acyclic` hypothesis and `LowerProgramSpends` hypotheses dropped.
+- **The meaning's exit** (condition 3): look first at whether `StopExited` can be an escape of `K_E` with its own facts (an exit at the status in the stop's world). The stop side's `least` is zero there, so it may fold in.
+
+**Next, in order.** Item 3 as planned above, with the tight table. Then item 4 (`lower_program_tracks`, the interim hypotheses dropped). Item 5: the floor at `_start`, the static refusal, a whole-program probe; the export prologue stated. Item 6: the witnesses and the cost shapes. Then step 4. Report when step 3 is whole.
 
 **Traps.**
-- `heather eval` needs the file to check first: comment out a failing `refl` verdict to evaluate its subject (`halt_code(...)`).
-- A `Performs` proof's reach is now `(… ∧ goal) ∨ esc` (at the instance, `∨ False`). A proof that takes one apart reads the goal with `reach_goal`, or matches `Inl(reach) => match reach { Inl(..) .. Inr(never) .. }`; a constructed one is `Inl(⟨…⟩)`.
-- `Guards` is FunctionIR's name (`function_ir_lower`): the bytes level's record is `CallGuards`. `bytes_level_lower` cannot import `bytes_level_scope` (it imports lower), hence `among` beside `listed`.
-- The probe machine's `low` is the lowest address *stored*. A stop now stores nothing for the call that stops, so the stop verdicts' `low` rose. Statuses and writes are unchanged.
-- Run the suite only on a committed tree. Work in a worktree (`git worktree add`) while it runs; `heather check` there reads the worktree's `lib/`.
-- Earlier traps still hold: `heather eval` cannot print `BitVec`-holding values; a word live across a system call must not sit in RDI/RSI/RDX/RAX/RCX/R11; on this branch `scripts/test --pr` has no merge base and runs every file; another session works in `lib/lang/ownership/`.
-- 2026-11-26: Step 3 item 1 at 057f2f0: the contract restated with the escape inside the claim (Tracked with the escape, SpentAt, OutOfRoom, TracksAt closing it, MeetsDone/MeetsExited at their outcome, tracked_prefix and performs_or_meet over an exiting escape; bytes_level_whole's LinuxRuns and RunsAsMeaning with the alternative at each branch's end). HEATHER_PR_NATIVE=all scripts/test --pr: '== suite: 4140 passed, 0 failed, 3 ignored =='; scripts/linked --check unchanged; scripts/fmt --check, scripts/lib-closures clean.
+- Never edit the main tree while a suite runs. This session did once, briefly, and moved the edit out. Use `git worktree add` with its own `HEATHER_CACHE_DIR`. Run `scripts/fmt` and `scripts/lib-closures` in the main tree: in a fresh worktree they build a binary from scratch.
+- `import memory;` in bytes_level_lower clashes (`Agrees`): use `BitVec::toNat_add_mod` and `Nat::mod_of_lt` (`rip_toNat`).
+- `scripts/issue log` appends at the file's end, after this section: move the line into the Log.
+- Earlier traps still hold: `heather eval` needs the file to check first and cannot print `BitVec`-holding values; `Guards` is FunctionIR's, the bytes level's record is `CallGuards`; a reach is `(… ∧ goal) ∨ esc` (`reach_goal` at no escape); the probe machine's `low` is the lowest address stored; run the suite only on a committed tree; on this branch `scripts/test --pr` has no merge base and runs every file; another session works in `lib/lang/ownership/`.
