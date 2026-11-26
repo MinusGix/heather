@@ -14,6 +14,10 @@ The bytes level's `Loop` has one `next` for going on and for leaving, its output
 
 A pass that ends, per arm, in going on with the next values or leaving with the outputs: the loop's body is a tree of branches whose leaves say which. Then a `Jump` is a leaf that goes on, a `Ret` inside the loop is a leaf that leaves, no flag word exists, and the lowering's tail is one conditional jump per leaving arm (forward) and one jump back per continuing arm.
 
+## The same need at a join
+
+A source join one of whose arms leaves (a `Ret` or a `Jump` inside the arm, the surface's early return) has the same shape: the bytes level's branch wants both arms to yield its outputs, so the translation copies what follows the join into the arm that goes on. Where both arms yield there is nothing to copy (the branch binds its outputs and what follows is placed once); where one leaves, a leaf that leaves the routine or the pass is what is missing. So the form wanted is one notion of leaf for a routine's body: yield to the join, go on to the next pass, leave with the outputs.
+
 ## Constraints
 
 - One loop form. The present one is the instance whose body has a single test at its end; it is restated as that instance or its programs are rewritten, not kept beside the new form.
