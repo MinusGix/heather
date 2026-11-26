@@ -1074,9 +1074,10 @@ theorem calls_wprim_bodied(): verdict([wprim(), calls_wprim()], 1).is_some() = T
 
 // Two written parameters, one lent on to a callee to write: checked. At two
 // fields of one block (which `Lendable` allows) the callee's frame by block
-// said nothing of the other field, the block being lent; the frame by place
-// (`Heap::Frame`, §23.14) says the field apart from what was lent reads as
-// before, which the caller's read of `b.y` after the call needs.
+// said nothing of the other field, the block being lent; the frame
+// (`Heap::Frame`, the lens equation, §23.18) gives that a field apart from what
+// was lent reads as before (`Heap::frame_apart`), which the caller's read of
+// `b.y` after the call needs.
 fn lends_one() → Func {
     Func(Sig([Param(pt_s(), ByWrite), Param(pt_s(), ByWrite)], Nil),
         seq([Call(0, [Arg(0)], 1), Write(whole(Arg(0)), Loc(0)), Death(whole(Loc(0))), Read(Place(Arg(1), [SField(1)]))], Ret([Arg(0), Arg(1)])))
@@ -1190,9 +1191,10 @@ fn lend_plain_back() → Func {
 
 theorem lend_plain_back_checked(): verdict([pt_w(), lend_plain_back()], 1).is_some() = True { refl }
 
-// The frame is the lens equation (§18.3): after `x[0]` is lent and written
-// back, `Ret` reads the whole of `x`, which reads only the apart paths and the
-// lent one as before (the frame by place) do not determine.
+// The frame is the lens equation (§18.3, §23.18): after `x[0]` is lent and
+// written back, `Ret` reads the whole of `x`, which the reads at the apart
+// paths and the lent one (the frame by place, §23.14) do not determine; the
+// equation does (`x` after is `x` before with `x[0]` overwritten).
 fn lend_under() → Func {
     Func(Sig([Param(pts_s(), ByWrite)], Nil), seq([View(el(Arg(0), Lit(0)), Writing), Call(0, [Loc(0)], 1), Write(whole(Loc(1)), Loc(0)), Death(whole(Loc(0))),
         Write(el(Arg(0), Lit(0)), Loc(1)), Death(whole(Loc(1)))], Ret([Arg(0)])))

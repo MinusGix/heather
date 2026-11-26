@@ -4141,11 +4141,14 @@ proof; each is listed with the program that forced it.
     design's sentence without an extensionality law the model must not have:
     a record kind's fields need not cover its type. `lend_under_checked` is
     the program: `x[0]` is lent, written back, and `Ret` reads the whole of
-    `x`. Now (being built) it is §18.3's lens equation: a block's value after
-    is its value before with each reference lent to change into it
-    overwritten by what that reference reads after. The reads at apart paths
-    follow from it as a lemma, and a block lent to nothing is equal before
-    and after. A block lent whole is unconstrained; what is known of it
+    `x`. Now it is §18.3's lens equation (§23.18): at every block live
+    before that nothing was lent to change whole, the block is live after
+    and its value after is its value before with each reference lent to
+    change into it overwritten by what that reference reads after
+    (`Sel::put_lent`, a fold of puts in the list's order; apart puts commute,
+    `Sel::put_ref_comm`). The reads at apart paths follow from it
+    (`Heap::frame_apart`), and a block lent to nothing is its value before
+    (`Heap::frame_whole`). A block lent whole is unconstrained; what is known of it
     comes from `ReadAll` and `Written`. Only references lent to change count
     (`Value::lent`): a block lent only to read is unchanged (§23.8).
   - **`Heap::Kept`:**
@@ -4170,3 +4173,50 @@ proof; each is listed with the program that forced it.
       the call's words, the arguments' then the results' (`found_checked`,
       §23.4); a copy where the argument was plain (`at_by_value`, §23.14).
       The words are the arguments as passed (`at_moved_refused`, §23.13).
+
+### 23.18 The frame as the lens equation (2026-11-26, eighth session)
+
+`Heap::Frame` is restated, not added beside: for a block `b` live before
+(`ob`) with no reference lent to change whole into it, the block is live
+after (`ob2`) and `ob2.val = Sel::put_lent(rs, b, ob2.val, ob.val)`. The fold
+puts, for each reference `r` of `rs` into `b` in the list's order, what `r`
+reads in `ob2.val` at `r.sels` of the value so far (`Sel::put_ref`); apart
+puts commute (`Sel::put_ref_comm`), so the order is a spelling. Two
+consequences are lemmas: a path apart from every lent reference into the
+block reads and fits as before (`Heap::frame_apart`, today's caller-side
+use), and a block nothing was lent into is its value before
+(`Heap::frame_whole`). The block lent whole stays the callee's, unconstrained
+here; a block lent only to read is not in `Value::lent`, so equal.
+
+**The invariant's frame is a record** (`LentFrame`, `Inv.frame`), of three
+clauses:
+
+- `eq`: the equation from the entry heap to the run's.
+- `pw`: the lent references pairwise apart by position (`Ref::Pairwise`),
+  from `Lendable.apart` at entry (`Value::lent_pairwise`) and constant.
+- `like`: each lent reference fits the entry's value, and what it reads now
+  has the entry's code and length there (`Sel::LikeAt`).
+
+The third is **a gap in the proof's own invariant, fixed**: the store's step
+of the equation (`Sel::put_lent_store`) writes at a lent reference `r` after
+the fold has put `r`'s value into the entry's; the two puts at `r` are one
+put (`Sel::write_write`, the model's `over_over` along the path) only where
+each value put keeps the code and length the entry has there, since a
+window's `over` is lawful only at its length. The verdict supplies the
+like-ness of each write to what is there (`WriteVal` for a whole place,
+`Sel::write_keeps` under a step); `like` accumulates it from the entry. No
+statement kind lacked it, so there is no finding for the interface.
+
+**The heap-changing builders**: `Inv::start` (each put writes back what is
+there, `Sel::put_lent_self`, so it takes `StrsLaws`; `like` from
+`Lendable.live`), `Inv::fresh` and `Inv::kill` (every block the frame speaks
+of is as it was, `LentFrame::keep`; the killed block is lent whole or made
+here), and `Inv::store_rest`, which now takes the store as a function `ff`
+applied at the root's selections that keeps the code and length read there
+(`Inv::store_frame`: at a lent root, `Sel::put_lent_set` over the pairwise
+list; at a root made here, a block past the frame). Both callers had the
+like-ness already (the holder write's `WriteVal`, the view write's `UpAt`).
+`Body::stage_ret` passes `inv.frame.eq`. The probe `lend_under_checked` (a
+view of `x[0]` lent, written back, all of `x` returned) waits for the call's
+proof to become a theorem.
+
