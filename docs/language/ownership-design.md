@@ -3600,6 +3600,18 @@ decider's verdict beside `Steps::apart_sound` (`Steps::fit_under` under a
 shared step, `Steps::fit_then` after two apart steps). `Lendable`'s apartness
 asks a caller for the same, which its licence gives.
 
+`fits_over` is unconditional because it speaks of one step on one value:
+`fits(a, over(b, g, d)) = fits(a, d)` compares steps `a` and `b` taken on
+the same `d`, and `over` keeps `d`'s code and its length (`PartOk.len_set`)
+whatever `g` returns. A modification at a field holding a sequence that
+changes the sequence's length does change whether an element step *under*
+that field fits, but that is a step on `at(b, d)`, not on `d`, and the law
+says nothing of it. The deeper fits are carried by `Steps::fit_under`, which
+uses `over_at` and so inherits its `like` condition through
+`Steps::verdict_keeps`, exactly as `ApartAt::under` does for `apart_sound`.
+At two apart steps (`Steps::fit_then`) the other step reads what it read, so
+no condition is needed there.
+
 **The checker's write** is split into `CSt::write` and its tail
 `CSt::write_last` (same meaning): an inversion that re-spelled the tail's
 nested match drove the kernel's conversion past the stack.
