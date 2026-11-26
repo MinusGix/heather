@@ -2690,12 +2690,14 @@ theorem emit_exit_emits<M>(saves: Nat, site: Site<M>, stack: Stack<M>(site.fetch
 // The out-of-room guard (ownership-design §17.9, §17.10)
 //
 // A call whose callee shares its component of the call graph is guarded:
-// at the call node's start, before any of the call's code, the stack
-// pointer is lowered by what the call needs below the frame (its words on
-// the stack, the return address and the callee's room by routine), compared
-// with the floor (RBP, `floor_register`), and raised again; below the
-// floor, the JCC goes to the stop. No register is written, so the call's
-// code after it is FunctionIR's, unchanged.
+// at the call node's start, before any of the call's code, the floor (RBP,
+// `floor_register`) is subtracted from the stack pointer, the room left is
+// compared with what the call needs below the frame (its words on the
+// stack, the return address and the callee's room by routine), and the
+// floor is added back; with less room, the JCC goes to the stop. The stop
+// uses no stack (two moves and the exit's SYSCALL), so leaving RSP moved
+// on that path is sound. No register is written on the path that goes on,
+// so the call's code after it is FunctionIR's, unchanged.
 
 // The guarded callees of the routine being emitted, the room by routine,
 // and the stop's label.
@@ -2714,14 +2716,16 @@ fn CallGuards::need(self g: CallGuards, callee: Nat, arguments: List<Typed>) →
 // The most a guard's immediate holds, sign-extended.
 fn guard_most() → Nat { 2147483647 }
 
-fn guard_test() → Test { Compare(B, Rsp, RightRegister(floor_register())) }
+fn guard_test(need: Nat) → Test { Compare(B, Rsp, RightImm32(BitVec::ofNat(need))) }
 
-fn guard_lower(need: Nat) → Instruction { AddRI32(Rsp, BitVec::ofNat(4294967296 - need)) }
+// RSP less the floor: the room left, which cannot wrap, the stack pointer
+// being at or above the floor.
+fn guard_lower() → Instruction { SubRR(Rsp, floor_register()) }
 
-fn guard_raise(need: Nat) → Instruction { AddRI32(Rsp, BitVec::ofNat(need)) }
+fn guard_raise() → Instruction { AddRR(Rsp, floor_register()) }
 
 fn Prog::guarded(self prog: Prog, need, stop: Nat) → Prog {
-    At(At(prog, 0, Block([guard_lower(need)])).branched_by(guard_test(), stop, False), 0, Block([guard_raise(need)]))
+    At(At(prog, 0, Block([guard_lower()])).branched_by(guard_test(need), stop, False), 0, Block([guard_raise()]))
 }
 
 // The stop: the reserved status (the contract's), Linux's exit; laid out

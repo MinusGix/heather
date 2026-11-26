@@ -2867,20 +2867,33 @@ ruled, and nothing else moved:
   in `g`'s list is guarded, every other call is FunctionIR's as before.
   `Body::emit` is its instance at `CallGuards::none()`, so every lemma
   about an unguarded region reads as it did.
-- **Where the guard sits** (amending step 1's finding): at the call node's
-  start, before any of the call's code, with no register written:
-  `ADD RSP, −need; CMP RSP, RBP; JB stop; ADD RSP, need`, with
-  `need = 8·(words past the sixth) + 8 + rooms(callee)`. The stop path
-  does not care what RSP holds, and the path that goes on restores it, so
-  the call's code after the guard is `File::emit_call` unchanged. The
-  guarded call's claim is then the guard's claim (with the escape) followed
-  by FunctionIR's call claim lifted to any escape, and nothing in
-  `function_ir_lower_calls` is edited or copied. Step 1's guard (after the
-  argument moves, RAX free) would have needed escape versions of
-  FunctionIR's four call-claim lemmas. The guard fires at the same rooms:
-  `d ≥ need` is the callee's entering premise
-  `rooms(g) <= (d − 8·count) − 8`. It is 23 bytes against step 1's 19.
-  `need` is refused above `2³¹ − 1` (the immediate is sign-extended).
+- **Where the guard sits** (amending step 1's finding). It sits at the
+  call node's start, before any of the call's code, with no free register:
+  `SUB RSP, RBP; CMP RSP, need; JB stop; ADD RSP, RBP`, where
+  `need = 8·(words past the sixth) + 8 + rooms(callee)`.
+  - `RSP − RBP` is the room left. It cannot wrap: the stack pointer is at
+    or above the floor. The first form proposed, `ADD RSP, −need; CMP RSP,
+    RBP`, compared `RSP − need` with the floor. That wraps unless the
+    stack's low address is at least `need`, which `Stack<M>` does not say,
+    so the coordinating session ruled it out.
+  - On the taken path RSP is left moved. That is sound because the stop
+    uses no stack: it is the exit's two moves and the SYSCALL. The path
+    that goes on restores RSP, so the call's code after the guard is
+    `File::emit_call` unchanged.
+  - The guarded call's claim is then the guard's claim (with the escape)
+    followed by FunctionIR's call claim lifted to any escape. Nothing in
+    `function_ir_lower_calls` is edited, generalised or copied. Step 1's
+    guard (after the argument moves, RAX free) would have needed escape
+    versions of FunctionIR's four call-claim lemmas.
+  - The guard fires at the same rooms as before: `d ≥ need` is the
+    callee's entering premise `rooms(g) <= (d − 8·count) − 8`. It costs
+    four instructions, as step 1's did. `need` is refused above `2³¹ − 1`
+    (the immediate is sign-extended).
+  - The table. With the guard counting the call's stack words and return
+    address in `need`, a guarded call's 24 bytes need not be in the
+    caller's room: §17.9's formula (24 only where the call is unguarded)
+    would do. The table is kept as built (24 at every call), since
+    changing it moves the probes' rooms (`down`'s 408).
 - `Routine::emit_by` refuses a placement saving six (the floor is RBP).
   `Program::lower` refuses a table that does not settle (`rooms_settled`).
   It lowers a program with no cycle as before (`Program::lower_plain`, the

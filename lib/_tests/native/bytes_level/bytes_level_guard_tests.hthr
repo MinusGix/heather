@@ -251,9 +251,7 @@ fn guard_needs_from(items: List<Named>, here: Nat, bound: Nat) → List<Nat> {
             match it.item {
                 Block(instrs) => match instrs {
                     Cons(i, more) => match more {
-                        Nil => match i { AddRI32(dest, imm) => match dest { Rsp => match (2147483648).leb(imm.toNat()) {
-                                True => Cons(now, Cons(4294967296 - imm.toNat(), guard_needs_from(rest, now, bound))),
-                                False => guard_needs_from(rest, now, bound) },
+                        Nil => match i { CmpRI32(left, imm) => match left { Rsp => Cons(now, Cons(imm.toNat(), guard_needs_from(rest, now, bound))),
                             _ => guard_needs_from(rest, now, bound) }, _ => guard_needs_from(rest, now, bound) },
                         Cons(_, _) => guard_needs_from(rest, now, bound),
                     },
