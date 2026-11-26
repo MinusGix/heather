@@ -5314,12 +5314,20 @@ Where it is passed plain, `ViewIs` asks each result only to be plain and
 [Result(Buf, OParam(0)), Result(Buf, OParam(0))])`, with a world answering two
 copies, is safe, and its caller `h(a: Buf take) { Call(twice, [a], 2); … }`
 run with `a` plain bound both results `KHold(o_a, AcOwn)`, two levels holding
-one object, against `Inv.one`. A plain parameter answered twice is two
-copies and is allowed. Probes: `twice_param_refused` (where written),
-`twice_caller_refused` (at the call), `twice_plain_caller_checked`; the
-callee `twice_plain` is itself refused at its `Ret`, as is `once_plain`
-answering a plain taken parameter once (`CSt::returns` asks a parameter
-answered back to be held as an owner).
+one object, against `Inv.one`. Probes: `twice_param_refused` (where
+written), `twice_caller_refused` (at the call).
+
+**An `OParam(i)` result names a taken parameter whose code moves**
+(`Result::ok`, the coordinating session's ruling on the loose end above). A
+plain value answered back is a copy either way and means nothing `OFresh` of
+its code does not; no checked body could answer it (`CSt::returns` asks a
+parameter answered back to be held as an owner); and it forced `Sig::once`
+and `CSt::result` to carry a "moves or not" case. Now `Sig::once` is one
+`OParam` per parameter, `CSt::result`'s plain `OParam` case is gone, and a
+signature handing a plain parameter's value back says `OFresh`. Probes:
+`twice_plain_callee_refused`, `twice_plain_caller_refused`,
+`once_plain_callee_refused`, `once_plain_caller_refused`, and the neighbours
+`once_fresh_checked`, `once_fresh_caller_checked`.
 
 **`Len(p, w)`, a place's length as a word** (issues/ownership-branch-on-
 object-length.md): meaning `Width::of_nat(w, Dyn::len(value at p))`, the
@@ -6023,3 +6031,184 @@ functions keep their total form for the meaning; the run asks first whether
 the fallback would be taken). It is done with the restated stages, each of
 which then owes "not stuck by codes" from the code check and the
 invariant's codes.
+
+## 27. The surface (2026-11-26, with Minus)
+
+What the source looks like, as agreed in conversation. Nothing here is
+built; §15.2 is what these words mean, and this section replaces its
+spellings. Marked **open** where it is not settled.
+
+### 27.1 The stance
+
+You write values, not references. In the meaning there are no references at
+all: a place lent to change means its value goes in and the new value comes
+back. Whether the machine passes an address or copies in and out is the
+implementation's choice, unobservable because the checker guarantees nobody
+else can see the place meanwhile. The words a program writes control
+permission (who may change this, who owns it), never representation.
+
+The cost rule is fixed, so the abstraction stays predictable:
+
+- A value that fits in registers (a word; by intent a small plain record)
+  travels in registers in every mode: read is a copy in, a write loan a copy
+  in and a copy out, a move a copy.
+- Anything else (a buffer, a large record) travels as an address.
+- **Nothing is cloned implicitly.** A copy of non-word data happens only
+  where the source writes `copy`.
+- There are no implicit moves either: a callee that keeps its argument says
+  `move` in its signature and the call says `move x` or `copy x`.
+
+### 27.2 The words
+
+You write `&` or `&mut` exactly where the difference is visible to the other
+side, and `move` where ownership changes hands.
+
+| Where | Written | Means |
+|---|---|---|
+| a parameter, an argument | nothing | read: a loan of what the caller has, or a copy of it; the callee cannot tell |
+| a parameter, an argument | `&mut` | lent to change; the change comes back |
+| a parameter, an argument | `move` | ownership moves in; the caller's variable is gone |
+| a result | a plain type | an owned value |
+| a result | `&{…} T`, `&mut{…} T` | lives inside what the braces name |
+
+```
+fn copy_span(src: List<u8>, dst: &mut List<u8>, same: src.len() = dst.len())
+copy_span(src, &mut out[from .. from + src.len()], _)
+fn push(v: &mut Vec<A>, move x: A)
+fn field(line: List<u8>, k: u64) → (lo: u64, hi: u64, f: &{line[lo .. hi]} List<u8>)
+```
+
+- **`&mut` and not a `mut` keyword on the binder**: `mut dst: T` already
+  means an owned, locally mutable value to anyone who has read Rust, the
+  opposite of what is meant.
+- **No dereference.** Inside `copy_span`, `dst` is the value; `dst[i] = …`
+  writes it. `&mut T` on a parameter is a mode spelled like a type, and is
+  not a type argument (`Vec<&mut T>`) until stored borrows exist.
+- **`move`, not `take`**: it reads the same at the parameter and at the
+  call. Against C++'s failures: after `move x` the variable is statically
+  gone (no moved-from state, nothing destroyed twice); `move` is the
+  transfer and never a quiet copy (if it cannot happen it is an error
+  saying why); a move is never user code; there are no reference
+  categories.
+- `let y = xs[i]` is a read view where the element is not a word and a
+  copy where it is. A local mutable variable stays `let mut n = 0`.
+
+### 27.3 Returned views
+
+`&{…} T`: the braces hold what the result lives in.
+
+- A bare name (`&{m} V`) is "somewhere inside `m`": all of `m` is frozen
+  while the result lives and nothing about where it sits is exposed. The
+  everyday form.
+- A full place (`&{line[lo .. hi]} List<u8>`) is "exactly here": the caller
+  holds the equation as a fact and the rest stays writable. Opted into.
+- Several (`&{a, b} T`): one of them.
+- Elided (`&T`) where one parameter is the only candidate.
+
+A lifetime is therefore a set of places, and a proposition the caller
+holds, not a variable. The checker today implements the exact form only;
+"somewhere inside" (within the region, no equation) is a small
+generalisation, not built.
+
+**How a function can take a value and return a reference into it.** It
+never takes a value in the machine's sense: a read parameter is a loan, and
+what is handed over is decided by the type, at the definition, never at a
+use. A type that travels by address gives an address into the caller's
+object; a type that travels in registers gives the part's value, which a
+read cannot tell from a reference; generic code is compiled per
+representation through the type's layout instance. A parameter that a
+`&mut` result borrows from is passed by address whatever its size, which
+the signature alone decides. Nothing "does not work for your type".
+
+### 27.4 What can be referenced: a type declares its places
+
+A place is a path of steps, and each step is an accessor a type declares:
+a get and a put with the lens laws, when the access is valid, and when two
+accesses of that kind are apart. Fields (apart when the names differ),
+elements (when the indices differ) and windows (when the ranges do not
+overlap) are built in; keys and variants exist as steps and have not been
+taken through the checker. A type that declares none can be borrowed only
+whole. An exotic accessor (the even-indexed elements against the odd) is a
+lawful get and put with an apartness the type proves once. Structural
+operations (a map's insert) borrow the whole, because they may move the
+storage.
+
+The guarantee needs no unfolding of a callee. A callee is checked once
+against its signature: it can form a view only by applying accessor steps
+to what it was lent, and what it returns lies within the places its result
+names. A caller reasons from the signature: what may change is what it lent
+with `&mut` or gave with `move`, what stays pinned is what the result's
+region names, and everything else is untouched (the frame). The soundness
+theorem is generic in the accessors' laws; compiled code owes one more, that
+the accessors agree with the byte layout (§25, `Strs::Laid`).
+
+**Open:** the surface for a user to declare an accessor on their own type.
+It belongs with the representation tier (§19): a type's layout instance,
+its accessors, and its class (copied freely, moved, or must be ended) are
+one declaration.
+
+### 27.5 Obligations
+
+An obligation is an ordinary solver-default argument, the mechanism the
+language has (`hx: x > 0 := infer`,
+`docs/language/classes/traits-design.md` §8), declared where the obligation
+comes from: an accessor's signature says how its precondition is found
+(`xs[i]` is sugar for that call), and a sequence instance says how its
+windows' apartness is. A caller can always pass the proof. No
+ownership-specific search rule and no new syntax; what the default solver
+set gains is linear arithmetic over the hypotheses in scope.
+
+### 27.6 What a function with `&mut` parameters is, in a proof
+
+One definition read two ways: the pure function the theorems are about and
+the body that is compiled, tied by `refl`. **Provisional:** the pure
+function answers its result followed by its changed parameters, and a
+tuple of one is the value (`sort(xs)` is the sorted list, `pop(xs)` a
+pair); parameter names may label the components. No `ensures` clauses. To
+be revisited against real code.
+
+### 27.7 Later rounds
+
+Borrows stored in data (`&mut{o} T` as a field), moving out of the middle
+of a structure, returned write views, and the declaration surface of 27.4.
+
+## 28. What is left, by milestone (2026-11-26)
+
+Stated as what has to exist, not as time.
+
+**A. The end-to-end theorem for the first fragment** (words, records of
+words, sequences of words; no allocation, no holes), with nothing assumed:
+
+1. `check_sound` over the restated invariant (§26): the walk over small
+   programs, the stages re-proved, the call, the body induction, joins,
+   `Jump`, fuel; with it the run stuck at the meaning's fallbacks (§26.5)
+   and the deep `RFits`.
+2. `PlacementSound` (§25): the remaining leaf stages, returns, jumps, the
+   join, the call, the routine, the fuel induction; then `PlaceComplete`.
+3. The out-of-room stop merged (§17.9, §17.10): the start code, and
+   `EndToEnd` restated over the contract with the stop.
+4. The bytes level's leaves that leave (`issues/bytes-level-loop-exits.md`),
+   so a source loop and an early return cost what they should.
+
+**B. A user can write it**, for that fragment: the surface of §27 in the
+parser and the elaborator; the one reflector from a source function to its
+pure meaning and its body with the pin; obligations as solver-default
+arguments; refusals that print the proposition owed; a planner for the
+bytes level in place of hand-written placements.
+
+**C. The shift** (§17.5's stages 5 to 7): everything the present `runtime
+fn` customers use, then the old pipeline deleted.
+
+- Objects with holes (references stored in data, a vector of vectors):
+  the next ownership round, through the checker, its soundness and the
+  seam.
+- Where memory comes from: `Fresh` placed, the allocator's laws, a bump
+  allocator, deaths with a reclaiming allocator, bounds (§15.9, §15.10).
+- The bytes level's missing forms: typed copies, narrow arithmetic, a
+  multiply, primitives and system calls placed from a table of routines
+  each proved to compute its world entry.
+- The representation tier's declaration surface (§19, §27.4).
+- The optimizer on the new layer.
+- The customers ported (the arena, the word map, the linked lexer, the
+  hashes), each compared with what it compiles to today; then the four old
+  languages, the generator and the old facts deleted in one change.
