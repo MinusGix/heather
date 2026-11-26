@@ -3,7 +3,7 @@
 // for each hypothesis. Tests, not library: nothing outside lib/_tests imports
 // this module (docs/test-value-audit.md §4.5).
 import logic; import bool; import nat; import option; import int; import omega; import rat;
-import dyadic; import float; import round; import arith; import eft;
+import dyadic; import float; import round; import arith; import eft; import p3109; import project;
 fn h16(neg: Bool, m, b: Nat, ok: binary16().canonical(m, b).IsTrue()) → Finite(binary16()) { Finite(neg, m, b, ok) }
 fn one() → Finite(binary16()) { h16(False, 1024, 14, trivial) }
 fn three() → Finite(binary16()) { h16(False, 1536, 15, trivial) }
@@ -176,4 +176,43 @@ theorem vk_needs_nearest(): ¬(-Nat::pow(2, vx().bexp + 5).int() <= vxl_rz().H()
         let p: (Nat::pow(2, vx().bexp + 5).int() = 524288) = refl;
         omega(h, e, p)
     }
+}
+
+// ---------------------------------------------------------------------------
+// Fast2Sum at a format without infinities (issues/float-fast2sum-saturated.md):
+// a nearest rounding past the largest float saturates to it, and that is
+// still a nearest float, so Fast2Sum gives the overflow error exactly.
+
+// E4M3: 416 + 64 = 480 is past 448, the largest float (its NaN takes the
+// next code), and saturates to it; `z = 448 - 416 = 32` and `t = 64 - 32`
+// is the overflow error 32, exactly.
+fn e4(m, b: Nat, ok: e4m3().canonical(m, b).IsTrue()) → Finite(e4m3()) { Finite(False, m, b, ok) }
+theorem e4m3_f2s_s(): (e4(13, 14, trivial)).add(e4(8, 12, trivial)) = Float::Fin(e4(14, 14, trivial)) { refl }
+theorem e4m3_f2s_exact(): (e4(14, 14, trivial)).val() + (e4(8, 11, trivial)).val() ≈ (e4(13, 14, trivial)).val() + (e4(8, 12, trivial)).val() {
+    Finite::fast_two_sum_exact(e4(13, 14, trivial), e4(8, 12, trivial), e4(14, 14, trivial), e4(8, 11, trivial), e4(8, 11, trivial),
+        True, NearestEven, trivial, refl, refl, refl)
+}
+
+// E2M1: 4 + 4 = 8 saturates to 6; `z = 2` and `t = 2` is the error.
+fn e2(m, b: Nat, ok: e2m1().canonical(m, b).IsTrue()) → Finite(e2m1()) { Finite(False, m, b, ok) }
+theorem e2m1_f2s_s(): (e2(2, 2, trivial)).add(e2(2, 2, trivial)) = Float::Fin(e2(3, 2, trivial)) { refl }
+theorem e2m1_f2s_exact(): (e2(3, 2, trivial)).val() + (e2(2, 1, trivial)).val() ≈ (e2(2, 2, trivial)).val() + (e2(2, 2, trivial)).val() {
+    Finite::fast_two_sum_exact(e2(2, 2, trivial), e2(2, 2, trivial), e2(3, 2, trivial), e2(2, 1, trivial), e2(2, 1, trivial),
+        True, NearestEven, trivial, refl, refl, refl)
+}
+
+// FLoPS Theorem 12 (`Finite::fast_two_sum_sat`): with the sum saturated to
+// the largest float by any mode, both subtractions are exact in any modes.
+// E4M3 with the subtractions toward zero and upward:
+theorem e4m3_f2s_sat_directed(): (Finite::max_finite(e4m3())).val() + (e4(8, 11, trivial)).val() ≈ (e4(13, 14, trivial)).val() + (e4(8, 12, trivial)).val() {
+    Finite::fast_two_sum_sat(e4(13, 14, trivial), e4(8, 12, trivial), e4(8, 11, trivial), e4(8, 11, trivial), TowardZero, TowardPos, refl, refl,
+        trivial, trivial, refl, refl)
+}
+// P3109 Binary8p3se: 40960 + 16384 = 57344 is past 49152; rounded upward and
+// saturated it is 49152, and the error 8192 comes out exactly.
+fn p3(m, b: Nat, ok: binary8p3se().canonical(m, b).IsTrue()) → Finite(binary8p3se()) { Finite(False, m, b, ok) }
+theorem b8p3se_f2s_s(): binary8p3se().project(TowardPos, SatFinite, (p3(5, 30, trivial)).val() + (p3(4, 29, trivial)).val()) = Float::Fin(Finite::max_finite(binary8p3se())) { refl }
+theorem b8p3se_f2s_sat(): (Finite::max_finite(binary8p3se())).val() + (p3(4, 28, trivial)).val() ≈ (p3(5, 30, trivial)).val() + (p3(4, 29, trivial)).val() {
+    Finite::fast_two_sum_sat(p3(5, 30, trivial), p3(4, 29, trivial), p3(4, 28, trivial), p3(4, 28, trivial), TowardNeg, TowardNeg, refl, refl,
+        trivial, trivial, refl, refl)
 }

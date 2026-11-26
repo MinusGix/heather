@@ -2068,6 +2068,18 @@ theorem Nat::not_even_succ_of_even(self n: Nat): Nat::Even(n) → ¬Nat::Even(n 
     }
 }
 
+// Adding an even number keeps the parity. Curried, so the recursion
+// descends on `b` two steps at a time with `a` fixed.
+theorem Nat::even_add_even(self b: Nat, a: Nat): Nat::Even(b) → (Nat::Even(a) → Nat::Even(a + b)) ∧ (¬Nat::Even(a) → ¬Nat::Even(a + b)) {
+    match b {
+        Zero => λ _ => And(λ e => e, λ o => o),
+        Succ(k) => match k {
+            Zero => λ (bad: Nat::Even(1)) => false_elim(bad),
+            Succ(l) => λ (h: Nat::Even(l + 2)) => l.even_add_even(a)(h),
+        },
+    }
+}
+
 theorem Nat::even_pow_two(self k: Nat): Nat::Even(Nat::pow(2, k + 1)) {
     j(sym(Nat::pow(2, k).mul_two()), λ y _ => Nat::Even(y), Nat::pow(2, k).even_double())
 }

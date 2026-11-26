@@ -52,18 +52,15 @@ import dyadic;
 // ---------------------------------------------------------------------------
 // Formats.
 
-// What the format keeps for special values. `Ieee`: infinities and NaNs in
-// the top exponent field, so finite values stop at the top binade. `NanOnly`:
-// no infinity, and the one pattern with every exponent and significand bit
-// set is NaN (OCP E4M3), so the top binade loses its largest significand.
-// `FiniteOnly`: every pattern is finite (OCP FP6 and FP4).
+// Which special values the format has. `Ieee`: infinities and NaN.
+// `NanOnly`: NaN and no infinity (OCP E4M3, the P3109 finite formats).
+// `FiniteOnly`: neither (OCP FP6 and FP4). Where the specials' codes sit, and
+// so how much of the top binade they take, is the format's `cut`, not this.
 inductive Specials { Ieee, NanOnly, FiniteOnly }
 
 fn Specials::has_inf(self s: Specials) → Bool { match s { Ieee => True, NanOnly => False, FiniteOnly => False } }
 
 fn Specials::has_nan(self s: Specials) → Bool { match s { Ieee => True, NanOnly => True, FiniteOnly => False } }
-
-fn Specials::reserves_top(self s: Specials) → Bool { match s { Ieee => False, NanOnly => True, FiniteOnly => False } }
 
 // A format with infinities has NaN too: an invalid operation on infinities
 // has a value.
@@ -71,19 +68,19 @@ theorem Specials::nan_of_inf(self s: Specials, has: s.has_inf().IsTrue()): s.has
     match s as λ t => t.has_inf().IsTrue() → t.has_nan().IsTrue() { Ieee => λ _ => trivial, NanOnly => λ _ => trivial, FiniteOnly => λ no => false_elim(no) }(has)
 }
 
-// Only a format without infinities reserves its top significand.
-theorem Specials::inf_free(self s: Specials, has: s.has_inf().IsTrue()): ¬s.reserves_top().IsTrue() {
-    match s as λ t => t.has_inf().IsTrue() → ¬t.reserves_top().IsTrue() { Ieee => λ _ r => r, NanOnly => λ no _ => no, FiniteOnly => λ no _ => no }(has)
-}
-
-// `frac` fraction bits (precision `frac + 1`, at least two); `emin` the least
-// normal exponent, IEEE's emin; `span` the number of binades above it, so
-// IEEE's emax is `emin + span`.
+// `frac` fraction bits (precision `frac + 1`; `frac = 0` is P3109's
+// precision one, where every nonzero value is a power of two); `emin` the
+// least normal exponent, IEEE's emin; `span` the number of binades above it
+// that hold finite values, so IEEE's emax is `emin + span`; `cut` the number
+// of largest significands the top binade gives up to special values (E4M3's
+// NaN, a P3109 format's infinity and NaN), at most all but its least normal
+// one (docs/library/float-p3109-design.md D3).
 record Format {
     frac: Nat,
-    frac_ok: 1 <= frac,
     emin: Int,
     span: Nat,
+    cut: Nat,
+    cut_ok: cut + 1 <= Nat::pow(2, frac),
     specials: Specials,
 }
 
@@ -112,25 +109,25 @@ evidence theorem Format::half_pos({F: Format}): 0 < F.half() { Nat::pow_pos(a :=
 evidence theorem Format::top_pos({F: Format}): 0 < F.top() { Nat::pow_pos(a := 2, n := F.prec()) }
 
 // IEEE 754 interchange formats and bfloat16.
-fn binary16() → Format { Format(10, trivial, -14, 29, Ieee) }
-fn binary32() → Format { Format(23, trivial, -126, 253, Ieee) }
-fn binary64() → Format { Format(52, trivial, -1022, 2045, Ieee) }
-fn bfloat16() → Format { Format(7, trivial, -126, 253, Ieee) }
+fn binary16() → Format { Format(10, -14, 29, 0, trivial, Ieee) }
+fn binary32() → Format { Format(23, -126, 253, 0, trivial, Ieee) }
+fn binary64() → Format { Format(52, -1022, 2045, 0, trivial, Ieee) }
+fn bfloat16() → Format { Format(7, -126, 253, 0, trivial, Ieee) }
 
 // OCP microscaling element formats (OCP MX v1.0). E8M0 is a scale with no
 // significand and no zero, so it is not a `Format`.
-fn e5m2() → Format { Format(2, trivial, -14, 29, Ieee) }
-fn e4m3() → Format { Format(3, trivial, -6, 14, NanOnly) }
-fn e3m2() → Format { Format(2, trivial, -2, 6, FiniteOnly) }
-fn e2m3() → Format { Format(3, trivial, 0, 2, FiniteOnly) }
-fn e2m1() → Format { Format(1, trivial, 0, 2, FiniteOnly) }
+fn e5m2() → Format { Format(2, -14, 29, 0, trivial, Ieee) }
+fn e4m3() → Format { Format(3, -6, 14, 1, trivial, NanOnly) }
+fn e3m2() → Format { Format(2, -2, 6, 0, trivial, FiniteOnly) }
+fn e2m3() → Format { Format(3, 0, 2, 0, trivial, FiniteOnly) }
+fn e2m1() → Format { Format(1, 0, 2, 0, trivial, FiniteOnly) }
 
 // ---------------------------------------------------------------------------
 // Canonical form.
 
 // The significand fits in `prec` bits, the exponent is in range, only the
-// least exponent holds significands below `2^(prec - 1)`, and a format that
-// reserves its top pattern for NaN leaves room below it in the top binade.
+// least exponent holds significands below `2^(prec - 1)`, and the top binade
+// stops `cut` significands short of the top.
 // Stated as the proposition and computed as its decision, whose bit is the
 // comparisons themselves (`leb`, `same`, `&&`, `||`, `!`;
 // issues/decide-bit-is-the-comparison.md), so the proof field of a `Finite`
@@ -138,7 +135,7 @@ fn e2m1() → Format { Format(1, trivial, 0, 2, FiniteOnly) }
 // conditions go in and out by `decide_intro` / `decide_elim`.
 fn Format::canonical(self F: Format, mag, bexp: Nat) → Bool {
     decide_bit<mag + 1 <= F.top() ∧ bexp <= F.span ∧ (bexp = 0 ∨ F.half() <= mag)
-        ∧ (F.specials.reserves_top().IsTrue() → F.span <= bexp → mag + 2 <= F.top())>()
+        ∧ (F.span <= bexp → mag + F.cut + 1 <= F.top())>()
 }
 
 record Finite(F: Format) { neg: Bool, mag: Nat, bexp: Nat, ok: F.canonical(mag, bexp).IsTrue() }
@@ -364,20 +361,27 @@ theorem Float::not_nan({F: Format}, self x: Float(F), none: F.specials.has_nan()
 // ---------------------------------------------------------------------------
 // Building canonical floats.
 
-theorem Format::two_le_half(self F: Format): 2 <= F.half() { Nat::le_pow_self(2, F.frac, trivial, F.frac_ok) }
+// `half` is at least one (two once there is a fraction bit), `top` twice it,
+// and the reserved significands leave the top binade its least normal one.
+theorem Format::one_le_half(self F: Format): 1 <= F.half() { Nat::pow_pos(a := 2, n := F.frac) }
 
-theorem Format::four_le_top(self F: Format): 4 <= F.top() {
-    let h = F.two_le_half();
+theorem Format::two_le_top(self F: Format): 2 <= F.top() {
+    let h = F.one_le_half();
     let t: (F.top() = F.half() * 2) = F.top_double();
     omega
 }
+
+theorem Format::cut_room(self F: Format): F.cut + 1 <= F.half() { F.cut_ok }
+
+// With a fraction bit, `half` is even and at least two.
+theorem Format::two_le_half(self F: Format, fr: 1 <= F.frac): 2 <= F.half() { Nat::le_pow_self(2, F.frac, trivial, fr) }
 
 // The canonical form from its four conditions.
 theorem Format::canonical_intro(self F: Format, mag, bexp: Nat,
     fits: mag + 1 <= F.top(),
     range: bexp <= F.span,
     normal: bexp = 0 ∨ F.half() <= mag,
-    free: F.specials.reserves_top().IsTrue() → F.span <= bexp → mag + 2 <= F.top()):
+    free: F.span <= bexp → mag + F.cut + 1 <= F.top()):
     F.canonical(mag, bexp).IsTrue()
 {
     decide_intro(And(fits, And(range, And(normal, free))))
@@ -386,16 +390,21 @@ theorem Format::canonical_intro(self F: Format, mag, bexp: Nat,
 // The four conditions back out of the canonical form.
 theorem Format::canonical_elim(self F: Format, mag, bexp: Nat, ok: F.canonical(mag, bexp).IsTrue()):
     mag + 1 <= F.top() ∧ bexp <= F.span ∧ (bexp = 0 ∨ F.half() <= mag)
-        ∧ (F.specials.reserves_top().IsTrue() → F.span <= bexp → mag + 2 <= F.top())
+        ∧ (F.span <= bexp → mag + F.cut + 1 <= F.top())
 {
     decide_elim(ok)
 }
 
-// Zero of either sign.
-fn Finite::zero(F: Format, neg: Bool) → Finite(F) {
-    Finite(neg, 0, 0, F.canonical_intro(0, 0, Nat::pow_pos(a := 2, n := F.prec()), trivial, Inl(refl),
-        λ _ _ => Nat::le_trans(2, 4, F.top(), trivial, F.four_le_top())))
+// Any significand up to `half` fits at the least exponent, whatever the cut.
+theorem Format::canonical_low(self F: Format, mag: Nat, le: mag <= F.half()): F.canonical(mag, 0).IsTrue() {
+    let c = F.cut_room();
+    let t: (F.top() = F.half() * 2) = F.top_double();
+    let h = F.one_le_half();
+    F.canonical_intro(mag, 0, omega, trivial, Inl(refl), λ _ => omega)
 }
+
+// Zero of either sign.
+fn Finite::zero(F: Format, neg: Bool) → Finite(F) { Finite(neg, 0, 0, F.canonical_low(0, trivial)) }
 
 // The two zeros are value-same (`zero_dyadic`) but not equal: they differ in
 // the sign bit.
@@ -403,75 +412,156 @@ theorem Finite::zeros_differ(F: Format): ¬(Finite::zero(F, False) = Finite::zer
     λ h => j(h, λ z _ => ¬(z.neg.IsTrue()), λ no => no)(trivial)
 }
 
-// The least positive subnormal, `2^qmin`.
-fn Finite::min_subnormal(F: Format) → Finite(F) {
-    Finite(False, 1, 0, F.canonical_intro(1, 0, Nat::le_trans(2, 4, F.top(), trivial, F.four_le_top()), trivial, Inl(refl),
-        λ _ _ => Nat::le_trans(3, 4, F.top(), trivial, F.four_le_top())))
-}
+// The least positive value, `2^qmin`: a subnormal, or at precision one the
+// least normal.
+fn Finite::min_subnormal(F: Format) → Finite(F) { Finite(False, 1, 0, F.canonical_low(1, F.one_le_half())) }
 
 // The least positive normal, `2^emin`.
-fn Finite::min_normal(F: Format) → Finite(F) {
-    let h = F.two_le_half();
-    let t: (F.top() = F.half() * 2) = F.top_double();
-    Finite(False, F.half(), 0, F.canonical_intro(F.half(), 0, omega, trivial, Inl(refl), λ _ _ => omega))
-}
+fn Finite::min_normal(F: Format) → Finite(F) { Finite(False, F.half(), 0, F.canonical_low(F.half(), F.half().le_refl())) }
 
-// The largest significand the top binade holds: all ones, or one less where
-// the all-ones pattern is NaN.
-fn Format::max_mag(self F: Format) → Nat {
-    match F.specials.reserves_top() { True => F.top() - 2, False => F.top() - 1 }
-}
+// The largest significand the top binade holds: all ones, less the reserved
+// ones.
+fn Format::max_mag(self F: Format) → Nat { F.top() - 1 - F.cut }
 
-// Where the largest significand sits: above the least normal one, one below
-// the top, two below where the top pattern is reserved.
+// Where the largest significand sits: at or above the least normal one, and
+// `cut` below the last.
 theorem Format::max_mag_bounds(self F: Format):
-    F.half() <= F.max_mag() ∧ F.max_mag() + 1 <= F.top()
-        ∧ (F.specials.reserves_top().IsTrue() → F.max_mag() + 2 = F.top())
-        ∧ (¬F.specials.reserves_top().IsTrue() → F.max_mag() + 1 = F.top())
+    F.half() <= F.max_mag() ∧ F.max_mag() + 1 <= F.top() ∧ F.max_mag() + F.cut + 1 = F.top()
 {
-    let h = F.two_le_half();
+    let c = F.cut_room();
     let t: (F.top() = F.half() * 2) = F.top_double();
-    let four = F.four_le_top();
-    match F.specials.reserves_top() as λ r => F.half() <= (match r { True => F.top() - 2, False => F.top() - 1 })
-        ∧ (match r { True => F.top() - 2, False => F.top() - 1 }) + 1 <= F.top()
-        ∧ (r.IsTrue() → (match r { True => F.top() - 2, False => F.top() - 1 }) + 2 = F.top())
-        ∧ (¬r.IsTrue() → (match r { True => F.top() - 2, False => F.top() - 1 }) + 1 = F.top())
-    {
-        True => {
-            let a: (F.half() <= F.top() - 2) = omega;
-            let b: (F.top() - 2 + 1 <= F.top()) = omega;
-            let c: (F.top() - 2 + 2 = F.top()) = omega;
-            And(a, And(b, And(λ _ => c, λ no => false_elim(no(trivial)))))
-        },
-        False => {
-            let a: (F.half() <= F.top() - 1) = omega;
-            let b: (F.top() - 1 + 1 = F.top()) = omega;
-            And(a, And(j(sym(b), λ y _ => y <= F.top(), F.top().le_refl()), And(λ no => false_elim(no), λ _ => b)))
-        },
-    }
+    let m: (F.max_mag() = F.top() - 1 - F.cut) = refl;
+    And(omega, And(omega, omega))
 }
 
 // The largest finite value, `max_mag · 2^qmax`.
 fn Finite::max_finite(F: Format) → Finite(F) {
-    let h = F.two_le_half();
-    let t: (F.top() = F.half() * 2) = F.top_double();
-    let four = F.four_le_top();
-    let fits = match F.specials.reserves_top() as λ r => (match r { True => F.top() - 2, False => F.top() - 1 }) + 1 <= F.top() {
-        True => { let g: (F.top() - 2 + 1 <= F.top()) = omega; g },
-        False => { let g: (F.top() - 1 + 1 <= F.top()) = omega; g },
-    };
-    let normal = match F.specials.reserves_top() as λ r => F.half() <= match r { True => F.top() - 2, False => F.top() - 1 } {
-        True => { let g: (F.half() <= F.top() - 2) = omega; g },
-        False => { let g: (F.half() <= F.top() - 1) = omega; g },
-    };
-    let free = λ (rt: F.specials.reserves_top().IsTrue()) (_: F.span <= F.span) =>
-        match F.specials.reserves_top() as λ r => r.IsTrue() → (match r { True => F.top() - 2, False => F.top() - 1 }) + 2 <= F.top() {
-            True => λ _ => { let g: (F.top() - 2 + 2 <= F.top()) = omega; g },
-            False => λ no => false_elim(no),
-        }(rt);
-    let ok = F.canonical_intro(F.max_mag(), F.span, fits, F.span.le_refl(), Inr(normal), free);
+    let mb = F.max_mag_bounds();
+    let ok = F.canonical_intro(F.max_mag(), F.span, mb.right.left, F.span.le_refl(), Inr(mb.left), λ _ => { let e = mb.right.right; omega });
     Finite(False, F.max_mag(), F.span, ok)
 }
+
+// The last bit of a float's code: the significand's when there are fraction
+// bits, and when there are none (precision one) the biased exponent's, since
+// `1 · 2^(qmin + b)` is code `b + 1` and zero is code 0
+// (docs/library/float-p3109-design.md D4).
+fn Format::lsb_at(frac, mag, bexp: Nat) → Nat { match frac { Zero => mag * Succ(bexp), Succ(_) => mag } }
+
+fn Format::lsb(self F: Format, mag, bexp: Nat) → Nat { Format::lsb_at(F.frac, mag, bexp) }
+
+// The two readings of `lsb`, with what each needs about `half`.
+theorem Format::lsb_cases(self F: Format, m, e: Nat):
+    (F.frac = 0 ∧ F.half() = 1 ∧ F.lsb(m, e) = m * Succ(e)) ∨ (1 <= F.frac ∧ F.lsb(m, e) = m)
+{
+    match F.frac as λ f => (f = 0 ∧ Nat::pow(2, f) = 1 ∧ Format::lsb_at(f, m, e) = m * Succ(e)) ∨ (1 <= f ∧ Format::lsb_at(f, m, e) = m) {
+        Zero => Inl(And(refl, And(refl, refl))),
+        Succ(k) => Inr(And(trivial, refl)),
+    }
+}
+
+// Codes one apart have opposite parities.
+theorem Format::parity_step(a, b: Nat, st: b = a + 1): (¬Nat::Even(a) → Nat::Even(b)) ∧ (Nat::Even(a) → ¬Nat::Even(b)) {
+    And(λ odd => j(sym(st), λ v _ => Nat::Even(v), a.even_succ_of_not_even(odd)),
+        λ ev eb => a.not_even_succ_of_even(ev)(j(st, λ v _ => Nat::Even(v), eb)))
+}
+
+// One significand step inside a binade moves the code by one.
+theorem Format::lsb_step(self F: Format, m, e: Nat, room: m + 2 <= F.top(), normal: e = 0 ∨ F.half() <= m): F.lsb(m + 1, e) = F.lsb(m, e) + 1 {
+    let t: (F.top() = F.half() * 2) = F.top_double();
+    match F.lsb_cases(m + 1, e) {
+        Inl(a) => match F.lsb_cases(m, e) {
+            Inl(b) => {
+                let hz: (F.half() = 1) = a.right.left;
+                let ez: (e = 0) = match normal { Inl(z) => z, Inr(le) => false_elim(omega) };
+                let pe: ((m + 1) * Succ(e) = Succ(e) + m * Succ(e)) = m.mul_succ_left(Succ(e));
+                let la: (F.lsb(m + 1, e) = (m + 1) * Succ(e)) = a.right.right;
+                let lb: (F.lsb(m, e) = m * Succ(e)) = b.right.right;
+                omega
+            },
+            Inr(b) => { let z: (F.frac = 0) = a.left; let o: (1 <= F.frac) = b.left; false_elim(omega) },
+        },
+        Inr(a) => match F.lsb_cases(m, e) {
+            Inl(b) => { let z: (F.frac = 0) = b.left; let o: (1 <= F.frac) = a.left; false_elim(omega) },
+            Inr(b) => { let la: (F.lsb(m + 1, e) = m + 1) = a.right; let lb: (F.lsb(m, e) = m) = b.right; omega },
+        },
+    }
+}
+
+// The carry from the top significand of a binade to the least of the next
+// flips the code's parity: with fraction bits the top is odd and the least
+// even (`half`), and at precision one the two codes are consecutive.
+theorem Format::lsb_carry(self F: Format, m, e: Nat, mt: m + 1 = F.top()):
+    (¬Nat::Even(F.lsb(m, e)) → Nat::Even(F.lsb(F.half(), e + 1))) ∧ (Nat::Even(F.lsb(m, e)) → ¬Nat::Even(F.lsb(F.half(), e + 1)))
+{
+    let t: (F.top() = F.half() * 2) = F.top_double();
+    match F.lsb_cases(F.half(), e + 1) {
+        Inl(a) => {
+            let hz: (F.half() = 1) = a.right.left;
+            let b = match F.lsb_cases(m, e) { Inl(b) => b, Inr(b) => { let z: (F.frac = 0) = a.left; let o: (1 <= F.frac) = b.left; false_elim(omega) } };
+            let m1: (m = 1) = omega;
+            let la: (F.lsb(F.half(), e + 1) = 1 * Succ(e + 1)) = j(hz, λ v _ => F.lsb(F.half(), e + 1) = v * Succ(e + 1), a.right.right);
+            let lb: (F.lsb(m, e) = 1 * Succ(e)) = j(m1, λ v _ => F.lsb(m, e) = v * Succ(e), b.right.right);
+            Format::parity_step(F.lsb(m, e), F.lsb(F.half(), e + 1), omega)
+        },
+        Inr(a) => {
+            let b = match F.lsb_cases(m, e) { Inr(b) => b, Inl(b) => { let z: (F.frac = 0) = b.left; let o: (1 <= F.frac) = a.left; false_elim(omega) } };
+            let ev: Nat::Even(F.half()) = match F.frac as λ f => 1 <= f → Nat::Even(Nat::pow(2, f)) { Zero => λ bad => false_elim(bad), Succ(k) => λ _ => k.even_pow_two() }(a.left);
+            let et: Nat::Even(F.half() + F.half()) = F.half().even_double();
+            let mm: (F.half() + F.half() = m + 1) = omega;
+            let odd: ¬Nat::Even(m) = λ em => m.not_even_succ_of_even(em)(j(mm, λ v _ => Nat::Even(v), et));
+            let lb: (F.lsb(m, e) = m) = b.right;
+            let la: (F.lsb(F.half(), e + 1) = F.half()) = a.right;
+            And(λ _ => j(sym(la), λ v _ => Nat::Even(v), ev), λ el => false_elim(odd(j(lb, λ v _ => Nat::Even(v), el))))
+        },
+    }
+}
+
+// A float whose code is even: the one ties to even pick.
+fn Finite::Even({F: Format}, self f: Finite(F)) → Type { Nat::Even(F.lsb(f.mag, f.bexp)) }
+
+// Moving a float up `j` binades keeps its code's parity when there are
+// fraction bits, or when `j` is even.
+theorem Format::lsb_shift(self F: Format, m, b, j: Nat, par: 1 <= F.frac ∨ Nat::Even(j)):
+    (Nat::Even(F.lsb(m, b)) → Nat::Even(F.lsb(m, b + j))) ∧ (¬Nat::Even(F.lsb(m, b)) → ¬Nat::Even(F.lsb(m, b + j)))
+{
+    match F.lsb_cases(m, b + j) {
+        Inl(a) => {
+            let c = match F.lsb_cases(m, b) { Inl(c) => c, Inr(c) => { let z: (F.frac = 0) = a.left; let o: (1 <= F.frac) = c.left; false_elim(omega) } };
+            let ej: Nat::Even(j) = match par { Inr(e) => e, Inl(o) => { let z: (F.frac = 0) = a.left; false_elim(omega) } };
+            let h = j.half();
+            let hj: (h + h = j) = j.half_add_half(ej);
+            let e1: (m * (h + h) = m * h + m * h) = ring;
+            let mj: (m * j = m * h + m * h) = j(hj, λ v _ => m * v = m * h + m * h, e1);
+            let even_mj: Nat::Even(m * j) = j(sym(mj), λ v _ => Nat::Even(v), (m * h).even_double());
+            let sp: (m * Succ(b + j) = m * Succ(b) + m * j) = ring;
+            let la: (F.lsb(m, b + j) = m * Succ(b) + m * j) = trans(a.right.right, sp);
+            let lb: (F.lsb(m, b) = m * Succ(b)) = c.right.right;
+            let p = (m * j).even_add_even(m * Succ(b))(even_mj);
+            And(λ ev => j(sym(la), λ v _ => Nat::Even(v), p.left(j(lb, λ v _ => Nat::Even(v), ev))),
+                λ od ev2 => p.right(λ e0 => od(j(sym(lb), λ v _ => Nat::Even(v), e0)))(j(la, λ v _ => Nat::Even(v), ev2)))
+        },
+        Inr(a) => {
+            let c = match F.lsb_cases(m, b) { Inr(c) => c, Inl(c) => { let z: (F.frac = 0) = c.left; let o: (1 <= F.frac) = a.left; false_elim(omega) } };
+            let e: (F.lsb(m, b) = F.lsb(m, b + j)) = trans(c.right, sym(a.right));
+            And(λ ev => j(e, λ v _ => Nat::Even(v), ev), λ od ev2 => od(j(sym(e), λ v _ => Nat::Even(v), ev2)))
+        },
+    }
+}
+
+// Whether a window `j` binades up keeps code parity, decided.
+fn Format::win_par(self F: Format, j: Nat) → (1 <= F.frac ∨ Nat::Even(j)) ∨ ¬(1 <= F.frac ∨ Nat::Even(j)) {
+    match (1).le_dec(F.frac) {
+        Inl(o) => Inl(Inl(o)),
+        Inr(no) => match j.even_dec() {
+            Inl(e) => Inl(Inr(e)),
+            Inr(ne) => Inr(λ p => match p { Inl(o) => no(o), Inr(e) => ne(e) }),
+        },
+    }
+}
+
+// The largest finite float's code is even: then a nearest-even tie at the
+// overflow threshold stays finite (D5).
+fn Format::MaxEven(self F: Format) → Type { Nat::Even(F.lsb(F.max_mag(), F.span)) }
 
 // One unit in the last place: the spacing of the floats at `x`'s exponent.
 fn Finite::ulp({F: Format}, self x: Finite(F)) → Dyadic { Dyadic(1, x.q()) }

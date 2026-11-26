@@ -150,18 +150,20 @@ in from the start but layered (§7.2), so mathematics never sees them.
 ## 3. Formats and values
 
 As landed in round 1 (`lib/std/num/float/float.hthr`; §10 records what changed
-from the first sketch):
+from the first sketch), with the P3109 round's `cut` and precision one
+(`docs/library/float-p3109-design.md` D3):
 
 ```heather
-// What the format keeps for special values. E4M3 is `NanOnly`: no infinity,
-// and its all-ones pattern is NaN. The OCP FP6/FP4 formats are `FiniteOnly`.
-// E8M0 is a scale with no significand or zero, so it is not a `Format`.
+// Which special values the format has. E4M3 is `NanOnly`: no infinity.
+// The OCP FP6/FP4 formats are `FiniteOnly`. E8M0 is a scale with no
+// significand or zero, so it is not a `Format`.
 inductive Specials { Ieee, NanOnly, FiniteOnly }
 
-// Only radix 2. `frac` fraction bits (precision `frac + 1`), `emin` IEEE's
-// least normal exponent, `span` binades above it (IEEE's emax is
-// `emin + span`).
-record Format { frac: Nat, frac_ok: 1 <= frac, emin: Int, span: Nat, specials: Specials }
+// Only radix 2. `frac` fraction bits (precision `frac + 1`, at least one
+// since the P3109 round), `emin` IEEE's least normal exponent, `span`
+// binades above it (IEEE's emax is `emin + span`), `cut` the largest
+// significands the top binade gives up to special values (E4M3's NaN: 1).
+record Format { frac: Nat, emin: Int, span: Nat, cut: Nat, cut_ok: cut + 1 <= Nat::pow(2, frac), specials: Specials }
 
 fn Format::qmin(self F: Format) → Int { F.emin - F.frac.int() }  // subnormals are multiples of 2^qmin
 fn Format::half(self F: Format) → Nat { Nat::pow(2, F.frac) }      // least normal significand

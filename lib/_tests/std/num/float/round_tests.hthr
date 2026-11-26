@@ -52,7 +52,7 @@ theorem e5m2_ne(x: Rat): RoundsTo(e5m2(), NearestEven, x, e5m2().round_rat(Neare
 
 // The relation unfolds at a literal mode over a neutral result, in checking position.
 theorem ne_nearest({F: Format}, x: Rat, f: Finite(F), r: RoundsTo(F, NearestEven, x, Fin(f))): Finite::Nearest(x, f) { r.left.left }
-theorem away_fits(x: Rat, f: Finite(e5m2()), r: RoundsTo(e5m2(), NearestAway, x, Fin(f))): e5m2().Fits(x) { r.right }
+theorem away_fits(x: Rat, f: Finite(e5m2()), r: RoundsTo(e5m2(), NearestAway, x, Fin(f))): e5m2().Fits(False, x) { r.right }
 theorem tz_cases({F: Format}, x: Rat, f: Finite(F), r: RoundsTo(F, TowardZero, x, Fin(f)), nn: 0 <= x): Finite::Below(x, f) { r.left(nn) }
 theorem flip({F: Format}, mode: Mode, x: Rat, r: Float(F), h: RoundsTo(F, mode.conj(), -x, r)): RoundsTo(F, mode, x, -r) { F.rounds_neg(mode, x, r, h) }
 

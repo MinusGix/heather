@@ -124,7 +124,7 @@ theorem Format::rec_sum_step(self F: Format, mode: Mode, m: Nat, ok: m + 1 < F.u
     let un: (0 <= U) = Rat::le_of_lt(F.u_pos(mode));
     let xn: (0 <= X.abs()) = X.abs_nonneg();
     let ga = F.gamma_add(mode, m, 1, ok);
-    let u1 = F.u_le_gamma(mode);
+    let u1 = F.u_le_gamma(mode, omega(ok));
     let gu: (G * U <= G * F.gamma(mode, 1)) = Rat::mul_le_mono_l(u1, gn);
     let gk: (G <= K) = F.gamma_mono(mode, m, m + 1, omega, ok);
     let c4: (G + U + G * U <= K) = linarith(ga, u1, gu);
