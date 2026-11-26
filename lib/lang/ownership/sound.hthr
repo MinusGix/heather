@@ -12388,3 +12388,157 @@ theorem Inv::arg_changes(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(t
         },
     })(refl, ch)
 }
+
+theorem Bool::true_of_not_false(b: Bool, h: (!b) = False): b = True { (match b as λ c => (!c) = False → c = True { True => λ _ => refl, False => λ no => absurd(no) })(h) }
+
+// `apart_lent` on two arguments one of which may change: their places of one
+// object apart at the words, or the two unrelated views (whose apartness is
+// `excl`'s).
+theorem CSt::apart_lent_cases(self s: CSt, tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(tys, cx.strs), env: Env(tys), la, lb: Nat, cha, chb: Bool, ch: (cha || chb) = True,
+    r1: List<Residual>, ok: s.apart_lent(Lent(la, s.places(la, Nil), cha), Lent(lb, s.places(lb, Nil), chb)) = Some(r1), hold: Residual::All(r1, tys, cx, env, True),
+    o: Nat, ra, rb: List<Step>, ma: Mem(Pl(o, ra ++ Nil), s.places(la, Nil)), mb: Mem(Pl(o, rb ++ Nil), s.places(lb, Nil)),
+    rga: s.InRange(Steps::lvls(ra ++ Nil)), rgb: s.InRange(Steps::lvls(rb ++ Nil))):
+    Sel::Apart(tys, cx.strs, Steps::sels(s.unsteps(ra ++ Nil), Env::ixs(tys, env)), Steps::sels(s.unsteps(rb ++ Nil), Env::ixs(tys, env))) ∨
+        ((s.related(la, lb) = False) ∧ ((s.role(la) = KView) ∧ (s.role(lb) = KView)))
+{
+    let y = s.related(la, lb) || !(s.role(la)).same(KView) || !(s.role(lb)).same(KView);
+    let ok1: ((match y as λ _ => Option<List<Residual>> { False => Some(Nil<Residual>), True => s.apart_each(s.places(la, Nil), s.places(lb, Nil)) }) = Some(r1)) =
+        j(ch, λ c _ => (match c && y as λ _ => Option<List<Residual>> { False => Some(Nil<Residual>), True => s.apart_each(s.places(la, Nil), s.places(lb, Nil)) }) = Some(r1), ok);
+    (match y as λ c => y = c → (match c as λ _ => Option<List<Residual>> { False => Some(Nil<Residual>), True => s.apart_each(s.places(la, Nil), s.places(lb, Nil)) }) = Some(r1) →
+            Sel::Apart(tys, cx.strs, Steps::sels(s.unsteps(ra ++ Nil), Env::ixs(tys, env)), Steps::sels(s.unsteps(rb ++ Nil), Env::ixs(tys, env))) ∨
+                ((s.related(la, lb) = False) ∧ ((s.role(la) = KView) ∧ (s.role(lb) = KView))) {
+        True => λ _ h1 => match s.apart_each_mem(tys, cx, env, s.places(la, Nil), s.places(lb, Nil), r1, h1, hold, Pl(o, ra ++ Nil), Pl(o, rb ++ Nil), ma, mb) {
+            ⟨r2, pr2⟩ => Inl(s.apart_pl_sound(tys, cx, sl, env, Pl(o, ra ++ Nil), Pl(o, rb ++ Nil), r2, pr2.left, pr2.right, refl, rga, rgb)),
+        },
+        False => λ yf _ => {
+            let p1 = Bool::or_false_parts(s.related(la, lb) || !(s.role(la)).same(KView), !(s.role(lb)).same(KView), yf);
+            let p2 = Bool::or_false_parts(s.related(la, lb), !(s.role(la)).same(KView), p1.left);
+            Inr(⟨p2.left, ⟨(s.role(la)).same_view(Bool::true_of_not_false((s.role(la)).same(KView), p2.right)), (s.role(lb)).same_view(Bool::true_of_not_false((s.role(lb)).same(KView), p1.right))⟩⟩)
+        },
+    })(refl, ok1)
+}
+
+// Unrelated levels: different, and neither an ancestor of an entry of the other.
+theorem CSt::unrelated(self s: CSt, a, b: Nat, h: s.related(a, b) = False):
+    (¬(a = b)) ∧ (((en: VEnt) → Mem(en, s.ents(b)) → a.member(s.anc_of(en, s.na + s.nd)) = False) ∧ ((en: VEnt) → Mem(en, s.ents(a)) → b.member(s.anc_of(en, s.na + s.nd)) = False))
+{
+    let p1 = Bool::or_false_parts(a.same(b) || a.member(s.anc(b)), b.member(s.anc(a)), h);
+    let p2 = Bool::or_false_parts(a.same(b), a.member(s.anc(b)), p1.left);
+    let nf = λ (x: Nat) (y: Nat) (hy: x.member(s.anc(y)) = False) (en: VEnt) (me: Mem(en, s.ents(y))) =>
+        Bool::false_of_not(x.member(s.anc_of(en, s.na + s.nd)), λ t => absurd(trans(sym(hy), VEnt::member_foldr(s.ents(y), λ q => s.anc_of(q, s.na + s.nd), x, en, me, t))));
+    ⟨λ eq => absurd(trans(sym(p2.left), j(eq, λ q _ => a.same(q) = True, a.same_self()))), ⟨nf(a, b, p2.right), nf(b, a, p1.right)⟩⟩
+}
+
+// Two unrelated views of one object, one an argument to change: `excl`.
+theorem Inv::excl_args(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>}, inv: Inv(tys, strs, s, e, m, h0, lent),
+    l, lk: Nat, r, q: Ref, a: ArgAt(s, inv.root, Mach::ixs(tys, strs, m), l, r), b: ArgAt(s, inv.root, Mach::ixs(tys, strs, m), lk, q), eo: a.o = b.o,
+    wa: Exists<VEnt>(λ en => (s.ents(l) = [en]) ∧ ((en.mode.writes() = True) ∧ ((en.obj = a.o) ∧ (en.reg = a.reg)))), vb: s.role(lk) = KView,
+    ne: ¬(l = lk), ni: (en: VEnt) → Mem(en, s.ents(lk)) → l.member(s.anc_of(en, s.na + s.nd)) = False, nk: (en: VEnt) → Mem(en, s.ents(l)) → lk.member(s.anc_of(en, s.na + s.nd)) = False):
+    Sel::Apart(tys, strs, Steps::sels(s.unsteps(a.reg), Mach::ixs(tys, strs, m)), Steps::sels(s.unsteps(b.reg), Mach::ixs(tys, strs, m)))
+{
+    let ws = Mach::ixs(tys, strs, m);
+    match wa {
+        ⟨ei, pei⟩ => match b.kind {
+            Inl(⟨ac, pb⟩) => false_elim(absurd(trans(sym(pb.left), vb))),
+            Inr(pv) => match pv.right {
+                ⟨ek, pek⟩ => {
+                    let emi = s.ent_mem(l, ei, pei.left);
+                    let mek: Mem(ek, s.views) = s.views.mem_filter(ek, λ x => x.lvl.same(lk), pek.left);
+                    let lek: (ek.lvl = lk) = ek.lvl.same_sound(lk, s.views.mem_filter_holds(ek, λ x => x.lvl.same(lk), pek.left));
+                    let mei: Mem(ei, s.ents(l)) = j(sym(pei.left), λ es _ => Mem(ei, es), Inl(refl));
+                    let ap = inv.excl(ei, ek, emi.left, mek, pei.right.left, trans(pei.right.right.left, trans(eo, sym(pek.right.left))),
+                        λ eq => ne(trans(sym(emi.right), trans(eq, lek))),
+                        j(sym(emi.right), λ z _ => z.member(s.anc_of(ek, s.na + s.nd)) = False, ni(ek, pek.left)),
+                        j(sym(lek), λ z _ => z.member(s.anc_of(ei, s.na + s.nd)) = False, nk(ei, mei)));
+                    j(pek.right.right, λ g _ => Sel::Apart(tys, strs, Steps::sels(s.unsteps(a.reg), ws), Steps::sels(s.unsteps(g), ws)),
+                        j(pei.right.right.right, λ g _ => Sel::Apart(tys, strs, Steps::sels(s.unsteps(g), ws), Steps::sels(s.unsteps(ek.reg), ws)), ap))
+                },
+            },
+        },
+    }
+}
+
+// An anchor's region, as the licence's residuals read it at the meaning's
+// words, at the run's.
+theorem Inv::arg_sels(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>}, inv: Inv(tys, strs, s, e, m, h0, lent),
+    sim: Sim(tys, strs, s, e, m), l: Nat, r: Ref, a: ArgAt(s, inv.root, Mach::ixs(tys, strs, m), l, r)):
+    (Steps::sels(s.unsteps(a.reg ++ Nil), Env::ixs(tys, e)) = Steps::sels(s.unsteps(a.reg), Mach::ixs(tys, strs, m))) ∧ s.InRange(Steps::lvls(a.reg ++ Nil))
+{
+    let an: (a.reg ++ Nil = a.reg) = a.reg.append_nil();
+    let rg: s.InRange(Steps::lvls(a.reg)) = λ k mk => (a.wd(k, mk)).left;
+    let e1 = Sim::region_sels(tys, strs, sim, a.reg, rg, λ k mk => (a.wd(k, mk)).right);
+    ⟨trans(cong_fn(λ (xs: List<Step>) => Steps::sels(s.unsteps(xs), Env::ixs(tys, e)), an), e1), j(sym(an), λ xs _ => s.InRange(Steps::lvls(xs)), rg)⟩
+}
+
+// P2, `apart`: an argument the callee may change is apart from every other.
+theorem Inv::lend_apart(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(tys, cx.strs), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>}, inv: Inv(tys, cx.strs, s, e, m, h0, lent),
+    none: s.pending() = False, ps: List<Param>, xs: List<Var>, nl: Next, okl: s.lend_all(tys, cx.strs, ps, xs) = Some(nl),
+    ra: List<Residual>, oka: s.apart_args(s.lent(ps, xs)) = Some(ra), hra: Residual::All(ra, tys, cx, e, True),
+    vs: List<Value(tys)>, pv: Cell::pass_all(tys, cx.strs, m.heap, ps, xs.map(λ x => REnv::get(tys, m.env, x))) = Some(vs)):
+    (i, k: Nat) → ¬(i = k) → (p: Param) → ps.nth(i) = Some(p) → p.mode.changes() = True → (r, q: Ref) → vs.nth(i) = Some(level2::Refer(r)) → vs.nth(k) = Some(level2::Refer(q)) →
+        Ref::Apart(tys, cx.strs, r, q)
+{
+    let strs = cx.strs;
+    let ws = Mach::ixs(tys, strs, m);
+    let sim = Inv::sim_now(tys, strs, inv, none);
+    let dflt = Param(SWord(WNat), ByRead);
+    λ i k ne p hp ch r q hr hq => match Inv::pass_arg(tys, strs, ps, xs, nl, okl, vs, pv, i, r, hr) {
+        ⟨x, px⟩ => match px.right {
+            ⟨l, pl⟩ => match Inv::pass_arg(tys, strs, ps, xs, nl, okl, vs, pv, k, q, hq) {
+                ⟨y, py⟩ => match py.right {
+                    ⟨lk, plk⟩ => {
+                        let a = Inv::arg_at(tys, strs, inv, sim, x, l, pl.left, pl.right.left, r, pl.right.right.left);
+                        let b = Inv::arg_at(tys, strs, inv, sim, y, lk, plk.left, plk.right.left, q, plk.right.right.left);
+                        let tk = j(hp, λ o _ => ((o.unwrap_or(dflt)).mode = ByTake → ((REnv::get(tys, m.env, x)).own = True) ∧ (Shape::plain(tys, strs, (o.unwrap_or(dflt)).code) = False)), pl.right.right.right);
+                        let ac = Inv::arg_changes(tys, strs, inv, ps, xs, nl, okl, i, x, px.left, p, hp, ch, l, pl.left, pl.right.left, r, pl.right.right.left, λ pm => (tk(pm)).left, a);
+                        match Nat::eq_or_ne(a.o, b.o) {
+                            Inr(no) => {
+                                let ap = Ref::apart_narrow(tys, strs, a.r0, b.r0, Steps::sels(s.unsteps(a.reg), ws), Steps::sels(s.unsteps(b.reg), ws), inv.apart(a.o, b.o, no, ac.left, a.r0, b.r0, a.rt, b.rt));
+                                j(sym(b.rr), λ z _ => Ref::Apart(tys, strs, r, z), j(sym(a.rr), λ z _ => Ref::Apart(tys, strs, z, Ref(b.r0.b, b.r0.sels ++ Steps::sels(s.unsteps(b.reg), ws))), ap))
+                            },
+                            Inl(eo) => {
+                                let r0e: (a.r0 = b.r0) = Option::some_inj(a.r0, b.r0, trans(sym(a.rt), trans(cong_fn(λ (z: Nat) => inv.root(z), eo), b.rt)));
+                                let sa = Inv::arg_sels(tys, strs, inv, sim, l, r, a);
+                                let sb = Inv::arg_sels(tys, strs, inv, sim, lk, q, b);
+                                let mb: Mem(Pl(a.o, b.reg ++ Nil), s.places(lk, Nil)) = j(sym(eo), λ z _ => Mem(Pl(z, b.reg ++ Nil), s.places(lk, Nil)), b.pl);
+                                let toM = λ (h1: Sel::Apart(tys, strs, Steps::sels(s.unsteps(a.reg ++ Nil), Env::ixs(tys, e)), Steps::sels(s.unsteps(b.reg ++ Nil), Env::ixs(tys, e)))) =>
+                                    j(sb.left, λ z _ => Sel::Apart(tys, strs, Steps::sels(s.unsteps(a.reg), ws), z), j(sa.left, λ z _ => Sel::Apart(tys, strs, z, Steps::sels(s.unsteps(b.reg ++ Nil), Env::ixs(tys, e))), h1));
+                                let li = s.lent_nth(xs, ps, i, x, px.left, l, pl.left);
+                                let lkk = s.lent_nth(xs, ps, k, y, py.left, lk, plk.left);
+                                let chi: ((match (ps.nth(i).unwrap_or(dflt)).mode { ByRead => False, ByWrite => True, ByTake => True }) = True) = j(sym(hp), λ o _ => (match (o.unwrap_or(dflt)).mode { ByRead => False, ByWrite => True, ByTake => True }) = True, ch);
+                                let chk = match (ps.nth(k).unwrap_or(dflt)).mode { ByRead => False, ByWrite => True, ByTake => True };
+                                let chi_v = match (ps.nth(i).unwrap_or(dflt)).mode { ByRead => False, ByWrite => True, ByTake => True };
+                                let sap: Sel::Apart(tys, strs, Steps::sels(s.unsteps(a.reg), ws), Steps::sels(s.unsteps(b.reg), ws)) = match Nat::lt_or_ge(i, k) {
+                                    Inl(ik) => match s.apart_args_pair(tys, cx, e, s.lent(ps, xs), ra, oka, hra, i, k, ik, Lent(l, s.places(l, Nil), chi_v), Lent(lk, s.places(lk, Nil), chk), li, lkk) {
+                                        ⟨r1, pr1⟩ => match s.apart_lent_cases(tys, cx, sl, e, l, lk, chi_v, chk, j(sym(chi), λ c _ => (c || chk) = True, refl), r1, pr1.left, pr1.right, a.o, a.reg, b.reg, a.pl, mb, sa.right, sb.right) {
+                                            Inl(h1) => toM(h1),
+                                            Inr(⟨un, vv⟩) => {
+                                                let u = s.unrelated(l, lk, un);
+                                                Inv::excl_args(tys, strs, inv, l, lk, r, q, a, b, eo, ac.right(vv.left), vv.right, u.left, u.right.left, u.right.right)
+                                            },
+                                        },
+                                    },
+                                    Inr(ki0) => {
+                                        let ki: (k < i) = omega(ki0, ne);
+                                        match s.apart_args_pair(tys, cx, e, s.lent(ps, xs), ra, oka, hra, k, i, ki, Lent(lk, s.places(lk, Nil), chk), Lent(l, s.places(l, Nil), chi_v), lkk, li) {
+                                            ⟨r1, pr1⟩ => match s.apart_lent_cases(tys, cx, sl, e, lk, l, chk, chi_v, j(sym(chi), λ c _ => (chk || c) = True, Bool::or_true_right(chk)), r1, pr1.left, pr1.right, a.o, b.reg, a.reg, mb, a.pl, sb.right, sa.right) {
+                                                Inl(h1) => toM(Sel::apart_sym(tys, strs, Steps::sels(s.unsteps(b.reg ++ Nil), Env::ixs(tys, e)), Steps::sels(s.unsteps(a.reg ++ Nil), Env::ixs(tys, e)), h1)),
+                                                Inr(⟨un, vv⟩) => {
+                                                    let u = s.unrelated(lk, l, un);
+                                                    Inv::excl_args(tys, strs, inv, l, lk, r, q, a, b, eo, ac.right(vv.right), vv.left, λ eq => u.left(sym(eq)), u.right.right, u.right.left)
+                                                },
+                                            },
+                                        }
+                                    },
+                                };
+                                let under = Sel::apart_under(tys, strs, sl, Steps::sels(s.unsteps(a.reg), ws), Steps::sels(s.unsteps(b.reg), ws), sap, a.r0.sels);
+                                let under2 = j(r0e, λ z _ => Sel::Apart(tys, strs, a.r0.sels ++ Steps::sels(s.unsteps(a.reg), ws), z.sels ++ Steps::sels(s.unsteps(b.reg), ws)), under);
+                                λ _ => j(sym(b.rr), λ z _ => Sel::Apart(tys, strs, r.sels, z.sels), j(sym(a.rr), λ z _ => Sel::Apart(tys, strs, z.sels, (Ref(b.r0.b, b.r0.sels ++ Steps::sels(s.unsteps(b.reg), ws))).sels), under2))
+                            },
+                        }
+                    },
+                },
+            },
+        },
+    }
+}
