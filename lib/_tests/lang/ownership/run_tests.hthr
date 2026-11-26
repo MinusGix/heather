@@ -280,23 +280,38 @@ fn elem1() → Value(tys()) { Refer(Ref(0, [OnSeq(SeqOne(INat(1)))])) }
 
 theorem under_lent_done(io: Io): one_fn(pt_r(), 1, 0, [elem1(), w(9)], heap1(ps2()), io) = Done(Answer([elem1()], heap1([Point(1, 2), Point(9, 3)]), io)) { refl }
 
-// A view's write-back onto its parent stores nothing: through a list lent
-// only to read it is done, the block unchanged, where a write of a copy at
-// the same place is stuck (`back_copy_read_r`).
+// A view's write-back onto its parent (`Back`) stores nothing where the view
+// refers: through a list lent only to read it is done, the block unchanged.
+// The same text as a `Write` stores, and so is stuck there; so is a `Back`
+// of a copy, which is a write (§23.22, §23.23).
 fn back_read_r() → Func {
+    Func(Sig([Param(pts_s(), ByRead)], Nil), seq([View(Place(Arg(0), [SElem(Lit(0))]), Writing), Back(Place(Arg(0), [SElem(Lit(0))]), Loc(0))], Ret(Nil)))
+}
+
+fn write_self_read_r() → Func {
     Func(Sig([Param(pts_s(), ByRead)], Nil), seq([View(Place(Arg(0), [SElem(Lit(0))]), Writing), Write(Place(Arg(0), [SElem(Lit(0))]), Loc(0))], Ret(Nil)))
 }
 
 fn back_copy_read_r() → Func {
-    Func(Sig([Param(pts_s(), ByRead)], Nil), seq([Read(Place(Arg(0), [SElem(Lit(0))])), Write(Place(Arg(0), [SElem(Lit(0))]), Loc(0))], Ret(Nil)))
+    Func(Sig([Param(pts_s(), ByRead)], Nil), seq([Read(Place(Arg(0), [SElem(Lit(0))])), Back(Place(Arg(0), [SElem(Lit(0))]), Loc(0))], Ret(Nil)))
 }
 
 theorem back_read_done(io: Io): one_fn(back_read_r(), 1, 0, [obj0()], heap1(ps2()), io) = Done(Answer(Nil, heap1(ps2()), io)) { refl }
 
+theorem write_self_read_stuck(io: Io): stuck(one_fn(write_self_read_r(), 1, 0, [obj0()], heap1(ps2()), io)) = True { refl }
+
 theorem back_copy_read_stuck(io: Io): stuck(one_fn(back_copy_read_r(), 1, 0, [obj0()], heap1(ps2()), io)) = True { refl }
 
+// A `Back` of a copy onto a plain root writes the copy there, as `Write`.
+fn back_copy_plain_r() → Func {
+    Func(Sig([Param(pts_s(), ByWrite), Param(pt_s(), ByRead)], Nil), seq([Back(Place(Arg(0), [SElem(Lit(1))]), Arg(1))], Ret([Arg(0)])))
+}
+
+theorem back_copy_plain_writes(io: Io):
+    one_fn(back_copy_plain_r(), 1, 0, [Plain(pts(ps2())), Plain(Dyn(pt_s(), Point(4, 4)))], Nil, io) = Done(Answer([Plain(pts([Point(1, 2), Point(4, 4)]))], Nil, io)) { refl }
+
 // A view of one element written into another place of the same block
-// still stores: only the very place is skipped.
+// stores, as every `Write` does.
 fn view_into_other_r() → Func {
     Func(Sig([Param(pts_s(), ByWrite)], Nil), seq([View(Place(Arg(0), [SElem(Lit(0))]), Reading), Write(Place(Arg(0), [SElem(Lit(1))]), Loc(0))], Ret([Arg(0)])))
 }

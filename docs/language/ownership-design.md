@@ -5228,7 +5228,9 @@ checked program. Three changes (`run.hthr`), each probed by evaluation first
    `slot_is_argument` (a callee answering its read parameter's reference as
    its written slot: before, the caller's slot referred to that block) and
    `plain_slot_back` (passed plain, the callee's copy comes back, as before).
-2. **A write-back through a reference stores nothing.** The run cannot see
+2. **A write-back through a reference stores nothing.** (Superseded by
+   `Back`, §23.23: the run below decided it by a test the bytes level cannot
+   make.) The run cannot see
    the checker's state, so the test is dynamic and exact: `Write(p, x)` with
    `p`'s root referring to `r` and `x`'s cell `Refer(q)` with `q` the very
    place, `r.narrow(ws, p.steps)` (`Value::is_ref`, a decided equality on
@@ -5269,6 +5271,39 @@ checked program. Three changes (`run.hthr`), each probed by evaluation first
 The cost in the proved stages was a handful of new obligations, each met
 from a clause the invariant already had, beside the decided equality's
 soundness lemmas; the write-back's referring cases became shorter.
+
+### 23.23 The write-back as its own statement, and three smaller changes (2026-11-26, twelfth session)
+
+**`Back(p, x)`** (the coordinating session's ruling, replacing §23.22's
+item 2). The translation to the bytes level must know from the text alone
+whether to emit nothing or a copy, so the run may not decide a write-back by
+comparing references. A write-back is now its own statement: in the meaning
+the write of `x`'s value at `p` (as `Write`); in the checker what `Write`
+did in its write-back cases (`CSt::back_of`: `x` a view to write on `p`'s
+root at `p`'s steps), `Write` refused where it would be one and `Back`
+refused where it is not; in the run the identity where `x`'s cell refers (no
+test of where) and `Stmt::write_run`, the write, under `Act::may`, where it
+is a copy. `Write(p, x)` always stores. `CSt::writes_back` (the only
+statement while a write-back is pending) names `Back`. The decided equality
+on references and its soundness lemmas are gone; `Sel::same_self` stays for
+`Act::may`. In the proof the write-back stages are about `Back` and their
+referring cases reach the identity by the cell alone (`Stmt::back_runs_ref`;
+the copy case through `Stmt::back_runs_copy`, `Back` of a copy running as
+`Write`); the ordinary write stages lost the case of a source that is the
+very place. Probes: `back_read_done` (a write-back through a list lent only
+to read), `write_self_read_stuck` (the same text as a `Write`),
+`back_copy_read_stuck`, `back_copy_plain_writes` (`run_tests`);
+`back_as_write_refused`, `back_not_back_refused`, `back_one_checked`
+(`checker_tests`, whose write-backs are now written `Back`).
+
+**`Inv.cfit` covers views to write only** (a gap in the proof's own
+invariant). It said of every live view whose parent's cell is a copy that its
+place fits the copy and its own copy is like what the place reads. Only views
+to write consume it (a write-back's `Like`, the write-back of a copy), and a
+read view result over an argument passed plain cannot meet it: `SafeAt`'s
+`ViewIs` asks such a result only to be plain, and no clause relates it to the
+argument's part. Restricted to views to write it holds at every builder as
+before.
 
 ## 24. How the build is organised (2026-11-26, the coordinating session)
 

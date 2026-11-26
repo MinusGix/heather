@@ -123,9 +123,9 @@ fn written() → Func {
         View(win(x(), Var(1), Var(2)), Writing),
         Lit(WNat, 7),
         Call(0, [Loc(1), Loc(0)], 2),
-        Write(whole(Loc(3)), Loc(0)),
+        Back(whole(Loc(3)), Loc(0)),
         Death(whole(Loc(0))),
-        Write(win(x(), Var(1), Var(2)), Loc(3)),
+        Back(win(x(), Var(1), Var(2)), Loc(3)),
         Death(whole(Loc(3))),
         Read(el(Loc(4), Lit(0))),
     ], Ret([Loc(0), x()])))
@@ -150,9 +150,9 @@ fn moved() → Func {
         View(win(x(), Var(3), Var(2)), Writing),
         Lit(WNat, 7),
         Call(0, [Loc(1), Loc(0)], 2),
-        Write(whole(Loc(3)), Loc(0)),
+        Back(whole(Loc(3)), Loc(0)),
         Death(whole(Loc(0))),
-        Write(win(x(), Var(3), Var(2)), Loc(3)),
+        Back(win(x(), Var(3), Var(2)), Loc(3)),
         Death(whole(Loc(3))),
         Read(el(Loc(4), Lit(0))),
     ], Ret([Loc(0), x()])))
@@ -182,7 +182,7 @@ fn unreturned() → Func {
         View(win(x(), Var(1), Var(2)), Writing),
         Lit(WNat, 7),
         Call(0, [Loc(1), Loc(0)], 2),
-        Write(whole(Loc(3)), Loc(0)),
+        Back(whole(Loc(3)), Loc(0)),
         Death(whole(Loc(0))),
         Death(whole(Loc(3))),
     ], Ret([Loc(1), x()])))
@@ -267,11 +267,11 @@ fn loan() → Func {
         View(win(x(), Var(1), Var(2)), Writing),
         Lit(WNat, 7),
         Write(el(Loc(1), Lit(0)), Loc(0)),
-        Write(win(x(), Var(1), Var(2)), Loc(1)),
+        Back(win(x(), Var(1), Var(2)), Loc(1)),
         Read(el(x(), Lit(0))),
         Lit(WNat, 4),
         Write(el(Loc(3), Lit(1)), Loc(0)),
-        Write(win(x(), Var(1), Var(2)), Loc(3)),
+        Back(win(x(), Var(1), Var(2)), Loc(3)),
         Read(el(Loc(3), Lit(0))),
         Read(el(Loc(5), Lit(0))),
         Death(whole(Loc(5))),
@@ -293,7 +293,7 @@ theorem loan_checked(): verdict([loan()], 0) = Some(loan_owes()) { refl }
 // each refused; a write through the loan after its death refused; a loan
 // of a part of a read parameter refused.
 fn peek() → Func {
-    Func(wsig(0), seq([View(win(x(), Lit(0), Lit(2)), Writing), Lit(WNat, 7), Write(el(Loc(1), Lit(0)), Loc(0)), Write(win(x(), Lit(0), Lit(2)), Loc(1)),
+    Func(wsig(0), seq([View(win(x(), Lit(0), Lit(2)), Writing), Lit(WNat, 7), Write(el(Loc(1), Lit(0)), Loc(0)), Back(win(x(), Lit(0), Lit(2)), Loc(1)),
         Read(el(x(), Lit(0))), Death(whole(Loc(2)))], Ret([Loc(1), x()])))
 }
 
@@ -701,9 +701,9 @@ fn after_call() → Func {
         View(win(x(), Lit(0), Var(1)), Reading),
         View(win(x(), Var(1), Var(2)), Writing),
         Call(0, [Loc(0), Arg(1)], 2),
-        Write(whole(Loc(2)), Loc(0)),
+        Back(whole(Loc(2)), Loc(0)),
         Death(whole(Loc(0))),
-        Write(win(x(), Var(1), Var(2)), Loc(2)),
+        Back(win(x(), Var(1), Var(2)), Loc(2)),
         Death(whole(Loc(2))),
         Lit(WNat, 5),
         Write(el(x(), Var(5)), Loc(0)),
@@ -796,9 +796,9 @@ fn outer() → Func {
     Func(wsig(3), seq([
         View(win(x(), Lit(0), Var(1)), Writing),
         Call(0, [Loc(0), Arg(2), Arg(3)], 2),
-        Write(whole(Loc(2)), Loc(0)),
+        Back(whole(Loc(2)), Loc(0)),
         Death(whole(Loc(0))),
-        Write(win(x(), Lit(0), Var(1)), Loc(2)),
+        Back(win(x(), Lit(0), Var(1)), Loc(2)),
         Death(whole(Loc(2))),
     ], Ret([Loc(1), x()])))
 }
@@ -813,9 +813,9 @@ fn outer2() → Func {
         Read(el(x(), Lit(0))),
         View(win(x(), Lit(1), Var(1)), Writing),
         Call(0, [Loc(0), Loc(1), Arg(2)], 2),
-        Write(whole(Loc(2)), Loc(0)),
+        Back(whole(Loc(2)), Loc(0)),
         Death(whole(Loc(0))),
-        Write(win(x(), Lit(1), Var(1)), Loc(2)),
+        Back(win(x(), Lit(1), Var(1)), Loc(2)),
         Death(whole(Loc(2))),
     ], Ret([Loc(1), x()])))
 }
@@ -951,9 +951,9 @@ fn zero_caller() → Func {
         View(win(x(), Lit(0), Var(1)), Writing),
         Lit(WNat, 0),
         Call(0, [Loc(1), Loc(0), Arg(1)], 1),
-        Write(whole(Loc(2)), Loc(0)),
+        Back(whole(Loc(2)), Loc(0)),
         Death(whole(Loc(0))),
-        Write(win(x(), Lit(0), Var(1)), Loc(2)),
+        Back(win(x(), Lit(0), Var(1)), Loc(2)),
         Death(whole(Loc(2))),
         Read(el(Loc(3), Lit(0))),
     ], Ret([Loc(0), x()])))
@@ -997,9 +997,9 @@ fn copy_caller() → Func {
         View(win(Arg(1), Lit(0), Var(2)), Reading),
         Lit(WNat, 0),
         Call(0, [Loc(2), Loc(1), Loc(0), Arg(2)], 1),
-        Write(whole(Loc(3)), Loc(0)),
+        Back(whole(Loc(3)), Loc(0)),
         Death(whole(Loc(0))),
-        Write(win(x(), Lit(0), Var(2)), Loc(3)),
+        Back(win(x(), Lit(0), Var(2)), Loc(3)),
         Death(whole(Loc(3))),
         Death(whole(Loc(2))),
     ], Ret([x()])))
@@ -1106,7 +1106,7 @@ fn one_window() → Func {
     Func(join_sig(), Join(TLe(Arg(2), Arg(2)),
         seq([View(win(Arg(0), Lit(0), Lit(1)), Writing)], Yield([Loc(0)])),
         seq([View(win(Arg(0), Lit(0), Lit(1)), Writing)], Yield([Loc(0)])),
-        seq([Lit(WNat, 5), Write(el(Loc(1), Lit(0)), Loc(0)), Write(win(Arg(0), Lit(0), Lit(1)), Loc(1)), Death(whole(Loc(1)))], Ret([Loc(0), Arg(0), Arg(1)]))))
+        seq([Lit(WNat, 5), Write(el(Loc(1), Lit(0)), Loc(0)), Back(win(Arg(0), Lit(0), Lit(1)), Loc(1)), Death(whole(Loc(1)))], Ret([Loc(0), Arg(0), Arg(1)]))))
 }
 
 theorem one_window_checked(): verdict([one_window()], 0) = Some(
@@ -1220,7 +1220,7 @@ fn wprim() → Func { Func(Sig([Param(pts_s(), ByWrite)], Nil), Ret(Nil)) }
 
 theorem wprim_refused(): verdict_in([wprim()], prim0(), 0) = None { refl }
 
-fn calls_wprim() → Func { Func(Sig([Param(pts_s(), ByWrite)], Nil), seq([Call(0, [Arg(0)], 1), Write(whole(Arg(0)), Loc(0)), Death(whole(Loc(0)))], Ret([Arg(0)]))) }
+fn calls_wprim() → Func { Func(Sig([Param(pts_s(), ByWrite)], Nil), seq([Call(0, [Arg(0)], 1), Back(whole(Arg(0)), Loc(0)), Death(whole(Loc(0)))], Ret([Arg(0)]))) }
 
 theorem calls_wprim_refused(): verdict_in([wprim(), calls_wprim()], prim0(), 1) = None { refl }
 
@@ -1234,7 +1234,7 @@ theorem calls_wprim_bodied(): verdict([wprim(), calls_wprim()], 1).is_some() = T
 // `b.y` after the call needs.
 fn lends_one() → Func {
     Func(Sig([Param(pt_s(), ByWrite), Param(pt_s(), ByWrite)], Nil),
-        seq([Call(0, [Arg(0)], 1), Write(whole(Arg(0)), Loc(0)), Death(whole(Loc(0))), Read(Place(Arg(1), [SField(1)]))], Ret([Arg(0), Arg(1)])))
+        seq([Call(0, [Arg(0)], 1), Back(whole(Arg(0)), Loc(0)), Death(whole(Loc(0))), Read(Place(Arg(1), [SField(1)]))], Ret([Arg(0), Arg(1)])))
 }
 
 fn writes_one() → Func { Func(Sig([Param(pt_s(), ByWrite)], Nil), Ret([Arg(0)])) }
@@ -1281,14 +1281,14 @@ theorem both_due(xs: List<Nat>, i, j: Nat, hi: ∥i < xs.len()∥, hj: ∥j < xs
 //     write-back is refused; after it, accepted.
 
 fn between() → Func {
-    Func(wsig(0), seq([View(win(x(), Lit(0), Lit(2)), Writing), Lit(WNat, 7), Write(el(Loc(1), Lit(0)), Loc(0)), Read(el(x(), Lit(5))), Write(win(x(), Lit(0), Lit(2)), Loc(2)),
+    Func(wsig(0), seq([View(win(x(), Lit(0), Lit(2)), Writing), Lit(WNat, 7), Write(el(Loc(1), Lit(0)), Loc(0)), Read(el(x(), Lit(5))), Back(win(x(), Lit(0), Lit(2)), Loc(2)),
         Death(whole(Loc(3)))], Ret([Loc(1), x()])))
 }
 
 theorem between_refused(): verdict([between()], 0) = None { refl }
 
 fn between_after() → Func {
-    Func(wsig(0), seq([View(win(x(), Lit(0), Lit(2)), Writing), Lit(WNat, 7), Write(el(Loc(1), Lit(0)), Loc(0)), Write(win(x(), Lit(0), Lit(2)), Loc(1)), Read(el(x(), Lit(5))),
+    Func(wsig(0), seq([View(win(x(), Lit(0), Lit(2)), Writing), Lit(WNat, 7), Write(el(Loc(1), Lit(0)), Loc(0)), Back(win(x(), Lit(0), Lit(2)), Loc(1)), Read(el(x(), Lit(5))),
         Death(whole(Loc(2)))], Ret([Loc(0), x()])))
 }
 
@@ -1303,10 +1303,10 @@ fn two_nat_w() → Func { Func(Sig([Param(nat_s(), ByWrite), Param(nat_s(), ByWr
 
 fn nested_two(late: Bool) → Func {
     let pre: List<Stmt> = [View(el(Arg(0), Lit(0)), Writing), View(Place(Loc(0), [SField(0)]), Writing), View(Place(Loc(1), [SField(1)]), Writing), Call(0, [Loc(1), Loc(0)], 2),
-        Write(whole(Loc(2)), Loc(0)), Death(whole(Loc(0))), Write(Place(Loc(4), [SField(1)]), Loc(2))];
-    let mid: List<Stmt> = match late { True => [Write(el(Arg(0), Lit(0)), Loc(4))], False => Nil };
-    let post: List<Stmt> = [Write(whole(Loc(3)), Loc(1)), Death(whole(Loc(1))), Write(Place(Loc(4), [SField(0)]), Loc(3)), Death(whole(Loc(2))), Death(whole(Loc(3))),
-        Write(el(Arg(0), Lit(0)), Loc(4)), Death(whole(Loc(4)))];
+        Back(whole(Loc(2)), Loc(0)), Death(whole(Loc(0))), Back(Place(Loc(4), [SField(1)]), Loc(2))];
+    let mid: List<Stmt> = match late { True => [Back(el(Arg(0), Lit(0)), Loc(4))], False => Nil };
+    let post: List<Stmt> = [Back(whole(Loc(3)), Loc(1)), Death(whole(Loc(1))), Back(Place(Loc(4), [SField(0)]), Loc(3)), Death(whole(Loc(2))), Death(whole(Loc(3))),
+        Back(el(Arg(0), Lit(0)), Loc(4)), Death(whole(Loc(4)))];
     Func(Sig([Param(pts_s(), ByWrite)], Nil), seq(pre ++ mid ++ post, Ret([Arg(0)])))
 }
 
@@ -1324,7 +1324,7 @@ theorem nested_two_late_refused(): verdict([two_nat_w(), nested_two(True)], 1) =
 // carries it for every view to write on a pending chain.
 fn back_under() → Func {
     Func(Sig([Param(pts_s(), ByWrite)], Nil), seq([View(el(Arg(0), Lit(0)), Writing), View(Place(Loc(0), [SField(0)]), Writing), Lit(WNat, 7), Write(whole(Loc(1)), Loc(0)),
-        Write(Place(Loc(2), [SField(0)]), Loc(1)), Death(whole(Loc(1))), Write(el(Arg(0), Lit(0)), Loc(2)), Death(whole(Loc(2)))], Ret([Arg(0)])))
+        Back(Place(Loc(2), [SField(0)]), Loc(1)), Death(whole(Loc(1))), Back(el(Arg(0), Lit(0)), Loc(2)), Death(whole(Loc(2)))], Ret([Arg(0)])))
 }
 
 theorem back_under_checked(): verdict([back_under()], 0).is_some() = True { refl }
@@ -1340,7 +1340,7 @@ fn pt_w() → Func { Func(Sig([Param(pt_s(), ByWrite)], Nil), Ret([Arg(0)])) }
 // `p`'s slot is a view to write of a copy, and a reference coming back would
 // be one no invariant could place.
 fn lend_plain_back() → Func {
-    Func(Sig([Param(pt_s(), ByWrite)], Nil), seq([Call(0, [Arg(0)], 1), Write(whole(Arg(0)), Loc(0)), Death(whole(Loc(0)))], Ret([Arg(0)])))
+    Func(Sig([Param(pt_s(), ByWrite)], Nil), seq([Call(0, [Arg(0)], 1), Back(whole(Arg(0)), Loc(0)), Death(whole(Loc(0)))], Ret([Arg(0)])))
 }
 
 theorem lend_plain_back_checked(): verdict([pt_w(), lend_plain_back()], 1).is_some() = True { refl }
@@ -1350,8 +1350,32 @@ theorem lend_plain_back_checked(): verdict([pt_w(), lend_plain_back()], 1).is_so
 // paths and the lent one (the frame by place, §23.14) do not determine; the
 // equation does (`x` after is `x` before with `x[0]` overwritten).
 fn lend_under() → Func {
-    Func(Sig([Param(pts_s(), ByWrite)], Nil), seq([View(el(Arg(0), Lit(0)), Writing), Call(0, [Loc(0)], 1), Write(whole(Loc(1)), Loc(0)), Death(whole(Loc(0))),
-        Write(el(Arg(0), Lit(0)), Loc(1)), Death(whole(Loc(1)))], Ret([Arg(0)])))
+    Func(Sig([Param(pts_s(), ByWrite)], Nil), seq([View(el(Arg(0), Lit(0)), Writing), Call(0, [Loc(0)], 1), Back(whole(Loc(1)), Loc(0)), Death(whole(Loc(0))),
+        Back(el(Arg(0), Lit(0)), Loc(1)), Death(whole(Loc(1)))], Ret([Arg(0)])))
 }
 
 theorem lend_under_checked(): verdict([pt_w(), lend_under()], 1).is_some() = True { refl }
+
+// A write-back is its own statement (§23.23): the text of one as a `Write`
+// is refused, and a `Back` that is not one (a literal written back onto a
+// view's place) is refused; `back_under` is the checked neighbour.
+fn back_as_write() → Func {
+    Func(Sig([Param(pts_s(), ByWrite)], Nil), seq([View(el(Arg(0), Lit(0)), Writing), Lit(WNat, 7), Write(Place(Loc(1), [SField(0)]), Loc(0)),
+        Write(el(Arg(0), Lit(0)), Loc(1)), Death(whole(Loc(1)))], Ret([Arg(0)])))
+}
+
+theorem back_as_write_refused(): verdict([back_as_write()], 0) = None { refl }
+
+fn back_not_back() → Func {
+    Func(Sig([Param(pts_s(), ByWrite)], Nil), seq([View(el(Arg(0), Lit(0)), Writing), Lit(WNat, 7), Back(Place(Loc(1), [SField(0)]), Loc(0)),
+        Back(el(Arg(0), Lit(0)), Loc(1)), Death(whole(Loc(1)))], Ret([Arg(0)])))
+}
+
+theorem back_not_back_refused(): verdict([back_not_back()], 0) = None { refl }
+
+fn back_one() → Func {
+    Func(Sig([Param(pts_s(), ByWrite)], Nil), seq([View(el(Arg(0), Lit(0)), Writing), Lit(WNat, 7), Write(Place(Loc(1), [SField(0)]), Loc(0)),
+        Back(el(Arg(0), Lit(0)), Loc(1)), Death(whole(Loc(1)))], Ret([Arg(0)])))
+}
+
+theorem back_one_checked(): verdict([back_one()], 0).is_some() = True { refl }

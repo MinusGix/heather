@@ -18,10 +18,10 @@
 //   the reference narrowed by the place's selections; of a plain variable, a
 //   copy. A take of a whole variable passes its value and ownership on.
 //   `fresh` makes a block, the next index. A write stores where the place is:
-//   in the block a referring root refers to, or in a plain root's own value;
-//   a write of a variable that refers to the very place written (a view's
-//   write-back onto its parent) stores nothing, the writes having gone
-//   through in place. A store is stuck outside what the activation may
+//   in the block a referring root refers to, or in a plain root's own value.
+//   A view's write-back onto its parent (`Back`) stores nothing where the
+//   view refers, the writes having gone through in place, and is a write
+//   where it is a copy. A store is stuck outside what the activation may
 //   change (`Act`): a block made since its entry, or a path under a
 //   reference one of its arguments lent to change. A death of an owner kills
 //   its block; any other death is nothing. A call runs the callee's body at
@@ -155,20 +155,13 @@ fn Mach::push(tys: Nat → Type, m: Mach(tys), c: Cell(tys)) → Mach(tys) { Mac
 // ---------------------------------------------------------------------------
 // What an activation may change
 
-// Selections compared as values, and one list a prefix of another (itself
-// included).
-fn Sel::sames(xs, ys: List<Sel>) → Bool {
-    match xs { Nil => match ys { Nil => True, Cons(_, _) => False }, Cons(a, xr) => match ys { Nil => False, Cons(b, yr) => a.same(b) && Sel::sames(xr, yr) } }
-}
+// One selection list a prefix of another (itself included).
 
 fn Sel::starts(xs, ys: List<Sel>) → Bool {
     match xs { Nil => True, Cons(a, xr) => match ys { Nil => False, Cons(b, yr) => a.same(b) && Sel::starts(xr, yr) } }
 }
 
-fn Ref::same(self a, b: Ref) → Bool { a.b.same(b.b) && Sel::sames(a.sels, b.sels) }
 
-// Whether a value is the reference `q`.
-fn Value::is_ref(tys: Nat → Type, v: Value(tys), q: Ref) → Bool { match v { Refer(r) => r.same(q), Plain(_) => False } }
 
 // Whether a callee may change what it is passed at this parameter.
 fn PMode::changes(self m: PMode) → Bool { match m { ByTake => True, ByRead => False, ByWrite => True } }
@@ -291,6 +284,35 @@ fn Cell::args(tys: Nat → Type, ps: List<Param>, vs: List<Value(tys)>) → List
 // ---------------------------------------------------------------------------
 // Statements
 
+// A write's run: `x`'s value stored at `p`, in the root's own value where
+// it is plain, in the block it refers to where it refers, under what the
+// activation may change (`Act::may`).
+fn Stmt::write_run(tys: Nat → Type, strs: Strs(tys), act: Act, m: Mach(tys), p: Place, x: Var, k: Mach(tys) → Ran(tys)) → Ran(tys) {
+    match Mach::val(tys, strs, m, x) {
+        None => Stuck,
+        Some(d) => {
+            let ss = Steps::sels(p.steps, Mach::ixs(tys, strs, m));
+            let c = REnv::get(tys, m.env, p.root);
+            match c.v {
+                Plain(old) => match Sel::put(tys, strs, ss, d, old) {
+                    Some(nw) => k(Mach(m.heap, REnv::set(tys, m.env, p.root, Cell(Plain(nw), c.own)), m.io)),
+                    None => Stuck,
+                },
+                Refer(r) => match act.may(r.b, r.sels ++ ss) {
+                    False => Stuck,
+                    True => match Heap::val(tys, strs, m.heap, r.b) {
+                        Some(old) => match Sel::put(tys, strs, r.sels ++ ss, d, old) {
+                            Some(nw) => k(Mach(Heap::store(tys, m.heap, r.b, nw), m.env, m.io)),
+                            None => Stuck,
+                        },
+                        None => Stuck,
+                    },
+                },
+            }
+        },
+    }
+}
+
 fn Stmt::run(self s: Stmt, tys: Nat → Type, strs: Strs(tys), fns: Nat → Func, call: Caller(tys), act: Act, m: Mach(tys), k: Mach(tys) → Ran(tys)) → Ran(tys) {
     match s {
         Op(op, a, b) => match Mach::val(tys, strs, m, a) {
@@ -302,32 +324,8 @@ fn Stmt::run(self s: Stmt, tys: Nat → Type, strs: Strs(tys), fns: Nat → Func
         },
         Lit(wd, n) => k(Mach::push(tys, m, Cell::plain(tys, Dyn(SWord(wd), Width::of_nat(wd, n))))),
         Read(p) => match Mach::place(tys, strs, m, p) { Some(d) => k(Mach::push(tys, m, Cell::plain(tys, d))), None => Stuck },
-        Write(p, x) => match Mach::val(tys, strs, m, x) {
-            None => Stuck,
-            Some(d) => {
-                let ss = Steps::sels(p.steps, Mach::ixs(tys, strs, m));
-                let c = REnv::get(tys, m.env, p.root);
-                match c.v {
-                    Plain(old) => match Sel::put(tys, strs, ss, d, old) {
-                        Some(nw) => k(Mach(m.heap, REnv::set(tys, m.env, p.root, Cell(Plain(nw), c.own)), m.io)),
-                        None => Stuck,
-                    },
-                    Refer(r) => match Value::is_ref(tys, (REnv::get(tys, m.env, x)).v, r.narrow(Mach::ixs(tys, strs, m), p.steps)) {
-                        True => k(m),
-                        False => match act.may(r.b, r.sels ++ ss) {
-                            False => Stuck,
-                            True => match Heap::val(tys, strs, m.heap, r.b) {
-                                Some(old) => match Sel::put(tys, strs, r.sels ++ ss, d, old) {
-                                    Some(nw) => k(Mach(Heap::store(tys, m.heap, r.b, nw), m.env, m.io)),
-                                    None => Stuck,
-                                },
-                                None => Stuck,
-                            },
-                        },
-                    },
-                }
-            },
-        },
+        Write(p, x) => Stmt::write_run(tys, strs, act, m, p, x, k),
+        Back(p, x) => match (REnv::get(tys, m.env, x)).v { Refer(_) => k(m), Plain(_) => Stmt::write_run(tys, strs, act, m, p, x, k) },
         View(p, _) => {
             let c = REnv::get(tys, m.env, p.root);
             match Mach::place(tys, strs, m, p) {
