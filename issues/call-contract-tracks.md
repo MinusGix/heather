@@ -41,3 +41,39 @@ A to D landed with `scripts/linked --check` unchanged and `HEATHER_PR_NATIVE=all
       The two kernel-write facts the claims need are in the contract module, from the Loan (`Spans::Window`, `Site::window_keeps_code`, `Site::resumes_resident`); no `ClauseStable` law for kernel writes was added (one instance needs it). Probes: `heap_call_step_claim` and `plain_loop_counted` (`function_ir_lower_calls_tests`: a CALL and a loop's turn counted), `linux_bind` and the control `steps_not_counted` (`x86_64_call_contract_tests`).
 
       Every certificate unchanged: `scripts/linked --check` exit 0, the 20 exports unchanged. Verified: `HEATHER_PR_NATIVE=all scripts/test --pr`: `== suite: 4139 passed, 0 failed, 3 ignored ==`.
+- 2026-11-26: **C landed** (items 3, 6 and 7).
+
+  The clause: `Site::Tracks` says that at every fuel, from the entry, the code performs the state read off the meaning (`Site::Reached`):
+  - Done: returned, at least 0 steps.
+  - Exited: at the exit call, in its world, at least 0 steps.
+  - Going(o): in world `o`, at least `n - 1` steps (`going_least`).
+  - Stuck: nothing.
+
+  `io.Answerable()` is asked in that clause only. `Site::MeetsDone` and `Site::MeetsExited` are its readings (`Site::tracks_done`, `Site::tracks_exited`). `Site::MeetsGoing` is restated with the stuck alternative; it is proved in D.
+
+  The lending law (item 7): `Site::Entering` takes the Loan and `lent: Type` (the bytes level's `blocks.Lent(spans)`) as hypotheses of the clause.
+
+  Room by depth (item 6): the premise is `room(f, peak(n, f, args, heap, io)) <= i`. `Body::peak`, `program_peaks` and `run_peak` are defined beside `run` by the run's own recursion, and `run` is unchanged. The lowering no longer checks room. `RoomLaw` is the table law, and `depth_rooms` is lawful for every program (`depth_rooms_lawful`). Emission's call bound is the routine count, so callee < caller is dropped.
+
+  The lowering, re-proved to `Tracks` (`lower_program_tracks`, under any lawful table):
+  - Done: `program_returns`, its callees at the table's depth below (`peak_answers`).
+  - Going: `program_goes`, built from `Body::emit_goes`, `routine_goes` and `function_enters_claim`. Its parts are the call's CALL and the callee going (`call_heap_goes`, with the hand-off kernel `into_callee`), the arm (`branch_heap_goes`), and the loop's turns (`plain_passes_goes`). The going facts are read off the run (`Body::goes_of`), and the world is unchanged while going (`program_going_quiet`).
+  - Exited: vacuous.
+
+  `lower_program_meets_done` and `lower_program_meets_exited` are now one-line instances at `depth_rooms`.
+
+  Deleted: `routine_rooms` and `rooms_after`, the emission's `Routine::roomy` check, and `Body::fits`.
+
+  Probes (`bytes_level_routines_tests`): `lend_tracks` and `both_tracks`. The recursion probe is `down` (calls itself): `down_lowers`; done with zero at fuel 3 from 2; still going at fuel 2; `run_peak` 2; `down_tracks`. Its control is `down_no_constant_room`: no table constant in the depth is lawful for it.
+
+  Not done: the out-of-room outcome (the old compiler's exit 139) has no meaning. It stays with [[bytes-level-lowering-recursion]].
+
+  Deviation: `routine_rooms` is not kept as an instance. For an acyclic program the depth table is constant past its height, but I have not proved it equal to `routine_rooms`.
+
+  §17.7 written in docs/language/ownership-design.md.
+
+  Owed and filed: for a program whose calls do not cycle, the depth table stops changing past the call graph's height, so one room suffices at every fuel. The lemma is not short (a strong induction on the routine index over `callee_room`'s congruence), so it is filed in [[bytes-level-lowering-recursion]]. The probes `lend_rooms_settle` (constant by evaluation from depth one) and `lend_rooms_grow` (smaller at depth zero) cover it for now.
+
+  The contract's comment on `going_least` gives the `n - 1` reason in the coordinator's words.
+
+  Verified (tree at the C commit): `scripts/linked --check` exit 0, every export unchanged. `HEATHER_PR_NATIVE=all scripts/test --pr`: `== suite: 4139 passed, 0 failed, 3 ignored ==`. The settle probes were added after it and checked with `heather check --expectations`.

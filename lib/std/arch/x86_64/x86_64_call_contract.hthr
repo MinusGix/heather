@@ -212,9 +212,10 @@ fn Site::Reached<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), 
 }
 
 // The machine steps the code has taken by then: going at fuel `n`, the
-// chain of turns and calls the fuel paid for, less the CALL that entered
-// the routine (the caller's instruction, before `Site::Entering`'s state);
-// otherwise none counted.
+// chain of turns and calls the fuel paid for, less one, because the first
+// counted step is the caller's `CALL`, before `Site::Entering`'s state (a
+// body at fuel `m` gives at least `m`); otherwise none counted. The
+// predecessor is deliberate: the meaning's fuel is not shifted to match.
 fn going_least(n: Nat, outcome: Ran<Answer>) → Nat {
     match outcome { Done(_) => 0, Exited(_, _) => 0, Going(_) => n - 1, Stuck(_) => 0 }
 }

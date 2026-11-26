@@ -80,6 +80,17 @@ theorem lend_tracks<M>(program: Prog, lowered: lend_program(3).lower(lend_places
         depth_rooms_lawful(lend_program(3).routines))
 }
 
+// The table by depth at a program whose calls do not cycle stops changing
+// past the call graph's height: `lend` calls `fill`, so from depth one on
+// each routine's room is one number (the lemma for every such program is
+// owed: issues/bytes-level-lowering-recursion.md).
+theorem lend_rooms_settle(): (depth_rooms(lend_program(3).routines)(1, 1) = depth_rooms(lend_program(3).routines)(1, 5)) ∧
+    (depth_rooms(lend_program(3).routines)(0, 0) = depth_rooms(lend_program(3).routines)(0, 5)) { ⟨refl, refl⟩ }
+
+// Below its height the table is smaller: at depth zero `lend` enters no
+// call, and asks only its frame and a call's 24 bytes.
+theorem lend_rooms_grow(): depth_rooms(lend_program(3).routines)(1, 0) < depth_rooms(lend_program(3).routines)(1, 1) { trivial }
+
 // ---------------------------------------------------------------------------
 // Two windows of one block written by one callee
 

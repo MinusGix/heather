@@ -5,7 +5,7 @@ labels: [native,x86,ownership]
 area: heather-in-heather
 milestone: [nh-ownership]
 created: 2026-11-25
-updated: 2026-11-25
+updated: 2026-11-26
 ---
 
 The bytes level's lowering ([[bytes-level-lowering-routines]]) refuses a routine that calls itself or a routine above it (`File::emit_call`'s `callee + 1 <= bound` with `bound = k`). The meaning ties routines by fuel, so recursion has a meaning; the contract `Site::Entering` fixes the room below a routine's return address (`rooms(f) <= i`) for every fuel, and a recursive routine needs room growing with the depth of calls. Stage 3 needs it back: the native gates include a recursion test (`crates/cli/tests/native_recursion.rs`).
@@ -29,3 +29,12 @@ The bytes level's lowering ([[bytes-level-lowering-routines]]) refuses a routine
 ## Done when
 
 `Site::Meets`' room states call depth once, a recursive routine lowers with its theorem, and the recursion gate's programs compile through the new layer.
+
+## Log
+
+- 2026-11-26: [[call-contract-tracks]] C admits recursion. `Site::Entering`'s room is `room(f, peak)`, where the peak is the deepest chain of calls the run enters (`run_peak`, beside `run`). The lowering is proved to `Site::Tracks` under every lawful table (`RoomLaw`; `depth_rooms` is lawful for every program), and calls go to any routine. Probe: `down` in `bytes_level_routines_tests`, which calls itself and is tracked; control `down_no_constant_room`.
+
+  Still open here:
+  - The out-of-room outcome (the old compiler's exit 139) has no meaning at the bytes level.
+  - Owed lemma: for a program whose calls do not cycle, `depth_rooms` stops changing past the call graph's height, and that stable value is the one number a caller must provide. Probe by evaluation: `lend_rooms_settle`.
+  - The recursion gate's programs through the new layer.
