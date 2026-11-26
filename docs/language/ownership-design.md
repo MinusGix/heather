@@ -5173,6 +5173,19 @@ the code at `steps` in its parameter's, by `Shape::steps_ok` (the function
 by the parameter's code. Probes: `obj_as_word`, `word_as_obj` and
 `view_as_point`, each refused where it is written and at the call.
 
+**A gap in the proof's own invariant, fixed: an owner's cell is owned**
+(`Inv.hown`, `CSt::HOwn`). Binding a moved argument answered back needs the
+caller's holder to have handed the reference over, which the run does only
+from an owned cell (`Cell::pass`); from an unowned one the argument goes as
+a plain copy, the result comes back plain (`ViewIs`) while the object's root
+keeps the block, and `href` breaks. It does not follow from `own` (the
+converse), `href` or `args`, so it is a clause: a level holding an object
+to own whose object has a root has an owned cell. It holds at every builder:
+`Cell::args` owns a taken argument that refers (`Cell::args_owned`), `Fresh`
+and a call's fresh result push owned cells, `Take` of a whole holder pushes
+the same cell, and the rest keep the cells (`CSt::hown_push`, `hown_sub`,
+`hown_gone`, as `href`'s).
+
 **C. A signature's results are a telescope.** A view result's steps name
 parameters and earlier results only, as a dependent answer is scoped
 (`(i: Nat, v: view of xs[i])`). A clause of `Sig::ok`, so tested where the
