@@ -4518,7 +4518,13 @@ cannot exist to answer the signature any other way. The rest:
   a call binds a moved result only from an owner), so a checked function
   that `Sig::ok` passes never meets the test failing; it makes the owning
   holder a fact of the state at `Ret` (`CSt::returns_param`) instead of an
-  invariant on accesses by object.
+  invariant on accesses by object. **It is a test of the checker's own
+  state standing in for that invariant** ("every holder of a taken
+  parameter's object owns it"), **not a rule of the language**: it never
+  refuses a function whose signature is `Sig::ok`. That claim is one for
+  the soundness search to confirm (`issues/ownership-soundness-oracle.md`,
+  §24 on the coordinating branch): no program it generates should be
+  refused by this test alone.
 
 **C. A signature's results are a telescope.** A view result's steps name
 parameters and earlier results only, as a dependent answer is scoped
