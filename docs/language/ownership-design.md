@@ -3707,3 +3707,15 @@ the parent at the child's place of what is there: the block is unchanged by
 the patch moves up one, `up_step` and the walk's independence of the
 written-back flags and of fuel past the chain), then `Death` and `Take` of a
 view's root, and `Ret`.
+
+**Added at the session's end, for the write-back**: `pone` (the pending
+entries are at one level, so the entry `patched` follows is the one written
+back); `Inv::rekin`, the flag-change lemmas for any map of the entries that
+keeps every field but `back` (`Inv::unback` its instance); the decider law
+`Steps::apart_prefix` (`steps.hthr`: a common prefix decides nothing, every
+step being the same as itself, a window then an element included); and the
+walk's independence of the written-back flags and of fuel past its level
+(`CSt::up_rekin`, `CSt::up_more`). Decided: a copy's place in its parent's
+copy is recorded by an invariant clause (`cfit`), not avoided by forbidding
+copies to be written through, since a value written back from a copy is the
+design's ordinary case for small plain data (§15.2).
