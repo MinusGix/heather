@@ -191,7 +191,14 @@ record StepModelLaws<S>(m: StepModel<S>) {
     // Writing back what was read changes nothing, where the step fits and
     // where it does not.
     put_back: (a: Sel) → (s: S) → m.over(a, λ _ => m.at(a, s), s) = s,
-    // A modification at any step keeps whether every step fits.
+    // An owner's fit at a step is unchanged by any modification of that
+    // owner at any step, whatever the modification returns: both steps are
+    // taken on the same owner, so this asks the model's `over` to keep
+    // what a fit reads of the owner (for `Dyn`, its code and length; a
+    // model whose `over` could change an owner's length breaks it). A fit
+    // deeper, under the modified step, is not this law's: it is a step on
+    // `at(b, s)`, and `Steps::fit_under` carries it under `over_at`'s
+    // `like` condition (docs/language/ownership-design.md §23.10).
     fits_over: (a, b: Sel) → (g: S → S) → (s: S) → m.fits(a, m.over(b, g, s)) = m.fits(a, s),
 }
 
