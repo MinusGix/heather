@@ -17,6 +17,15 @@ import level2;
 import run;
 import verdict;
 import checker;
+import sound_paths;
+import sound_state;
+import sound_heap;
+import sound_inv;
+import sound_write;
+import sound_stages;
+import sound_like;
+import sound_ret;
+import sound_call;
 import sound;
 
 fn tys() → Nat → Type { λ k => match k { Zero => List<Nat>, Succ(_) => True } }

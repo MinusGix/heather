@@ -5314,12 +5314,20 @@ Where it is passed plain, `ViewIs` asks each result only to be plain and
 [Result(Buf, OParam(0)), Result(Buf, OParam(0))])`, with a world answering two
 copies, is safe, and its caller `h(a: Buf take) { Call(twice, [a], 2); … }`
 run with `a` plain bound both results `KHold(o_a, AcOwn)`, two levels holding
-one object, against `Inv.one`. A plain parameter answered twice is two
-copies and is allowed. Probes: `twice_param_refused` (where written),
-`twice_caller_refused` (at the call), `twice_plain_caller_checked`; the
-callee `twice_plain` is itself refused at its `Ret`, as is `once_plain`
-answering a plain taken parameter once (`CSt::returns` asks a parameter
-answered back to be held as an owner).
+one object, against `Inv.one`. Probes: `twice_param_refused` (where
+written), `twice_caller_refused` (at the call).
+
+**An `OParam(i)` result names a taken parameter whose code moves**
+(`Result::ok`, the coordinating session's ruling on the loose end above). A
+plain value answered back is a copy either way and means nothing `OFresh` of
+its code does not; no checked body could answer it (`CSt::returns` asks a
+parameter answered back to be held as an owner); and it forced `Sig::once`
+and `CSt::result` to carry a "moves or not" case. Now `Sig::once` is one
+`OParam` per parameter, `CSt::result`'s plain `OParam` case is gone, and a
+signature handing a plain parameter's value back says `OFresh`. Probes:
+`twice_plain_callee_refused`, `twice_plain_caller_refused`,
+`once_plain_callee_refused`, `once_plain_caller_refused`, and the neighbours
+`once_fresh_checked`, `once_fresh_caller_checked`.
 
 **`Len(p, w)`, a place's length as a word** (issues/ownership-branch-on-
 object-length.md): meaning `Width::of_nat(w, Dyn::len(value at p))`, the

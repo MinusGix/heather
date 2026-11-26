@@ -1,0 +1,533 @@
+// sound_ret: part of the soundness proof of the ownership checker, split
+// from `sound.hthr` along its sections (issues/ownership-sound-consolidate.md);
+// see `sound.hthr` for the map.
+import logic;
+import bool;
+import nat;
+import option;
+import list;
+import bitvec;
+import bitvec_nat;
+import span_set;
+import store;
+import atom;
+import steps;
+import shape;
+import body;
+import level2;
+import run;
+import verdict;
+import checker;
+import linux_world;
+import sound_paths;
+import sound_state;
+import sound_heap;
+import sound_inv;
+import sound_write;
+import sound_stages;
+import sound_like;
+
+// ---------------------------------------------------------------------------
+// The return: what `SafeAt` asks of the answer, from the invariant at `Ret`
+
+// What the run reads of a value at no selections, the meaning reads.
+theorem Value::read_of_get(tys: Nat → Type, strs: Strs(tys), h: Heap(tys), v: Value(tys), d: Dyn(tys), g: Value::get(tys, strs, h, v, Nil) = Some(d)):
+    Value::read(tys, v, strs, h, h.len()) = Some(d)
+{
+    (match v as λ u => Value::get(tys, strs, h, u, Nil) = Some(d) → Value::read(tys, u, strs, h, h.len()) = Some(d) {
+        Plain(d0) => λ g0 => cong_fn(λ (q: Dyn(tys)) => Some(q), (Sel::get_parts(tys, strs, Nil, d0, d, g0)).right),
+        Refer(r) => λ g0 => (match Heap::obj(tys, h, r.b) as λ oo =>
+                (match (match oo { Some(o) => Obj::read(tys, strs, h, h.len(), o), None => None<Dyn(tys)>() }) { Some(x) => Sel::get(tys, strs, r.sels ++ Nil, x), None => None<Dyn(tys)>() }) = Some(d) →
+                (match oo { Some(o) => Obj::read(tys, strs, h, h.len(), o).map(λ x => Sel::read_at(tys, strs, r.sels, x)), None => None<Dyn(tys)>() }) = Some(d) {
+            None => λ no => absurd(no),
+            Some(o) => λ g1 => (match Obj::read(tys, strs, h, h.len(), o) as λ ox =>
+                    (match ox { Some(x) => Sel::get(tys, strs, r.sels ++ Nil, x), None => None<Dyn(tys)>() }) = Some(d) → ox.map(λ x => Sel::read_at(tys, strs, r.sels, x)) = Some(d) {
+                None => λ no => absurd(no),
+                Some(x) => λ g2 => cong_fn(λ (q: Dyn(tys)) => Some(q),
+                    trans(cong_fn(λ (ss: List<Sel>) => Sel::read_at(tys, strs, ss, x), sym(List::append_nil(r.sels))), (Sel::get_parts(tys, strs, r.sels ++ Nil, x, d, g2)).right)),
+            })(g1),
+        })(g0),
+    })(g)
+}
+
+// The variables a `Ret` lists, read as the meaning's (`ReadAll`).
+theorem Sim::read_all(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, sim: Sim(tys, strs, s, e, m), xs: List<Var>): (rs: List<Residual>) → s.read_vars(tys, strs, xs) = Some(rs) →
+    Value::ReadAll(tys, strs, m.heap, m.heap.len(), xs.map(λ x => (REnv::get(tys, m.env, x)).v), xs.map(λ x => Env::get(tys, e, x)))
+{
+    match xs {
+        Nil => λ rs _ => trivial,
+        Cons(x, rest) => λ rs ok => {
+            let a = Option::and_then_some(s.read_var(tys, strs, x), λ g => s.read_vars(tys, strs, rest).map(λ r2 => g.rs ++ r2), rs, ok);
+            match Option::map_some_inv(s.read_vars(tys, strs, rest), λ r2 => a.witness.rs ++ r2, rs, a.proof.right) {
+                ⟨r2, pb⟩ => ⟨Value::read_of_get(tys, strs, m.heap, (REnv::get(tys, m.env, x)).v, Env::get(tys, e, x), Sim::read_val(tys, strs, sim, x, a.witness, a.proof.left)),
+                    Sim::read_all(tys, strs, sim, rest, r2, pb.left)⟩,
+            }
+        },
+    }
+}
+
+// An argument object's root is the argument as passed: the start gave it,
+// and no stage changed the argument's cell's reference (`Stepped.kept`).
+theorem Inv::arg_root(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>}, {root: Nat → Option<Ref>}, inv: Inv(tys, strs, s, e, m, h0, lent, root),
+    ps: List<Param>, vs: List<Value(tys)>, ent: REnv::ArgsKept(tys, m.env, REnv(Cell::args(tys, ps, vs), Nil)), i: Nat, lt: i < s.na, v: Value(tys), hv: vs.nth(i) = Some(v)):
+    root(i) = Value::ref_of(tys, v)
+{
+    trans(inv.args(i, lt), trans(ent(i), cong_fn(λ (u: Value(tys)) => Value::ref_of(tys, u), Cell::args_get(tys, vs, ps, i, v, hv))))
+}
+
+// A holder of an object with a root: what the root reads is its meaning.
+theorem Inv::hold_reads(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>}, {root: Nat → Option<Ref>}, inv: Inv(tys, strs, s, e, m, h0, lent, root),
+    none: s.pending() = False, x: Var, l, o: Nat, a: Acc, hl: s.lvl(x) = Some(l), hr: s.role(l) = KHold(o, a), r: Ref, rt: root(o) = Some(r)):
+    Value::read(tys, Refer(r), strs, m.heap, m.heap.len()) = Some(Env::get(tys, e, x))
+{
+    let sim = Inv::sim_now(tys, strs, inv, none);
+    let cv: ((REnv::get(tys, m.env, x)).v = Refer(r)) = inv.href(x, l, o, a, hl, hr, r, rt);
+    let ag: Value::Reads(tys, strs, m.heap, (REnv::get(tys, m.env, x)).v, Env::get(tys, e, x)) =
+        j(hr, λ q _ => Cell::Agrees(tys, strs, m.heap, q, REnv::get(tys, m.env, x), Env::get(tys, e, x)), sim.vars(x, l, hl));
+    Value::read_of_get(tys, strs, m.heap, Refer(r), Env::get(tys, e, x), j(cv, λ u _ => Value::get(tys, strs, m.heap, u, Nil) = Some(Env::get(tys, e, x)), ag))
+}
+
+// A fresh result, as `CSt::returns` checks it: plain, or an object past the
+// arguments, whose root is a block the call made (`made`).
+theorem Inv::ret_fresh(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>}, {root: Nat → Option<Ref>}, inv: Inv(tys, strs, s, e, m, h0, lent, root),
+    sim: Sim(tys, strs, s, e, m), ls: List<Nat>, vs: List<Value(tys)>, ws: List<Ix>, x: Var, l: Nat, hl: s.lvl(x) = Some(l), code: Shape, ok: s.returns(tys, strs, ls, l, Result(code, OFresh)) = True):
+    Value::ViewIs(tys, strs, h0.len(), m.heap, vs, ws, code, OFresh, (REnv::get(tys, m.env, x)).v)
+{
+    (match (REnv::get(tys, m.env, x)).v as λ u => (REnv::get(tys, m.env, x)).v = u → Value::ViewIs(tys, strs, h0.len(), m.heap, vs, ws, code, OFresh, u) {
+        Plain(_) => λ _ => trivial,
+        Refer(r) => λ cr => {
+            let rk = inv.refs(x, l, hl, r, cr);
+            (match s.role(l) as λ q => s.role(l) = q → (match q { KPlain => True, KHold(o, a) => !Shape::plain(tys, strs, code) && s.na.leb(o) && (match a { AcOwn => True, AcRead => False, AcWrite => False }), KView => False, KGone => False }) = True →
+                    (match q { KHold(o, _) => root(o) = Some(r), KView => VEnt::Any(s.ents(l), λ en => (root(en.obj)).map(λ r0 => r0.narrow(Mach::ixs(tys, strs, m), s.unsteps(en.reg))) = Some(r)), KPlain => False, KGone => True }) →
+                    (Shape::plain(tys, strs, code) = False) ∧ ((h0.len() <= r.b) ∧ ((r.sels = Nil) ∧ Heap::Bare(tys, m.heap, r.b))) {
+                KPlain => λ _ _ no => false_elim(no),
+                KHold(o, a) => λ hr c rt => {
+                    let p1 = Bool::and_true_parts(!Shape::plain(tys, strs, code) && s.na.leb(o), match a { AcOwn => True, AcRead => False, AcWrite => False }, c);
+                    let p2 = Bool::and_true_parts(!Shape::plain(tys, strs, code), s.na.leb(o), p1.left);
+                    let mo = inv.made(o, Nat::le_of_leb(s.na, o, p2.right), r, rt);
+                    let ag: Value::Reads(tys, strs, m.heap, Refer(r), Env::get(tys, e, x)) = j(cr, λ u _ => Value::Reads(tys, strs, m.heap, u, Env::get(tys, e, x)),
+                        j(hr, λ q _ => Cell::Agrees(tys, strs, m.heap, q, REnv::get(tys, m.env, x), Env::get(tys, e, x)), sim.vars(x, l, hl)));
+                    let bare: Heap::Bare(tys, m.heap, r.b) = match Value::refer_inv(tys, strs, m.heap, r, Env::get(tys, e, x), ag) {
+                        ⟨dv, pd⟩ => match Heap::obj_of_val(tys, strs, m.heap, r.b, dv, pd.left) { ⟨ob, pob⟩ => Exists(ob, ⟨pob, inv.bare(o, r, rt, ob, pob)⟩) },
+                    };
+                    ⟨Bool::false_of_not_true(Shape::plain(tys, strs, code), p2.left), ⟨mo.left, ⟨mo.right, bare⟩⟩⟩
+                },
+                KView => λ _ no _ => absurd(no),
+                KGone => λ _ no _ => absurd(no),
+            })(refl, ok, rk)
+        },
+    })(refl)
+}
+
+// Each written parameter at `Ret`: its slot is its holder, which refers to
+// the argument as passed where that referred (`href`, `Inv::arg_root`), and
+// its meaning is like the argument (`Like.held`, the holder being the
+// parameter's own, to write: `Like.acc`).
+theorem Inv::ret_written(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>}, {root: Nat → Option<Ref>}, inv: Inv(tys, strs, s, e, m, h0, lent, root),
+    ps: List<Param>, ds: List<Dyn(tys)>, lk: Like(tys, strs, ps, ds, s, e), vs: List<Value(tys)>, vl: vs.len() = s.na, ent: REnv::ArgsKept(tys, m.env, REnv(Cell::args(tys, ps, vs), Nil)), is: List<Nat>):
+    Param::AllW(ps, s.na, is) → (xs: List<Var>) → (ls: List<Nat>) → s.lvls(xs) = Some(ls) → s.gives_back(ls, is) = True →
+    Value::Written(tys, strs, vs, ds, is, xs.map(λ x => (REnv::get(tys, m.env, x)).v), xs.map(λ x => Env::get(tys, e, x)))
+{
+    match is {
+        Nil => λ _ xs ls _ _ => trivial,
+        Cons(i, rest) => λ aw xs => match xs {
+            Nil => λ ls hl gb => absurd(j(sym(Option::some_inj(Nil, ls, hl)), λ q _ => s.gives_back(q, Cons(i, rest)) = True, gb)),
+            Cons(x, xr) => λ ls hl gb => {
+                let a = Option::and_then_some(s.lvl(x), λ l => s.lvls(xr).map(λ lt => Cons(l, lt)), ls, hl);
+                let l = a.witness;
+                match Option::map_some_inv(s.lvls(xr), λ (lt: List<Nat>) => Cons(l, lt), ls, a.proof.right) {
+                    ⟨lr, pl⟩ => {
+                        let gb2: (s.gives_back(Cons(l, lr), Cons(i, rest)) = True) = j(sym(pl.right), λ q _ => s.gives_back(q, Cons(i, rest)) = True, gb);
+                        let parts = Bool::and_true_parts(match s.role(l) { KHold(o, _) => o.same(i) && !s.unsynced(o), _ => False }, s.gives_back(lr, rest), gb2);
+                        let lt: (i < s.na) = aw.left.left;
+                        match CSt::gives_hold(s, l, i, parts.left) {
+                            ⟨a0, hr⟩ => match aw.left.right {
+                                ⟨p, pp⟩ => {
+                                    let below = s.lvl_below(x, l, a.proof.left);
+                                    let ro: (CSt::role_of(tys, strs, p, i) = KHold(i, a0)) = lk.acc(l, i, a0, below, hr, lt, p, pp.left);
+                                    let aw0: (KHold(i, AcWrite) = KHold(i, a0)) = j(pp.right, λ md _ =>
+                                        (match md { ByTake => match Shape::plain(tys, strs, p.code) { True => KPlain, False => KHold(i, AcOwn) }, ByRead => KHold(i, AcRead), ByWrite => KHold(i, AcWrite) }) = KHold(i, a0), ro);
+                                    let ae: (AcWrite = a0) = cong_fn(λ (q: Role) => match q { KHold(_, y) => y, KPlain => AcRead, KView => AcRead, KGone => AcRead }, aw0);
+                                    let hrw: (s.role(l) = KHold(i, AcWrite)) = trans(hr, cong_fn(λ (y: Acc) => KHold(i, y), sym(ae)));
+                                    let lkx = lk.held(x, l, i, a.proof.left, hrw);
+                                    let fits: Dyn::Fits(tys, strs, Dyn::arg(tys, ds, i), Env::get(tys, e, x)) =
+                                        ⟨j(lkx.left, λ c _ => (Env::get(tys, e, x)).code.same(c) = True, Shape::same_self((Env::get(tys, e, x)).code)), lkx.right⟩;
+                                    let rp: (match vs.nth(i).unwrap_or(level2::Plain(Dyn::none(tys))) as λ _ => Type { Refer(r) => (REnv::get(tys, m.env, x)).v = Refer(r), Plain(_) => sound_heap::Value::refers(tys, (REnv::get(tys, m.env, x)).v) = False }) =
+                                        (match vs.nth(i) as λ ov => vs.nth(i) = ov →
+                                                (match ov.unwrap_or(level2::Plain(Dyn::none(tys))) as λ _ => Type { Refer(r) => (REnv::get(tys, m.env, x)).v = Refer(r), Plain(_) => sound_heap::Value::refers(tys, (REnv::get(tys, m.env, x)).v) = False }) {
+                                            None => λ hn => match List::nth_present(vs, i, omega(lt, vl)) { ⟨v0, pv0⟩ => absurd(trans(sym(hn), pv0)) },
+                                            Some(v) => λ hv => (match v as λ u => vs.nth(i) = Some(u) → (match u as λ _ => Type { Refer(r) => (REnv::get(tys, m.env, x)).v = Refer(r), Plain(_) => sound_heap::Value::refers(tys, (REnv::get(tys, m.env, x)).v) = False }) {
+                                                Plain(d0) => λ hv2 => {
+                                                    // A holder of an argument passed by value: its object has no root, so its cell is a copy.
+                                                    let rn: (root(i) = None<Ref>()) = Inv::arg_root(tys, strs, inv, ps, vs, ent, i, lt, level2::Plain(d0), hv2);
+                                                    (match (REnv::get(tys, m.env, x)).v as λ u => (REnv::get(tys, m.env, x)).v = u → sound_heap::Value::refers(tys, u) = False {
+                                                        Plain(_) => λ _ => refl,
+                                                        Refer(r2) => λ cv => {
+                                                            let rk: (root(i) = Some(r2)) = j(hr, λ q _ => match q { KHold(o2, _) => root(o2) = Some(r2),
+                                                                KView => VEnt::Any(s.ents(l), λ en => (root(en.obj)).map(λ r0 => r0.narrow(Mach::ixs(tys, strs, m), s.unsteps(en.reg))) = Some(r2)), KPlain => False, KGone => True },
+                                                                inv.refs(x, l, a.proof.left, r2, cv));
+                                                            absurd(trans(sym(rn), rk))
+                                                        },
+                                                    })(refl)
+                                                },
+                                                Refer(r) => λ hv2 => inv.href(x, l, i, a0, a.proof.left, hr, r, Inv::arg_root(tys, strs, inv, ps, vs, ent, i, lt, Refer(r), hv2)),
+                                            })(hv),
+                                        })(refl);
+                                    ⟨rp, ⟨fits, Inv::ret_written(tys, strs, inv, ps, ds, lk, vs, vl, ent, rest, aw.right, xr, lr, pl.left, parts.right)⟩⟩
+                                },
+                            },
+                        }
+                    },
+                }
+            },
+        },
+    }
+}
+
+// One result at `Ret`, as `CSt::returns` checked it: `Value::ViewIs`.
+theorem Inv::ret_one(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>}, {root: Nat → Option<Ref>}, inv: Inv(tys, strs, s, e, m, h0, lent, root),
+    sim: Sim(tys, strs, s, e, m), ps: List<Param>, vs: List<Value(tys)>, ent: REnv::ArgsKept(tys, m.env, REnv(Cell::args(tys, ps, vs), Nil)), vl: vs.len() = s.na,
+    ws: List<Ix>, all: List<Nat>, sw: CSt::SigWords(s, all, ws, Mach::ixs(tys, strs, m)), x: Var, l: Nat, hl: s.lvl(x) = Some(l), code: Shape, og: Origin,
+    ok: s.returns(tys, strs, all, l, Result(code, og)) = True): Value::ViewIs(tys, strs, h0.len(), m.heap, vs, ws, code, og, (REnv::get(tys, m.env, x)).v)
+{
+    let cv = (REnv::get(tys, m.env, x)).v;
+    // The argument at `i`: present, its root its reference.
+    let argv = λ (i: Nat) (lt: i < s.na) => List::nth_present(vs, i, omega(lt, vl));
+    (match og as λ o => s.returns(tys, strs, all, l, Result(code, o)) = True → Value::ViewIs(tys, strs, h0.len(), m.heap, vs, ws, code, o, cv) {
+        OFresh => λ okf => Inv::ret_fresh(tys, strs, inv, sim, all, vs, ws, x, l, hl, code, okf),
+        OParam(i) => λ okp => {
+            let rp = s.returns_param(tys, strs, all, l, code, i, okp);
+            let lt: (i < s.na) = rp.left;
+            let ha: Exists<Acc>(λ a => (s.role(l) = KHold(i, a))) = Exists(AcOwn, rp.right);
+            match ha {
+                ⟨a, hr⟩ => match argv(i, lt) {
+                    ⟨v, hv⟩ => j(sym(hv), λ q _ => (match q as λ _ => Type { Some(w) => match w as λ _ => Type { Refer(r) => cv = Refer(r), Plain(_) => sound_heap::Value::refers(tys, cv) = False }, None => False }),
+                        (match v as λ u => vs.nth(i) = Some(u) → (match u as λ _ => Type { Refer(r) => cv = Refer(r), Plain(_) => sound_heap::Value::refers(tys, cv) = False }) {
+                            Refer(r) => λ hv2 => inv.href(x, l, i, a, hl, hr, r, Inv::arg_root(tys, strs, inv, ps, vs, ent, i, lt, Refer(r), hv2)),
+                            Plain(d) => λ hv2 => {
+                                let rn: (root(i) = None) = Inv::arg_root(tys, strs, inv, ps, vs, ent, i, lt, level2::Plain(d), hv2);
+                                (match cv as λ u => cv = u → sound_heap::Value::refers(tys, u) = False {
+                                    Plain(_) => λ _ => refl,
+                                    Refer(q) => λ cq => {
+                                        let rk: (root(i) = Some(q)) = j(hr, λ rr _ => match rr { KHold(o2, _) => root(o2) = Some(q),
+                                            KView => VEnt::Any(s.ents(l), λ en => (root(en.obj)).map(λ r0 => r0.narrow(Mach::ixs(tys, strs, m), s.unsteps(en.reg))) = Some(q)), KPlain => False, KGone => True },
+                                            inv.refs(x, l, hl, q, cq));
+                                        absurd(trans(sym(rn), rk))
+                                    },
+                                })(refl)
+                            },
+                        })(hv)),
+                },
+            }
+        },
+        OView(i, sx) => λ okv => {
+            let inner = match s.sig_steps(all, sx) { Some(ys) => match s.ents(l) { Cons(en, rest) => match rest { Nil => en.obj.same(i) && Steps::same(en.reg, ys) && !en.mode.writes(), Cons(_, _) => False }, Nil => False }, None => False };
+            let p1 = Bool::and_true_parts((i + 1).leb(s.na) && True, inner, okv);
+            let lt: (i < s.na) = omega(Nat::le_of_leb(i + 1, s.na, (Bool::and_true_parts((i + 1).leb(s.na), True, p1.left)).left));
+            // The view's one entry: of object `i`, its region the signature's steps at this function's levels.
+            let one: Exists<List<Step>>(λ ys => (s.sig_steps(all, sx) = Some(ys)) ∧ Exists<VEnt>(λ en => (s.ents(l) = [en]) ∧ ((en.obj = i) ∧ (en.reg = ys)))) =
+                (match s.sig_steps(all, sx) as λ o => s.sig_steps(all, sx) = o → (match o { Some(ys) => match s.ents(l) { Cons(en, rest) => match rest { Nil => en.obj.same(i) && Steps::same(en.reg, ys) && !en.mode.writes(), Cons(_, _) => False }, Nil => False }, None => False }) = True →
+                        Exists<List<Step>>(λ ys => (s.sig_steps(all, sx) = Some(ys)) ∧ Exists<VEnt>(λ en => (s.ents(l) = [en]) ∧ ((en.obj = i) ∧ (en.reg = ys)))) {
+                    None => λ _ no => absurd(no),
+                    Some(ys) => λ hs c => Exists(ys, ⟨hs, (match s.ents(l) as λ q => s.ents(l) = q → (match q { Cons(en, rest) => match rest { Nil => en.obj.same(i) && Steps::same(en.reg, ys) && !en.mode.writes(), Cons(_, _) => False }, Nil => False }) = True →
+                            Exists<VEnt>(λ en => (s.ents(l) = [en]) ∧ ((en.obj = i) ∧ (en.reg = ys))) {
+                        Nil => λ _ no => absurd(no),
+                        Cons(en, rest) => λ he c2 => (match rest as λ q => s.ents(l) = Cons(en, q) → (match q { Nil => en.obj.same(i) && Steps::same(en.reg, ys) && !en.mode.writes(), Cons(_, _) => False }) = True →
+                                Exists<VEnt>(λ en2 => (s.ents(l) = [en2]) ∧ ((en2.obj = i) ∧ (en2.reg = ys))) {
+                            Cons(_, _) => λ _ no => absurd(no),
+                            Nil => λ he2 c3 => {
+                                let q1 = Bool::and_true_parts(en.obj.same(i) && Steps::same(en.reg, ys), !en.mode.writes(), c3);
+                                let q2 = Bool::and_true_parts(en.obj.same(i), Steps::same(en.reg, ys), q1.left);
+                                Exists(en, ⟨he2, ⟨Nat::same_sound(en.obj, i, q2.left), Steps::same_sound(en.reg, ys, q2.right)⟩⟩)
+                            },
+                        })(he, c2),
+                    })(refl, c)⟩),
+                })(refl, p1.right);
+            match one {
+                ⟨ys, py⟩ => match py.right {
+                    ⟨en, pe⟩ => {
+                        let inents: Mem(en, s.ents(l)) = j(sym(pe.left), λ q _ => Mem(en, q), Inl(refl));
+                        let mem: Mem(en, s.views) = s.views.mem_filter(en, λ q => q.lvl.same(l), inents);
+                        let el: (en.lvl = l) = Nat::same_sound(en.lvl, l, s.views.mem_filter_holds(en, λ q => q.lvl.same(l), inents));
+                        // What the entry's object's root makes of the cell: its reference narrowed by the region.
+                        let refok = λ (q: Ref) (cq: cv = Refer(q)) => {
+                            let rk = inv.refs(x, l, hl, q, cq);
+                            let rv: (s.role(l) = KView) = j(el, λ k _ => s.role(k) = KView, (inv.vents(en, mem)).right.right);
+                            let any: VEnt::Any([en], λ e2 => ((root(e2.obj)).map(λ r0 => r0.narrow(Mach::ixs(tys, strs, m), s.unsteps(e2.reg))) = Some(q))) =
+                                j(pe.left, λ es _ => VEnt::Any(es, λ e2 => (root(e2.obj)).map(λ r0 => r0.narrow(Mach::ixs(tys, strs, m), s.unsteps(e2.reg))) = Some(q)),
+                                    j(rv, λ rr _ => match rr { KHold(o2, _) => root(o2) = Some(q),
+                                        KView => VEnt::Any(s.ents(l), λ e2 => (root(e2.obj)).map(λ r0 => r0.narrow(Mach::ixs(tys, strs, m), s.unsteps(e2.reg))) = Some(q)), KPlain => False, KGone => True }, rk));
+                            let at: ((root(en.obj)).map(λ r0 => r0.narrow(Mach::ixs(tys, strs, m), s.unsteps(en.reg))) = Some(q)) = match any { Inl(h1) => h1, Inr(no) => false_elim(no) };
+                            j(pe.right.left, λ k _ => (root(k)).map(λ r0 => r0.narrow(Mach::ixs(tys, strs, m), s.unsteps(en.reg))) = Some(q), at)
+                        };
+                        match argv(i, lt) {
+                            ⟨v, hv⟩ => j(sym(hv), λ q _ => (match q as λ _ => Type { Some(w) => match w as λ _ => Type { Refer(r) => cv = Refer(r.narrow(ws, sx)), Plain(_) => sound_heap::Value::refers(tys, cv) = False }, None => False }),
+                                (match v as λ u => vs.nth(i) = Some(u) → (match u as λ _ => Type { Refer(r) => cv = Refer(r.narrow(ws, sx)), Plain(_) => sound_heap::Value::refers(tys, cv) = False }) {
+                                    Refer(r) => λ hv2 => {
+                                        let rt: (root(i) = Some(r)) = Inv::arg_root(tys, strs, inv, ps, vs, ent, i, lt, Refer(r), hv2);
+                                        let rt2: (root(en.obj) = Some(r)) = j(sym(pe.right.left), λ k _ => root(k) = Some(r), rt);
+                                        let hh: (sound_heap::Value::refers(tys, (REnv::get(tys, m.env, s.var_at(l))).v) = True) = j(el, λ k _ => sound_heap::Value::refers(tys, (REnv::get(tys, m.env, s.var_at(k))).v) = True,
+                                            Inv::ent_refers(tys, strs, inv, s.na + s.nd, en, mem, (inv.vents(en, mem)).right.left, r, rt2));
+                                        let refers: (sound_heap::Value::refers(tys, cv) = True) = j(s.lvl_var(x, l, hl), λ y _ => sound_heap::Value::refers(tys, (REnv::get(tys, m.env, y)).v) = True, hh);
+                                        let inr: ((k: Nat) → k.member(Steps::lvls(ys)) = True → s.in_regions(k) = True) = λ k mk =>
+                                            s.region_lvl(en, mem, k, j(sym(pe.right.right), λ q _ => k.member(Steps::lvls(q)) = True, mk));
+                                        let sels: (Steps::sels(s.unsteps(ys), Mach::ixs(tys, strs, m)) = Steps::sels(sx, ws)) = s.sig_sels(all, ws, Mach::ixs(tys, strs, m), sw, sx, ys, py.left, inr);
+                                        (match cv as λ u => cv = u → sound_heap::Value::refers(tys, u) = True → u = Refer(r.narrow(ws, sx)) {
+                                            Plain(_) => λ _ no => absurd(no),
+                                            Refer(q) => λ cq _ => {
+                                                let at = refok(q, cq);
+                                                let qq: (r.narrow(Mach::ixs(tys, strs, m), s.unsteps(en.reg)) = q) = Option::some_inj(r.narrow(Mach::ixs(tys, strs, m), s.unsteps(en.reg)), q,
+                                                    trans(cong_fn(λ (o: Option<Ref>) => o.map(λ r0 => r0.narrow(Mach::ixs(tys, strs, m), s.unsteps(en.reg))), sym(rt)), at));
+                                                cong_fn(λ (z: Ref) => Refer(z), trans(sym(qq), j(sym(pe.right.right), λ q2 _ => r.narrow(Mach::ixs(tys, strs, m), s.unsteps(q2)) = r.narrow(ws, sx),
+                                                    cong_fn(λ (t: List<Sel>) => Ref(r.b, r.sels ++ t), sels))))
+                                            },
+                                        })(refl, refers)
+                                    },
+                                    Plain(d) => λ hv2 => {
+                                        let rn: (root(i) = None) = Inv::arg_root(tys, strs, inv, ps, vs, ent, i, lt, level2::Plain(d), hv2);
+                                        (match cv as λ u => cv = u → sound_heap::Value::refers(tys, u) = False {
+                                            Plain(_) => λ _ => refl,
+                                            Refer(q) => λ cq => {
+                                                let at = refok(q, cq);
+                                                absurd(trans(sym(at), cong_fn(λ (o: Option<Ref>) => o.map(λ r0 => r0.narrow(Mach::ixs(tys, strs, m), s.unsteps(en.reg))),
+                                                    rn)))
+                                            },
+                                        })(refl)
+                                    },
+                                })(hv)),
+                        }
+                    },
+                },
+            }
+        },
+    })(ok)
+}
+
+theorem Inv::ret_views(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>}, {root: Nat → Option<Ref>}, inv: Inv(tys, strs, s, e, m, h0, lent, root),
+    sim: Sim(tys, strs, s, e, m), ps: List<Param>, vs: List<Value(tys)>, ent: REnv::ArgsKept(tys, m.env, REnv(Cell::args(tys, ps, vs), Nil)), vl: vs.len() = s.na,
+    ws: List<Ix>, all: List<Nat>, sw: CSt::SigWords(s, all, ws, Mach::ixs(tys, strs, m)), rs: List<Result>):
+    (xs: List<Var>) → (ls: List<Nat>) → s.lvls(xs) = Some(ls) → s.returns_all(tys, strs, all, ls, rs) = True →
+    Value::Views(tys, strs, h0.len(), m.heap, vs, ws, rs, xs.map(λ x => (REnv::get(tys, m.env, x)).v))
+{
+    match rs {
+        Nil => λ _ _ _ _ => trivial,
+        Cons(r, rest) => λ xs => match xs {
+            Nil => λ ls hl ok => absurd(j(sym(Option::some_inj(Nil, ls, hl)), λ q _ => s.returns_all(tys, strs, all, q, Cons(r, rest)) = True, ok)),
+            Cons(x, xr) => λ ls hl ok => {
+                let a = Option::and_then_some(s.lvl(x), λ l => s.lvls(xr).map(λ lt => Cons(l, lt)), ls, hl);
+                match Option::map_some_inv(s.lvls(xr), λ (lt: List<Nat>) => Cons(a.witness, lt), ls, a.proof.right) {
+                    ⟨lr, pl⟩ => {
+                        let ok2: (s.returns_all(tys, strs, all, Cons(a.witness, lr), Cons(r, rest)) = True) = j(sym(pl.right), λ q _ => s.returns_all(tys, strs, all, q, Cons(r, rest)) = True, ok);
+                        let parts = Bool::and_true_parts(s.returns(tys, strs, all, a.witness, r), s.returns_all(tys, strs, all, lr, rest), ok2);
+                        ⟨Inv::ret_one(tys, strs, inv, sim, ps, vs, ent, vl, ws, all, sw, x, a.witness, a.proof.left, r.code, r.origin, parts.left),
+                            Inv::ret_views(tys, strs, inv, sim, ps, vs, ent, vl, ws, all, sw, rest, xr, lr, pl.left, parts.right)⟩
+                    },
+                }
+            },
+        },
+    }
+}
+
+// An owning result, as `CSt::returns` checks it: a level holding its object
+// to own, the object's root the result's whole block. A fresh one's object
+// is made here (`made`); a parameter's is the argument (`Lendable.whole`:
+// the parameter is a taken one by `Sig::ok`, and one of a plain code is
+// passed by value, so does not refer).
+theorem Inv::owned_hold(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>}, {root: Nat → Option<Ref>}, inv: Inv(tys, strs, s, e, m, h0, lent, root),
+    ps: List<Param>, vs: List<Value(tys)>, ent: REnv::ArgsKept(tys, m.env, REnv(Cell::args(tys, ps, vs), Nil)), vl: vs.len() = s.na, ld: Lendable(tys, strs, ps, h0, vs),
+    all: List<Nat>, x: Var, l: Nat, hl: s.lvl(x) = Some(l), code: Shape, og: Origin, ok: s.returns(tys, strs, all, l, Result(code, og)) = True,
+    pk: (i: Nat) → og = OParam(i) → Exists<Param>(λ p => (ps.nth(i) = Some(p)) ∧ (p.mode = ByTake)),
+    b: Nat, fb: Value::owned_b(tys, og, (REnv::get(tys, m.env, x)).v) = Some(b)):
+    Exists<Nat>(λ o => (s.role(l) = KHold(o, AcOwn)) ∧ Exists<Ref>(λ q => (root(o) = Some(q)) ∧ ((q.b = b) ∧ (q.sels = Nil))))
+{
+    let cv = (REnv::get(tys, m.env, x)).v;
+    (match og as λ o2 => og = o2 → s.returns(tys, strs, all, l, Result(code, o2)) = True → Value::owned_b(tys, o2, cv) = Some(b) →
+            Exists<Nat>(λ o => (s.role(l) = KHold(o, AcOwn)) ∧ Exists<Ref>(λ q => (root(o) = Some(q)) ∧ ((q.b = b) ∧ (q.sels = Nil)))) {
+        OView(_, _) => λ _ _ no => absurd(no),
+        OParam(i) => λ eo okp => {
+            let rp = s.returns_param(tys, strs, all, l, code, i, okp);
+            (match cv as λ u => cv = u → Value::owned_b(tys, OParam(i), u) = Some(b) →
+                    Exists<Nat>(λ o => (s.role(l) = KHold(o, AcOwn)) ∧ Exists<Ref>(λ q => (root(o) = Some(q)) ∧ ((q.b = b) ∧ (q.sels = Nil)))) {
+                Plain(_) => λ _ no => absurd(no),
+                Refer(q) => λ cq fq => {
+                    let qb: (q.b = b) = Option::some_inj(q.b, b, fq);
+                    let rt: (root(i) = Some(q)) = j(rp.right, λ rr _ => match rr { KHold(o2, _) => root(o2) = Some(q),
+                        KView => VEnt::Any(s.ents(l), λ en => (root(en.obj)).map(λ r0 => r0.narrow(Mach::ixs(tys, strs, m), s.unsteps(en.reg))) = Some(q)), KPlain => False, KGone => True },
+                        inv.refs(x, l, hl, q, cq));
+                    match List::nth_present(vs, i, omega(rp.left, vl)) {
+                        ⟨v, hv⟩ => {
+                            let ar: (root(i) = Value::ref_of(tys, v)) = Inv::arg_root(tys, strs, inv, ps, vs, ent, i, rp.left, v, hv);
+                            let vq: (v = Refer(q)) = (match v as λ u => Some(q) = Value::ref_of(tys, u) → u = Refer(q) {
+                                Plain(_) => λ no => absurd(no),
+                                Refer(q2) => λ h => cong_fn(λ (z: Ref) => Refer(z), sym(Option::some_inj(q, q2, h))),
+                            })(trans(sym(rt), ar));
+                            let hv2: (vs.nth(i) = Some(Refer(q))) = j(vq, λ u _ => vs.nth(i) = Some(u), hv);
+                            match pk(i, eo) {
+                                ⟨p, pp⟩ => {
+                                    let sn: (q.sels = Nil) = (match Shape::plain(tys, strs, p.code) as λ c => Shape::plain(tys, strs, p.code) = c → q.sels = Nil {
+                                        True => λ pl => false_elim(ld.plain(i, p, pp.left, pp.right, pl, q, hv2)),
+                                        False => λ pl => (ld.whole(i, p, pp.left, pp.right, pl, q, hv2)).left,
+                                    })(refl);
+                                    Exists(i, ⟨rp.right, Exists(q, ⟨rt, ⟨qb, sn⟩⟩)⟩)
+                                },
+                            }
+                        },
+                    }
+                },
+            })(refl)
+        },
+        OFresh => λ _ okf => (match cv as λ u => cv = u → Value::owned_b(tys, OFresh, u) = Some(b) →
+                Exists<Nat>(λ o => (s.role(l) = KHold(o, AcOwn)) ∧ Exists<Ref>(λ q => (root(o) = Some(q)) ∧ ((q.b = b) ∧ (q.sels = Nil)))) {
+            Plain(_) => λ _ no => absurd(no),
+            Refer(q) => λ cr fq => {
+                let qb: (q.b = b) = Option::some_inj(q.b, b, fq);
+                (match s.role(l) as λ rr => s.role(l) = rr →
+                        (match rr { KPlain => True, KHold(o, a) => !Shape::plain(tys, strs, code) && s.na.leb(o) && (match a { AcOwn => True, AcRead => False, AcWrite => False }), KView => False, KGone => False }) = True →
+                        (match rr { KHold(o, _) => root(o) = Some(q), KView => VEnt::Any(s.ents(l), λ en => (root(en.obj)).map(λ r0 => r0.narrow(Mach::ixs(tys, strs, m), s.unsteps(en.reg))) = Some(q)), KPlain => False, KGone => True }) →
+                        Exists<Nat>(λ o => (s.role(l) = KHold(o, AcOwn)) ∧ Exists<Ref>(λ q2 => (root(o) = Some(q2)) ∧ ((q2.b = b) ∧ (q2.sels = Nil)))) {
+                    KPlain => λ _ _ no => false_elim(no),
+                    KView => λ _ no _ => absurd(no),
+                    KGone => λ _ no _ => absurd(no),
+                    KHold(o, a) => λ hr c rt => {
+                        let p1 = Bool::and_true_parts(!Shape::plain(tys, strs, code) && s.na.leb(o), match a { AcOwn => True, AcRead => False, AcWrite => False }, c);
+                        let p2 = Bool::and_true_parts(!Shape::plain(tys, strs, code), s.na.leb(o), p1.left);
+                        let ho: (s.role(l) = KHold(o, AcOwn)) = (match a as λ a2 => (match a2 { AcOwn => True, AcRead => False, AcWrite => False }) = True → s.role(l) = KHold(o, a2) → s.role(l) = KHold(o, AcOwn) {
+                            AcOwn => λ _ h => h,
+                            AcRead => λ no _ => absurd(no),
+                            AcWrite => λ no _ => absurd(no),
+                        })(p1.right, hr);
+                        Exists(o, ⟨ho, Exists(q, ⟨rt, ⟨qb, (inv.made(o, Nat::le_of_leb(s.na, o, p2.right), q, rt)).right⟩⟩)⟩)
+                    },
+                })(refl, okf, inv.refs(x, l, hl, q, cr))
+            },
+        })(refl),
+    })(refl, ok, fb)
+}
+
+// No result after an owning one in `q0`'s block owns it: its holder is at
+// another level (`CSt::fresh_once`, which a parameter answered back obeys as
+// a made object does), so of another object (`one`), and two objects one of
+// which may change are apart (`apart`), which two whole references into
+// one block are not.
+theorem Inv::ret_not_owned(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>}, {root: Nat → Option<Ref>}, inv: Inv(tys, strs, s, e, m, h0, lent, root),
+    ps: List<Param>, vs: List<Value(tys)>, ent: REnv::ArgsKept(tys, m.env, REnv(Cell::args(tys, ps, vs), Nil)), vl: vs.len() = s.na, ld: Lendable(tys, strs, ps, h0, vs),
+    all: List<Nat>, l0, o0: Nat, q0: Ref, b0: l0 < s.na + s.nd, hr0: s.role(l0) = KHold(o0, AcOwn), rt0: root(o0) = Some(q0), sn0: q0.sels = Nil, rs: List<Result>):
+    (k: Nat) → (xs: List<Var>) → (ls: List<Nat>) → s.lvls(xs) = Some(ls) → s.returns_all(tys, strs, all, ls, rs) = True → Sig::ok_from(tys, strs, ps, rs, k) = True → l0.member(ls) = False →
+    Value::NotOwned(tys, q0.b, rs, xs.map(λ x => (REnv::get(tys, m.env, x)).v))
+{
+    match rs {
+        Nil => λ _ _ _ _ _ _ _ => trivial,
+        Cons(r, rest) => λ k xs => match xs {
+            Nil => λ _ _ _ _ _ => trivial,
+            Cons(x, xr) => λ ls hl ok sok nm => {
+                let a = Option::and_then_some(s.lvl(x), λ l => s.lvls(xr).map(λ lt => Cons(l, lt)), ls, hl);
+                match Option::map_some_inv(s.lvls(xr), λ (lt: List<Nat>) => Cons(a.witness, lt), ls, a.proof.right) {
+                    ⟨lr, pl⟩ => {
+                        let l = a.witness;
+                        let ok2: (s.returns_all(tys, strs, all, Cons(l, lr), Cons(r, rest)) = True) = j(sym(pl.right), λ q _ => s.returns_all(tys, strs, all, q, Cons(r, rest)) = True, ok);
+                        let parts = Bool::and_true_parts(s.returns(tys, strs, all, l, r), s.returns_all(tys, strs, all, lr, rest), ok2);
+                        let sp = Bool::and_true_parts(Result::ok(tys, strs, ps, r, k), Sig::ok_from(tys, strs, ps, rest, k + 1), sok);
+                        let pk: ((i: Nat) → r.origin = OParam(i) → Exists<Param>(λ p => (ps.nth(i) = Some(p)) ∧ (p.mode = ByTake))) =
+                            λ i og => match Result::ok_param(tys, strs, ps, r, k, sp.left, i, og) { ⟨p, pp⟩ => Exists(p, ⟨pp.left, pp.right.left⟩) };
+                        let nm3 = Nat::member_cons_false(l0, l, lr, j(sym(pl.right), λ q _ => l0.member(q) = False, nm));
+                        ⟨λ fb => match Inv::owned_hold(tys, strs, inv, ps, vs, ent, vl, ld, all, x, l, a.proof.left, r.code, r.origin, parts.left, pk, q0.b, fb) {
+                            ⟨o, po⟩ => match po.right {
+                                ⟨q, pq⟩ => {
+                                    let ne: ¬(o = o0) = λ eo => inv.one(l0, l, o0, AcOwn, AcOwn, b0, s.lvl_below(x, l, a.proof.left), nm3.left, hr0,
+                                        j(eo, λ z _ => s.role(l) = KHold(z, AcOwn), po.left));
+                                    let ch: s.Changes(o0) = Inl(Exists(l0, ⟨b0, Exists(AcOwn, ⟨hr0, refl⟩)⟩));
+                                    let ap: Sel::Apart(tys, strs, q0.sels, q.sels) = inv.apart(o0, o, λ eq => ne(sym(eq)), ch, q0, q, rt0, pq.left)(sym(pq.right.left));
+                                    Sel::apart_nil_nil(tys, strs, j(pq.right.right, λ z _ => Sel::Apart(tys, strs, Nil, z), j(sn0, λ z _ => Sel::Apart(tys, strs, z, q.sels), ap)))
+                                },
+                            },
+                        }, Inv::ret_not_owned(tys, strs, inv, ps, vs, ent, vl, ld, all, l0, o0, q0, b0, hr0, rt0, sn0, rest, k + 1, xr, lr, pl.left, parts.right, sp.right, nm3.right)⟩
+                    },
+                }
+            },
+        },
+    }
+}
+
+// The owning results at `Ret` are in different blocks (`Value::OwnedApart`).
+theorem Inv::ret_owned_apart(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>}, {root: Nat → Option<Ref>}, inv: Inv(tys, strs, s, e, m, h0, lent, root),
+    ps: List<Param>, vs: List<Value(tys)>, ent: REnv::ArgsKept(tys, m.env, REnv(Cell::args(tys, ps, vs), Nil)), vl: vs.len() = s.na, ld: Lendable(tys, strs, ps, h0, vs),
+    all: List<Nat>, rs: List<Result>):
+    (k: Nat) → (xs: List<Var>) → (ls: List<Nat>) → s.lvls(xs) = Some(ls) → s.returns_all(tys, strs, all, ls, rs) = True → s.fresh_once(ls, rs) = True → Sig::ok_from(tys, strs, ps, rs, k) = True →
+    Value::OwnedApart(tys, rs, xs.map(λ x => (REnv::get(tys, m.env, x)).v))
+{
+    match rs {
+        Nil => λ _ _ _ _ _ _ _ => trivial,
+        Cons(r, rest) => λ k xs => match xs {
+            Nil => λ _ _ _ _ _ => trivial,
+            Cons(x, xr) => λ ls hl ok once sok => {
+                let a = Option::and_then_some(s.lvl(x), λ l => s.lvls(xr).map(λ lt => Cons(l, lt)), ls, hl);
+                match Option::map_some_inv(s.lvls(xr), λ (lt: List<Nat>) => Cons(a.witness, lt), ls, a.proof.right) {
+                    ⟨lr, pl⟩ => {
+                        let l = a.witness;
+                        let ok2: (s.returns_all(tys, strs, all, Cons(l, lr), Cons(r, rest)) = True) = j(sym(pl.right), λ q _ => s.returns_all(tys, strs, all, q, Cons(r, rest)) = True, ok);
+                        let parts = Bool::and_true_parts(s.returns(tys, strs, all, l, r), s.returns_all(tys, strs, all, lr, rest), ok2);
+                        let once2 = j(sym(pl.right), λ q _ => s.fresh_once(q, Cons(r, rest)) = True, once);
+                        let op = Bool::and_true_parts(match r.origin { OFresh => match s.role(l) { KHold(_, _) => !l.member(lr), KPlain => True, KView => True, KGone => True }, OParam(_) => match s.role(l) { KHold(_, _) => !l.member(lr), KPlain => True, KView => True, KGone => True }, OView(_, _) => True },
+                            s.fresh_once(lr, rest), once2);
+                        let sp = Bool::and_true_parts(Result::ok(tys, strs, ps, r, k), Sig::ok_from(tys, strs, ps, rest, k + 1), sok);
+                        let pk: ((i: Nat) → r.origin = OParam(i) → Exists<Param>(λ p => (ps.nth(i) = Some(p)) ∧ (p.mode = ByTake))) =
+                            λ i og => match Result::ok_param(tys, strs, ps, r, k, sp.left, i, og) { ⟨p, pp⟩ => Exists(p, ⟨pp.left, pp.right.left⟩) };
+                        let cv = (REnv::get(tys, m.env, x)).v;
+                        let head: (match Value::owned_b(tys, r.origin, cv) as λ _ => Type { Some(b) => Value::NotOwned(tys, b, rest, xr.map(λ y => (REnv::get(tys, m.env, y)).v)), None => True }) =
+                            (match Value::owned_b(tys, r.origin, cv) as λ ob => Value::owned_b(tys, r.origin, cv) = ob →
+                                    (match ob as λ _ => Type { Some(b) => Value::NotOwned(tys, b, rest, xr.map(λ y => (REnv::get(tys, m.env, y)).v)), None => True }) {
+                                None => λ _ => trivial,
+                                Some(b) => λ fb => match Inv::owned_hold(tys, strs, inv, ps, vs, ent, vl, ld, all, x, l, a.proof.left, r.code, r.origin, parts.left, pk, b, fb) {
+                                    ⟨o, po⟩ => match po.right {
+                                        ⟨q, pq⟩ => {
+                                            // A level answered as an owning result is not answered again.
+                                            let hm: ((match s.role(l) { KHold(_, _) => !l.member(lr), KPlain => True, KView => True, KGone => True }) = True) =
+                                                (match r.origin as λ o2 => Value::owned_b(tys, o2, cv) = Some(b) →
+                                                        (match o2 { OFresh => match s.role(l) { KHold(_, _) => !l.member(lr), KPlain => True, KView => True, KGone => True }, OParam(_) => match s.role(l) { KHold(_, _) => !l.member(lr), KPlain => True, KView => True, KGone => True }, OView(_, _) => True }) = True →
+                                                        (match s.role(l) { KHold(_, _) => !l.member(lr), KPlain => True, KView => True, KGone => True }) = True {
+                                                    OFresh => λ _ h => h,
+                                                    OParam(_) => λ _ h => h,
+                                                    OView(_, _) => λ no _ => absurd(no),
+                                                })(fb, op.left);
+                                            let nm: (!l.member(lr) = True) = j(po.left, λ rr _ => (match rr { KHold(_, _) => !l.member(lr), KPlain => True, KView => True, KGone => True }) = True, hm);
+                                            j(pq.right.left, λ z _ => Value::NotOwned(tys, z, rest, xr.map(λ y => (REnv::get(tys, m.env, y)).v)),
+                                                Inv::ret_not_owned(tys, strs, inv, ps, vs, ent, vl, ld, all, l, o, q, s.lvl_below(x, l, a.proof.left), po.left, pq.left, pq.right.right, rest, k + 1, xr, lr, pl.left, parts.right, sp.right,
+                                                    Bool::false_of_not_true(l.member(lr), nm)))
+                                        },
+                                    },
+                                },
+                            })(refl);
+                        ⟨head, Inv::ret_owned_apart(tys, strs, inv, ps, vs, ent, vl, ld, all, rest, k + 1, xr, lr, pl.left, parts.right, op.right, sp.right)⟩
+                    },
+                }
+            },
+        },
+    }
+}
+
+// The `Ret` stage: from the invariant, `Like`, and the argument cells as
+// passed, what `SafeAt` asks of the answer the run gives there.
+theorem Body::stage_ret(tys: Nat → Type, strs: Strs(tys), sig: Sig, {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>}, {root: Nat → Option<Ref>}, inv: Inv(tys, strs, s, e, m, h0, lent, root),
+    ds: List<Dyn(tys)>, lk: Like(tys, strs, sig.params, ds, s, e), vs: List<Value(tys)>, ent: REnv::ArgsKept(tys, m.env, REnv(Cell::args(tys, sig.params, vs), Nil)),
+    na: s.na = sig.params.len(), vl: vs.len() = s.na, dl: ds.len() = s.na, ld: Lendable(tys, strs, sig.params, h0, vs), sok: Sig::ok(tys, strs, sig) = True,
+    xs: List<Var>, cd: Shape::same_list(s.codes(xs), sig.ret_codes()) = True, ok: s.ret(tys, strs, sig, xs) = True):
+    RetOk(tys, strs, sig, vs, ds, h0, lent, xs.map(λ x => (REnv::get(tys, m.env, x)).v), m.heap, xs.map(λ x => Env::get(tys, e, x)))
+{
+    let ri = s.ret_inv(tys, strs, sig, xs, ok);
+    let sim = Inv::sim_now(tys, strs, inv, ri.none);
+    let nr = sig.results.len();
+    let aw0: Param::AllW(sig.params, sig.params.len(), sig.written()) = Param::written_all(sig.params, sig.params, 0, λ i p h => {
+        let ee: (i = i + 0) = omega();
+        j(ee, λ n _ => sig.params.nth(n) = Some(p), h)
+    }, omega());
+    let aw: Param::AllW(sig.params, s.na, sig.written()) = j(sym(na), λ n _ => Param::AllW(sig.params, n, sig.written()), aw0);
+    let wr = Inv::ret_written(tys, strs, inv, sig.params, ds, lk, vs, vl, ent, sig.written(), aw, xs.drop(nr), ri.ls.drop(nr), s.lvls_drop(xs, ri.ls, nr, ri.lvls), ri.gives);
+    let wr2: Value::Written(tys, strs, vs, ds, sig.written(), (xs.map(λ x => (REnv::get(tys, m.env, x)).v)).drop(nr), (xs.map(λ x => Env::get(tys, e, x))).drop(nr)) =
+        j(sym(xs.map_drop(λ x => Env::get(tys, e, x), nr)), λ q _ => Value::Written(tys, strs, vs, ds, sig.written(), (xs.map(λ x => (REnv::get(tys, m.env, x)).v)).drop(nr), q),
+            j(sym(xs.map_drop(λ x => (REnv::get(tys, m.env, x)).v, nr)), λ q _ => Value::Written(tys, strs, vs, ds, sig.written(), q, (xs.drop(nr)).map(λ x => Env::get(tys, e, x))), wr));
+    let sw = Inv::ret_words(tys, strs, inv, ri.none, sig.params, ds, lk, dl, xs, ri.ls, ri.lvls);
+    RetOk(Sim::read_all(tys, strs, sim, xs, Nil, ri.reads), wr2, inv.frame.eq, ⟨inv.grows, inv.stays⟩,
+        Inv::ret_views(tys, strs, inv, sim, sig.params, vs, ent, vl, Dyn::ixs(tys, ds ++ xs.map(λ x => Env::get(tys, e, x))), ri.ls, sw, sig.results, xs, ri.ls, ri.lvls, ri.rets),
+        Inv::ret_owned_apart(tys, strs, inv, sig.params, vs, ent, vl, ld, ri.ls, sig.results, 0, xs, ri.ls, ri.lvls, ri.rets, ri.once, (Bool::and_true_parts(Sig::ok_from(tys, strs, sig.params, sig.results, 0), Sig::once(tys, strs, sig.params, sig.results), sok)).left),
+        Sim::coded_res(tys, strs, sim, sig.written().map(λ i => sig.params.nth(i).map(λ p => p.code).unwrap_or(SWord(WNat))), sig.results, xs, ri.ls, ri.lvls, cd))
+}

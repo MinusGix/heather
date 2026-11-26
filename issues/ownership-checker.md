@@ -29,141 +29,111 @@ Items 1 and 2 are definitions and evaluation; item 3 waits for the coordinating 
 
 `CheckSound` has an inhabitant for the fragment, the experiments' programs are probes or theorems of the real modules, and the experiment modules are gone.
 
-## Handoff (2026-11-26, end of the eleventh session: step 0 landed, P5 begun)
+## Handoff (2026-11-26, end of the twelfth session: the run as the machine's reading, `Back`, `Len`, `Sig::ok`, the split)
 
-Continue on branch `claude/ownership-checker-sound`. Read design §23.21
-(this session) after §23.17–§23.20. The call's parts are at the end of
-`lib/lang/ownership/sound.hthr`, after `LentFrame::call`. The coordinating
-session's branch (`origin/claude/focused-darwin-it31c1`, design §24) is
-merged in: put new §23 subsections **before the line `## 24.`**. Findings
-from its soundness search arrive batched, each to be landed as its own
-commit before continuing.
+Continue on branch `claude/ownership-checker-sound`. **The plan changed**
+(the repository owner's decision, through the coordinating session): the
+proof is to be made compositional now, as restated in §26 of the design note
+on the coordinating branch (`origin/claude/focused-darwin-it31c1`, read it
+with `git show`, do not merge): agreement per variable outside the places of
+its live write views plus a sync clause for a written-back view, instead of
+`Sim` of the patched environment; one disjointness clause over footprints;
+shape-stability as one invariant. Under it a written argument's slot is a
+write view of the argument at the whole place, so the call's P4–P6 as built
+are not needed. §26.5 (the run stuck wherever the meaning takes a fallback)
+belongs with the restated stages. P5 on the present invariant was dropped:
+`Inv::bind_param_result`, `Inv::bind_view_result`, `MovedArg`, `ViewArg`
+are in history at `0e42cd2`, `f3925c5` (reverted by `1a47948`, `320b40f`).
 
-**Done this session:**
-- **Step 0, the four rulings** (§23.21; suite green at da2faef):
-  - A. `SafeAt`'s Done part concludes the results coded
-    (`Dyn::Coded(…, (p.w(g, ds)).take(nres), sig.res_params())`); a
-    primitive's by the world's law `Prog::Coded`, a premise of
-    `CheckSound`; a body's from `Ret` (`RetOk.coded`, `Sim::coded_res`).
-  - B. `Value::OwnedApart` (every owning result, fresh or a moved
-    parameter) replaces `FreshApart`, proved at `Ret`
-    (`Inv::owned_hold`, `ret_not_owned`, `ret_owned_apart`). The
-    caller-side `CSt::holds` is gone. `CSt::returns` asks a parameter
-    answered back to be held `AcOwn` (`CSt::returns_param`): a test that
-    never refuses under `Sig::ok`, standing in for an invariant.
-  - B′/C. **`Sig::ok`** (checker.hthr), tested in `Func::verdict` and at
-    each call: `OParam` names a taken parameter, `OView` a read one; a
-    result's code is what its origin gives (the parameter's, or the code at
-    the view's steps by `Shape::steps_ok`); a view's steps name parameters
-    and earlier results only (the telescope).
-  - D. `CSt::result`'s `OView` case runs `atoms_ok` on the levels its
-    region names.
-  - `Body::stage_ret` now takes `ld: Lendable`, `sok: Sig::ok` and `cd`
-    (the `Ret` code check).
-- **P5 begun**: `Ref::Grown` (how a binding leaves the roots: all kept, a
-  new one the block of the result that owns it) and
-  **`Inv::bind_fresh_result`**: a fresh result bound, all three kinds
-  (plain value; holder with no root; holder of the callee's block), from
-  per-result facts `SafeAt` gives.
-- **`Inv.hown`** (`CSt::HOwn`, a gap in the proof's own invariant, §23.21):
-  a level holding an object to own whose object has a root has an owned
-  cell; added at all fourteen `Inv` builders (`hown_push`, `hown_sub`,
-  `hown_gone`, `Cell::args_owned`; `push_hold` takes `hwn`).
+**Done this session** (design §23.22, §23.23):
+- The run as the machine's reading (`b4becf9`): a written parameter's slot
+  after a call is the argument where it refers (`Value::slots`); a store is
+  stuck outside the activation's `Act` (`lent` of the entry's arguments,
+  `h0` its heap length; `Act::may`), the write stages meeting it from
+  `Inv.owned` (`Act::may_owned`); `Stepped.runs` at `Act(lent, h0.len())`.
+- `Back(p, x)`, the write-back as its own statement (`5070b13`): meaning a
+  write; checker `CSt::back_of` (`Write` refused where it would be a
+  write-back, `Back` where not; `writes_back` names `Back`); run the identity
+  where `x`'s cell refers, `Stmt::write_run` where it is a copy. The run's
+  reference test of `b4becf9` is gone.
+- `Len(p, w)` (`c512fee`): a place's length as a word, checked as `Read` of
+  a sequence, owing `RLen(p, w)` (a new residual kind, `Width::Holds`) at a
+  bounded width; `Stmt::stage_len`.
+- `Sig::ok`: `Sig::once` (no parameter answered twice) and `OParam` only of a
+  taken parameter whose code moves (`c512fee`, `fc573b0`).
+- `Inv.cfit` over views to write only (`65d5c1a`, a proof-side gap).
+- `sound.hthr` split mechanically (`c583fcd`), no statement changed:
+  `sound_paths` (1364 lines), `sound_state` (1565), `sound_heap` (2818),
+  `sound_inv` (3844), `sound_write` (2055), `sound_stages` (1340),
+  `sound_like` (864), `sound_ret` (533), `sound_call` (1941); `sound.hthr`
+  is the map and imports them all. With `--cache`, an edit to a module's last
+  declaration checks in one to two seconds for each module. A declaration
+  sits in the earliest module its kind and its dependencies allow (the
+  splitter is a script; regenerate nothing by hand: edit the modules now).
+  Where std declares the same name (`Bool::or_false_parts`, …) the uses are
+  qualified by their sound module (`sound_paths::Bool::…`); `Slot` is
+  `sound_heap::Slot` past `sound_heap` (store.hthr has an `inductive Slot`).
 
-**Next, in this order:**
-0. **The coordinating session's run ruling (2026-11-26), its own step,
-   before P6** (it changes what P6 is built on; two other sessions wait to
-   merge it). The principle: **level 2's run is the machine's reading**;
-   where the run transports, stores or allows a store the machine does not,
-   the run changes once and `check_sound` says it of every checked program.
-   For each item: probes by evaluation in `run_tests` first (a program
-   whose run differs before and after, and one whose run does not), then
-   the proof repaired. If any of 1–3 costs more in the proved stages than
-   it reads, stop and tell the coordinating session with counts. Report
-   when landed, with the suite line.
-   1. **A referring written parameter is not transported back**: after a
-      call, the caller's slot for a written parameter whose argument refers
-      is the argument's own cell, whatever the callee's `Ret` listed; a
-      plain one's value comes back as now. `Answer` and `SafeAt`'s `Written`
-      keep their shape. For P6 a simplification: the slot's cell is the
-      argument's by the run.
-   2. **The run's `Back` of a cell that refers is the identity** (the writes
-      went through in place; the meaning does the put). A plain copy's
-      `Back` stores as now. The write-back stage's referring cases lose
-      their store; say which of the four cases change.
-   3. **A store is stuck outside what the activation may change**: a store
-      through a reference is stuck unless the reference is under one of the
-      activation's references lent to change (`Value::lent` of the entry's
-      arguments) or its block was made since the activation's entry. The
-      invariant has both as indices (`lent`, `h0`) and `owned` says a
-      changing object's root is in one or past the other, so each write
-      stage gains one obligation it can meet. Carry the two as parameters of
-      the body's run, not fields of `Mach`, unless a cleaner place shows.
-      (`Heap::Frame` says a block not lent keeps its value, not that it was
-      never stored to; the bytes level needs the second.)
-   4. **A statement reading a place's length as a word** (the body has none;
-      `issues/ownership-branch-on-object-length.md`): checker, meaning, run
-      and stage as for `Read` of a plain part, through the sequence
-      instance's own length. Not necessarily in the commit of 1–3, but
-      before the body induction. **Send the coordinating session its name
-      and shape in one line before building.**
-   Do not edit `lib/lang/ownership/sequences.hthr` until the coordinating
-   session says (the slice session is adding an instance at its end).
-1. **P5, the moved result** (finish P5 first only if it is cheaper than
-   rebuilding it on the changed run; the ruling says "finish the piece of P5
-   you are in, then do this", and the eleventh session stopped at a piece's
-   end): `Inv::bind_param_result` beside
-   `bind_fresh_result`, on `CSt::result` at `OParam(i)` (decided by the
-   parameter's code since 416d51b):
-   - plain code: the argument was passed by value (`Lendable.plain`), so
-     `ViewIs` gives a plain cell: `push_plain`;
-   - moving, `s0.role(l) = KHold(o, AcOwn)` at the argument's level, two
-     cases by the object's root before the call:
-     - `root(o) = Some(r)`: the holder's cell is owned (`Inv.hown`, new
-       this session) and refers to `r` (`href`), so `Cell::pass` handed `r`
-       over and `ViewIs` says the result is `Refer(r)`, owned by
-       `Cell::results`: `bind_moved` (generalise it to a cell `c` with
-       `c.v = Refer(r)`, `c.own = True`; record eta holds by `refl`);
-     - `root(o) = None`: the cell is plain (`refs`), so is the result:
-       `push_hold` with `rf`/`hrf`/`hwn` vacuous.
-   - The facts about `o` at the binding state (`o < s.nobj`, no level
-     holding it, its root alone in its block, lent or made, apart) are the
-     fold's: the moved holder is gone after the lends (`CSt::lend_take`); no
-     other old level holds `o` (`one`); an earlier result holding `o` would
-     be a second owning result in `r.b` (`OwnedApart`, both `Refer(r)` by
-     `ViewIs`); an earlier fresh result's block is at or past the call's
-     heap length, the argument's below it (`Lendable.live`).
-2. **P5, the view result**: from `Inv::push_view`, its region's levels
-   plain by `atoms_ok` (ruling D) and bound before it (the telescope).
-3. **P5, the fold** over `CSt::results` and `Cell::results`/`Dyn::take_n`
-   (split lemmas: the first `nres` cells are the results', the rest the
-   slots'). Carry, from the pre-call `s`: the same `na`; the old levels'
-   roles as after the lends; the old views kept, new entries at new levels,
-   `Reading` and back; `Ref::Grown` step by step, which with `OwnedApart`
-   discharges the next fresh result's `fr`. `SafeAt` gives per result:
-   `ReadAll` (the cell reads `d`), `Coded` (`d.code = r.code`), `Views`
-   (`ViewIs`), the cell's `own` by `Cell::results` (`owns && refers`).
-4. P6 by peeling (§23.20: `BackAt.nk` weakened to pending children, through
-   `step_keeps` and `CSt::noanc`), P7–P9, then report to the coordinating
-   session.
+**Probes whose bodies changed from `Write` to `Back`** (for the seam's
+session, to find its own write-backs): in `checker_tests.hthr` the functions
+`after_call`, `back_under` (its two write-backs onto parents; its first
+write stays a `Write`), `between`, `between_after`, `calls_wprim`,
+`copy_caller`, `lend_plain_back`, `lend_under`, `lends_one`, `loan`,
+`moved`, `nested_two`, `one_window`, `outer`, `outer2`, `peek`,
+`unreturned`, `written`, `zero_caller` (and the new `back_one`,
+`back_not_back`); in `run_tests.hthr` the new `back_read_r`,
+`back_copy_read_r`, `back_copy_plain_r`. Rule: a write whose value variable is a view to write
+opened on the written root at the written steps is a `Back`.
+
+**The invariant's clauses sorted** (for the restatement; `Inv` in
+`sound_inv.hthr`, with the statement kind that first needed each):
+- *The checker's state alone*: `one` (a holder per object: `Take`, the
+  call's moved result), `words` (region levels plain and bound: `View`'s
+  atoms), `held` (holders' objects exist: `Fresh`), `vents` (entries at live
+  view levels: `View`), `chain` (an entry's parent below it and its region
+  the parent's extended: `View`), `wpar` (a view to write's parent view is a
+  view to write: the writes through views), `nbase` (`Ret`).
+- *The roots index against the state* (no heap, no cells): `apart` (objects
+  that change are apart: writes), `owned` (a changing object's root lent or
+  made: `Ret`'s frame, and now `Act::may`), `young` (`Fresh`), `made` (made
+  objects whole and past `h0`: `Ret`).
+- *The heap*: `inheap` (roots in the heap: `Fresh`), `bare` (roots' blocks
+  have no holes: `Fresh`, writes), `frame` (`LentFrame`, the lens equation
+  against `h0`: writes, `Ret`), `grows`, `stays` (the call).
+- *The cells*: `refs` (a cell's reference is its root narrowed: `View`,
+  writes), `own` (an owned cell's block is its object's alone: `Death`,
+  `Take`), `uni` (a view refers iff its parent does: the write-back), `excl`
+  and `sib` (live views to write apart from the rest at the run's words: the
+  writes, the write-back), `cfit` (a view to write over a copy fits it: the
+  write-back of a copy), `args` (`Ret`'s arguments as passed), `href` and
+  `hown` (a holder's cell refers to and owns its root: the call's moved
+  results, P5).
+- *Only for the patched meaning*: `sim` (`Sim` of `s.patched(e, m)`: a
+  pending chain's ancestors read as if written up, D2 §23.15), with `Like`
+  (a separate record, §23.16) carrying what the meaning keeps of a view to
+  write on a pending chain. The restatement replaces both with agreement
+  outside live write views and a sync clause.
+
+**Next, in order** (the coordinating session's list; ask it for the order
+of the restatement's pieces): the restatement of §26 on the split modules,
+starting from the clauses above; the body induction; joins, `Jump`, fuel,
+`CheckSound`; the experiments retired.
 
 **Traps found this session:**
-- `fn Roots::Grown` fails: a member needs an existing owner type
-  (`Ref::Grown`).
-- A `let` typed `(match … ) = True` must be parenthesised whole:
-  `let h: ((match …) = True) = …`.
-- A value `Cell(Refer(Ref(b, Nil)), True)` in a type cannot infer `tys`
-  even under `let x: (… = c)`; bind `let mk = λ (u: Value(tys)) (z: Bool) =>
-  Cell(u, z)` and a typed `let rq0: Value(tys) = Refer(…)`.
-- `j(eq, P, P(a))` rewrites forward to `P(b)`: to get a property of `c.v`
-  from one of `Refer(q)` use `sym(cq)`.
-- `git checkout <file>` to clean a scratch edit reverts all of the file's
-  work: copy scratch files to the scratchpad instead.
-- The full `sound.hthr` check **without** `--cache` takes about three
-  minutes; with the cache after an edit it took ten or more. Check without
-  it; `--timings` with `.open.tsv` names the item running.
-- Before naming a lemma, grep: `CSt::role_of_own` and `Cell::args_own`
-  already existed (a duplicate name is an error, not a shadow).
+- An imported name that std also declares is ambiguous across modules (a
+  local one used to win): qualify by module, or drop an identical duplicate.
+- A bare `Slot`/type name may silently resolve to std's type when two
+  imports define it: qualify by module.
+- `let G = λ (st: CSt) => Exists<…>(λ root2 => …)` needs the inner binder
+  annotated and the `let` typed (`let G: CSt → Type = …`).
+- `absurd` sees only an outer constructor clash: `Some(Plain x) = Some(Refer
+  r)` needs `Option::some_inj` first.
+- A run lemma that mirrors the run's match by `j` must mirror its exact
+  shape (factor the run's arms into a `fn`, as `Stmt::write_run`, so the
+  mirror is one call).
+- `scripts/test --pr` with no merge base runs every file and the native
+  gates get killed (`signal: 9`): use `HEATHER_PR_BASE=4edbd21` (the
+  coordinating branch's `47939344` is cherry-picked here).
 
 ## Log
 
@@ -200,3 +170,4 @@ commit before continuing.
 - 2026-11-26: `scripts/test --pr` at 66a7bf2 (after `Inv.hown`): `== suite: 4140 passed, 0 failed, 3 ignored ==`. The coordinating session's run ruling recorded as Next item 0.
 - 2026-11-26 (twelfth session): step 0 items 1–3, the run as the machine's reading (`b4becf9`, design §23.22): a written parameter's slot is the argument where it refers (`Value::slots`); a write whose source is the very place stores nothing (`Value::is_ref`, `Ref::same_sound`); a store is stuck outside the activation's `Act` (lent to change, or made since entry; `Act::may`), met in the write stages by `Inv.owned` (`Act::may_owned`); probes in `run_tests`. `scripts/test --pr` at `b4becf9` (no merge base with `origin/master`, so every file ran): `== suite: 4139 passed, 1 failed, 3 ignored ==`, the failure `native_linked.rs` killed by `signal: 9` under load; rerun alone (`scripts/test --pr --test native_linked`): `== suite: 2 passed, 0 failed, 0 ignored ==`.
 - 2026-11-26 (twelfth session, after the coordinating session's change of plan): P5's two builders reverted (`1a47948`, `320b40f`; the code stays in history at `0e42cd2`, `f3925c5`), `Inv.cfit` over views to write only (`65d5c1a`); `Back(p, x)` as its own statement replacing the run's reference test (`5070b13`); `Sig::once` and `Len(p, w)` with `RLen` (`c512fee`); design §23.23. `HEATHER_PR_BASE=4edbd21 scripts/test --pr` at `c512fee` (with the coordinating branch's `47939344` cherry-picked): `== suite: 4070 passed, 0 failed, 3 ignored ==`.
+- 2026-11-26 (twelfth session, end): `sound.hthr` split into nine modules (`c583fcd`); `Sig::ok`'s `OParam` only of a moving taken parameter (`fc573b0`). `HEATHER_PR_BASE=4edbd21 scripts/test --pr` at `400d526`, clean tree: `== suite: 4070 passed, 0 failed, 3 ignored ==`. Handoff rewritten (the clauses sorted for §26's restatement).
