@@ -9194,3 +9194,129 @@ theorem Inv::ret_written(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(t
         },
     }
 }
+
+// A live view of an object with a root refers: up its chain of parents
+// (`chain`, each at a lower level) to the holder, which refers (`href`),
+// each cell referring as its parent's does (`uni`).
+theorem Inv::ent_refers(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: Nat → Bool}, inv: Inv(tys, strs, s, e, m, h0, lent), f: Nat):
+    (en: VEnt) → Mem(en, s.views) → en.lvl < f → (r: Ref) → inv.root(en.obj) = Some(r) → Value::refers(tys, (REnv::get(tys, m.env, s.var_at(en.lvl))).v) = True
+{
+    match f {
+        Zero => λ en _ lt _ _ => false_elim(Nat::lt_irrefl(en.lvl, omega(lt))),
+        Succ(k) => λ en mem lt r rt => {
+            let ch = inv.chain(en, mem);
+            let vv = inv.vents(en, mem);
+            let bp: (en.par < s.na + s.nd) = omega(ch.left, vv.right.left);
+            let hy = s.lvl_var_at(en.par, bp);
+            let hx = s.lvl_var_at(en.lvl, vv.right.left);
+            let up = inv.uni(en, mem, s.var_at(en.lvl), s.var_at(en.par), hx, hy);
+            let pr: (Value::refers(tys, (REnv::get(tys, m.env, s.var_at(en.par))).v) = True) = (match s.role(en.par) as λ q => s.role(en.par) = q →
+                    (match q { KHold(o, _) => (o = en.obj) ∧ (en.reg = en.at), KView => VEnt::Any(s.ents(en.par), λ pe => (pe.obj = en.obj) ∧ (en.reg = pe.reg ++ en.at)), KPlain => False, KGone => False }) →
+                    Value::refers(tys, (REnv::get(tys, m.env, s.var_at(en.par))).v) = True {
+                KHold(o, a) => λ eq pp => cong_fn(λ (u: Value(tys)) => Value::refers(tys, u), inv.href(s.var_at(en.par), en.par, o, a, hy, eq, r, j(sym(pp.left), λ q _ => inv.root(q) = Some(r), rt))),
+                KView => λ _ pp => match VEnt::any_mem(s.ents(en.par), λ pe => (pe.obj = en.obj) ∧ (en.reg = pe.reg ++ en.at), pp) {
+                    ⟨pe, pm⟩ => {
+                        let memv: Mem(pe, s.views) = s.views.mem_filter(pe, λ q => q.lvl.same(en.par), pm.left);
+                        let pl: (pe.lvl = en.par) = Nat::same_sound(pe.lvl, en.par, s.views.mem_filter_holds(pe, λ q => q.lvl.same(en.par), pm.left));
+                        j(pl, λ q _ => Value::refers(tys, (REnv::get(tys, m.env, s.var_at(q))).v) = True,
+                            Inv::ent_refers(tys, strs, inv, k, pe, memv, omega(pl, ch.left, lt), r, j(sym(pm.right.left), λ q _ => inv.root(q) = Some(r), rt)))
+                    },
+                },
+                KPlain => λ _ no => false_elim(no),
+                KGone => λ _ no => false_elim(no),
+            })(refl, ch.right);
+            trans(up, pr)
+        },
+    }
+}
+
+// A signature's atom at this function's levels: an argument never written,
+// or a plain result the `Ret` lists.
+theorem CSt::sig_atom_cases(self s: CSt, all: List<Nat>, k: Nat, b: Atom, h: s.sig_atom(all, Var(k)) = Some(b)):
+    ((k < s.na) ∧ ((k.member(s.wrote) = False) ∧ (b = Var(k)))) ∨ Exists<Nat>(λ l => (s.na <= k) ∧ ((all.nth(k - s.na) = Some(l)) ∧ ((s.role(l) = KPlain) ∧ (b = Var(l)))))
+{
+    (match (k + 1).leb(s.na) as λ c => (k + 1).leb(s.na) = c →
+            (match c { True => (!k.member(s.wrote)).then(Some(Var(k))), False => all.nth(k - s.na).and_then(λ l => match s.role(l) { KPlain => Some(Var(l)), _ => None }) }) = Some(b) →
+            ((k < s.na) ∧ ((k.member(s.wrote) = False) ∧ (b = Var(k)))) ∨ Exists<Nat>(λ l => (s.na <= k) ∧ ((all.nth(k - s.na) = Some(l)) ∧ ((s.role(l) = KPlain) ∧ (b = Var(l))))) {
+        True => λ ec hb => {
+            let p = Bool::then_some(!k.member(s.wrote), Some(Var(k)), b, hb);
+            Inl(⟨omega(Nat::le_of_leb(k + 1, s.na, ec)), ⟨Bool::false_of_not_true(k.member(s.wrote), p.left), sym(Option::some_inj(Var(k), b, p.right))⟩⟩)
+        },
+        False => λ ec hb => {
+            let a = Option::and_then_some(all.nth(k - s.na), λ l => match s.role(l) { KPlain => Some(Var(l)), _ => None }, b, hb);
+            let l = a.witness;
+            let ge: (s.na <= k) = omega(Nat::not_le_of_leb(k + 1, s.na, ec));
+            (match s.role(l) as λ r => s.role(l) = r → (match r { KPlain => Some(Var(l)), _ => None<Atom>() }) = Some(b) →
+                    ((k < s.na) ∧ ((k.member(s.wrote) = False) ∧ (b = Var(k)))) ∨ Exists<Nat>(λ l2 => (s.na <= k) ∧ ((all.nth(k - s.na) = Some(l2)) ∧ ((s.role(l2) = KPlain) ∧ (b = Var(l2))))) {
+                KPlain => λ er eb => Inr(Exists(l, ⟨ge, ⟨a.proof.left, ⟨er, sym(Option::some_inj(Var(l), b, eb))⟩⟩⟩)),
+                KHold(_, _) => λ _ no => absurd(no),
+                KView => λ _ no => absurd(no),
+                KGone => λ _ no => absurd(no),
+            })(refl, a.proof.right)
+        },
+    })(refl, h)
+}
+
+
+// What a signature's words read at the call's words, its levels read in the
+// run's: a returned view's place as the signature names it (at the levels
+// a live region reads, which are plain: `words`).
+fn CSt::SigWords(s: CSt, all: List<Nat>, ws, wl: List<Ix>) → Type { (k, l: Nat) → s.sig_atom(all, Var(k)) = Some(Var(l)) → s.in_regions(l) = True → wl.nth(s.ix_of(l)) = ws.nth(k) }
+
+theorem CSt::sig_atom_ix(self s: CSt, all: List<Nat>, ws, wl: List<Ix>, w: CSt::SigWords(s, all, ws, wl), a, b: Atom, h: s.sig_atom(all, a) = Some(b),
+    inr: (l: Nat) → l.member(b.lvls()) = True → s.in_regions(l) = True): (s.unatom(b)).ix(wl) = a.ix(ws) {
+    (match a as λ q => s.sig_atom(all, q) = Some(b) → (s.unatom(b)).ix(wl) = q.ix(ws) {
+        Lit(n) => λ hq => j(Option::some_inj(Lit(n), b, hq), λ q _ => (s.unatom(q)).ix(wl) = Atom::ix(Lit(n), ws), refl),
+        Var(k) => λ hq => {
+            let lv: Exists<Nat>(λ l => (b = Var(l))) = match s.sig_atom_cases(all, k, b, hq) { Inl(c) => Exists(k, c.right.right), Inr(⟨l, c⟩) => Exists(l, c.right.right.right) };
+            match lv {
+                ⟨l, bl⟩ => {
+                    let hl: (s.sig_atom(all, Var(k)) = Some(Var(l))) = trans(hq, cong_fn(λ (q: Atom) => Some(q), bl));
+                    let ir: (s.in_regions(l) = True) = inr(l, j(sym(bl), λ q _ => l.member(q.lvls()) = True, j(sym(l.same_self()), λ c _ => (c || False) = True, refl)));
+                    j(sym(bl), λ q _ => (s.unatom(q)).ix(wl) = Atom::ix(Var(k), ws),
+                        j(sym(s.unatom_var(l)), λ q _ => q.ix(wl) = Atom::ix(Var(k), ws), cong_fn(λ (o: Option<Ix>) => o.unwrap_or(INat(0)), w(k, l, hl, ir))))
+                },
+            }
+        },
+    })(h)
+}
+
+theorem CSt::sig_step_sel(self s: CSt, all: List<Nat>, ws, wl: List<Ix>, w: CSt::SigWords(s, all, ws, wl), a, b: Step, h: s.sig_step(all, a) = Some(b),
+    inr: (l: Nat) → l.member(b.lvls()) = True → s.in_regions(l) = True): (s.unstep(b)).sel(wl) = a.sel(ws) {
+    (match a as λ q => s.sig_step(all, q) = Some(b) → (s.unstep(b)).sel(wl) = q.sel(ws) {
+        SField(i) => λ hq => j(Option::some_inj(SField(i), b, hq), λ q _ => (s.unstep(q)).sel(wl) = (SField(i)).sel(ws), refl),
+        SElem(i) => λ hq => match Option::map_some_inv(s.sig_atom(all, i), λ jj => SElem(jj), b, hq) {
+            ⟨i2, pi⟩ => j(pi.right, λ q _ => (s.unstep(q)).sel(wl) = (SElem(i)).sel(ws), cong_fn(λ (q: Ix) => OnSeq(SeqOne(q)), s.sig_atom_ix(all, ws, wl, w, i, i2, pi.left, λ l ml => inr(l, j(pi.right, λ q _ => l.member(q.lvls()) = True, ml))))),
+        },
+        SWindow(lo, n) => λ hq => {
+            let a1 = Option::and_then_some(s.sig_atom(all, lo), λ l2 => s.sig_atom(all, n).map(λ n2 => SWindow(l2, n2)), b, hq);
+            match Option::map_some_inv(s.sig_atom(all, n), λ n2 => SWindow(a1.witness, n2), b, a1.proof.right) {
+                ⟨n2, pn⟩ => j(pn.right, λ q _ => (s.unstep(q)).sel(wl) = (SWindow(lo, n)).sel(ws),
+                    trans(cong_fn(λ (q: Ix) => OnSeq(SeqRun(q, (s.unatom(n2)).ix(wl))), s.sig_atom_ix(all, ws, wl, w, lo, a1.witness, a1.proof.left,
+                            λ l ml => inr(l, j(pn.right, λ q _ => l.member(q.lvls()) = True, l.member_app_l(a1.witness.lvls(), n2.lvls(), ml))))),
+                        cong_fn(λ (q: Ix) => OnSeq(SeqRun(lo.ix(ws), q)), s.sig_atom_ix(all, ws, wl, w, n, n2, pn.left,
+                            λ l ml => inr(l, j(pn.right, λ q _ => l.member(q.lvls()) = True, l.member_app_r(a1.witness.lvls(), n2.lvls(), ml))))))),
+            }
+        },
+        SKey(_, _) => λ no => absurd(no),
+        SVariant(_) => λ no => absurd(no),
+    })(h)
+}
+
+theorem CSt::sig_sels(self s: CSt, all: List<Nat>, ws, wl: List<Ix>, w: CSt::SigWords(s, all, ws, wl), xs: List<Step>): (ys: List<Step>) → s.sig_steps(all, xs) = Some(ys) →
+    ((l: Nat) → l.member(Steps::lvls(ys)) = True → s.in_regions(l) = True) → Steps::sels(s.unsteps(ys), wl) = Steps::sels(xs, ws)
+{
+    match xs {
+        Nil => λ ys h _ => j(Option::some_inj(Nil, ys, h), λ q _ => Steps::sels(s.unsteps(q), wl) = Nil, refl),
+        Cons(a, rest) => λ ys h inr => {
+            let a1 = Option::and_then_some(s.sig_step(all, a), λ b => s.sig_steps(all, rest).map(λ bs => Cons(b, bs)), ys, h);
+            match Option::map_some_inv(s.sig_steps(all, rest), λ (bs: List<Step>) => Cons(a1.witness, bs), ys, a1.proof.right) {
+                ⟨bs, pb⟩ => j(pb.right, λ q _ => Steps::sels(s.unsteps(q), wl) = Steps::sels(Cons(a, rest), ws),
+                    trans(cong_fn(λ (q: Sel) => Cons(q, Steps::sels(s.unsteps(bs), wl)), s.sig_step_sel(all, ws, wl, w, a, a1.witness, a1.proof.left,
+                            λ l ml => inr(l, j(pb.right, λ q _ => l.member(Steps::lvls(q)) = True, l.member_app_l(a1.witness.lvls(), Steps::lvls(bs), ml))))),
+                        cong_fn(λ (t: List<Sel>) => Cons(a.sel(ws), t), CSt::sig_sels(s, all, ws, wl, w, rest, bs, pb.left,
+                            λ l ml => inr(l, j(pb.right, λ q _ => l.member(Steps::lvls(q)) = True, l.member_app_r(a1.witness.lvls(), Steps::lvls(bs), ml))))))),
+            }
+        },
+    }
+}
