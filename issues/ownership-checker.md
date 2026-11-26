@@ -29,72 +29,72 @@ Items 1 and 2 are definitions and evaluation; item 3 waits for the coordinating 
 
 `CheckSound` has an inhabitant for the fragment, the experiments' programs are probes or theorems of the real modules, and the experiment modules are gone.
 
-## Handoff (2026-11-26, item 3: the write stages in progress)
+## Handoff (2026-11-26, third session: item 2 of its brief, the writes, in progress)
 
-Continue on branch `claude/ownership-checker-sound` (the coordinating
-session's item list and rails are in its brief; this section is the state).
-Everything is in `lib/lang/ownership/sound.hthr` unless named. Design
-§23.8–§23.10 says what changed and why; read them first.
+Continue on branch `claude/ownership-checker-sound`. Everything is in
+`lib/lang/ownership/sound.hthr`; design §23.11 says what was built this
+session and why (read it, then §23.8–§23.10).
 
-**Done in item 3**: the stages `Lit`, `Op`, `Read`, `Fresh`, `Take` (part,
-plain, holder), `Death` (part, plain, holder), `View` (plain; to read and to
-write, of a holder and of a view), and `Write` whose root is plain
-(`Stmt::stage_write_plain`), each concluding `Stepped` against the whole
-`Inv` from `none: s.pending() = False`.
+**Done**: the stages `Lit`, `Op`, `Read`, `Fresh`, `Take` (part, plain,
+holder), `Death` (part, plain, holder), `View` (all four), `Write` to a plain
+root (`stage_write_plain`), through a holder (`stage_write_hold`, both
+cells) and through a view (`stage_write_view`, both cells, the pending chain
+walked by `CSt::up_sim`). Each concludes `Stepped` from `none`.
+
+**The invariant as it now stands** (`Inv`): `sim` is against
+`s.patched(e, m)`, which writes a pending view's value up its chain only
+where the view's cell refers, by level-count fuel; new clauses `wpar` (a
+live view to write whose parent is a view has that parent with one entry, to
+write) and `uni` (an entry's cell and its parent's both refer or are both
+copies). `Inv::touch` is the identity; `Inv::unback` carries every clause
+but `sim` to a state where one view's entry is no longer written back.
 
 **Next, in order**:
 
-1. **Write through a holder** (`KHold(o, a)`, `a.writes()`). Two cells:
-   - the holder's cell is `Plain(d)` (an object held by value, no root):
-     as `stage_write_plain`, but the role is a holder, so `Cell::Agrees` is
-     `Value::Reads` (`Value::get(h, Plain(nw), Nil) = Some(nw)`).
-   - `Refer(r)`, `r = root(o)` (from `refs`): the run stores
-     `write_at(r.sels ++ ss, λ _ => vd, old)` into block `r.b`
-     (`Stmt::write_runs_ref`, `Heap::val_store_here`, `bare`). Every other
-     live reference reads as before: another object's in the same block by
-     `apart(o, …)` (`Changes(o)` from the holder's `a.writes()`) widened
-     with `Sel::apart_ext_l/_r`, then `Sel::get_apart`; a view of `o` by
-     the licence (`CSt::write_lic_hold` then `Inv::lic_apart` with
-     `pl = Pl(o, xs)`, `CSt::unsteps_steps` to get `p.steps` back), then
-     `Sel::get_under` with prefix `r.sels`; other blocks by
-     `Heap::val_store_other`. The holder itself reads `write_at(ss, …, R)`
-     by `Sel::write_get`, which is `e2`'s root by `Steps::write_sels`.
-     `frame`: the block is `owned` (lent or new); `grows`, `inheap`,
-     `bare` by `Heap::store_len`, `Heap::obj_store_holes`.
-   - The state after is `s.written(l).unback(l)`: equal views (no entry's
-     level is a holder's: `vents`), different `touched`/`wrote`. `Inv`
-     must be rebuilt for it (§23.10: `unsteps`, `anc_of`, `Parent`, `up`
-     do not convert between the two states); write `Inv::touch` once,
-     with `refok_keep`, `excl_keep`, `parent_keep`, as `Inv::gone` does.
-   - The words regions read are unchanged at `m2`: plain levels' cells are
-     not touched and a plain cell reads without the heap; copy
-     `stage_write_plain`'s `wsame` (via `Sim::lvl_ix` on the new `Sim`).
-2. **Write through a view** (one writing entry `pe`): the heap changes in
-   the root's block at `root(pe.obj).sels ++ unsteps(pe.reg) ++ ss`; the
-   state becomes pending (`unback`), so `Sim` is against
-   `s2.patched(e2)`, the chain written up by `CSt::up`. Ancestors read the
-   new heap, which is what `up` writes into them; needs lemmas on `up`
-   (one step: `Env::set` of the parent at `en.at`) and `put_back`.
-   Entries not related to `l` are apart by `excl`; descendants by the
-   licence (`write_lic_view`, `meets_view`).
-3. **The write-back** (`is_back`): a pending state's stage; `backed(lv)`;
-   the heap does not change, the meaning catches up one ancestor.
-4. Death and Take of a view's root; `Ret`; then item 4 (`Call`, with the
-   defects B and C reported to the coordinator: written slot is the
-   argument where it refers; distinct fresh results).
+1. **The write-back** (`is_back(l, xs, lv)`: `ents(lv) = [ce]`, `ce.par = l`,
+   `ce.at` the written steps; no licence residuals). It is a write through
+   the parent `l` at `ce.at` of the child's value. Two clauses first:
+   - `pone` (all pending entries are at one level): `patched` follows the
+     first pending entry `find` returns, and the stage needs it to be `ce`.
+     Every builder proves it from its new state's `none`
+     (`CSt::pone_none`); `Inv::unback` from `none` before (only the written
+     view's entries change); the write-back keeps it (the child is written
+     back, only the parent's entry becomes pending).
+   - **A fit for copies** (asked of the coordinating session, see below): a
+     plain chain's write-back runs `Sel::put` into the parent's cell, stuck
+     unless the child's place fits the parent's value, and nothing records
+     that for a copy (for a referring chain it follows from the child's
+     reference reading the block).
+   Then: referring chain: the block is unchanged (`put_back` along the
+   child's path: the child's reference reads what the block holds there),
+   the meaning's parent becomes what the run's parent reads (the walk's
+   first step, `CSt::up_step`); before, the patch is `up(s, e, lv)`, after,
+   `up(s3, e3, l)` (parent a view) or `e3` (a holder), so the lemma to add
+   is `up`'s independence of the written-back flags (as `anc_unback`) and
+   of fuel past the chain (as `anc_more`). Plain chain: the parent's cell
+   set, `Inv::set_cell` generalised from `none` to `patched = e` (a copy's
+   pending patch is the meaning itself).
+2. `Death` and `Take` of a view's root (`Death` of a view written back:
+   `Inv::gone` with the view's entries removed from `views`; no entry has it
+   as parent, `has_children`), and `Ret`.
+3. Item 3 of the brief (`Call`), with the two decisions recorded there.
 
 **Costs and traps found this session**:
 
-- Re-spelling a checker definition's nested `match` inside an inversion
-  (`and_then_some` lambdas) made the kernel's conversion overflow its
-  stack (abort 134, `--timings` `.open.tsv` named the item). Split the
-  checker function so the inversion names the tail (`CSt::write_last`).
-- A `let` whose value is a `match` (even in a lambda) needs its type or a
-  motive (`as λ _ => T`). Constructors `Plain` need `level2::Plain` in
-  expressions.
-- Before adding a lemma, grep: `Sel::get_fit`, `Sel::get_parts`,
-  `Sel::fit_append`, `CSt::var_in` (a function) already existed.
-- Whole-folder check without the cache: about a minute for `sound.hthr`.
+- One undivided stage (`stage_write_view`) exhausted the 8 GiB rail though
+  each lemma it used checked in well under a second; the `--timings`
+  `<stem>.open.tsv` named it. Split into lemmas whose statements spell their
+  objects out (no `let` in a statement), it checks in under a second.
+- A run that dies at the rail prints no `error:` line: read the last line
+  (`ok`) or the `.open.tsv`, never only grep for errors.
+- `heather check --cache` here replayed a stale image and reported
+  "0 declarations kernel-checked … ok" after edits; check without `--cache`
+  (about 50 s for `sound.hthr`).
+- A `let` whose type holds a lambda with `=` in its body needs the equation
+  parenthesised (`λ y => (a = b)`), or the parser stops at the `=`.
+- `scripts/fmt` (the Heather formatter, whitespace only) is what
+  `scripts/fmt --check` gates; run it on the file, never `cargo fmt`.
+- Do not edit `lib/` while `scripts/test` runs: the library gate reads it.
 
 ## Log
 

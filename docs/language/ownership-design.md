@@ -3635,3 +3635,75 @@ of the written object, apart below the holder's own selections).
 with the state fixed (`unsteps`, `anc_of`, `Parent`, `up`) do not convert
 between the two, so `Inv` is rebuilt for it with `refok_keep`, `excl_keep`
 and `parent_keep`, as `Inv::gone` does for `CSt::set`.
+
+### 23.11 Writes through a holder and through a view (2026-11-26)
+
+**What a write changes is stated twice, once per kind of change**:
+`Inv::set_cell` (one cell set to a value that refers nowhere, the heap kept)
+and `Inv::store` (a holder's block stored). Every write stage is one of them
+plus the state it leaves: `Stmt::stage_write_plain` and the holder held by
+value through `set_cell`, the holder by reference through `store`.
+`WriteInv::facts` splits a write's residuals once. `Inv::store` is itself
+`Inv::store_rest` (the clauses but `sim`, for any meaning every variable
+agrees with) after its `Sim`: another object's references are apart from the
+holder's root by `apart` (`away`), a view of the same object apart from the
+written path below the root by the licence (`under`, `Sel::get_under`).
+
+**The state after a write through a variable** is `s.written(l).unback(l)`.
+For a holder it is `s` but for `touched` and `wrote`, and the invariant
+converts to that state unchanged (`Inv::touch` is the identity, contrary to
+§23.10's expectation; only `views.map(unback l) = views` needs a proof,
+`CSt::wrote_none`). For a view its entry is no longer written back;
+`Inv::unback` carries every clause but `sim`, which read an entry's level,
+object, region, mode, parent and place, never the flag (`Kin`,
+`CSt::anc_unback`, `CSt::refok_unback`, `CSt::parent_unback`).
+
+**Three corrections to the invariant**, all proof-side (no interface or
+checker changed):
+
+- **The pending patch only along a referring chain.** A view of an object
+  held by value is a copy (`Cell::view_of`), so after a write through it the
+  run's ancestors hold the old value until the write-back, as their meanings
+  do. `Inv.sim` against the chain written up was false there: at `p = Plain(Point(0,0))`
+  for `f(p: Point write)`, `View(v, p.x, Writing); Write(v, 1)` leaves the
+  patched meaning `p = Point(1,0)` and the run's cell `Point(0,0)`.
+  `CSt::patched` now takes the machine and writes up only when the pending
+  view's cell refers; its walk takes the level count as fuel (a parent is at
+  a lower level).
+- **`wpar`**: a live view to write whose parent is a view has that parent
+  with exactly one entry, itself to write. The checker opens a view to write
+  of a view only through `write_at`'s one entry, and a parent with children
+  does not die; the walk `CSt::up` follows a parent's first entry, so this is
+  what makes the pending chain one path.
+- **`uni`**: an entry's cell and its parent's both refer or are both copies
+  (a view's cell is its parent's narrowed, or a copy). Without it neither case
+  of the view write is provable: a copy's patch must stop at once, a
+  referring chain must refer up to its holder.
+
+**The walk** (`CSt::up_sim`, by induction on its fuel): at each view of the
+pending chain (`UpAt`: its one entry, its reference into the stored block and
+the write below it, every variable not an ancestor agreeing, the ancestors and
+the words regions read as they were) the parent's reference, which the
+child's extends by the child's place `a`, reads after the store what it read
+with what the child reads now written at `a` (`CSt::up_parent`,
+`Sel::read_under`, by the model's `over_read` along a path,
+`Sel::write_read`); that is exactly what the walk writes into the parent's
+meaning. At the holder the walk stops (`CSt::up_last`; a holder has no
+entries, `CSt::ents_hold_nil`). Off the chain (`Inv::view_off`) every
+variable reads what it read: another object's references by `apart`; a view
+of the same object is a descendant of the written view, which the licence
+found apart, or neither, which `excl` says is apart; a holder of the object is
+the chain's top (`CSt::anc_holder`, and `one`).
+
+**Cost**: the view write written as one lemma exhausted the 8 GiB rail (the
+`--timings` `.open.tsv` named `Stmt::stage_write_view`), each lemma it used
+being cheap; split into `Stmt::write_view_upat` (the walk's start),
+`Stmt::write_view_inv` (walk, store, unback) and `Stmt::write_view_ref` (the
+referring case's run), no declaration of the write stages takes a second.
+
+**Still to build for the writes**: the write-back (`is_back`; a write through
+the parent at the child's place of what is there: the block is unchanged by
+`put_back` where the chain refers, the parent's cell set where it is a copy;
+the patch moves up one, `up_step` and the walk's independence of the
+written-back flags and of fuel past the chain), then `Death` and `Take` of a
+view's root, and `Ret`.
