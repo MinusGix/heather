@@ -53,3 +53,12 @@ Beside it:
     - `scripts/fmt --check` and `scripts/lib-closures` are clean, and `scripts/linked --check` is unchanged.
     - `HEATHER_PR_NATIVE=all scripts/test --pr`: `== suite: 4139 passed, 0 failed, 3 ignored ==`.
     - The inherited head's baseline run reported 4138/1. Its one failure was the library gate, which read these modules while they were being edited; every other target passed.
+- 2026-11-26: **Item 3, the dead reference `Move`, landed** (8bc961c).
+  - `Scope::memory`'s reference-`Move` arm now emits nothing where the function never reads the copy (`mem_nat(output, reads) = False`). That is the drop the rebound pure node gets: exact in meaning, since nothing reads the output.
+  - The placement walk skips it, because its form is `Plain([])`.
+  - The theorem covers word nodes only (a word's `Move` is unchanged), so only `pure_form`'s spelled motive changed.
+  - No reference move was added to the language.
+  - Probes: `dead_copy_dropped` and `answered_copy_kept` (from_function_ir_tests).
+  - The per-row counts are in the comparison's entry.
+  - Verification: `scripts/fmt --check` and `scripts/lib-closures` are clean, and `scripts/linked --check` is unchanged.
+  - `HEATHER_PR_NATIVE=all scripts/test --pr`: `== suite: 4139 passed, 0 failed, 3 ignored ==`.
