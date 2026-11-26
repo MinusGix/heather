@@ -163,20 +163,28 @@ fn Site::LinuxPerforms<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.d
 }
 
 // ---------------------------------------------------------------------------
-// The contract
+// The contract (docs/language/ownership-design.md §17.7)
 
-// Routine `f` entered at stack offset `i`, as every clause of the contract
-// takes it: at its label, the program resident, the stack pointer at `i`
-// with room for the return address `ret` there, the arguments passed as
-// words, room for its frames below (`rooms(f)`) and the lending's words
-// above (`top`), the heap injected, and the world one Linux may be.
-fn Site::Entering<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), spans: Spans, top: Nat, rooms: Nat → Nat, bound: Nat,
-    clause: Nat → List<Value> → Heap → Io → MachineState<M> → Nat → BitVec(64) → Type) → Type {
-    (f: Nat) → f + 1 <= bound → (args: List<Value>) → (heap: Heap) → (io: Io) → io.Answerable() →
+// Routine `f` entered at stack offset `i`, as every clause takes it, under
+// one lending for the whole run: the stack and the spans lent under the
+// lending laws (`Loan`) and the meaning's own law of what it may write
+// against them (`lent`: the bytes level's `blocks.Lent(spans)`); at its
+// label, the program resident, the stack pointer at `i` with room for the
+// return address `ret` there, the arguments passed as words, the lending's
+// words above (`top`), and the heap injected. Then at every fuel `n` whose
+// deepest chain of calls (`peak`, the meaning's own) has its room below the
+// return address (`room(f, peak) <= i`, a table by routine and call depth),
+// `clause` at `n`.
+fn Site::Entering<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), spans: Spans, top: Nat, lent: Type, room: Nat → Nat → Nat,
+    peak: Nat → Nat → List<Value> → Heap → Io → Nat, bound: Nat,
+    clause: Nat → Nat → List<Value> → Heap → Io → MachineState<M> → Nat → BitVec(64) → Type) → Type {
+    Loan<M>(site.fetch, site.data, stack, top, spans) → lent →
+    (f: Nat) → f + 1 <= bound → (args: List<Value>) → (heap: Heap) → (io: Io) →
     (s: MachineState<M>) → s.rip = next_rip(site.origin, asm_labels(site.program)(f + 1)) → site.Resident(s.memory) →
     (i: Nat) → read_gpr(Rsp, s.gprs) = stack.at(i) → i + 8 <= stack.size →
-    stack.Passed(lower_values(spans, args), i, s) → rooms(f) <= i → i + 8 <= top → Injected<M>(site.data, spans, heap, s.memory) →
-    (ret: BitVec(64)) → read_word(site.data, s.memory, stack.at(i)) = Some(ret) → clause(f, args, heap, io, s, i, ret)
+    stack.Passed(lower_values(spans, args), i, s) → i + 8 <= top → Injected<M>(site.data, spans, heap, s.memory) →
+    (ret: BitVec(64)) → read_word(site.data, s.memory, stack.at(i)) = Some(ret) →
+    (n: Nat) → room(f, peak(n, f, args, heap, io)) <= i → clause(n, f, args, heap, io, s, i, ret)
 }
 
 // Returned with `a`: at the return address, the program resident, the stack
@@ -190,21 +198,69 @@ fn Site::Returned<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data),
         ((stack.WroteIn(i, spans, s.memory, r.state.memory) ∧ Injected<M>(site.data, spans, a.heap, r.state.memory)) ∧ (r.io = a.io)))
 }
 
-// Done: wherever the meaning is done at some fuel, the code returns with it.
-fn Site::MeetsDone<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), spans: Spans, top: Nat, rooms: Nat → Nat, bound: Nat,
-    meaning: Nat → Calls()) → Type {
-    site.Entering(stack, spans, top, rooms, bound, λ f args heap io s i ret => (n: Nat) → (a: Answer) → meaning(n, f, args, heap, io) = Done(a) →
-        Exists<Nat>(λ calls => site.LinuxPerforms(stack, λ r => site.Returned(stack, spans, s, i, ret, a, r), calls, 0, Running(s, io))))
+// The state the code performs at a fuel, read off the meaning's outcome
+// there: done, returned with the answer; exited, at the exit call with its
+// status in its world; going, a state in the world so far; stuck, nothing.
+fn Site::Reached<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), spans: Spans, s: MachineState<M>, i: Nat, ret: BitVec(64),
+    outcome: Ran<Answer>) → Running<M, Io> → Type {
+    match outcome {
+        Done(a) => λ r => site.Returned(stack, spans, s, i, ret, a, r),
+        Exited(status, o) => λ r => (LinuxSyscallAt(site.linux(stack), r.state) ∧ LinuxExits(r.state, status)) ∧ (r.io = o),
+        Going(o) => λ r => r.io = o,
+        Stuck(_) => λ r => True,
+    }
 }
 
-// Exited: wherever the meaning exits at some fuel, the code makes the exit
-// call with that status, in that world.
-fn Site::MeetsExited<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), spans: Spans, top: Nat, rooms: Nat → Nat, bound: Nat,
-    meaning: Nat → Calls()) → Type {
-    site.Entering(stack, spans, top, rooms, bound, λ f args heap io s i ret => (n: Nat) → (status: BitVec(64)) → (o: Io) →
-        meaning(n, f, args, heap, io) = Exited(status, o) →
-        Exists<Nat>(λ calls => site.LinuxPerforms(stack, λ r => (LinuxSyscallAt(site.linux(stack), r.state) ∧ LinuxExits(r.state, status)) ∧ (r.io = o),
-            calls, 0, Running(s, io))))
+// The machine steps the code has taken by then: going at fuel `n`, the
+// chain of turns and calls the fuel paid for, less the CALL that entered
+// the routine (the caller's instruction, before `Site::Entering`'s state);
+// otherwise none counted.
+fn going_least(n: Nat, outcome: Ran<Answer>) → Nat {
+    match outcome { Done(_) => 0, Exited(_, _) => 0, Going(_) => n - 1, Stuck(_) => 0 }
+}
+
+fn Site::Tracked<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), spans: Spans, s: MachineState<M>, i: Nat, ret: BitVec(64), io: Io,
+    n: Nat, outcome: Ran<Answer>) → Type {
+    Exists<Nat>(λ calls => site.LinuxPerforms(stack, site.Reached(stack, spans, s, i, ret, outcome), calls, going_least(n, outcome), Running(s, io)))
+}
+
+// The one clause a lowering proves: at every fuel, from the entry, the code
+// performs the state read off the meaning there, in a world whose every
+// answer is one Linux may give.
+fn Site::Tracks<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), spans: Spans, top: Nat, lent: Type, room: Nat → Nat → Nat,
+    peak: Nat → Nat → List<Value> → Heap → Io → Nat, bound: Nat, meaning: Nat → Calls()) → Type {
+    site.Entering(stack, spans, top, lent, room, peak, bound, λ n f args heap io s i ret => io.Answerable() →
+        site.Tracked(stack, spans, s, i, ret, io, n, meaning(n, f, args, heap, io)))
+}
+
+// Done: `Tracks` read where the meaning is done.
+fn Site::MeetsDone<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), spans: Spans, top: Nat, lent: Type, room: Nat → Nat → Nat,
+    peak: Nat → Nat → List<Value> → Heap → Io → Nat, bound: Nat, meaning: Nat → Calls()) → Type {
+    site.Entering(stack, spans, top, lent, room, peak, bound, λ n f args heap io s i ret => io.Answerable() → (a: Answer) →
+        meaning(n, f, args, heap, io) = Done(a) → site.Tracked(stack, spans, s, i, ret, io, n, Done(a)))
+}
+
+// Exited: `Tracks` read where the meaning exits.
+fn Site::MeetsExited<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), spans: Spans, top: Nat, lent: Type, room: Nat → Nat → Nat,
+    peak: Nat → Nat → List<Value> → Heap → Io → Nat, bound: Nat, meaning: Nat → Calls()) → Type {
+    site.Entering(stack, spans, top, lent, room, peak, bound, λ n f args heap io s i ret => io.Answerable() → (status: BitVec(64)) → (o: Io) →
+        meaning(n, f, args, heap, io) = Exited(status, o) → site.Tracked(stack, spans, s, i, ret, io, n, Exited(status, o)))
+}
+
+theorem Site::tracks_done<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), spans: Spans, top: Nat, lent: Type, room: Nat → Nat → Nat,
+    peak: Nat → Nat → List<Value> → Heap → Io → Nat, bound: Nat, meaning: Nat → Calls(),
+    tracks: site.Tracks(stack, spans, top, lent, room, peak, bound, meaning)): site.MeetsDone(stack, spans, top, lent, room, peak, bound, meaning) {
+    λ loan law f below args heap io s here resident i rsp inside passed high injected ret saved n roomy answerable a ran =>
+        j(ran, λ x _ => site.Tracked(stack, spans, s, i, ret, io, n, x),
+            tracks(loan, law, f, below, args, heap, io, s, here, resident, i, rsp, inside, passed, high, injected, ret, saved, n, roomy, answerable))
+}
+
+theorem Site::tracks_exited<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), spans: Spans, top: Nat, lent: Type, room: Nat → Nat → Nat,
+    peak: Nat → Nat → List<Value> → Heap → Io → Nat, bound: Nat, meaning: Nat → Calls(),
+    tracks: site.Tracks(stack, spans, top, lent, room, peak, bound, meaning)): site.MeetsExited(stack, spans, top, lent, room, peak, bound, meaning) {
+    λ loan law f below args heap io s here resident i rsp inside passed high injected ret saved n roomy answerable status o ran =>
+        j(ran, λ x _ => site.Tracked(stack, spans, s, i, ret, io, n, x),
+            tracks(loan, law, f, below, args, heap, io, s, here, resident, i, rsp, inside, passed, high, injected, ret, saved, n, roomy, answerable))
 }
 
 // The code has not yet returned to `ret`.
@@ -212,24 +268,26 @@ fn Site::Before<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), i
     ¬((r.state.rip = ret) ∧ (read_gpr(Rsp, r.state.gprs) = stack.at(i + 8)))
 }
 
-// Going: every world the code reaches before it returns or exits is a
-// prefix of a history the meaning reaches. (An exit resumes nothing, so no
-// step leaves it.)
-fn Site::MeetsGoing<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), spans: Spans, top: Nat, rooms: Nat → Nat, bound: Nat,
-    meaning: Nat → Calls()) → Type {
-    site.Entering(stack, spans, top, rooms, bound, λ f args heap io s i ret => (r: Running<M, Io>) →
-        Star(λ (a: Running<M, Io>) (b: Running<M, Io>) => site.Before(stack, i, ret, a) ∧ site.Step(stack, a, b), Running(s, io), r) →
-        Exists<Nat>(λ n => Exists<List<Exchange>>(λ h => (history(meaning(n, f, args, heap, io)) = Some(h)) ∧ Extends(h, r.io.past))))
+// Going: every world the code reaches in `j` steps before it returns or
+// exits, where the room is there at fuel `j + 1`, is a prefix of a history
+// the meaning reaches, or the meaning gets stuck at some fuel. (An exit
+// resumes nothing, so no step leaves it.)
+fn Site::MeetsGoing<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), spans: Spans, top: Nat, lent: Type, room: Nat → Nat → Nat,
+    peak: Nat → Nat → List<Value> → Heap → Io → Nat, bound: Nat, meaning: Nat → Calls()) → Type {
+    site.Entering(stack, spans, top, lent, room, peak, bound, λ n f args heap io s i ret => io.Answerable() → (j: Nat) → n = j + 1 →
+        (r: Running<M, Io>) → StarN(λ (a: Running<M, Io>) (b: Running<M, Io>) => site.Before(stack, i, ret, a) ∧ site.Step(stack, a, b), j, Running(s, io), r) →
+        Exists<Nat>(λ m => Exists<List<Exchange>>(λ h => (history(meaning(m, f, args, heap, io)) = Some(h)) ∧ Extends(h, r.io.past))) ∨
+        Exists<Nat>(λ m => Exists<Io>(λ o => meaning(m, f, args, heap, io) = Stuck(o))))
 }
 
 // The contract, over one lending for the whole run, for every routine
 // below `bound` and every fuel: done, exited, going. That the code left
 // alone what it was not lent is not said here: the injection after the call
 // pins every byte of every block, so it is a fact about the answer's heap.
-fn Site::Meets<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), spans: Spans, top: Nat, rooms: Nat → Nat, bound: Nat,
-    meaning: Nat → Calls()) → Type {
-    site.MeetsDone(stack, spans, top, rooms, bound, meaning) ∧
-        (site.MeetsExited(stack, spans, top, rooms, bound, meaning) ∧ site.MeetsGoing(stack, spans, top, rooms, bound, meaning))
+fn Site::Meets<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), spans: Spans, top: Nat, lent: Type, room: Nat → Nat → Nat,
+    peak: Nat → Nat → List<Value> → Heap → Io → Nat, bound: Nat, meaning: Nat → Calls()) → Type {
+    site.MeetsDone(stack, spans, top, lent, room, peak, bound, meaning) ∧
+        (site.MeetsExited(stack, spans, top, lent, room, peak, bound, meaning) ∧ site.MeetsGoing(stack, spans, top, lent, room, peak, bound, meaning))
 }
 
 // ---------------------------------------------------------------------------

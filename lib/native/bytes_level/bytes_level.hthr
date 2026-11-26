@@ -697,3 +697,85 @@ fn routines_valid(signatures: Nat → Option<Signature>, routines: List<Routine>
 
 // Each routine valid over every routine's signature.
 fn Program::valid(self p: Program) → Bool { routines_valid(program_signatures(p.routines), p.routines) }
+
+// ---------------------------------------------------------------------------
+// The deepest chain of calls a run enters (docs/language/ownership-design.md
+// §17.7)
+//
+// By the run's own recursion, beside it: a call node entered counts one,
+// and below it its callee's chain at the fuel the call gives it; a sequence,
+// a branch and a loop's passes the deepest of what they run, each part from
+// where `run` leaves the one before. A call is counted where it is entered,
+// whatever its callee then does: the machine has pushed its return address.
+// The room a routine's code needs below its return address follows this,
+// not the fuel (`Site::Tracks`).
+
+// Where `r` is done, `k` of its value; nothing more otherwise.
+fn Ran::deeper<T>(self r: Ran<T>, k: T → Nat) → Nat { match r { Done(v) => k(v), Exited(_, _) => 0, Going(_) => 0, Stuck(_) => 0 } }
+
+fn loop_pass_peak(step: Nat → Config → Ran<Config>, peak: Nat → Config → Nat, parameters: List<Typed>, exit: Nat, next: List<Typed>, fuel: Nat,
+    later: List<Value> → Heap → Io → Nat) → List<Value> → Heap → Io → Nat {
+    λ state m io => match pass_locals(parameters, state) {
+        None => 0,
+        Some(l) => peak(fuel, Config(l, m, io)).max(step(fuel, Config(l, m, io)).deeper(λ (after: Config) => match read_values(next, after.locals) {
+            None => 0,
+            Some(more) => match after.locals.words(1, exit).head_bit() { False => later(more, after.memory, after.io), True => 0 },
+        })),
+    }
+}
+
+fn loop_later_peak(step: Nat → Config → Ran<Config>, peak: Nat → Config → Nat, parameters: List<Typed>, exit: Nat, next: List<Typed>, fuel: Nat) →
+    List<Value> → Heap → Io → Nat {
+    match fuel {
+        Zero => λ state m io => 0,
+        Succ(rest) => loop_pass_peak(step, peak, parameters, exit, next, rest, loop_later_peak(step, peak, parameters, exit, next, rest)),
+    }
+}
+
+fn loop_run_peak(step: Nat → Config → Ran<Config>, peak: Nat → Config → Nat, parameters: List<Typed>, exit: Nat, next: List<Typed>, fuel: Nat) →
+    List<Value> → Heap → Io → Nat {
+    loop_pass_peak(step, peak, parameters, exit, next, fuel, loop_later_peak(step, peak, parameters, exit, next, fuel))
+}
+
+// What a program's routines' chains are at one fuel, as `Calls()` is what
+// they answer.
+fn Peaks() → Type { Nat → List<Value> → Heap → Io → Nat }
+
+fn Body::peak(self body: Body, blocks: Blocks, calls: Calls(), peaks: Peaks(), fuel: Nat, c: Config) → Nat {
+    match body {
+        Leaf(_) => 0,
+        Seq(first, rest) => first.peak(blocks, calls, peaks, fuel, c).max(first.run(blocks, calls, fuel, c).deeper(λ (mid: Config) =>
+            rest.peak(blocks, calls, peaks, fuel, mid))),
+        Branch(condition, yes, no) => match c.locals.words(1, condition).head_bit() {
+            True => yes.peak(blocks, calls, peaks, fuel, c),
+            False => no.peak(blocks, calls, peaks, fuel, c),
+        },
+        Call(callee, arguments, _) => match read_values(arguments, c.locals) { None => 0, Some(args) => peaks(callee, args, c.memory, c.io) + 1 },
+        Loop(inputs, parameters, inner, exit, next, _) => match read_values(inputs, c.locals) {
+            None => 0,
+            Some(state) => loop_run_peak(λ (n: Nat) (pass: Config) => inner.run(blocks, calls, n, pass),
+                λ (n: Nat) (pass: Config) => inner.peak(blocks, calls, peaks, n, pass), parameters, exit, next, fuel, state, c.memory, c.io),
+        },
+        Sys(_) => 0,
+        Exit(_) => 0,
+    }
+}
+
+fn Routine::peak(self routine: Routine, blocks: Blocks, calls: Calls(), peaks: Peaks(), fuel: Nat, args: List<Value>, heap: Heap, io: Io) → Nat {
+    match bind_values(routine.parameters, args, Locals::empty()) { None => 0, Some(l) => routine.body.peak(blocks, calls, peaks, fuel, Config(l, heap, io)) }
+}
+
+fn program_peaks(routines: List<Routine>, blocks: Blocks, fuel: Nat) → Peaks() {
+    match fuel {
+        Zero => λ f args heap io => 0,
+        Succ(rest) => λ f args heap io => match routines.nth(f) {
+            None => 0,
+            Some(routine) => routine.peak(blocks, program_calls(routines, blocks, rest), program_peaks(routines, blocks, rest), rest, args, heap, io),
+        },
+    }
+}
+
+// The run's deepest chain of calls below the routine it starts in.
+fn run_peak(p: Program, blocks: Blocks, fuel, f: Nat, args: List<Value>, heap: Heap, io: Io) → Nat {
+    program_peaks(p.routines, blocks, fuel, f, args, heap, io)
+}

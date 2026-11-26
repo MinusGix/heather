@@ -1412,18 +1412,26 @@ theorem Site::claims_jump_item<M, W>(self site: Site<M>, writes: ByteWrites<M>, 
     }
 }
 
-// The callee's contract as a claim: entered at `entry` with room for the
-// return address at offset `i` and `pre`, it performs a return to that
-// address, the program still resident, the stack pointer just above it,
-// and `post` relating where it was entered to where it returned
-// (`Site::Returns` is it at no system call).
-fn Site::ReturnsClaim<M, W>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), kernel: Kernel<M, W>, calls, least, entry: Nat,
-    pre: Nat → Running<M, W> → Type, post: Nat → Running<M, W> → Running<M, W> → Type) → Type {
+// A callee's claim: entered at `entry` with room for the return address
+// at offset `i` and `pre`, it performs `goal`, which may relate where it
+// was entered to where it got (a return, `Site::ReturnsClaim`; or a state
+// some steps in, for a callee still going).
+fn Site::EntersClaim<M, W>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), kernel: Kernel<M, W>, calls, least, entry: Nat,
+    pre: Nat → Running<M, W> → Type, goal: Nat → Running<M, W> → BitVec(64) → Running<M, W> → Type) → Type {
     (s: Running<M, W>) → s.state.rip = next_rip(site.origin, entry) → site.Resident(s.state.memory) →
     (i: Nat) → read_gpr(Rsp, s.state.gprs) = stack.at(i) → i + 8 <= stack.size → pre(i, s) →
     (ret: BitVec(64)) → read_word(site.data, s.state.memory, stack.at(i)) = Some(ret) →
-    site.Performs(stack.writes, kernel, λ (t: Running<M, W>) => (t.state.rip = ret) ∧ (site.Resident(t.state.memory) ∧
-        ((read_gpr(Rsp, t.state.gprs) = stack.at(i + 8)) ∧ post(i, s, t))), calls, least, s)
+    site.Performs(stack.writes, kernel, goal(i, s, ret), calls, least, s)
+}
+
+// The callee's contract as a claim: entered so, it performs a return to
+// that address, the program still resident, the stack pointer just above
+// it, and `post` relating where it was entered to where it returned
+// (`Site::Returns` is it at no system call).
+fn Site::ReturnsClaim<M, W>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), kernel: Kernel<M, W>, calls, least, entry: Nat,
+    pre: Nat → Running<M, W> → Type, post: Nat → Running<M, W> → Running<M, W> → Type) → Type {
+    site.EntersClaim(stack, kernel, calls, least, entry, pre, λ (i: Nat) (s: Running<M, W>) (ret: BitVec(64)) (t: Running<M, W>) =>
+        (t.state.rip = ret) ∧ (site.Resident(t.state.memory) ∧ ((read_gpr(Rsp, t.state.gprs) = stack.at(i + 8)) ∧ post(i, s, t))))
 }
 
 theorem Site::returns_claim_of<M, W>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), kernel: Kernel<M, W>, entry: Nat,
@@ -1439,21 +1447,21 @@ theorem Site::returns_claim_of<M, W>(self site: Site<M>, stack: Stack<M>(site.fe
     }
 }
 
-// A CALL at a label against its callee's claim: the CALL is one machine
-// step, counted, then the callee's run; from the call to the item after
-// it.
-theorem Site::claims_call<M, W>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), kernel: Kernel<M, W>, fits: FillsFit(site.program, no_fills()),
+// A CALL at a label into a callee's claim, whatever its goal: the CALL is
+// one machine step, counted, then the callee's run; `leave` reads the
+// caller's goal off the callee's.
+theorem Site::claims_call_by<M, W>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), kernel: Kernel<M, W>, fits: FillsFit(site.program, no_fills()),
     k: Nat, before: Prog, name, target: Nat, at: asm_back(site.program, k) = At(before, name, CallTo(target)),
     entry: Nat, lands: NearLands(prog_len(before), asm_jump_of(asm_labels(site.program), prog_len(before), CallTo(target)), entry),
-    calls, least: Nat, callee_pre: Nat → Running<M, W> → Type, callee_post: Nat → Running<M, W> → Running<M, W> → Type,
-    callee: site.ReturnsClaim(stack, kernel, calls, least, entry, callee_pre, callee_post),
-    pre, post: Running<M, W> → Type, index: Running<M, W> → Nat,
+    calls, least: Nat, callee_pre: Nat → Running<M, W> → Type, callee_goal: Nat → Running<M, W> → BitVec(64) → Running<M, W> → Type,
+    callee: site.EntersClaim(stack, kernel, calls, least, entry, callee_pre, callee_goal),
+    pre, goal: Running<M, W> → Type, index: Running<M, W> → Nat,
     enter: (s: Running<M, W>) → pre(s) → (read_gpr(Rsp, s.state.gprs) = stack.at(index(s) + 8)) ∧ (index(s) + 8 <= stack.size ∧
         callee_pre(index(s), Running(call_near_after(stack.writes, asm_jump_of(asm_labels(site.program), prog_len(before), CallTo(target)), s.state), s.io))),
-    leave: (s, t: Running<M, W>) → pre(s) → read_gpr(Rsp, t.state.gprs) = stack.at(index(s) + 8) →
-        callee_post(index(s), Running(call_near_after(stack.writes, asm_jump_of(asm_labels(site.program), prog_len(before), CallTo(target)), s.state), s.io), t) →
-        post(t)):
-    site.Claims(stack.writes, kernel, calls, 1 + least, prog_len(before), pre, site.Arrived(prog_len(before) + 5, post)) {
+    leave: (s, t: Running<M, W>) → s.state.rip = next_rip(site.origin, prog_len(before)) → pre(s) →
+        callee_goal(index(s), Running(call_near_after(stack.writes, asm_jump_of(asm_labels(site.program), prog_len(before), CallTo(target)), s.state), s.io),
+            next_rip(s.state.rip, 5), t) → goal(t)):
+    site.Claims(stack.writes, kernel, calls, 1 + least, prog_len(before), pre, goal) {
     λ r here resident holds => {
         let s = r.state;
         let displacement = asm_jump_of(asm_labels(site.program), prog_len(before), CallTo(target));
@@ -1481,14 +1489,34 @@ theorem Site::claims_call<M, W>(self site: Site<M>, stack: Stack<M>(site.fetch, 
         let u_ret: (read_word(site.data, u.memory, stack.at(i)) = Some(ret)) =
             j(sym(pushed), λ a _ => read_word(site.data, stack.writes.store(s.memory, a, word_bytes(ret)), stack.at(i)) = Some(ret),
                 stack.stored(s.memory, i, room, ret));
-        let returned = callee(Running(u, r.io), u_rip, u_resident, i, u_rsp, room, found.right.right, ret, u_ret);
-        site.performs_prefix(stack.writes, kernel, site.Arrived(prog_len(before) + 5, post), calls, least, 1, r, u, call,
-            site.performs_weaken(stack.writes, kernel, λ (t: Running<M, W>) => (t.state.rip = ret) ∧ (site.Resident(t.state.memory) ∧
-                    ((read_gpr(Rsp, t.state.gprs) = stack.at(i + 8)) ∧ callee_post(i, Running(u, r.io), t))),
-                site.Arrived(prog_len(before) + 5, post),
-                λ t back => ⟨⟨trans(back.left, site.rip_after(s, prog_len(before), 5, here)), back.right.left⟩,
-                    leave(r, t, holds, back.right.right.left, back.right.right.right)⟩, calls, least, Running(u, r.io), returned))
+        let entered = callee(Running<M, W>(u, r.io), u_rip, u_resident, i, u_rsp, room, found.right.right, ret, u_ret);
+        site.performs_prefix(stack.writes, kernel, goal, calls, least, 1, r, u, call,
+            site.performs_weaken(stack.writes, kernel, callee_goal(i, Running<M, W>(u, r.io), ret), goal, λ t reached => leave(r, t, here, holds, reached),
+                calls, least, Running<M, W>(u, r.io), entered))
     }
+}
+
+// A CALL at a label against its callee's claim: the CALL is one machine
+// step, counted, then the callee's run; from the call to the item after
+// it.
+theorem Site::claims_call<M, W>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), kernel: Kernel<M, W>, fits: FillsFit(site.program, no_fills()),
+    k: Nat, before: Prog, name, target: Nat, at: asm_back(site.program, k) = At(before, name, CallTo(target)),
+    entry: Nat, lands: NearLands(prog_len(before), asm_jump_of(asm_labels(site.program), prog_len(before), CallTo(target)), entry),
+    calls, least: Nat, callee_pre: Nat → Running<M, W> → Type, callee_post: Nat → Running<M, W> → Running<M, W> → Type,
+    callee: site.ReturnsClaim(stack, kernel, calls, least, entry, callee_pre, callee_post),
+    pre, post: Running<M, W> → Type, index: Running<M, W> → Nat,
+    enter: (s: Running<M, W>) → pre(s) → (read_gpr(Rsp, s.state.gprs) = stack.at(index(s) + 8)) ∧ (index(s) + 8 <= stack.size ∧
+        callee_pre(index(s), Running(call_near_after(stack.writes, asm_jump_of(asm_labels(site.program), prog_len(before), CallTo(target)), s.state), s.io))),
+    leave: (s, t: Running<M, W>) → pre(s) → read_gpr(Rsp, t.state.gprs) = stack.at(index(s) + 8) →
+        callee_post(index(s), Running(call_near_after(stack.writes, asm_jump_of(asm_labels(site.program), prog_len(before), CallTo(target)), s.state), s.io), t) →
+        post(t)):
+    site.Claims(stack.writes, kernel, calls, 1 + least, prog_len(before), pre, site.Arrived(prog_len(before) + 5, post)) {
+    site.claims_call_by(stack, kernel, fits, k, before, name, target, at, entry, lands, calls, least, callee_pre,
+        λ (i: Nat) (s: Running<M, W>) (ret: BitVec(64)) (t: Running<M, W>) => (t.state.rip = ret) ∧ (site.Resident(t.state.memory) ∧
+            ((read_gpr(Rsp, t.state.gprs) = stack.at(i + 8)) ∧ callee_post(i, s, t))),
+        callee, pre, site.Arrived(prog_len(before) + 5, post), index, enter,
+        λ s t here held back => ⟨⟨trans(back.left, site.rip_after(s.state, prog_len(before), 5, here)), back.right.left⟩,
+            leave(s, t, held, back.right.right.left, back.right.right.right)⟩)
 }
 
 // A function closed by RET into its claim: its body performs, from its

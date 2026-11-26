@@ -4372,6 +4372,44 @@ fn Stack::Called<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self sta
     stack.CalledBy(saved, lending.spans(), stack.FileIn(lending), d, slots, s0, now, g0, count, answer, extra, t)
 }
 
+// What the CALL's push leaves, from where the call's words are ready: the
+// return address a frame word below the words passed, the caller's trail
+// kept, and the words passed from the stack pointer up.
+theorem call_pushes<M, S>(saved: List<Gpr>, slots: Nat, eight: saved.len() <= 8, slotted: saved.len() <= slots, site: Site<M>,
+    stack: Stack<M>(site.fetch, site.data), top: Nat, spans: Spans, Mem: S → M → Type, stable: stack.ClauseStable(top, Mem), d: Nat, s0: MachineState<M>,
+    fits: d + 8 * slots <= stack.size, under: (d + 8 * slots) + 8 <= top, deep: 24 <= d, count: Nat, few: count <= 2, words: List<BitVec(64)>,
+    before: S, g0: Gprs, displacement: BitVec(32), x: MachineState<M>,
+    held: stack.ArgsReadyBy(saved, spans, Mem, d, slots, s0, before, g0, count, words, x)):
+    (read_gpr(Rsp, x.gprs) = stack.at(((d - 8 * count) - 8) + 8)) ∧ (stack.WroteIn(d, spans, x.memory, call_near_after(stack.writes, displacement, x).memory) ∧
+        (stack.TrailBy(spans, Mem, d + 8 * slots, s0.memory, before, call_near_after(stack.writes, displacement, x).memory) ∧
+         stack.Passed(words, (d - 8 * count) - 8, call_near_after(stack.writes, displacement, x)))) {
+    let c = d - 8 * count;
+    let back: ((c - 8) + 8 = c) = Nat::sub_add_cancel(8, c, { omega });
+    let at_c: (stack.at((c - 8) + 8) = stack.at(c)) = cong_fn<Nat, BitVec(64)>(λ n => stack.at(n), back);
+    let rsp_x: (read_gpr(Rsp, x.gprs) = stack.at((c - 8) + 8)) = trans(held.left, sym(at_c));
+    let pushed: (push_address(x.gprs) = stack.at(c - 8)) =
+        trans(cong_fn<BitVec(64), BitVec(64)>(λ a => a.sub(BitVec::ofNat(8)), rsp_x), push_at(stack.low, c - 8));
+    let ret = word_bytes(next_rip(x.rip, 5));
+    let own: stack.WroteIn(d, spans, x.memory, call_near_after(stack.writes, displacement, x).memory) =
+        j(sym(pushed), λ a _ => stack.WroteIn(d, spans, x.memory, stack.writes.store(x.memory, a, ret)),
+            stack.wrote_in_word(d, spans, x.memory, c - 8, { omega }, next_rip(x.rip, 5)));
+    let trail: stack.TrailBy(spans, Mem, d + 8 * slots, s0.memory, before, call_near_after(stack.writes, displacement, x).memory) =
+        j(sym(pushed), λ a _ => stack.TrailBy(spans, Mem, d + 8 * slots, s0.memory, before, stack.writes.store(x.memory, a, ret)),
+            stack.trail_by_store(top, spans, Mem, stable, d + 8 * slots, { omega }, s0.memory, before, x.memory, held.right.right.right.left,
+                c - 8, { omega }, next_rip(x.rip, 5)));
+    let above: stack.Unchanged(c, x.memory, call_near_after(stack.writes, displacement, x).memory) =
+        j(sym(pushed), λ a _ => stack.Unchanged(c, x.memory, stack.writes.store(x.memory, a, ret)),
+            stack.store_below(x.memory, c - 8, c, { omega }, { omega }, next_rip(x.rip, 5)));
+    let passed_x: stack.Passes(words, argument_registers(), (c - 8) + 8, x.gprs, x.memory) =
+        j(sym(back), λ n _ => stack.Passes(words, argument_registers(), n, x.gprs, x.memory), held.right.left);
+    let passed: stack.Passed(words, c - 8, call_near_after(stack.writes, displacement, x)) =
+        stack.passes_after_write(words, argument_registers(), (c - 8) + 8, x.gprs, call_near_after(stack.writes, displacement, x).memory,
+            Rsp, push_address(x.gprs), trivial,
+            stack.passes_unchanged(c, x.memory, call_near_after(stack.writes, displacement, x).memory, above, words, argument_registers(),
+                (c - 8) + 8, x.gprs, { omega }, passed_x));
+    ⟨rsp_x, ⟨own, ⟨trail, passed⟩⟩⟩
+}
+
 // The CALL against the callee's claim (`Pre`, `Post`): the CALL is one
 // machine step, counted; `enters` and `leaves` relate the caller's clause
 // and world to the callee's, as `call_step_by`'s do.
@@ -4398,33 +4436,9 @@ theorem call_step_claim<M, S, W>(saved: List<Gpr>, slots: Nat, eight: saved.len(
     let saved_top: (d + 8 * (0 + saved.len()) <= top) = { omega };
     let at_c: (stack.at((c - 8) + 8) = stack.at(c)) = cong_fn<Nat, BitVec(64)>(λ n => stack.at(n), back);
     let displacement = asm_jump_of(asm_labels(site.program), prog_len(prog), CallTo(callee + 1));
-    let pushes: (x: MachineState<M>) → stack.ArgsReadyBy(saved, spans, Mem, d, slots, s0, before, g0, count, words, x) →
-        (read_gpr(Rsp, x.gprs) = stack.at((c - 8) + 8)) ∧ (stack.WroteIn(d, spans, x.memory, call_near_after(stack.writes, displacement, x).memory) ∧
-            (stack.TrailBy(spans, Mem, d + 8 * slots, s0.memory, before, call_near_after(stack.writes, displacement, x).memory) ∧
-             stack.Passed(words, c - 8, call_near_after(stack.writes, displacement, x)))) = λ x held => {
-        let rsp_x: (read_gpr(Rsp, x.gprs) = stack.at((c - 8) + 8)) = trans(held.left, sym(at_c));
-        let pushed: (push_address(x.gprs) = stack.at(c - 8)) =
-            trans(cong_fn<BitVec(64), BitVec(64)>(λ a => a.sub(BitVec::ofNat(8)), rsp_x), push_at(stack.low, c - 8));
-        let ret = word_bytes(next_rip(x.rip, 5));
-        let own: stack.WroteIn(d, spans, x.memory, call_near_after(stack.writes, displacement, x).memory) =
-            j(sym(pushed), λ a _ => stack.WroteIn(d, spans, x.memory, stack.writes.store(x.memory, a, ret)),
-                stack.wrote_in_word(d, spans, x.memory, c - 8, { omega }, next_rip(x.rip, 5)));
-        let trail: stack.TrailBy(spans, Mem, d + 8 * slots, s0.memory, before, call_near_after(stack.writes, displacement, x).memory) =
-            j(sym(pushed), λ a _ => stack.TrailBy(spans, Mem, d + 8 * slots, s0.memory, before, stack.writes.store(x.memory, a, ret)),
-                stack.trail_by_store(top, spans, Mem, stable, d + 8 * slots, { omega }, s0.memory, before, x.memory, held.right.right.right.left,
-                    c - 8, { omega }, next_rip(x.rip, 5)));
-        let above: stack.Unchanged(c, x.memory, call_near_after(stack.writes, displacement, x).memory) =
-            j(sym(pushed), λ a _ => stack.Unchanged(c, x.memory, stack.writes.store(x.memory, a, ret)),
-                stack.store_below(x.memory, c - 8, c, { omega }, { omega }, next_rip(x.rip, 5)));
-        let passed_x: stack.Passes(words, argument_registers(), (c - 8) + 8, x.gprs, x.memory) =
-            j(sym(back), λ n _ => stack.Passes(words, argument_registers(), n, x.gprs, x.memory), held.right.left);
-        let passed: stack.Passed(words, c - 8, call_near_after(stack.writes, displacement, x)) =
-            stack.passes_after_write(words, argument_registers(), (c - 8) + 8, x.gprs, call_near_after(stack.writes, displacement, x).memory,
-                Rsp, push_address(x.gprs), trivial,
-                stack.passes_unchanged(c, x.memory, call_near_after(stack.writes, displacement, x).memory, above, words, argument_registers(),
-                    (c - 8) + 8, x.gprs, { omega }, passed_x));
-        ⟨rsp_x, ⟨own, ⟨trail, passed⟩⟩⟩
-    };
+    let pushes = λ (x: MachineState<M>) (held: stack.ArgsReadyBy(saved, spans, Mem, d, slots, s0, before, g0, count, words, x)) =>
+        call_pushes<M, S>(saved, slots, eight, slotted, site, stack, top, spans, Mem, stable, d, s0, fits, under, deep, count, few, words, before, g0,
+            displacement, x, held);
     site.claims_call(stack, kernel, site.program.laid_out_fits(laid), k, prog, 0, callee + 1, at,
         asm_labels(site.program)(callee + 1),
         call_lands(asm_labels(site.program), k, site.program, prog, 0, callee + 1, site.program.laid_out_lands(laid), at),
@@ -7146,6 +7160,76 @@ theorem function_runs_claim<M, S, W>(slots, saves: Nat, slotted: slots <= 8, sit
                     ⟨arrived.left, ⟨⟨done.left, ⟨kept_trans(callee_kept(), s0.gprs, g_loaded, t.state.gprs, kept01, done.right.left), done.right.right⟩⟩,
                         arrived.right.right⟩⟩
                 }, calls, least, Running(x1, r.io), ran))
+    }
+}
+
+// The entry's loads and the frame opened, then whatever the body's code
+// claims from there (`body_claims`, at any state the frame opens to): what
+// a routine's code does while its body has not finished.
+theorem function_enters_claim<M, S, W>(slots, saves: Nat, slotted: slots <= 8, site: Site<M>, laid: site.program.laid_out().IsTrue(),
+    stack: Stack<M>(site.fetch, site.data), top: Nat, spans: Spans, Mem: S → M → Type, World: S → W → Type, kernel: Kernel<M, W>, calls, least: Nat,
+    stable: stack.ClauseStable(top, Mem), k: Nat, prog: Prog, file: File, parameters: List<Nat>, facts: Type, values: Valuation(), d: Nat, before: S,
+    goal: Running<M, W> → Type,
+    body_claims: (x1: MachineState<M>) → read_gpr(Rsp, x1.gprs) = stack.at(d) →
+        site.Claims(stack.writes, kernel, calls, least, prog_len(function_opened(prog, k, parameters.drop(6).len(), slots, saves)),
+            λ (r: Running<M, W>) => ((file.Represents(values, r.state.gprs) ∧ facts) ∧ stack.TrailedBy(saves, spans, Mem, d + 8 * slots, x1, before, r.state)) ∧
+                World(before, r.io), goal),
+    opened_in: function_opened(prog, k, parameters.drop(6).len(), slots, saves).Within(site.program),
+    entered: (g: Gprs) → PortsAt(values, word_ports(parameters), parameter_registers(), g) → file.Represents(values, g),
+    few: parameters.drop(6).len() <= 2, s0: MachineState<M>, rsp: read_gpr(Rsp, s0.gprs) = stack.at(d + frame_size(slots, saves)),
+    fits: d + frame_size(slots, saves) <= stack.size, under: d + frame_size(slots, saves) <= top, in_memory: Mem(before, s0.memory),
+    passed: stack.Passes(words_of(values, parameters), argument_registers(), (d + frame_size(slots, saves)) + 8, s0.gprs, s0.memory),
+    holds: facts):
+    site.Claims(stack.writes, kernel, calls, least, prog_len(prog),
+        λ (x: Running<M, W>) => ((x.state.gprs = s0.gprs) ∧ (x.state.memory = s0.memory)) ∧ World(before, x.io), goal) {
+    let loads = parameters.drop(6).len();
+    let ws = words_of(values, parameters);
+    let label = At(prog, k + 1, Block([]));
+    let loaded = function_loaded(prog, k, loads);
+    let g_loaded = load_words(stack_registers(), ws.drop(6), s0.gprs);
+    let s1 = MachineState(gprs := g_loaded, flags := s0.flags, rip := s0.rip, memory := s0.memory);
+    let g1 = stack.opened(d, frame_size(slots, saves), s1).gprs;
+    let rsp_s1: (read_gpr(Rsp, g_loaded) = stack.at(d + frame_size(slots, saves))) =
+        trans(load_words_misses(Rsp, stack_registers(), ws.drop(6), s0.gprs, trivial), rsp);
+    let rsp_g1: (read_gpr(Rsp, g1) = stack.at(d)) =
+        moved_rsp_reads(frame_size(slots, saves), stack.at(d), stack.at(d + frame_size(slots, saves)), g_loaded, rsp_s1, λ (z: frame_size(slots, saves) = 0) => {
+            let e: (d + frame_size(slots, saves) = d) = { omega };
+            cong_fn<Nat, BitVec(64)>(λ n => stack.at(n), e)
+        });
+    let loaded_in = Prog::within_trans(loaded_opened(prog, k, loads, slots, saves), opened_in);
+    let counted: (ws.drop(6).len() = loads) =
+        trans(cong_fn<List<BitVec(64)>, Nat>(λ w => w.len(), words_of_drop(values, parameters, 6)), words_of_len(values, parameters.drop(6)));
+    let few_words: (ws.drop(6).len() <= 2) = { omega };
+    let small: (1 + ws.drop(6).len() <= 16) = { omega };
+    let inside: ((d + frame_size(slots, saves)) + 8 = (d + frame_size(slots, saves)) + 8 * 1) = { omega };
+    let in_regs: ArgsIn(ws, parameter_registers(), g_loaded) =
+        stack.passes_loaded(stack_registers(), trivial, ws, argument_registers(), (d + frame_size(slots, saves)) + 8, s0.gprs, s0.memory, trivial, few_words,
+            passed);
+    let ready: file.Represents(values, g1) = entered(g1, args_ports(values, parameters, parameter_registers(), g1,
+        moved_rsp_args(frame_size(slots, saves), ws, parameter_registers(), stack.at(d), g_loaded, trivial, in_regs)));
+    let stacked: stack.Passes(ws.drop(6), Nil, (d + frame_size(slots, saves)) + 8 * 1, s0.gprs, s0.memory) =
+        j(inside, λ n _ => stack.Passes(ws.drop(6), Nil, n, s0.gprs, s0.memory),
+            stack.passes_stacked(ws, argument_registers(), (d + frame_size(slots, saves)) + 8, s0.gprs, s0.gprs, s0.memory, passed));
+    let first = j(counted, λ n _ => stack_registers().loads(n, label, 1).Within(site.program) →
+            site.Moves(stack.writes, prog_len(label), prog_len(stack_registers().loads(n, label, 1)),
+                λ (x: MachineState<M>) => (x.gprs = s0.gprs) ∧ (x.memory = s0.memory),
+                λ (t: MachineState<M>) => (t.gprs = g_loaded) ∧ (t.memory = s0.memory)),
+        site.moves_loads(stack, site.program.laid_out_fits(laid), d + frame_size(slots, saves), s0.gprs, s0.memory, stack_registers(), ws.drop(6), label, 1,
+            s0.gprs, small, trivial, rsp, stacked))(loaded_in);
+    λ r here resident held => {
+        let a = first(r.state, here, resident, held.left);
+        let s = a.witness;
+        let entering = function_enters<M, S>(slots, saves, slotted, site, laid, stack, top, spans, Mem, stable, loaded, s1, d, rsp_s1, fits, under,
+            before, in_memory, opened_in)(s, a.proof.right.left, a.proof.right.right.left, a.proof.right.right.right);
+        let x1 = entering.witness;
+        let at1 = entering.proof.right.right.right;
+        let rsp_x1: (read_gpr(Rsp, x1.gprs) = stack.at(d)) = trans(cong_fn<Gprs, BitVec(64)>(λ g => read_gpr(Rsp, g), at1.left), rsp_g1);
+        let start: stack.TrailedBy(saves, spans, Mem, d + 8 * slots, x1, before, x1) =
+            ⟨kept_refl(body_kept(saves), x1.gprs), ⟨stack.wrote_in_refl(d + 8 * slots, spans, x1.memory), at1.right.left.right⟩⟩;
+        site.performs_after(stack.writes, kernel, goal, calls, least, r, x1,
+            machine_steps_trans(site.fetch, site.data, stack.writes, r.state, s, x1, a.proof.left, entering.proof.left),
+            body_claims(x1, rsp_x1)(Running(x1, r.io), entering.proof.right.left, entering.proof.right.right.left,
+                ⟨⟨⟨j(sym(at1.left), λ g _ => file.Represents(values, g), ready), holds⟩, start⟩, held.right⟩))
     }
 }
 
