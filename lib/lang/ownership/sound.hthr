@@ -11766,10 +11766,10 @@ theorem CSt::lend_st(self s: CSt, tys: Nat → Type, strs: Strs(tys), p: Param, 
 theorem Sim::pass_all(tys: Nat → Type, strs: Strs(tys), {e: Env(tys)}, {m: Mach(tys)}, xs: List<Var>): (s: CSt) → Sim(tys, strs, s, e, m) → (ps: List<Param>) → (n: Next) →
     s.lend_all(tys, strs, ps, xs) = Some(n) →
     Sim(tys, strs, n.st, e, m) ∧ Exists<List<Value(tys)>>(λ vs => (Cell::pass_all(tys, strs, m.heap, ps, xs.map(λ x => REnv::get(tys, m.env, x))) = Some(vs)) ∧
-        Value::ReadAll(tys, strs, m.heap, m.heap.len(), vs, xs.map(λ x => Env::get(tys, e, x))))
+        (Value::ReadAll(tys, strs, m.heap, m.heap.len(), vs, xs.map(λ x => Env::get(tys, e, x))) ∧ (Value::get_all(tys, strs, m.heap, vs) = Some(xs.map(λ x => Env::get(tys, e, x))))))
 {
     match xs {
-        Nil => λ s sim ps n ok => ⟨j(Option::some_inj(checker::Next(s, Nil), n, ok), λ q _ => Sim(tys, strs, q.st, e, m), sim), Exists(Nil, ⟨refl, trivial⟩)⟩,
+        Nil => λ s sim ps n ok => ⟨j(Option::some_inj(checker::Next(s, Nil), n, ok), λ q _ => Sim(tys, strs, q.st, e, m), sim), Exists(Nil, ⟨refl, ⟨trivial, refl⟩⟩)⟩,
         Cons(x, rest) => λ s sim ps => match ps {
             Nil => λ n no => absurd(no),
             Cons(p, prest) => λ n ok => {
@@ -11793,7 +11793,10 @@ theorem Sim::pass_all(tys: Nat → Type, strs: Strs(tys), {e: Env(tys)}, {m: Mac
                                 j(sym(pv.left), λ o _ => (match o as λ _ => Option<List<Value(tys)>> { Some(v0) => Cell::pass_all(tys, strs, m.heap, prest.drop(0), rest.map(λ y => REnv::get(tys, m.env, y))).map(λ vs => Cons(v0, vs)), None => None }) = Some(Cons(v, vr)),
                                     j(sym(pr), λ o _ => o.map(λ vs => Cons(v, vs)) = Some(Cons(v, vr)), refl));
                             let rd: (Value::read(tys, v, strs, m.heap, m.heap.len()) = Some(Env::get(tys, e, x))) = Value::read_of_get(tys, strs, m.heap, v, Env::get(tys, e, x), pv.right.left);
-                            ⟨j(a2.proof.right, λ q _ => Sim(tys, strs, q.st, e, m), ih.left), Exists(Cons(v, vr), ⟨all, ⟨rd, pvr.right⟩⟩)⟩
+                            let ga: (Value::get_all(tys, strs, m.heap, Cons(v, vr)) = Some(Cons(Env::get(tys, e, x), rest.map(λ y => Env::get(tys, e, y))))) =
+                                j(sym(pv.right.left), λ o _ => (match o as λ _ => Option<List<Dyn(tys)>> { Some(d) => Value::get_all(tys, strs, m.heap, vr).map(λ ds => Cons(d, ds)), None => None }) = Some(Cons(Env::get(tys, e, x), rest.map(λ y => Env::get(tys, e, y)))),
+                                    j(sym(pvr.right.right), λ o _ => o.map(λ ds => Cons(Env::get(tys, e, x), ds)) = Some(Cons(Env::get(tys, e, x), rest.map(λ y => Env::get(tys, e, y)))), refl));
+                            ⟨j(a2.proof.right, λ q _ => Sim(tys, strs, q.st, e, m), ih.left), Exists(Cons(v, vr), ⟨all, ⟨⟨rd, pvr.right.left⟩, ga⟩⟩)⟩
                         },
                     },
                 }
@@ -12723,4 +12726,21 @@ theorem Inv::lendable(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(tys, cx.strs
         trans(Shape::same_list_len(s.codes(xs), ps.map(λ p => p.code), cok), ps.len_map(λ p => p.code)))));
     Lendable(ar, Inv::lend_live(tys, cx.strs, inv, none, ps, xs, nl, okl, vs, pv), Inv::lend_plain(tys, cx.strs, ps, xs, nl, okl, vs, pv),
         Inv::lend_apart(tys, cx, sl, inv, none, ps, xs, nl, okl, ra, oka, hra, vs, pv), Inv::lend_whole(tys, cx, inv, none, ps, xs, nl, okl, ra, oka, hra, vs, pv))
+}
+
+// P3: a callee with a body runs at the fuel below the caller's; a
+// primitive answers the world's results, plain, the heap as it was.
+theorem Run::calls_body(tys: Nat → Type, p: Prog(tys), f, g: Nat, np: p.prim(g) = False, vs: List<Value(tys)>, h: Heap(tys), io: Io):
+    Run::calls(tys, p.strs, p.fns, p.w, p.prim, Succ(f))(g, vs, h, io) = p.run(tys, f, g, vs, h, io)
+{
+    j(sym(np), λ b _ => (match b as λ _ => Ran(tys) { True => Run::prim(tys, p.strs, p.w, g, vs, h, io), False => (p.fns(g)).run(tys, p.strs, p.fns, Run::calls(tys, p.strs, p.fns, p.w, p.prim, f), g, vs, h, io) }) =
+        (p.fns(g)).run(tys, p.strs, p.fns, Run::calls(tys, p.strs, p.fns, p.w, p.prim, f), g, vs, h, io), refl)
+}
+
+theorem Run::calls_prim(tys: Nat → Type, p: Prog(tys), f, g: Nat, ip: p.prim(g) = True, vs: List<Value(tys)>, h: Heap(tys), io: Io, ds: List<Dyn(tys)>, ga: Value::get_all(tys, p.strs, h, vs) = Some(ds)):
+    Run::calls(tys, p.strs, p.fns, p.w, p.prim, Succ(f))(g, vs, h, io) = Done(Answer((p.w(g, ds)).map(λ d => level2::Plain(d)), h, io))
+{
+    j(sym(ip), λ b _ => (match b as λ _ => Ran(tys) { True => Run::prim(tys, p.strs, p.w, g, vs, h, io), False => (p.fns(g)).run(tys, p.strs, p.fns, Run::calls(tys, p.strs, p.fns, p.w, p.prim, f), g, vs, h, io) }) =
+        Done(Answer((p.w(g, ds)).map(λ d => level2::Plain(d)), h, io)),
+        j(sym(ga), λ o _ => (match o as λ _ => Ran(tys) { Some(ds2) => Done(Answer((p.w(g, ds2)).map(λ d => level2::Plain(d)), h, io)), None => Stuck }) = Done(Answer((p.w(g, ds)).map(λ d => level2::Plain(d)), h, io)), refl))
 }
