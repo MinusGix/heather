@@ -420,19 +420,19 @@ theorem sum_going(): Pair(going2(run2(sum_fns(), sum_world(), 3, 0, [word(4)], N
 // placement written by a linear scan over each path (the planner is not yet
 // on the bytes level: §25), so every layout premise is met.
 
-fn nl_places() → List<function_ir_lower::Place> { [Into(Rdi), Into(Rsi), Into(Rdx), Into(Rcx), Into(R8), Into(R9), Into(R10), Into(R11), Into(Rax), Into(R9), Into(Rax), Into(Rcx), Into(R9), Into(Rdi), Into(Rsi), Into(Rdx), Into(Rcx), Into(R8), Into(Rax), Into(R9), Into(Rax), Into(Rcx), Into(R9), Into(Rdi), Into(Rsi), Into(Rdx), Into(Rcx), Into(R8), Into(Rax), Into(Rax), Into(R8), Into(Rax), Into(Rcx), Into(R9), Into(Rdi), Into(Rsi), Into(Rdx), Into(Rcx), Into(R8), Into(Rax), Into(R9), Into(Rdi), Into(Rsi), Into(Rdx), Into(Rcx), Into(R8), Into(Rax), Into(R9), Into(R10), Into(Rcx), Into(Rax)] }
+fn nl_places() → List<function_ir_lower::Place> { [Into(Rdi), Into(Rsi), Into(Rdx), Into(Rcx), Into(R8), Into(R9), Into(R10), Into(R11), Into(Rax), Into(R9), Into(Rax), Into(Rcx), Into(R9), Into(Rdi), Into(Rsi), Into(Rdx), Into(Rcx), Into(R8), Into(Rax), Into(R9), Into(Rax), Into(Rcx), Into(R9), Into(Rdi), Into(Rsi), Into(Rdx), Into(Rcx), Into(R8), Into(Rax), Into(Rax), Into(R8), Into(Rax), Into(Rcx), Into(R9), Into(Rdi), Into(Rsi), Into(Rdx), Into(Rcx), Into(R8), Into(Rax), Into(R9), Into(Rdi), Into(Rsi), Into(Rdx), Into(Rcx), Into(R8), Into(Rax), Into(R9), Into(R10), CallSlots(0), Into(Rcx), Spilling(0), Into(Rax)] }
 
 fn nl_lowered() → Option<x86_64_asm::Prog> { placed(nl_fns()).and_then(λ (q: Program) => q.lower(nl_places())) }
 
 theorem nl_lowers(): nl_lowered().is_some() = True { refl }
 
-fn cw_places() → List<function_ir_lower::Place> { [Into(Rdi), Into(Rsi), Into(Rdx), Into(Rcx), Into(R8), Into(R9), Into(R10), Into(R11), Into(Rax), Into(R10), Into(Rax), Into(Rax), Into(R9), Into(R10), Into(Rdi), Into(Rsi), Into(Rdx), Into(Rcx), Into(R8), Into(R9), Into(Rax), Into(R10), Into(Rdi), Into(Rsi), Into(Rdx), Into(Rcx), Into(R8), Into(R9), Into(Rax), Into(R10), Into(R11), Into(Rcx), Into(Rsi), Into(Rdx), Into(Rdi), Into(Rax)] }
+fn cw_places() → List<function_ir_lower::Place> { [Into(Rdi), Into(Rsi), Into(Rdx), Into(Rcx), Into(R8), Into(R9), Into(R10), Into(R11), Into(Rax), Into(R10), Into(Rax), Into(Rax), Into(R9), Into(R10), Into(Rdi), Into(Rsi), Into(Rdx), Into(Rcx), Into(R8), Into(R9), Into(Rax), Into(R10), Into(Rdi), Into(Rsi), Into(Rdx), Into(Rcx), Into(R8), Into(R9), Into(Rax), Into(R10), Into(R11), CallSlots(0), Into(Rcx), Into(Rsi), Into(Rdx), Into(Rdi), Spilling(0), Into(Rax)] }
 
 fn cw_lowered() → Option<x86_64_asm::Prog> { placed(cw_fns()).and_then(λ (q: Program) => q.lower(cw_places())) }
 
 theorem cw_lowers(): cw_lowered().is_some() = True { refl }
 
-fn sum_places() → List<function_ir_lower::Place> { [Into(Rcx), Into(Rdx), Into(Rsi), Into(R8), Into(Rdi), Into(Rax), Into(Rax)] }
+fn sum_places() → List<function_ir_lower::Place> { [CallSlots(1), Into(Rcx), Into(Rdx), Into(Rsi), Into(R8), Spilling(8), Into(Rdi), Into(Rax), Into(Rax)] }
 
 fn sum_lowered() → Option<x86_64_asm::Prog> { placed(sum_fns()).and_then(λ (q: Program) => q.lower(sum_places())) }
 
