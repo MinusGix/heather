@@ -12632,3 +12632,95 @@ theorem CSt::apart_lent_hold_r(self s: CSt, tys: Nat → Type, cx: Ctx(tys), env
     j(cy,
         λ c _ => (match c as λ _ => Option<List<Residual>> { False => Some(Nil<Residual>), True => s.apart_each(s.places(la, Nil), s.places(lb, Nil)) }) = Some(r1), ok)
 }
+
+// P2, `whole`: an owned object taken is its whole block, which no other
+// argument reaches (another of its object's places is never found apart
+// from the whole).
+theorem Inv::lend_whole(tys: Nat → Type, cx: Ctx(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>}, inv: Inv(tys, cx.strs, s, e, m, h0, lent),
+    none: s.pending() = False, ps: List<Param>, xs: List<Var>, nl: Next, okl: s.lend_all(tys, cx.strs, ps, xs) = Some(nl),
+    ra: List<Residual>, oka: s.apart_args(s.lent(ps, xs)) = Some(ra), hra: Residual::All(ra, tys, cx, e, True),
+    vs: List<Value(tys)>, pv: Cell::pass_all(tys, cx.strs, m.heap, ps, xs.map(λ x => REnv::get(tys, m.env, x))) = Some(vs)):
+    (i: Nat) → (p: Param) → ps.nth(i) = Some(p) → p.mode = ByTake → Shape::plain(tys, cx.strs, p.code) = False → (r: Ref) → vs.nth(i) = Some(level2::Refer(r)) →
+        (r.sels = Nil) ∧ ((k: Nat) → ¬(k = i) → (q: Ref) → vs.nth(k) = Some(level2::Refer(q)) → ¬(q.b = r.b))
+{
+    let strs = cx.strs;
+    let sim = Inv::sim_now(tys, strs, inv, none);
+    let dflt = Param(SWord(WNat), ByRead);
+    λ i p hp pm pc r hr => match Inv::pass_arg(tys, strs, ps, xs, nl, okl, vs, pv, i, r, hr) {
+        ⟨x, px⟩ => match px.right {
+            ⟨l, pl⟩ => {
+                let tk = j(hp, λ o _ => ((o.unwrap_or(dflt)).mode = ByTake → ((REnv::get(tys, m.env, x)).own = True) ∧ (Shape::plain(tys, strs, (o.unwrap_or(dflt)).code) = False)), pl.right.right.right);
+                match inv.own(x, l, pl.left, λ hg => pl.right.left(Role::same_gone(s.role(l), hg)), (tk(pm)).left, r, pl.right.right.left) {
+                    ⟨o, po⟩ => ⟨po.right.right.left, λ k nk q hq => match Inv::pass_arg(tys, strs, ps, xs, nl, okl, vs, pv, k, q, hq) {
+                        ⟨y, py⟩ => match py.right {
+                            ⟨lk, plk⟩ => {
+                                let b = Inv::arg_at(tys, strs, inv, sim, y, lk, plk.left, plk.right.left, q, plk.right.right.left);
+                                let qb: (q.b = b.r0.b) = cong_fn(λ (z: Ref) => z.b, b.rr);
+                                match Nat::eq_or_ne(b.o, o) {
+                                    Inr(no) => λ eb => po.right.right.right(b.o, no, b.r0, b.rt)(trans(sym(qb), eb)),
+                                    Inl(eo) => {
+                                        let hr2: (s.role(l) = KHold(o, AcOwn)) = po.left;
+                                        let mi: Mem(Pl(o, Nil), s.places(l, Nil)) = j(sym(hr2), λ z _ => Mem(Pl(o, Nil), match z as λ _ => List<Pl> { KHold(o2, _) => [Pl(o2, Nil<Step>())], KView => (s.ents(l)).map(λ e2 => Pl(e2.obj, e2.reg ++ Nil<Step>())), KPlain => Nil<Pl>(), KGone => Nil<Pl>() }), Inl(refl));
+                                        let mk: Mem(Pl(o, b.reg ++ Nil), s.places(lk, Nil)) = j(eo, λ z _ => Mem(Pl(z, b.reg ++ Nil), s.places(lk, Nil)), b.pl);
+                                        let li = s.lent_nth(xs, ps, i, x, px.left, l, pl.left);
+                                        let lkk = s.lent_nth(xs, ps, k, y, py.left, lk, plk.left);
+                                        let chi_v = match (ps.nth(i).unwrap_or(dflt)).mode { ByRead => False, ByWrite => True, ByTake => True };
+                                        let chk = match (ps.nth(k).unwrap_or(dflt)).mode { ByRead => False, ByWrite => True, ByTake => True };
+                                        let chi: (chi_v = True) = j(sym(hp), λ z _ => (match (z.unwrap_or(dflt)).mode { ByRead => False, ByWrite => True, ByTake => True }) = True,
+                                            j(sym(pm), λ md _ => (match md { ByRead => False, ByWrite => True, ByTake => True }) = True, refl));
+                                        let no: False = match Nat::lt_or_ge(i, k) {
+                                            Inl(ik) => match s.apart_args_pair(tys, cx, e, s.lent(ps, xs), ra, oka, hra, i, k, ik, Lent(l, s.places(l, Nil), chi_v), Lent(lk, s.places(lk, Nil), chk), li, lkk) {
+                                                ⟨r1, pr1⟩ => {
+                                                    let ae = s.apart_lent_hold(tys, cx, e, l, lk, chi_v, chk, j(sym(chi), λ c _ => (c || chk) = True, refl), o, AcOwn, hr2, r1, pr1.left);
+                                                    match s.apart_each_mem(tys, cx, e, s.places(l, Nil), s.places(lk, Nil), r1, ae, pr1.right, Pl(o, Nil), Pl(o, b.reg ++ Nil), mi, mk) {
+                                                        ⟨r2, pr2⟩ => s.apart_whole(o, b.reg ++ Nil, r2, pr2.left),
+                                                    }
+                                                },
+                                            },
+                                            Inr(ki0) => {
+                                                let ki: (k < i) = omega(ki0, nk);
+                                                match s.apart_args_pair(tys, cx, e, s.lent(ps, xs), ra, oka, hra, k, i, ki, Lent(lk, s.places(lk, Nil), chk), Lent(l, s.places(l, Nil), chi_v), lkk, li) {
+                                                    ⟨r1, pr1⟩ => {
+                                                        let ae = s.apart_lent_hold_r(tys, cx, e, lk, l, chk, chi_v, j(sym(chi), λ c _ => (chk || c) = True, Bool::or_true_right(chk)), o, AcOwn, hr2, r1, pr1.left);
+                                                        match s.apart_each_mem(tys, cx, e, s.places(lk, Nil), s.places(l, Nil), r1, ae, pr1.right, Pl(o, b.reg ++ Nil), Pl(o, Nil), mk, mi) {
+                                                            ⟨r2, pr2⟩ => s.apart_whole_r(o, b.reg ++ Nil, r2, pr2.left),
+                                                        }
+                                                    },
+                                                }
+                                            },
+                                        };
+                                        false_elim(no)
+                                    },
+                                }
+                            },
+                        },
+                    }⟩,
+                }
+            },
+        },
+    }
+}
+
+theorem Shape::same_list_len(xs: List<Shape>): (ys: List<Shape>) → Shape::same_list(xs, ys) = True → xs.len() = ys.len() {
+    match xs {
+        Nil => λ ys => match ys { Nil => λ _ => refl, Cons(_, _) => λ no => absurd(no) },
+        Cons(x, xr) => λ ys => match ys {
+            Nil => λ no => absurd(no),
+            Cons(y, yr) => λ h => Nat::cong_succ(Shape::same_list_len(xr, yr, (Bool::and_true_parts(x.same(y), Shape::same_list(xr, yr), h)).right)),
+        },
+    }
+}
+
+// P2: the callee's inputs are lendable.
+theorem Inv::lendable(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(tys, cx.strs), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>}, inv: Inv(tys, cx.strs, s, e, m, h0, lent),
+    none: s.pending() = False, ps: List<Param>, xs: List<Var>, cok: Shape::same_list(s.codes(xs), ps.map(λ p => p.code)) = True, nl: Next, okl: s.lend_all(tys, cx.strs, ps, xs) = Some(nl),
+    ra: List<Residual>, oka: s.apart_args(s.lent(ps, xs)) = Some(ra), hra: Residual::All(ra, tys, cx, e, True),
+    vs: List<Value(tys)>, pv: Cell::pass_all(tys, cx.strs, m.heap, ps, xs.map(λ x => REnv::get(tys, m.env, x))) = Some(vs)):
+    Lendable(tys, cx.strs, ps, m.heap, vs)
+{
+    let ln = (Cell::pass_all_nth(tys, cx.strs, m.heap, xs.map(λ x => REnv::get(tys, m.env, x)), ps, vs, pv)).left;
+    let ar: (vs.len() = ps.len()) = trans(ln, trans(xs.len_map(λ x => REnv::get(tys, m.env, x)), trans(sym(xs.len_map(λ x => s.code(x))),
+        trans(Shape::same_list_len(s.codes(xs), ps.map(λ p => p.code), cok), ps.len_map(λ p => p.code)))));
+    Lendable(ar, Inv::lend_live(tys, cx.strs, inv, none, ps, xs, nl, okl, vs, pv), Inv::lend_plain(tys, cx.strs, ps, xs, nl, okl, vs, pv),
+        Inv::lend_apart(tys, cx, sl, inv, none, ps, xs, nl, okl, ra, oka, hra, vs, pv), Inv::lend_whole(tys, cx, inv, none, ps, xs, nl, okl, ra, oka, hra, vs, pv))
+}
