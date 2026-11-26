@@ -193,8 +193,8 @@ fn Value::ReadAll(tys: Nat → Type, strs: Strs(tys), h: Heap(tys), fuel: Nat, v
     }
 }
 
-// Whether a callee may change what it is passed at this parameter.
-fn PMode::changes(self m: PMode) → Bool { match m { ByTake => True, ByRead => False, ByWrite => True } }
+// `PMode::changes` and `Value::lent` are `run.hthr`'s: the run's stores are
+// stuck outside what the activation was lent to change (`Act`).
 
 // Two selection paths of one value apart: a modification through either
 // leaves the other's read and whether it fits (a run's read is stuck where
@@ -371,18 +371,6 @@ fn Heap::Stays(tys: Nat → Type, before, after: Heap(tys)) → Type {
 
 // The heap a call leaves: no shorter, and its old blocks `Stays`.
 fn Heap::Kept(tys: Nat → Type, before, after: Heap(tys)) → Type { (before.len() <= after.len()) ∧ Heap::Stays(tys, before, after) }
-
-// The references lent to a parameter that may change them: what a call may
-// write or kill. One lent only to read is the frame's, unchanged.
-fn Value::lent(tys: Nat → Type, ps: List<Param>, vs: List<Value(tys)>) → List<Ref> {
-    match vs {
-        Nil => Nil,
-        Cons(v, rest) => match ps {
-            Nil => Nil,
-            Cons(p, pr) => match v { Refer(r) => match p.mode.changes() { True => Cons(r, Value::lent(tys, pr, rest)), False => Value::lent(tys, pr, rest) }, Plain(_) => Value::lent(tys, pr, rest) },
-        },
-    }
-}
 
 // A function's safety at one fuel: what its run owes at every input that
 // reads as the meaning's arguments, meets the function's precondition and

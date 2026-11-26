@@ -18,10 +18,17 @@
 //   the reference narrowed by the place's selections; of a plain variable, a
 //   copy. A take of a whole variable passes its value and ownership on.
 //   `fresh` makes a block, the next index. A write stores where the place is:
-//   in the block a referring root refers to, or in a plain root's own value.
-//   A death of an owner kills its block; any other death is nothing. A call
-//   runs the callee's body at one less fuel, handing a taken argument over
-//   where the caller owns it and a copy where it does not.
+//   in the block a referring root refers to, or in a plain root's own value;
+//   a write of a variable that refers to the very place written (a view's
+//   write-back onto its parent) stores nothing, the writes having gone
+//   through in place. A store is stuck outside what the activation may
+//   change (`Act`): a block made since its entry, or a path under a
+//   reference one of its arguments lent to change. A death of an owner kills
+//   its block; any other death is nothing. A call runs the callee's body at
+//   one less fuel, handing a taken argument over where the caller owns it
+//   and a copy where it does not; after it, a written parameter's slot is
+//   the argument itself where the argument refers, the callee's value where
+//   it was passed plain.
 // - **Joins** run the arm the test picks; its `Yield` continues after the
 //   join with the outputs pushed on the environment from before the join
 //   (an arm's own bindings end with it), whatever the arms' leaves are. A
@@ -146,6 +153,47 @@ fn Value::get_all(tys: Nat → Type, strs: Strs(tys), h: Heap(tys), vs: List<Val
 fn Mach::push(tys: Nat → Type, m: Mach(tys), c: Cell(tys)) → Mach(tys) { Mach(m.heap, REnv::push(tys, m.env, c), m.io) }
 
 // ---------------------------------------------------------------------------
+// What an activation may change
+
+// Selections compared as values, and one list a prefix of another (itself
+// included).
+fn Sel::sames(xs, ys: List<Sel>) → Bool {
+    match xs { Nil => match ys { Nil => True, Cons(_, _) => False }, Cons(a, xr) => match ys { Nil => False, Cons(b, yr) => a.same(b) && Sel::sames(xr, yr) } }
+}
+
+fn Sel::starts(xs, ys: List<Sel>) → Bool {
+    match xs { Nil => True, Cons(a, xr) => match ys { Nil => False, Cons(b, yr) => a.same(b) && Sel::starts(xr, yr) } }
+}
+
+fn Ref::same(self a, b: Ref) → Bool { a.b.same(b.b) && Sel::sames(a.sels, b.sels) }
+
+// Whether a value is the reference `q`.
+fn Value::is_ref(tys: Nat → Type, v: Value(tys), q: Ref) → Bool { match v { Refer(r) => r.same(q), Plain(_) => False } }
+
+// Whether a callee may change what it is passed at this parameter.
+fn PMode::changes(self m: PMode) → Bool { match m { ByTake => True, ByRead => False, ByWrite => True } }
+
+// The references lent to a parameter that may change them: what a call may
+// write or kill. One lent only to read is the frame's, unchanged.
+fn Value::lent(tys: Nat → Type, ps: List<Param>, vs: List<Value(tys)>) → List<Ref> {
+    match vs {
+        Nil => Nil,
+        Cons(v, rest) => match ps {
+            Nil => Nil,
+            Cons(p, pr) => match v { Refer(r) => match p.mode.changes() { True => Cons(r, Value::lent(tys, pr, rest)), False => Value::lent(tys, pr, rest) }, Plain(_) => Value::lent(tys, pr, rest) },
+        },
+    }
+}
+
+// What an activation may store to (§23.22): the references its arguments
+// lent to change (`Value::lent` of its entry's), and the heap's length at its
+// entry, past which every block was made since. A store elsewhere is stuck:
+// a block lent only to read, or not lent, is never stored to.
+record Act { lent: List<Ref>, h0: Nat }
+
+fn Act::may(self a: Act, b: Nat, ss: List<Sel>) → Bool { a.h0.leb(b) || a.lent.any_bit(λ (r: Ref) => r.b.same(b) && Sel::starts(r.sels, ss)) }
+
+// ---------------------------------------------------------------------------
 // Calls
 
 // The run of a program's functions at one fuel, as a callee sees it.
@@ -179,6 +227,29 @@ fn Cell::pass_all(tys: Nat → Type, strs: Strs(tys), h: Heap(tys), ps: List<Par
 }
 
 fn Value::refers(tys: Nat → Type, v: Value(tys)) → Bool { match v { Plain(_) => False, Refer(_) => True } }
+
+// A written parameter's slot after a call: the argument itself where it
+// refers (the callee's writes went through it in place), the callee's value
+// where it was passed plain.
+fn Value::back(tys: Nat → Type, v, w: Value(tys)) → Value(tys) { match v { Refer(r) => Refer(r), Plain(_) => w } }
+
+fn Value::backs(tys: Nat → Type, ps: List<Param>, vs, ws: List<Value(tys)>) → List<Value(tys)> {
+    match ps {
+        Nil => ws,
+        Cons(p, pr) => match p.mode {
+            ByWrite => Cons(Value::back(tys, vs.nth(0).unwrap_or(Plain(Dyn::none(tys))), ws.nth(0).unwrap_or(Plain(Dyn::none(tys)))), Value::backs(tys, pr, vs.drop(1), ws.drop(1))),
+            ByRead => Value::backs(tys, pr, vs.drop(1), ws),
+            ByTake => Value::backs(tys, pr, vs.drop(1), ws),
+        },
+    }
+}
+
+// The values a call binds, from the arguments as passed and the callee's
+// answer: its results, then its written parameters' slots (and anything the
+// callee answered past them, as it answered it).
+fn Value::slots(tys: Nat → Type, sig: Sig, vs, rs: List<Value(tys)>) → List<Value(tys)> {
+    rs.take(sig.results.len()) ++ Value::backs(tys, sig.params, vs, rs.drop(sig.results.len()))
+}
 
 // Whether the caller owns a result: a reference to a fresh object, or to a
 // parameter it took; a view and a written parameter are not owned.
@@ -220,7 +291,7 @@ fn Cell::args(tys: Nat → Type, ps: List<Param>, vs: List<Value(tys)>) → List
 // ---------------------------------------------------------------------------
 // Statements
 
-fn Stmt::run(self s: Stmt, tys: Nat → Type, strs: Strs(tys), fns: Nat → Func, call: Caller(tys), m: Mach(tys), k: Mach(tys) → Ran(tys)) → Ran(tys) {
+fn Stmt::run(self s: Stmt, tys: Nat → Type, strs: Strs(tys), fns: Nat → Func, call: Caller(tys), act: Act, m: Mach(tys), k: Mach(tys) → Ran(tys)) → Ran(tys) {
     match s {
         Op(op, a, b) => match Mach::val(tys, strs, m, a) {
             Some(x) => match Mach::val(tys, strs, m, b) {
@@ -241,12 +312,18 @@ fn Stmt::run(self s: Stmt, tys: Nat → Type, strs: Strs(tys), fns: Nat → Func
                         Some(nw) => k(Mach(m.heap, REnv::set(tys, m.env, p.root, Cell(Plain(nw), c.own)), m.io)),
                         None => Stuck,
                     },
-                    Refer(r) => match Heap::val(tys, strs, m.heap, r.b) {
-                        Some(old) => match Sel::put(tys, strs, r.sels ++ ss, d, old) {
-                            Some(nw) => k(Mach(Heap::store(tys, m.heap, r.b, nw), m.env, m.io)),
-                            None => Stuck,
+                    Refer(r) => match Value::is_ref(tys, (REnv::get(tys, m.env, x)).v, r.narrow(Mach::ixs(tys, strs, m), p.steps)) {
+                        True => k(m),
+                        False => match act.may(r.b, r.sels ++ ss) {
+                            False => Stuck,
+                            True => match Heap::val(tys, strs, m.heap, r.b) {
+                                Some(old) => match Sel::put(tys, strs, r.sels ++ ss, d, old) {
+                                    Some(nw) => k(Mach(Heap::store(tys, m.heap, r.b, nw), m.env, m.io)),
+                                    None => Stuck,
+                                },
+                                None => Stuck,
+                            },
                         },
-                        None => Stuck,
                     },
                 }
             },
@@ -275,7 +352,7 @@ fn Stmt::run(self s: Stmt, tys: Nat → Type, strs: Strs(tys), fns: Nat → Func
         Call(g, args, n) => match Cell::pass_all(tys, strs, m.heap, (fns(g)).sig.params, args.map(λ x => REnv::get(tys, m.env, x))) {
             None => Stuck,
             Some(vs) => match call(g, vs, m.heap, m.io) {
-                Done(a) => k(Mach(a.heap, REnv::push_all(tys, m.env, Cell::results(tys, (fns(g)).sig, (fns(g)).sig.results, a.results, n)), a.io)),
+                Done(a) => k(Mach(a.heap, REnv::push_all(tys, m.env, Cell::results(tys, (fns(g)).sig, (fns(g)).sig.results, Value::slots(tys, (fns(g)).sig, vs, a.results), n)), a.io)),
                 Exited(st, io2) => Exited(st, io2),
                 Going(io2) => Going(io2),
                 Stuck => Stuck,
@@ -310,13 +387,13 @@ fn Test::run(self t: Test, tys: Nat → Type, strs: Strs(tys), m: Mach(tys)) →
 
 // The run of a body: its results to `ret` with the machine there, an arm's
 // outputs to `yld`. `me` is the function's own index, which a `Jump` calls.
-fn Body::run(self b: Body, tys: Nat → Type, strs: Strs(tys), fns: Nat → Func, call: Caller(tys), me: Nat, m: Mach(tys),
+fn Body::run(self b: Body, tys: Nat → Type, strs: Strs(tys), fns: Nat → Func, call: Caller(tys), act: Act, me: Nat, m: Mach(tys),
     ret: List<Value(tys)> → Mach(tys) → Ran(tys), yld: List<Cell(tys)> → Mach(tys) → Ran(tys)) → Ran(tys)
 {
     match b {
         Ret(rs) => ret(rs.map(λ x => (REnv::get(tys, m.env, x)).v), m),
         Yield(os) => yld(os.map(λ x => REnv::get(tys, m.env, x)), m),
-        Do(s, rest) => s.run(tys, strs, fns, call, m, λ m2 => rest.run(tys, strs, fns, call, me, m2, ret, yld)),
+        Do(s, rest) => s.run(tys, strs, fns, call, act, m, λ m2 => rest.run(tys, strs, fns, call, act, me, m2, ret, yld)),
         Jump(args) => match Cell::pass_all(tys, strs, m.heap, (fns(me)).sig.params, args.map(λ x => REnv::get(tys, m.env, x))) {
             None => Stuck,
             Some(vs) => match call(me, vs, m.heap, m.io) {
@@ -329,8 +406,8 @@ fn Body::run(self b: Body, tys: Nat → Type, strs: Strs(tys), fns: Nat → Func
         Join(t, yes, no, rest) => match t.run(tys, strs, m) {
             None => Stuck,
             Some(c) => {
-                let after = λ (outs: List<Cell(tys)>) (m2: Mach(tys)) => rest.run(tys, strs, fns, call, me, Mach(m2.heap, REnv::push_all(tys, m.env, outs), m2.io), ret, yld);
-                match c { True => yes.run(tys, strs, fns, call, me, m, ret, after), False => no.run(tys, strs, fns, call, me, m, ret, after) }
+                let after = λ (outs: List<Cell(tys)>) (m2: Mach(tys)) => rest.run(tys, strs, fns, call, act, me, Mach(m2.heap, REnv::push_all(tys, m.env, outs), m2.io), ret, yld);
+                match c { True => yes.run(tys, strs, fns, call, act, me, m, ret, after), False => no.run(tys, strs, fns, call, act, me, m, ret, after) }
             },
         },
     }
@@ -339,7 +416,7 @@ fn Body::run(self b: Body, tys: Nat → Type, strs: Strs(tys), fns: Nat → Func
 // A function's run with its calls through `call`: from its arguments, the
 // heap and the world, its answer.
 fn Func::run(self f: Func, tys: Nat → Type, strs: Strs(tys), fns: Nat → Func, call: Caller(tys), me: Nat, vs: List<Value(tys)>, h: Heap(tys), io: Io) → Ran(tys) {
-    f.body.run(tys, strs, fns, call, me, Mach(h, REnv(Cell::args(tys, f.sig.params, vs), Nil), io),
+    f.body.run(tys, strs, fns, call, Act(Value::lent(tys, f.sig.params, vs), h.len()), me, Mach(h, REnv(Cell::args(tys, f.sig.params, vs), Nil), io),
         λ rs m => Done(Answer(rs, m.heap, m.io)), λ _ m => Done(Answer(Nil, m.heap, m.io)))
 }
 
