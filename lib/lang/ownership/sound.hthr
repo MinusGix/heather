@@ -14612,3 +14612,89 @@ theorem Heap::put_at_holes(tys: Nat → Type, strs: Strs(tys), h: Heap(tys), k: 
         Some(d) => λ hz => Heap::obj_store_holes(tys, h, k.b, b, Sel::write_at(tys, strs, k.sels ++ Nil<Sel>(), λ _ => o, d), ob, hz),
     })(ho)
 }
+
+// What one written argument that refers gives a put: its level, a holder
+// that writes or a view with one entry to write, its cell the reference
+// passed, and the licence's apartness at the call's words `ws0`.
+record PutAt(tys: Nat → Type, strs: Strs(tys), s: CSt, env: REnv(tys), ws0: List<Ix>, x: Var, k: Ref) {
+    l: Nat,
+    hl: s.lvl(x) = Some(l),
+    rk: Exists<Nat>(λ o => Exists<Acc>(λ a => (s.role(l) = KHold(o, a)) ∧ (a.writes() = True))) ∨ Exists<VEnt>(λ en => (s.ents(l) = [en]) ∧ (en.mode.writes() = True)),
+    live: ¬((s.role(l)).same(KGone) = True),
+    ck: (REnv::get(tys, env, x)).v = Refer(k),
+    lich: (o: Nat) → (a: Acc) → s.role(l) = KHold(o, a) → (en: VEnt) → Mem(en, s.views) → en.obj = o → Sel::Apart(tys, strs, Steps::sels(s.unsteps(en.reg), ws0), Nil<Sel>()),
+    licv: (pe: VEnt) → s.ents(l) = [pe] → (ey: VEnt) → Mem(ey, s.views) → ey.obj = pe.obj → ¬(ey.lvl = l) → l.member(s.anc_of(ey, s.na + s.nd)) = True →
+        Sel::Apart(tys, strs, Steps::sels(s.unsteps(ey.reg), ws0), Steps::sels(s.unsteps(pe.reg), ws0) ++ Nil<Sel>()),
+}
+
+// The written values put in turn keep the invariant: each put is
+// `Inv::put_arg`; a later argument's reference reads as at the call, being
+// apart from each earlier one (`Lendable.apart`), so what is put there fits
+// what is there (`Value::Written`'s fit).
+theorem Inv::puts(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(tys, cx.strs), {s: CSt}, {e0: Env(tys)}, {mm: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>}, inv0: Inv(tys, cx.strs, s, e0, mm, h0, lent),
+    none: s.pending() = False, ps: List<Param>, xs: List<Var>, vs: List<Value(tys)>, ds: List<Dyn(tys)>, apb: Value::ApartBy(tys, cx.strs, ps, vs),
+    arg: (i: Nat) → (p: Param) → ps.nth(i) = Some(p) → p.mode = ByWrite → (k: Ref) → vs.nth(i) = Some(Refer(k)) →
+        Exists<Var>(λ x => (xs.nth(i) = Some(x)) ∧ PutAt(tys, cx.strs, s, mm.env, Mach::ixs(tys, cx.strs, mm), x, k)),
+    rd: (i: Nat) → (k: Ref) → vs.nth(i) = Some(Refer(k)) → Exists<Dyn(tys)>(λ d => (ds.nth(i) = Some(d)) ∧ (Value::get(tys, cx.strs, mm.heap, Refer(k), Nil) = Some(d))), is: List<Nat>):
+    (slots: List<Value(tys)>) → (outs: List<Dyn(tys)>) → Value::Written(tys, cx.strs, vs, ds, is, slots, outs) → Nat::Incr(is) →
+    ((i: Nat) → Mem(i, is) → Exists<Param>(λ p => (ps.nth(i) = Some(p)) ∧ (p.mode = ByWrite))) →
+    (e: Env(tys)) → (h: Heap(tys)) → Inv(tys, cx.strs, s, e, Mach(h, mm.env, mm.io), h0, lent) →
+    ((i: Nat) → Mem(i, is) → (k: Ref) → vs.nth(i) = Some(Refer(k)) → Value::get(tys, cx.strs, h, Refer(k), Nil) = Value::get(tys, cx.strs, mm.heap, Refer(k), Nil)) →
+    ((i: Nat) → (k: Ref) → vs.nth(i) = Some(Refer(k)) → (ob: Obj(tys)) → Heap::obj(tys, h, k.b) = Some(ob) → ob.holes = Nil) →
+    Inv(tys, cx.strs, s, s.puts_mean(tys, cx.strs, vs, xs, e, is, outs), Mach(Heap::puts(tys, cx.strs, h, vs, is, outs), mm.env, mm.io), h0, lent)
+{
+    let strs = cx.strs;
+    let sim0 = Inv::sim_now(tys, strs, inv0, none);
+    match is {
+        Nil => λ slots outs _ _ _ e h inv _ _ => inv,
+        Cons(i, rest) => λ slots => match slots {
+            Nil => λ outs no => false_elim(no),
+            Cons(a, arest) => λ outs => match outs {
+                Nil => λ no => false_elim(no),
+                Cons(o, orest) => λ w inc wm e h inv rem hb => {
+                    let G: (Option<Value(tys)> → Type) = λ z => Inv(tys, strs, s, s.puts_mean(tys, strs, vs, xs, s.put_mean_opt(tys, strs, e, z, xs.nth(i), o), rest, orest),
+                        Mach(Heap::puts(tys, strs, Heap::put_opt(tys, strs, h, z, o), vs, rest, orest), mm.env, mm.io), h0, lent);
+                    let rem1 = λ (i2: Nat) (m2: Mem(i2, rest)) => rem(i2, Inr(m2));
+                    (match vs.nth(i) as λ z => vs.nth(i) = z → G(z) {
+                        None => λ _ => Inv::puts(tys, cx, sl, inv0, none, ps, xs, vs, ds, apb, arg, rd, rest, arest, orest, w.right.right, inc.right, λ i2 m2 => wm(i2, Inr(m2)), e, h, inv, rem1, hb),
+                        Some(v) => (match v as λ v2 => vs.nth(i) = Some(v2) → G(Some(v2)) {
+                            Plain(d0) => λ _ => Inv::puts(tys, cx, sl, inv0, none, ps, xs, vs, ds, apb, arg, rd, rest, arest, orest, w.right.right, inc.right, λ i2 m2 => wm(i2, Inr(m2)), e, h, inv, rem1, hb),
+                            Refer(k) => λ hv => match wm(i, Inl(refl)) {
+                                ⟨p, pp⟩ => match arg(i, p, pp.left, pp.right, k, hv) {
+                                    ⟨x, px⟩ => match rd(i, k, hv) {
+                                        ⟨d, pd⟩ => {
+                                            let pa = px.right;
+                                            let sim = Inv::sim_now(tys, strs, inv, none);
+                                            let g1 = Cell::agrees_val(tys, strs, h, s.role(pa.l), REnv::get(tys, mm.env, x), Env::get(tys, e, x), sim.vars(x, pa.l, pa.hl), pa.live);
+                                            let g2: (Value::get(tys, strs, h, Refer(k), Nil) = Some(Env::get(tys, e, x))) = j(pa.ck, λ u _ => Value::get(tys, strs, h, u, Nil) = Some(Env::get(tys, e, x)), g1);
+                                            let ex: (Env::get(tys, e, x) = d) = Option::some_inj(Env::get(tys, e, x), d, trans(sym(g2), trans(rem(i, Inl(refl), k, hv), pd.right)));
+                                            let fits: Dyn::Fits(tys, strs, d, o) = j(pd.left, λ z _ => Dyn::Fits(tys, strs, z.unwrap_or(Dyn::none(tys)), o), w.right.left);
+                                            let oc: (o.code = (Env::get(tys, e, x)).code) = trans(Shape::same_eq(o.code, d.code, fits.left), cong_fn(λ (z: Dyn(tys)) => z.code, sym(ex)));
+                                            let ol: (Dyn::len(tys, strs, o) = Dyn::len(tys, strs, Env::get(tys, e, x))) = trans(fits.right, cong_fn(λ (z: Dyn(tys)) => Dyn::len(tys, strs, z), sym(ex)));
+                                            let wsame = Inv::words_after(tys, strs, inv0, sim0, sim, λ k2 ir2 => Sim::plain_same(tys, strs, sim0, sim, refl, k2, (inv0.words(k2, ir2)).left, (inv0.words(k2, ir2)).right));
+                                            let iv1 = Inv::put_arg(tys, cx, sl, inv, none, x, pa.l, pa.hl, pa.rk, k, pa.ck, Mach::ixs(tys, strs, mm), wsame, pa.lich, pa.licv, o, oc, ol);
+                                            let ch: (p.mode.changes() = True) = cong_fn(λ (md: PMode) => md.changes(), pp.right);
+                                            let rem2 = λ (i2: Nat) (m2: Mem(i2, rest)) (k2: Ref) (hv2: vs.nth(i2) = Some(Refer(k2))) => {
+                                                let lt: (i < i2) = inc.left(i2, m2);
+                                                let ap = apb(i, i2, λ eq => Nat::lt_irrefl(i, omega(lt, eq)), p, pp.left, ch, k, k2, hv, hv2);
+                                                trans(Heap::put_at_apart(tys, strs, h, k, o, k2, ap, hb(i, k, hv), hb(i2, k2, hv2)), rem(i2, Inr(m2), k2, hv2))
+                                            };
+                                            let hb2 = λ (i2: Nat) (k2: Ref) (hv2: vs.nth(i2) = Some(Refer(k2))) (ob: Obj(tys)) (ho: Heap::obj(tys, Heap::put_at(tys, strs, h, k, o), k2.b) = Some(ob)) =>
+                                                match Heap::put_at_holes(tys, strs, h, k, o, k2.b, ob, ho) { ⟨o0, po⟩ => trans(po.right, hb(i2, k2, hv2, o0, po.left)) };
+                                            let r = Inv::puts(tys, cx, sl, inv0, none, ps, xs, vs, ds, apb, arg, rd, rest, arest, orest, w.right.right, inc.right, λ i2 m2 => wm(i2, Inr(m2)),
+                                                s.put_mean(tys, strs, e, x, pa.l, o), Heap::put_at(tys, strs, h, k, o), iv1, rem2, hb2);
+                                            j(sym(px.left), λ zx _ => Inv(tys, strs, s, s.puts_mean(tys, strs, vs, xs, s.put_mean_opt(tys, strs, e, Some(Refer(k)), zx, o), rest, orest),
+                                                    Mach(Heap::puts(tys, strs, Heap::put_at(tys, strs, h, k, o), vs, rest, orest), mm.env, mm.io), h0, lent),
+                                                j(sym(pa.hl), λ zl _ => Inv(tys, strs, s, s.puts_mean(tys, strs, vs, xs, (match zl as λ _ => Env(tys) { Some(l2) => s.put_mean(tys, strs, e, x, l2, o), None => e }), rest, orest),
+                                                    Mach(Heap::puts(tys, strs, Heap::put_at(tys, strs, h, k, o), vs, rest, orest), mm.env, mm.io), h0, lent), r))
+                                        },
+                                    },
+                                },
+                            },
+                        })
+                    })(refl)
+                },
+            },
+        },
+    }
+}
