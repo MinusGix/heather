@@ -18,8 +18,8 @@
 // - **A function's safety** (`Safety`), relative to its callees' at less
 //   fuel: at no fuel is the run stuck; a measured function's run is done
 //   from its measure on; where it is done, its results read the meaning's,
-//   each written parameter reads the meaning's value after and that value
-//   fits its value before (`Value::Written`), the heap outside what was
+//   each referring written parameter's slot is the argument itself and the
+//   meaning's value after fits its value before (`Value::Written`), the heap outside what was
 //   lent is unchanged, and each returned view is its parameter's reference
 //   narrowed by the steps its signature names at the call's words
 //   (`Value::Views`, `Ref::narrow`); where an unmeasured run is going, its history is a
@@ -235,33 +235,39 @@ fn Dyn::coded(tys: Nat → Type, ds: List<Dyn(tys)>, ps: List<Param>) → Bool {
 
 fn Dyn::Coded(tys: Nat → Type, ds: List<Dyn(tys)>, ps: List<Param>) → Type { Dyn::coded(tys, ds, ps) = True }
 
-// Each written parameter, after: a referring argument's block reads the
-// meaning's value after; and that value fits the value before. (A plain
-// one's value after is in the answer's written slots, which `ReadAll`
-// reads.)
-fn Value::Written(tys: Nat → Type, strs: Strs(tys), h: Heap(tys), fuel: Nat, vs: List<Value(tys)>, ds: List<Dyn(tys)>, is: List<Nat>) → List<Dyn(tys)> → Type {
+// Each written parameter, after: a referring argument's slot in the answer
+// is the argument itself, so the caller's view of what it lent stays its
+// own reference (what the slot reads is `ReadAll`'s); and the meaning's
+// value after fits the value before. (A plain one's value after is in the
+// answer's written slots, which `ReadAll` reads.)
+fn Value::Written(tys: Nat → Type, strs: Strs(tys), vs: List<Value(tys)>, ds: List<Dyn(tys)>, is: List<Nat>) → List<Value(tys)> → List<Dyn(tys)> → Type {
     match is {
-        Nil => λ _ => True,
-        Cons(i, rest) => λ outs => match outs {
+        Nil => λ _ _ => True,
+        Cons(i, rest) => λ slots outs => match slots {
             Nil => False,
-            Cons(o, orest) =>
-                (match vs.nth(i).unwrap_or(Plain(Dyn::none(tys))) as λ _ => Type { Refer(r) => Value::read(tys, Refer(r), strs, h, fuel) = Some(o), Plain(_) => True }) ∧
-                Dyn::Fits(tys, strs, ds.nth(i).unwrap_or(Dyn::none(tys)), o) ∧
-                Value::Written(tys, strs, h, fuel, vs, ds, rest, orest),
+            Cons(a, arest) => match outs {
+                Nil => False,
+                Cons(o, orest) =>
+                    (match vs.nth(i).unwrap_or(Plain(Dyn::none(tys))) as λ _ => Type { Refer(r) => a = Refer(r), Plain(_) => True }) ∧
+                    Dyn::Fits(tys, strs, ds.nth(i).unwrap_or(Dyn::none(tys)), o) ∧
+                    Value::Written(tys, strs, vs, ds, rest, arest, orest),
+            },
         },
     }
 }
 
 // Each result, after, as its origin says: a fresh one is plain or a block
 // this call made (none below the heap's length before it, so no argument
-// reaches it); a parameter's is the argument itself; a view is the
-// argument's reference narrowed by the steps the signature names, read at
+// reaches it); a parameter's is the argument itself where it refers (one
+// passed by value comes back a plain value, changed or not); a view is the
+// argument's reference narrowed by the steps the signature names (a copy,
+// where the argument was passed by value), read at
 // the call's words: the arguments', then the results'.
 fn Value::ViewIs(tys: Nat → Type, strs: Strs(tys), n: Nat, vs: List<Value(tys)>, ws: List<Ix>, code: Shape, org: Origin, o: Value(tys)) → Type {
     match org {
-        OView(i, xs) => match vs.nth(i) { Some(v) => match v { Refer(r) => o = Refer(r.narrow(ws, xs)), Plain(_) => False }, None => False },
+        OView(i, xs) => match vs.nth(i) { Some(v) => match v { Refer(r) => o = Refer(r.narrow(ws, xs)), Plain(_) => Value::refers(tys, o) = False }, None => False },
         OFresh => match o { Plain(_) => True, Refer(r) => (Shape::plain(tys, strs, code) = False) ∧ (n <= r.b) ∧ (r.sels = Nil) },
-        OParam(i) => vs.nth(i) = Some(o),
+        OParam(i) => match vs.nth(i) { Some(v) => match v { Refer(r) => o = Refer(r), Plain(_) => Value::refers(tys, o) = False }, None => False },
     }
 }
 
@@ -272,18 +278,31 @@ fn Value::Views(tys: Nat → Type, strs: Strs(tys), n: Nat, vs: List<Value(tys)>
     }
 }
 
-// The heap after is the heap before at every block that existed before and
-// that nothing was lent; a block made by the call is not the frame's.
-fn Heap::Frame(tys: Nat → Type, before, after: Heap(tys), lent: Nat → Bool) → Type { (b: Nat) → b < before.len() → lent(b) = False → after.nth(b) = before.nth(b) }
+// What a block holds at a selection path: its object's value read there,
+// where the path fits (holes are not read: the fragment has none).
+fn Heap::at(tys: Nat → Type, strs: Strs(tys), h: Heap(tys), b: Nat, q: List<Sel>) → Option<Dyn(tys)> { Heap::obj(tys, h, b).and_then(λ o => Sel::get(tys, strs, q, o.val)) }
 
-// The blocks lent to a parameter that may change them: what a call may
-// write or kill. A block lent only to read is the frame's, unchanged.
-fn Value::lends(tys: Nat → Type, ps: List<Param>, vs: List<Value(tys)>, b: Nat) → Bool {
+// The heap after is the heap before at every place nothing lent to change
+// reaches (§18.3, by place): at every block that existed before, every
+// selection path apart from every reference lent to change into that block
+// reads, and fits, as before. A block lent to nothing has nothing to be apart
+// from, so its empty path, its whole object, reads as before; a block lent
+// to change whole (a reference with no selections, as a taken object is) is
+// the callee's, no path being apart from all of it; a block made by the call
+// is not spoken of.
+fn Heap::Frame(tys: Nat → Type, strs: Strs(tys), before, after: Heap(tys), rs: List<Ref>) → Type {
+    (b: Nat) → b < before.len() → ((r: Ref) → Mem(r, rs) → r.b = b → ¬(r.sels = Nil)) →
+        (q: List<Sel>) → ((r: Ref) → Mem(r, rs) → r.b = b → Sel::Apart(tys, strs, r.sels, q)) → Heap::at(tys, strs, after, b, q) = Heap::at(tys, strs, before, b, q)
+}
+
+// The references lent to a parameter that may change them: what a call may
+// write or kill. One lent only to read is the frame's, unchanged.
+fn Value::lent(tys: Nat → Type, ps: List<Param>, vs: List<Value(tys)>) → List<Ref> {
     match vs {
-        Nil => False,
+        Nil => Nil,
         Cons(v, rest) => match ps {
-            Nil => False,
-            Cons(p, pr) => (p.mode.changes() && match v { Refer(r) => r.b.same(b), Plain(_) => False }) || Value::lends(tys, pr, rest, b),
+            Nil => Nil,
+            Cons(p, pr) => match v { Refer(r) => match p.mode.changes() { True => Cons(r, Value::lent(tys, pr, rest)), False => Value::lent(tys, pr, rest) }, Plain(_) => Value::lent(tys, pr, rest) },
         },
     }
 }
@@ -299,8 +318,8 @@ fn SafeAt(tys: Nat → Type, p: Prog(tys), g: Nat, fuel: Nat) → Type {
         ((match p.need(g) as λ _ => Type { Some(n) => n(g, ds) <= fuel → Exists<Answer(tys)>(λ a => p.run(tys, fuel, g, vs, h, io) = Done(a)), None => True }) ∧
         (((a: Answer(tys)) → p.run(tys, fuel, g, vs, h, io) = Done(a) →
             Value::ReadAll(tys, p.strs, a.heap, a.heap.len(), a.results, p.w(g, ds)) ∧
-            Value::Written(tys, p.strs, a.heap, a.heap.len(), vs, ds, (p.fns(g)).sig.written(), (p.w(g, ds)).drop((p.fns(g)).sig.results.len())) ∧
-            Heap::Frame(tys, h, a.heap, λ b => Value::lends(tys, (p.fns(g)).sig.params, vs, b)) ∧
+            Value::Written(tys, p.strs, vs, ds, (p.fns(g)).sig.written(), a.results.drop((p.fns(g)).sig.results.len()), (p.w(g, ds)).drop((p.fns(g)).sig.results.len())) ∧
+            Heap::Frame(tys, p.strs, h, a.heap, Value::lent(tys, (p.fns(g)).sig.params, vs)) ∧
             Value::Views(tys, p.strs, h.len(), vs, Dyn::ixs(tys, ds ++ p.w(g, ds)), (p.fns(g)).sig.results, a.results)) ∧
         (match p.need(g) as λ _ => Type { Some(_) => True, None => (io2: Io) → p.run(tys, fuel, g, vs, h, io) = Going(io2) → p.reaches(g, ds, io2.past) })))
 }
@@ -319,9 +338,11 @@ fn Sig::reads_only(tys: Nat → Type, strs: Strs(tys), sg: Sig) → Bool {
 }
 
 // A checker: from the environment's structures, the program's signatures,
-// which callees are primitives and a function's index, its verdict, or a
-// refusal.
-fn Checker(tys: Nat → Type) → Type<1> { Strs(tys) → (Nat → Sig) → (Nat → Bool) → Nat → Func → Option<Owes> }
+// which callees are primitives, which functions are measured (have a
+// `need`) and a function's index, its verdict, or a refusal.
+fn Checker(tys: Nat → Type) → Type<1> { Strs(tys) → (Nat → Sig) → (Nat → Bool) → (Nat → Bool) → Nat → Func → Option<Owes> }
+
+fn Prog::measured(tys: Nat → Type, self p: Prog(tys), g: Nat) → Bool { match p.need(g) { Some(_) => True, None => False } }
 
 // Each function's pin: its meaning in the world is its body's, pointwise.
 fn Prog::Pinned(tys: Nat → Type, p: Prog(tys)) → Type {
@@ -332,6 +353,6 @@ fn Prog::Pinned(tys: Nat → Type, p: Prog(tys)) → Type {
 // what it owes holding at every argument list meeting the function's
 // precondition, give the function's safety.
 fn CheckSound(tys: Nat → Type, check: Checker(tys)) → Type<1> {
-    (p: Prog(tys)) → Prog::Pinned(tys, p) → (g: Nat) → (d: Owes) → check(p.strs, λ g2 => (p.fns(g2)).sig, p.prim, g, p.fns(g)) = Some(d) →
+    (p: Prog(tys)) → Prog::Pinned(tys, p) → (g: Nat) → (d: Owes) → check(p.strs, λ g2 => (p.fns(g2)).sig, p.prim, λ g2 => p.measured(tys, g2), g, p.fns(g)) = Some(d) →
         ((args: List<Dyn(tys)>) → Dyn::Coded(tys, args, (p.fns(g)).sig.params) → p.pres(g, args) → d.Due(tys, Prog::ctx(tys, p, g, args), p.fns(g))) → Safety(tys, p, g)
 }

@@ -29,8 +29,12 @@
 //   it is, marks `w` written back, and changes `p`.
 // - **Residuals**: an accessor's precondition at every element or window
 //   step of a place read, written, taken or viewed (`RAccess`, one per such
-//   prefix); `RFits` at a write of a sequence; `RPre` and `RMeasure` at a
-//   call and a `Jump`; `RApart` from the licence.
+//   prefix); `RFits` at a write of a sequence; `RPre` at a call and a
+//   `Jump`; `RApart` from the licence. A measured function (one with a
+//   `need`) owes `RMeasure` at each call of a callee with a body and at its
+//   `Jump`, and is refused a call of an unmeasured one (there is no measure
+//   to compare: `WMeasure`); an unmeasured function owes no measure, its
+//   termination being claimed nowhere.
 // - **A call** reads each argument it lends to read, writes each it lends to
 //   write, and moves each it takes that the caller owns (copies any other).
 //   Arguments lent where one writes are apart. Its results: a fresh object,
@@ -426,8 +430,9 @@ fn CSt::unback(self s: CSt, l: Nat) → CSt { s.with_views(s.views.map(λ e => m
 fn CSt::backed(self s: CSt, l: Nat) → CSt { s.with_views(s.views.map(λ e => match e.lvl.same(l) { True => VEnt(e.lvl, e.obj, e.reg, e.mode, e.par, e.at, True), False => e })) }
 
 // A variable written: its state changed, and a view to write is no longer
-// written back.
-fn CSt::wrote_to(self s: CSt, l: Nat) → CSt { match s.role(l) { KPlain => s, _ => s.written(l).unback(l) } }
+// written back. A plain variable is recorded as written only: a returned
+// view's signature reads an argument as passed (`CSt::sig_atom`).
+fn CSt::wrote_to(self s: CSt, l: Nat) → CSt { match s.role(l) { KPlain => s.written(l), _ => s.written(l).unback(l) } }
 
 // ---------------------------------------------------------------------------
 // Statements
@@ -657,16 +662,22 @@ fn CSt::slots(self s: CSt, s0: CSt, sig: Sig, xs: List<Var>, ws: List<Nat>) → 
     }
 }
 
-fn CSt::call(self s: CSt, tys: Nat → Type, strs: Strs(tys), sigs: Nat → Sig, prim: Nat → Bool, g: Nat, xs: List<Var>) → Option<Next> {
+// The measure a call owes: where the caller is measured and the callee has a body.
+fn Residual::measure(owed: Bool, g: Nat, xs: List<Var>) → List<Residual> { match owed { True => [RMeasure(g, xs)], False => Nil } }
+
+fn CSt::call(self s: CSt, tys: Nat → Type, strs: Strs(tys), sigs: Nat → Sig, prim: Nat → Bool, mo: Bool, g: Nat, xs: List<Var>) → Option<Next> {
     let sig = sigs(g);
     (!prim(g) || Sig::reads_only(tys, strs, sig)).then(
         s.lend_all(tys, strs, sig.params, xs).and_then(λ nl =>
             s.apart_args(s.lent(sig.params, xs)).and_then(λ ra =>
                 nl.st.results(tys, strs, s, sig, xs, sig.results).and_then(λ s2 =>
-                    s2.slots(s, sig, xs, sig.written()).map(λ s3 => Next(s3, nl.rs ++ ra ++ [RPre(g, xs), RMeasure(g, xs)]))))))
+                    s2.slots(s, sig, xs, sig.written()).map(λ s3 => Next(s3, nl.rs ++ ra ++ Cons(RPre(g, xs), Residual::measure(mo && !prim(g), g, xs))))))))
 }
 
-fn Stmt::verdict(self st: Stmt, tys: Nat → Type, strs: Strs(tys), sigs: Nat → Sig, prim: Nat → Bool, s: CSt) → Option<Next> {
+// A measured function's call of an unmeasured one: refused (`WMeasure`).
+fn Stmt::unmeasured(self st: Stmt, prim, meas: Nat → Bool, me: Nat) → Bool { match st { Call(g, _, _) => meas(me) && !prim(g) && !meas(g), _ => False } }
+
+fn Stmt::verdict(self st: Stmt, tys: Nat → Type, strs: Strs(tys), sigs: Nat → Sig, prim: Nat → Bool, mo: Bool, s: CSt) → Option<Next> {
     match st {
         Op(_, a, b) => s.read_var(tys, strs, a).and_then(λ ga => s.read_var(tys, strs, b).map(λ gb => Next(s.push(CVar(ga.code, KPlain)), ga.rs ++ gb.rs))),
         Lit(w, _) => Some(Next(s.push(CVar(SWord(w), KPlain)), Nil)),
@@ -675,7 +686,7 @@ fn Stmt::verdict(self st: Stmt, tys: Nat → Type, strs: Strs(tys), sigs: Nat �
         View(p, md) => s.view(tys, strs, p, md),
         Take(p) => s.take(tys, strs, p),
         Fresh(c, n, v) => s.read_var(tys, strs, n).and_then(λ gn => s.read_var(tys, strs, v).map(λ gv => Next(s.push(CVar(c, KHold(s.nobj, AcOwn))).fresh_obj(), gn.rs ++ gv.rs))),
-        Call(g, xs, _) => s.call(tys, strs, sigs, prim, g, xs),
+        Call(g, xs, _) => s.call(tys, strs, sigs, prim, mo, g, xs),
         Death(p) => s.death(p),
     }
 }
@@ -700,13 +711,14 @@ fn CSt::writes_back(self s: CSt, st: Stmt) → Bool {
 // Leaves: a return, a `Jump`
 
 // A signature's atom at this function's levels: below the parameters'
-// count an argument's level; past it a result the `Ret` lists, which must
+// count an argument's level, never written, since the signature reads the
+// argument as passed; past it a result the `Ret` lists, which must
 // be a plain word, so the view's place cannot move under it.
 fn CSt::sig_atom(self s: CSt, ls: List<Nat>, a: Atom) → Option<Atom> {
     match a {
         Lit(n) => Some(Lit(n)),
         Var(k) => match (k + 1).leb(s.na) {
-            True => Some(Var(k)),
+            True => (!k.member(s.wrote)).then(Some(Var(k))),
             False => ls.nth(k - s.na).and_then(λ l => match s.role(l) { KPlain => Some(Var(l)), _ => None }),
         },
     }
@@ -726,11 +738,14 @@ fn CSt::sig_steps(self s: CSt, ls: List<Nat>, xs: List<Step>) → Option<List<St
     match xs { Nil => Some(Nil), Cons(a, rest) => s.sig_step(ls, a).and_then(λ b => s.sig_steps(ls, rest).map(λ bs => Cons(b, bs))) }
 }
 
+fn Result::param(self r: Result) → List<Nat> { match r.origin { OParam(i) => [i], OView(i, _) => [i], OFresh => Nil } }
+
 // A result as its origin promises: a plain value or an object made by
 // this call (not an argument's: `Value::ViewIs`); the parameter's object; a read view of the parameter at the
-// steps named.
+// steps named. A parameter named is one of the function's (an object made
+// here is no argument the caller can compare with).
 fn CSt::returns(self s: CSt, tys: Nat → Type, strs: Strs(tys), ls: List<Nat>, l: Nat, r: Result) → Bool {
-    match r.origin {
+    r.param().all_bit(λ i => (i + 1).leb(s.na)) && match r.origin {
         OFresh => match s.role(l) { KPlain => True, KHold(o, a) => !Shape::plain(tys, strs, r.code) && s.na.leb(o) && (match a { AcOwn => True, AcRead => False, AcWrite => False }), KView => False, KGone => False },
         OParam(i) => match s.role(l) { KHold(o, _) => o.same(i), _ => False },
         OView(i, xs) => match s.sig_steps(ls, xs) {
@@ -772,11 +787,9 @@ fn CSt::keeps_place(self s: CSt, xs: List<Var>, i: Nat) → Bool {
     match xs.nth(i).and_then(λ x => s.lvl(x)) { Some(l) => match s.role(l) { KHold(o, _) => o.same(i), _ => False }, None => False }
 }
 
-fn Result::param(self r: Result) → List<Nat> { match r.origin { OParam(i) => [i], OView(i, _) => [i], OFresh => Nil } }
-
-fn CSt::jump(self s: CSt, tys: Nat → Type, strs: Strs(tys), sig: Sig, me: Nat, xs: List<Var>) → Option<List<Residual>> {
+fn CSt::jump(self s: CSt, tys: Nat → Type, strs: Strs(tys), sig: Sig, mo: Bool, me: Nat, xs: List<Var>) → Option<List<Residual>> {
     let kept = (sig.written() ++ sig.results.foldr(λ (r: Result) (acc: List<Nat>) => r.param() ++ acc, Nil)).all_bit(λ i => s.keeps_place(xs, i));
-    kept.then(s.lend_all(tys, strs, sig.params, xs).and_then(λ nl => s.apart_args(s.lent(sig.params, xs)).map(λ ra => nl.rs ++ ra ++ [RPre(me, xs), RMeasure(me, xs)])))
+    kept.then(s.lend_all(tys, strs, sig.params, xs).and_then(λ nl => s.apart_args(s.lent(sig.params, xs)).map(λ ra => nl.rs ++ ra ++ Cons(RPre(me, xs), Residual::measure(mo, me, xs)))))
 }
 
 // ---------------------------------------------------------------------------
@@ -939,8 +952,9 @@ fn CSt::joined(s0: CSt, oy, on: Option<Yd>) → Option<CSt> {
 // ---------------------------------------------------------------------------
 // Bodies, and the checker
 
-// Why the pass refused: from codes alone, or ownership.
-inductive Why { WCodes, WOwn }
+// Why the pass refused: from codes alone, ownership, or a measured
+// function calling an unmeasured one.
+inductive Why { WCodes, WOwn, WMeasure }
 
 // A body's verdict, or why it was refused (the first fault, in order).
 inductive Vd { VOk(r: CRes), VNo(w: Why) }
@@ -956,7 +970,7 @@ fn Yd::alike(oy, on: Option<Yd>) → Bool {
     match oy { Some(y) => match on { Some(n) => Shape::same_list(y.codes(), n.codes()), None => True }, None => True }
 }
 
-fn Body::verdict(self b: Body, tys: Nat → Type, strs: Strs(tys), sigs: Nat → Sig, prim: Nat → Bool, me: Nat, s: CSt) → Vd {
+fn Body::verdict(self b: Body, tys: Nat → Type, strs: Strs(tys), sigs: Nat → Sig, prim, meas: Nat → Bool, me: Nat, s: CSt) → Vd {
     match b {
         Ret(xs) => match Shape::same_list(s.codes(xs), sigs(me).ret_codes()) {
             False => VNo(WCodes),
@@ -965,13 +979,16 @@ fn Body::verdict(self b: Body, tys: Nat → Type, strs: Strs(tys), sigs: Nat →
         Yield(xs) => Vd::own((!s.pending()).then(Some(CRes(OEnd, Some(Yd(s, xs)))))),
         Jump(xs) => match Shape::same_list(s.codes(xs), sigs(me).param_codes()) {
             False => VNo(WCodes),
-            True => Vd::own((!s.pending()).then(s.jump(tys, strs, sigs(me), me, xs).map(λ rs => CRes(OJump(rs), None)))),
+            True => Vd::own((!s.pending()).then(s.jump(tys, strs, sigs(me), meas(me), me, xs).map(λ rs => CRes(OJump(rs), None)))),
         },
         Do(st, rest) => match st.code_ok(tys, strs, sigs, s) {
             False => VNo(WCodes),
-            True => match (!s.pending() || s.writes_back(st)).then(st.verdict(tys, strs, sigs, prim, s)) {
-                None => VNo(WOwn),
-                Some(nx) => rest.verdict(tys, strs, sigs, prim, me, nx.st).then(λ cr => VOk(CRes(ODo(nx.rs, cr.owes), cr.yld))),
+            True => match st.unmeasured(prim, meas, me) {
+                True => VNo(WMeasure),
+                False => match (!s.pending() || s.writes_back(st)).then(st.verdict(tys, strs, sigs, prim, meas(me), s)) {
+                    None => VNo(WOwn),
+                    Some(nx) => rest.verdict(tys, strs, sigs, prim, meas, me, nx.st).then(λ cr => VOk(CRes(ODo(nx.rs, cr.owes), cr.yld))),
+                },
             },
         },
         Join(t, yes, no, rest) => match t.code_ok(s) {
@@ -980,12 +997,12 @@ fn Body::verdict(self b: Body, tys: Nat → Type, strs: Strs(tys), sigs: Nat →
                 let tv = match t as λ _ => List<Var> { TLt(a, c) => [a, c], TLe(a, c) => [a, c] };
                 match s.read_vars(tys, strs, tv) {
                     Some(trs) => match trs {
-                        Nil => yes.verdict(tys, strs, sigs, prim, me, s.arm()).then(λ cy => no.verdict(tys, strs, sigs, prim, me, s.arm()).then(λ cn =>
+                        Nil => yes.verdict(tys, strs, sigs, prim, meas, me, s.arm()).then(λ cy => no.verdict(tys, strs, sigs, prim, meas, me, s.arm()).then(λ cn =>
                             match Yd::alike(cy.yld, cn.yld) {
                                 False => VNo(WCodes),
                                 True => match CSt::joined(s, cy.yld, cn.yld) {
                                     None => VNo(WOwn),
-                                    Some(s1) => rest.verdict(tys, strs, sigs, prim, me, s1).then(λ cr => VOk(CRes(OJoin(cy.owes, cn.owes, cr.owes), cr.yld))),
+                                    Some(s1) => rest.verdict(tys, strs, sigs, prim, meas, me, s1).then(λ cr => VOk(CRes(OJoin(cy.owes, cn.owes, cr.owes), cr.yld))),
                                 },
                             })),
                         Cons(_, _) => VNo(WOwn),
@@ -1009,18 +1026,18 @@ fn CSt::params(tys: Nat → Type, strs: Strs(tys), ps: List<Param>, i: Nat) → 
 
 fn CSt::start(tys: Nat → Type, strs: Strs(tys), sig: Sig) → CSt { CSt(CSt::params(tys, strs, sig.params, 0), Nil, sig.params.len(), 0, Nil, sig.params.len(), Nil, Nil) }
 
-fn Func::verdict(self f: Func, tys: Nat → Type, strs: Strs(tys), sigs: Nat → Sig, prim: Nat → Bool, me: Nat) → Vd { f.body.verdict(tys, strs, sigs, prim, me, CSt::start(tys, strs, f.sig)) }
+fn Func::verdict(self f: Func, tys: Nat → Type, strs: Strs(tys), sigs: Nat → Sig, prim, meas: Nat → Bool, me: Nat) → Vd { f.body.verdict(tys, strs, sigs, prim, meas, me, CSt::start(tys, strs, f.sig)) }
 
 // Why a function is refused, if it is.
-fn Func::refusal(self f: Func, tys: Nat → Type, strs: Strs(tys), sigs: Nat → Sig, prim: Nat → Bool, me: Nat) → Option<Why> {
-    match f.verdict(tys, strs, sigs, prim, me) { VOk(_) => None, VNo(w) => Some(w) }
+fn Func::refusal(self f: Func, tys: Nat → Type, strs: Strs(tys), sigs: Nat → Sig, prim, meas: Nat → Bool, me: Nat) → Option<Why> {
+    match f.verdict(tys, strs, sigs, prim, meas, me) { VOk(_) => None, VNo(w) => Some(w) }
 }
 
 // The checker: a primitive has no body and owes nothing if it only reads;
 // any other function, the pass (its code conditions included).
 fn check(tys: Nat → Type) → Checker(tys) {
-    λ strs sigs prim g f => match prim(g) {
+    λ strs sigs prim meas g f => match prim(g) {
         True => Sig::reads_only(tys, strs, f.sig).then(Some(OEnd)),
-        False => match f.verdict(tys, strs, sigs, prim, g) { VOk(cr) => Some(cr.owes), VNo(_) => None },
+        False => match f.verdict(tys, strs, sigs, prim, meas, g) { VOk(cr) => Some(cr.owes), VNo(_) => None },
     }
 }

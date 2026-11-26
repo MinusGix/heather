@@ -153,7 +153,7 @@ theorem words_not_coded(): ¬Dyn::Coded(tys(), [nat(5), nat(1)], pick_r().sig.pa
 
 fn sigs() → Nat → Sig { λ g => match g { Zero => Sig([Param(SNamed(0), ByRead), Param(SWord(WNat), ByTake)], [Result(SWord(WNat), OFresh)]), Succ(_) => Sig(Nil, Nil) } }
 
-fn refused(f: Func, sg: Nat → Sig) → Option<Why> { f.refusal(tys(), strs(), sg, λ _ => False, 0) }
+fn refused(f: Func, sg: Nat → Sig) → Option<Why> { f.refusal(tys(), strs(), sg, λ _ => False, λ _ => True, 0) }
 
 theorem pick_coded(): refused(pick_r(), sigs()) = None { refl }
 
@@ -210,11 +210,14 @@ fn bump(x: &mut Nat) → True {
 // The source's `Mutated(x, trivial)` read back: no results, then `x` after.
 theorem bump_means(x: Nat): bump_r().then(Mutated<Nat, True>, tys(), strs(), λ _ _ => Nil, 0, [nat(x)], λ rs => Mutated(as_nat(rs), trivial)) = bump(x) { refl }
 
-// The clause at a run that left `y` in the argument's block: `y` is the
-// meaning's `x + 1`, and it fits `x`.
-theorem bump_written_clause(x, y: Nat):
-    Value::Written(tys(), strs(), [Live(Obj(nat(y), Nil))], 1, [Refer(Ref(0, Nil))], [nat(x)], bump_sig().written(), bump_r().denote(tys(), strs(), λ _ _ => Nil, 0, [nat(x)]).drop(0))
-    = ((Some(nat(y)) = Some(nat(x + 1))) ∧ Dyn::Fits(tys(), strs(), nat(x), nat(x + 1)) ∧ True)
+fn arg0() → Value(tys()) { Refer(Ref(0, Nil)) }
+
+// The clause at a run whose answer's slot is the argument: the slot is the
+// argument itself, and the meaning's `x + 1` fits `x`; what the slot reads
+// is `ReadAll`'s.
+theorem bump_written_clause(x: Nat):
+    Value::Written(tys(), strs(), [arg0()], [nat(x)], bump_sig().written(), [arg0()], bump_r().denote(tys(), strs(), λ _ _ => Nil, 0, [nat(x)]).drop(0))
+    = ((arg0() = arg0()) ∧ Dyn::Fits(tys(), strs(), nat(x), nat(x + 1)) ∧ True)
 { refl }
 
 // ---------------------------------------------------------------------------
@@ -229,7 +232,9 @@ theorem view_clause(xs: List<Nat>, i: u64, b: Nat, out: Value(tys())):
     = ((out = Refer(Ref(b, [OnSeq(SeqOne(IWord(64, i)))]))) ∧ True)
 { refl }
 
-// The control: a view of a parameter passed by value owes `False`.
+// A view of a parameter passed by value is a copy: a plain value (it owed
+// `False`, so `at` at a plain list was checked and not safe; §23.13).
 theorem view_of_plain(xs: List<Nat>, i: u64, out: Value(tys())):
-    Value::Views(tys(), strs(), 1, [Plain(nats(xs)), Plain(Dyn(SWord(WBits(64)), i))], Dyn::ixs(tys(), [nats(xs), Dyn(SWord(WBits(64)), i)]), at_sig().results, [out]) = (False ∧ True)
+    Value::Views(tys(), strs(), 1, [Plain(nats(xs)), Plain(Dyn(SWord(WBits(64)), i))], Dyn::ixs(tys(), [nats(xs), Dyn(SWord(WBits(64)), i)]), at_sig().results, [out])
+    = ((Value::refers(tys(), out) = False) ∧ True)
 { refl }

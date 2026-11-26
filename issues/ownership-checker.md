@@ -29,94 +29,73 @@ Items 1 and 2 are definitions and evaluation; item 3 waits for the coordinating 
 
 `CheckSound` has an inhabitant for the fragment, the experiments' programs are probes or theorems of the real modules, and the experiment modules are gone.
 
-## Handoff (2026-11-26, end of the fourth session: Ret, then the call)
+## Handoff (2026-11-26, end of the fifth session: D2, then the call)
 
 Continue on branch `claude/ownership-checker-sound`. Everything is in
-`lib/lang/ownership/sound.hthr`; design §23.12 says what was built this
-session and why (read it, then §23.8–§23.11). The coordinating session's list
-for this session was: 1 `cfit`; 2 the write-back; 3 `Death`/`Take` of a view's
-root, `Ret`; 4 `Call` (plan it as named parts first and send the parts to the
-coordinating session); 5 `SafeAt` for a body without joins or `Jump`, then
-report; 6 joins, `Jump`, the induction. Items 1 and 2 are done, and so is the
-`Death`/`Take` half of item 3.
+`lib/lang/ownership/sound.hthr`. Read design §23.13 and §23.14 first
+(this session), then §23.8 to §23.12. The coordinating session's order: D2
+(several pending views), then `Call` in the nine named parts below, then
+`SafeAt` for a body with no join and no `Jump` and report; then joins, `Jump`,
+the induction on fuel.
 
-**Done this session**:
-- **`cfit` and `sib`**, carried through every builder. `cfit`: a copy's place
-  fits its parent's copy, and the copy is *like* what is read there, i.e.
-  the same code and length; fit alone is not kept by the child's own
-  write-back at a place of several steps. `sib`: two siblings, one to write,
-  are apart at their *places*. `excl` only says so of whole regions, and
-  apartness under a shared prefix does not cancel at the `Sel` level; the
-  decider cancels it (`Steps::apart_prefix`). The licence's soundness chain
-  now takes a common prefix (`against_sound`, `license_sound`,
-  `Inv::lic_suffix`; `Inv::lic_apart` is its Nil-prefix instance;
-  `Inv::sib_lic`).
-- **The write-back**: `Stmt::stage_back` dispatches to three stages:
-  - `stage_back_ref_none`: the chain refers, nothing pending; the run stores
-    what is there (`Heap::store_val`), and the meaning is unchanged
-    (`Env::set_fix`).
-  - `stage_back_ref_pend`: the chain refers, the child pending; the meaning
-    is the walk's first step (`up_step`), the patch afterwards its rest.
-  - `stage_back_copy`: a chain of copies, through `Inv::set_cell`.
+**Done this session** (each with probes; `scripts/test --pr` in the log):
+- **Checker fixes.** A returned view's signature atom reads an argument
+  never written (`sig_atom`; plain writes recorded in `wrote`). A result
+  naming an object made here is refused (`returns`).
+- **The measure.** It is owed only by a measured function. `Checker` is told
+  which functions are measured, and `WMeasure` refuses a measured caller of
+  an unmeasured callee.
+- **Definitions.** `ViewIs` at `OParam`/`OView` is plain where the argument
+  was. `Written` says the slot is the argument. `Heap::Frame` is by place,
+  over `Value::lent` references.
+- **`Inv`** gained `args`, `href`, `made` and `nbase`; `lent` is now the list
+  of references lent to change; `owned` and `frame` were restated.
+- **`Stepped`** gained `kept`: the argument cells' references.
+- **`Like`**, with its start and the `push`, `gone` and `write` steps. The
+  per-statement steps are to be assembled in the body's induction:
+  - each binding is `Like::push` (no new written holder, except a take of
+    one, which carries it);
+  - a death is `Like::gone`;
+  - a write is `Like::write`. Its root is like itself by `RFits`, or by the
+    code check and `len_non_seq` at an ordinary write, by
+    `Inv::back_like` at a write-back (not yet written: equality through the
+    heap where the chain refers, `cfit` where it is copies), and by
+    `CallFits` at a call's slot. What is pending after it is `pend`'s, which
+    the stage proves.
+- **`Ret`**: `Body::stage_ret`.
 
-  The parent is a holder or a view in each: `CSt::back_patched_hold` and
-  `_view`. The state after is one `rekin` (`CSt::back_state`,
-  `VEnt::reback`), finished by `Inv::back_finish`. `Inv::set_cell` takes
-  `s.patched(e, m) = e`, before and after, instead of `none`.
-- **`Stmt::stage_death_view`** (`Inv::drop_view`, `CSt::drop`): also valid
-  while another view is pending (`CSt::patched_drop`, `up_drop`, `anc_drop`).
-  **`Stmt::stage_take_view`** (`Inv::take_view`, `CSt::moved`, `VEnt::rn`, the
-  `Alike` record; ancestry through `anc_moved`, `anc_par_eq`, `anc_not`).
+**Next: D2**, designed in §23.14 (the disjointness statement, the commuting
+lemma, which stages change). Prove the commuting lemma first and report
+to the coordinating session before restating the stages. They asked to hear
+if it is not clean.
 
-**Next: `Ret`**, the open question first. `CSt::ret` passes when nothing is
-pending, the results are as their origins say (`returns_all`), and each
-written parameter's object is held and synced (`gives_back`).
-`SafeAt` then wants four things:
-- `ReadAll` of the cells against the meaning: Sim with bare blocks
-  (`Value::get` to `Value::read`).
-- `Frame`: `inv.frame`, since `lent` is `Value::lends` at the start.
-- `Views`: from `returns_all` and `refs`.
-- `Written`: the argument's block reads the final meaning, and
-  `Dyn::Fits(ds_i, o)`.
+**Then `Call`**, in this order:
+- **P1** `Inv::pass`: `pass_all` succeeds and `ReadAll` holds of the passed
+  values; `Coded` from the code check; `pres` from `RPre`.
+- **P2** `Inv::lendable`, one lemma per clause. `apart` for one object comes
+  through `apart_args` and the licence chain generalised from
+  `Inv::lic_apart`.
+- **P3** `Call::callee`: the callee's `SafeAt` at the fuel below. A
+  primitive is `Call::prim`.
+- **P4** `Inv::call_frame`: from the callee's place frame.
+- **P5** `Inv::bind_results`: fresh results in distinct blocks;
+  `returns_all` refusing one object twice is already decided.
+- **P6** `Inv::bind_slots`: pending slots, D2.
+- **P7**: the moved arguments.
+- **P8** `Like::call`.
+- **P9** `Stmt::stage_call`, split into run, invariant and `Like`.
 
-Two of these need facts about the start that `Inv` does not keep:
-- **an argument's reference is its object's root**. This one is cheap: a
-  clause over `m.env` alone, since a referring cell is never set
-  (`set_cell` is for plain cells only), and every builder keeps it.
-- **a written parameter's meaning keeps the code and length of the argument
-  as passed** (`Fits`). The original `ds` is not a parameter of `Inv`.
-
-  For a referring argument it is what the root read in `h0`, so it can be a
-  clause over `h0`. For a plain argument nothing in `Inv` holds the original
-  value. Every write keeps the root's code and length (`write_keeps`, and
-  `WriteVal` for a write of the whole), so it is a fact of the meaning
-  alone, and could be carried by the body's induction instead.
-
-This is a design decision: put it to the coordinating session before
-building `Ret`.
-
-**Then** the brief's item 4 (`Call`): plan it as named parts and send the
-parts to the coordinating session before writing any of it.
-
-**Costs and traps found this session**:
-- No declaration written this session is dear: each takes under 0.3 s. The
-  dearest in `sound.hthr` are still `CSt::write_inv` and `CSt::up_next`. The
-  file checks in about 60 s without `--cache`.
-- A `let` whose type is not stated cannot hold a `match`. The elaborator
-  needs the motive: state the `let`'s type.
-- `λ (a, b: T)` is not a lambda binder; write `(a: T) (b: T)`. In a Π-type
-  `(a, b: T) →` is fine.
-- A local named like a method (`rn` beside `VEnt::rn`) is refused as
-  ambiguous at `en.rn(…)`.
-- `match e: p(h)` is in the standard library, but stating the equation
-  through `j` (as `List::filter_keep` does) needs no goal refinement.
-- Record eta holds by conversion (`Mach(m.heap, m.env, m.io) = m`, and the
-  same for `VEnt`), so a stage may answer `Stepped(m, …)` where the run
-  answers `Mach(…)`.
-- `scripts/test --pr` runs every test file here (no merge base) in about
-  37 minutes. Run it from a second worktree
-  (`git worktree add ../heather-wt <rev>`) so `lib/` can be edited
-  meanwhile.
+**Traps found this session:**
+- A `let` or parameter type that is a lambda with `=` in its body needs
+  parentheses: `Exists<Nat>(λ l => (b = Var(l)))`.
+- A recursive theorem must match on a declared parameter, not on a
+  `λ`-bound one.
+- `Lit(n)` is ambiguous with the statement `Lit(w, n)`; write
+  `Atom::ix(Lit(n), ws)`.
+- A Python `replace` over a pattern shared by two theorems silently edits
+  both. Anchor each edit on text unique to its theorem.
+- `scripts/fmt` is Heather's formatter, which `scripts/fmt --check` asks for
+  (it is not `cargo fmt`).
 
 ## Log
 
@@ -137,3 +116,5 @@ parts to the coordinating session before writing any of it.
 - 2026-11-26 (fourth session): `cfit` (with like-ness) and `sib` through every builder; the licence's soundness after a common prefix (`6f6c923`). `scripts/test --pr` at `6f6c923`: `== suite: 4140 passed, 0 failed, 3 ignored ==`.
 - 2026-11-26: the write-back stage in its four cases; `Inv::set_cell` over a patch that is the meaning (`b52c3a6`). `scripts/test --pr` at `b52c3a6`: `== suite: 4140 passed, 0 failed, 3 ignored ==`.
 - 2026-11-26: the death and the take of a view (`62a8529`, `ea53353`); handoff rewritten at `Ret`. `scripts/test --pr` at `ea53353`: `== suite: 4140 passed, 0 failed, 3 ignored ==`.
+- 2026-11-26 (fifth session): the `sig_atom` and `returns` checker fixes; the measure for measured functions only (`WMeasure`); `ViewIs` plain where the argument was, `Written` the slot as the argument, `Heap::Frame` by place; `Inv` gains `args`, `href`, `made`, `nbase`; `Stepped.kept`; `Like` with its start and steps; the `Ret` stage (`Body::stage_ret`). Design §23.13, §23.14. Handoff rewritten at D2.
+- 2026-11-26: `scripts/test --pr` at `1dcfe82` (the last code commit of the fifth session; `906374b` after it is docs and this issue only): `== suite: 4140 passed, 0 failed, 3 ignored ==`.
