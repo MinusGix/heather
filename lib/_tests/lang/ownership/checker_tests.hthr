@@ -594,8 +594,6 @@ theorem beside_found_checked(): verdict([found(), beside_found()], 1) = Some(
     ODo([RPre(0, [x(), Arg(1)]), RMeasure(0, [x(), Arg(1)])], ODo(Nil, ODo([RApart(Var(5), Lit(1), Var(2), Lit(1)), acc_el(x(), Var(2))], ODo([acc_el(Loc(1), Lit(0))], OEnd)))))
 { refl }
 
-
-
 // The forward form, a view naming a later result: refused where it is
 // written, and a caller of a table entry with that signature at the call.
 fn found_fwd_sig() → Sig { Sig([Param(nx(), ByRead), Param(nat_s(), ByTake)], [Result(nx(), OView(0, [SWindow(Var(3), Lit(1))])), Result(nat_s(), OFresh)]) }
