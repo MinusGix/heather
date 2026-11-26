@@ -1571,7 +1571,7 @@ fn CSt::CFitAt(tys: Nat → Type, strs: Strs(tys), ss: List<Sel>, dp, dc: Dyn(ty
 }
 
 fn CSt::CFit(tys: Nat → Type, strs: Strs(tys), s: CSt, env: REnv(tys), ws: List<Ix>) → Type {
-    (en: VEnt) → Mem(en, s.views) → (y, z: Var) → s.lvl(y) = Some(en.par) → s.lvl(z) = Some(en.lvl) → (dp, dc: Dyn(tys)) →
+    (en: VEnt) → Mem(en, s.views) → en.mode.writes() = True → (y, z: Var) → s.lvl(y) = Some(en.par) → s.lvl(z) = Some(en.lvl) → (dp, dc: Dyn(tys)) →
         (REnv::get(tys, env, y)).v = level2::Plain(dp) → (REnv::get(tys, env, z)).v = level2::Plain(dc) → CSt::CFitAt(tys, strs, Steps::sels(s.unsteps(en.at), ws), dp, dc)
 }
 
@@ -2590,7 +2590,7 @@ theorem CSt::changes_push(self s: CSt, cv: CVar, o: Nat, nohold: (a: Acc) → cv
 theorem CSt::cfit_ws(tys: Nat → Type, strs: Strs(tys), s: CSt, env: REnv(tys), ws, ws2: List<Ix>,
     ats: (en: VEnt) → Mem(en, s.views) → Steps::sels(s.unsteps(en.at), ws2) = Steps::sels(s.unsteps(en.at), ws), cf: CSt::CFit(tys, strs, s, env, ws)): CSt::CFit(tys, strs, s, env, ws2)
 {
-    λ en mem y z hy hz dp dc cy cz => j(sym(ats(en, mem)), λ q _ => CSt::CFitAt(tys, strs, q, dp, dc), cf(en, mem, y, z, hy, hz, dp, dc, cy, cz))
+    λ en mem w y z hy hz dp dc cy cz => j(sym(ats(en, mem)), λ q _ => CSt::CFitAt(tys, strs, q, dp, dc), cf(en, mem, w, y, z, hy, hz, dp, dc, cy, cz))
 }
 
 theorem CSt::sib_keep(tys: Nat → Type, strs: Strs(tys), s, s2: CSt, ws, ws2: List<Ix>, vs: s2.views = s.views,
@@ -2608,22 +2608,22 @@ theorem CSt::sib_keep(tys: Nat → Type, strs: Strs(tys), s, s2: CSt, ws, ws2: L
 // own variable the pushed one.
 theorem CSt::cfit_push(tys: Nat → Type, strs: Strs(tys), s: CSt, cv: CVar, env: REnv(tys), c: Cell(tys), ws, ws2: List<Ix>, cf: CSt::CFit(tys, strs, s, env, ws),
     pb: (en: VEnt) → Mem(en, s.views) → en.par < s.na + s.nd,
-    new: (en: VEnt) → Mem(en, s.views) → en.lvl = s.na + s.nd → (y0: Var) → s.lvl(y0) = Some(en.par) → (dp, dc: Dyn(tys)) → (REnv::get(tys, env, y0)).v = level2::Plain(dp) →
+    new: (en: VEnt) → Mem(en, s.views) → en.mode.writes() = True → en.lvl = s.na + s.nd → (y0: Var) → s.lvl(y0) = Some(en.par) → (dp, dc: Dyn(tys)) → (REnv::get(tys, env, y0)).v = level2::Plain(dp) →
         c.v = level2::Plain(dc) → CSt::CFitAt(tys, strs, Steps::sels(s.unsteps(en.at), ws), dp, dc),
     ats: (en: VEnt) → Mem(en, s.views) → Steps::sels((s.push(cv)).unsteps(en.at), ws2) = Steps::sels(s.unsteps(en.at), ws)):
     CSt::CFit(tys, strs, s.push(cv), REnv::push(tys, env, c), ws2)
 {
     let env2 = REnv::push(tys, env, c);
-    λ en mem y z hy hz dp dc cy cz => match s.push_lvl(cv, y, en.par, hy) {
+    λ en mem w y z hy hz dp dc cy cz => match s.push_lvl(cv, y, en.par, hy) {
         Inl(py) => false_elim(Nat::lt_irrefl(en.par, omega(pb(en, mem), py.right))),
         Inr(ey) => match ey {
             ⟨y0, py⟩ => {
                 let cy0: ((REnv::get(tys, env, y0)).v = level2::Plain(dp)) =
                     trans(cong_fn(λ (q: Cell(tys)) => q.v, sym(REnv::get_push_up(tys, env, c, y0))), j(py.left, λ u _ => (REnv::get(tys, env2, u)).v = level2::Plain(dp), cy));
                 j(sym(ats(en, mem)), λ q _ => CSt::CFitAt(tys, strs, q, dp, dc), match s.push_lvl(cv, z, en.lvl, hz) {
-                    Inl(pz) => new(en, mem, pz.right, y0, py.right, dp, dc, cy0, j(pz.left, λ u _ => (REnv::get(tys, env2, u)).v = level2::Plain(dc), cz)),
+                    Inl(pz) => new(en, mem, w, pz.right, y0, py.right, dp, dc, cy0, j(pz.left, λ u _ => (REnv::get(tys, env2, u)).v = level2::Plain(dc), cz)),
                     Inr(ez) => match ez {
-                        ⟨z0, qz⟩ => cf(en, mem, y0, z0, py.right, qz.right, dp, dc, cy0,
+                        ⟨z0, qz⟩ => cf(en, mem, w, y0, z0, py.right, qz.right, dp, dc, cy0,
                             trans(cong_fn(λ (q: Cell(tys)) => q.v, sym(REnv::get_push_up(tys, env, c, z0))), j(qz.left, λ u _ => (REnv::get(tys, env2, u)).v = level2::Plain(dc), cz))),
                     },
                 })
@@ -2780,7 +2780,7 @@ theorem Inv::push_plain(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(ty
         CSt::uni_push(tys, s, cv, m.env, c, inv.uni, λ en mem => omega((inv.chain(en, mem)).left, (inv.vents(en, mem)).right.left),
             λ en mem at => false_elim(Nat::lt_irrefl(en.lvl, omega((inv.vents(en, mem)).right.left, at)))),
         CSt::cfit_push(tys, strs, s, cv, m.env, c, ws, ws2, inv.cfit, λ en mem => omega((inv.chain(en, mem)).left, (inv.vents(en, mem)).right.left),
-            λ en mem at => false_elim(Nat::lt_irrefl(en.lvl, omega((inv.vents(en, mem)).right.left, at))), ats),
+            λ en mem _ at => false_elim(Nat::lt_irrefl(en.lvl, omega((inv.vents(en, mem)).right.left, at))), ats),
         CSt::sib_keep(tys, strs, s, s2, ws, ws2, refl, ats, inv.sib),
         inv.args, CSt::href_push(tys, s, cv, m.env, c, root, inv.href, λ o a eq => absurd(eq)), inv.made, inv.nbase, inv.stays,
         CSt::hown_push(tys, s, cv, m.env, c, root, inv.hown, λ o eq => absurd(eq)))
@@ -3214,7 +3214,7 @@ theorem Inv::bind_fresh(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(ty
         CSt::uni_push(tys, s, cv, m.env, cn, inv.uni, λ en mem => omega((inv.chain(en, mem)).left, (inv.vents(en, mem)).right.left),
             λ en mem at => false_elim(Nat::lt_irrefl(en.lvl, omega((inv.vents(en, mem)).right.left, at)))),
         CSt::cfit_push(tys, strs, s, cv, m.env, cn, ws, ws2, inv.cfit, λ en mem => omega((inv.chain(en, mem)).left, (inv.vents(en, mem)).right.left),
-            λ en mem at => false_elim(Nat::lt_irrefl(en.lvl, omega((inv.vents(en, mem)).right.left, at))), ats),
+            λ en mem _ at => false_elim(Nat::lt_irrefl(en.lvl, omega((inv.vents(en, mem)).right.left, at))), ats),
         CSt::sib_keep(tys, strs, s, s2, ws, ws2, refl, ats, inv.sib),
         λ i lt => {
             let lt0: (i < s.na) = lt;
@@ -3929,7 +3929,7 @@ theorem Inv::push_hold(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys
         CSt::uni_push(tys, s, cv, m.env, c, inv.uni, λ en mem => omega((inv.chain(en, mem)).left, (inv.vents(en, mem)).right.left),
             λ en mem at => false_elim(Nat::lt_irrefl(en.lvl, omega((inv.vents(en, mem)).right.left, at)))),
         CSt::cfit_push(tys, strs, s, cv, m.env, c, ws, ws2, inv.cfit, λ en mem => omega((inv.chain(en, mem)).left, (inv.vents(en, mem)).right.left),
-            λ en mem at => false_elim(Nat::lt_irrefl(en.lvl, omega((inv.vents(en, mem)).right.left, at))), ats),
+            λ en mem _ at => false_elim(Nat::lt_irrefl(en.lvl, omega((inv.vents(en, mem)).right.left, at))), ats),
         CSt::sib_keep(tys, strs, s, s2, ws, ws2, refl, ats, inv.sib),
         inv.args,
         CSt::href_push(tys, s, CVar(code, KHold(o, a)), m.env, c, root, inv.href, λ o2 a2 eq r rt => hrf(r, j(sym(cong_fn(Role::held, eq)), λ q _ => root(q) = Some(r), rt))),
@@ -4491,7 +4491,7 @@ theorem Inv::push_view(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys
         Sel::Apart(tys, strs, Steps::sels(s.unsteps(e1.reg), Mach::ixs(tys, strs, m)), Steps::sels(s.unsteps(e2.reg), Mach::ixs(tys, strs, m))),
     nx2: (e1, e2: VEnt) → Mem(e1, s.views) → Mem(e2, ne) → e1.mode.writes() = True → e1.obj = e2.obj → e1.lvl.member(s.anc_of(e2, s.na + s.nd)) = False →
         Sel::Apart(tys, strs, Steps::sels(s.unsteps(e1.reg), Mach::ixs(tys, strs, m)), Steps::sels(s.unsteps(e2.reg), Mach::ixs(tys, strs, m))),
-    ncfit: (en: VEnt) → Mem(en, ne) → (y0: Var) → s.lvl(y0) = Some(en.par) → (dp, dc: Dyn(tys)) → (REnv::get(tys, m.env, y0)).v = level2::Plain(dp) → c.v = level2::Plain(dc) →
+    ncfit: (en: VEnt) → Mem(en, ne) → en.mode.writes() = True → (y0: Var) → s.lvl(y0) = Some(en.par) → (dp, dc: Dyn(tys)) → (REnv::get(tys, m.env, y0)).v = level2::Plain(dp) → c.v = level2::Plain(dc) →
         CSt::CFitAt(tys, strs, Steps::sels(s.unsteps(en.at), Mach::ixs(tys, strs, m)), dp, dc),
     nsib1: (e1, e2: VEnt) → Mem(e1, ne) → Mem(e2, s.views) → e1.mode.writes() = True → e1.par = e2.par →
         Sel::Apart(tys, strs, Steps::sels(s.unsteps(e1.at), Mach::ixs(tys, strs, m)), Steps::sels(s.unsteps(e2.at), Mach::ixs(tys, strs, m))),
@@ -4548,9 +4548,9 @@ theorem Inv::push_view(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys
         Inr(mo) => (inv.words(l, s.at_lvl(en, mo, l, ml))).left,
     };
     let ats: ((en: VEnt) → Mem(en, ne ++ s.views) → Steps::sels(s2.unsteps(en.at), ws2) = Steps::sels(s.unsteps(en.at), ws)) = λ en mem => wsel(en.at, aall(en, mem));
-    let cfv: CSt::CFit(tys, strs, sv, m.env, ws) = λ en mem y z hy hz dp dc cy cz => match ne.mem_append(s.views, en, mem) {
+    let cfv: CSt::CFit(tys, strs, sv, m.env, ws) = λ en mem w y z hy hz dp dc cy cz => match ne.mem_append(s.views, en, mem) {
         Inl(mn) => false_elim(Nat::lt_irrefl(nl, j(nlvl(en, mn), λ q _ => q < nl, s.lvl_below(z, en.lvl, hz)))),
-        Inr(mo) => inv.cfit(en, mo, y, z, hy, hz, dp, dc, cy, cz),
+        Inr(mo) => inv.cfit(en, mo, w, y, z, hy, hz, dp, dc, cy, cz),
     };
     let sib2: CSt::Sib(tys, strs, s2, ws2) = λ e1 e2b m1 m2b w1 pp n12 => {
         let ap: Sel::Apart(tys, strs, Steps::sels(s.unsteps(e1.at), ws), Steps::sels(s.unsteps(e2b.at), ws)) = match ne.mem_append(s.views, e1, m1) {
@@ -4677,8 +4677,8 @@ theorem Inv::push_view(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys
                 Inr(mo) => false_elim(Nat::lt_irrefl(en.lvl, omega(lv(en, mo), at))),
             }),
         CSt::cfit_push(tys, strs, sv, cv, m.env, c, ws, ws2, cfv, pall,
-            λ en mem at y0 hy dp dc cy cc => match ne.mem_append(s.views, en, mem) {
-                Inl(mn) => ncfit(en, mn, y0, hy, dp, dc, cy, cc),
+            λ en mem w at y0 hy dp dc cy cc => match ne.mem_append(s.views, en, mem) {
+                Inl(mn) => ncfit(en, mn, w, y0, hy, dp, dc, cy, cc),
                 Inr(mo) => false_elim(Nat::lt_irrefl(en.lvl, omega(lv(en, mo), at))),
             }, ats),
         sib2,
@@ -4999,8 +4999,8 @@ theorem Stmt::stage_view_core(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(tys,
         let yr: (y0 = p.root) = trans(sym(s.lvl_var(y0, en.par, hy)), trans(cong_fn(λ (q: Nat) => s.var_at(q), npar(en, mem)), s.lvl_var(p.root, g.root, hroot)));
         j(sym(yr), λ z _ => Value::refers(tys, c.v) = Value::refers(tys, (REnv::get(tys, m.env, z)).v), Value::refers_view(tys, (REnv::get(tys, m.env, p.root)).v, d, ws, p.steps))
     };
-    let ncfit: ((en: VEnt) → Mem(en, ne) → (y0: Var) → s.lvl(y0) = Some(en.par) → (dp, dc: Dyn(tys)) → (REnv::get(tys, m.env, y0)).v = level2::Plain(dp) → c.v = level2::Plain(dc) →
-            CSt::CFitAt(tys, strs, Steps::sels(s.unsteps(en.at), ws), dp, dc)) = λ en mem y0 hy dp dc cy cc => {
+    let ncfit: ((en: VEnt) → Mem(en, ne) → en.mode.writes() = True → (y0: Var) → s.lvl(y0) = Some(en.par) → (dp, dc: Dyn(tys)) → (REnv::get(tys, m.env, y0)).v = level2::Plain(dp) → c.v = level2::Plain(dc) →
+            CSt::CFitAt(tys, strs, Steps::sels(s.unsteps(en.at), ws), dp, dc)) = λ en mem _ y0 hy dp dc cy cc => {
         let yr: (y0 = p.root) = trans(sym(s.lvl_var(y0, en.par, hy)), trans(cong_fn(λ (q: Nat) => s.var_at(q), npar(en, mem)), s.lvl_var(p.root, g.root, hroot)));
         j(sym(nat(en, mem)), λ q _ => CSt::CFitAt(tys, strs, Steps::sels(q, ws), dp, dc),
             Stmt::view_cfit(tys, strs, m.heap, (REnv::get(tys, m.env, p.root)).v, d, ws, p.steps, at, dp, dc, j(yr, λ z _ => (REnv::get(tys, m.env, z)).v = level2::Plain(dp), cy), cc))
@@ -6399,9 +6399,9 @@ theorem Inv::set_cell(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)
     pn2: s.patched(tys, strs, Env::set(tys, e, x, f), Mach(m.heap, REnv::set(tys, m.env, x, c), m.io)) = Env::set(tys, s.patched(tys, strs, e, m), x, f),
     agr: Cell::Agrees(tys, strs, m.heap, s.role(l), c, f(Env::get(tys, e, x))), code: (f(Env::get(tys, e, x))).code = (s.var(l)).code, nref: (r: Ref) → c.v = Refer(r) → False,
     cref: Value::refers(tys, (REnv::get(tys, m.env, x)).v) = False,
-    cpar: (en: VEnt) → Mem(en, s.views) → en.par = l → (z: Var) → s.lvl(z) = Some(en.lvl) → (dp, dc: Dyn(tys)) → c.v = level2::Plain(dp) → (REnv::get(tys, m.env, z)).v = level2::Plain(dc) →
+    cpar: (en: VEnt) → Mem(en, s.views) → en.mode.writes() = True → en.par = l → (z: Var) → s.lvl(z) = Some(en.lvl) → (dp, dc: Dyn(tys)) → c.v = level2::Plain(dp) → (REnv::get(tys, m.env, z)).v = level2::Plain(dc) →
         CSt::CFitAt(tys, strs, Steps::sels(s.unsteps(en.at), Mach::ixs(tys, strs, m)), dp, dc),
-    cself: (en: VEnt) → Mem(en, s.views) → en.lvl = l → (y: Var) → s.lvl(y) = Some(en.par) → (dp, dc: Dyn(tys)) → (REnv::get(tys, m.env, y)).v = level2::Plain(dp) → c.v = level2::Plain(dc) →
+    cself: (en: VEnt) → Mem(en, s.views) → en.mode.writes() = True → en.lvl = l → (y: Var) → s.lvl(y) = Some(en.par) → (dp, dc: Dyn(tys)) → (REnv::get(tys, m.env, y)).v = level2::Plain(dp) → c.v = level2::Plain(dc) →
         CSt::CFitAt(tys, strs, Steps::sels(s.unsteps(en.at), Mach::ixs(tys, strs, m)), dp, dc)):
     Inv(tys, strs, s, Env::set(tys, e, x, f), Mach(m.heap, REnv::set(tys, m.env, x, c), m.io), h0, lent, root)
 {
@@ -6449,17 +6449,17 @@ theorem Inv::set_cell(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)
         λ en me => CSt::sels_keep(en.reg, s, Mach::ixs(tys, strs, m2), s, Mach::ixs(tys, strs, m), λ l2 ml => wsame(l2, s.region_lvl(en, me, l2, ml)));
     let ats: ((en: VEnt) → Mem(en, s.views) → Steps::sels(s.unsteps(en.at), Mach::ixs(tys, strs, m2)) = Steps::sels(s.unsteps(en.at), Mach::ixs(tys, strs, m))) =
         λ en me => CSt::sels_keep(en.at, s, Mach::ixs(tys, strs, m2), s, Mach::ixs(tys, strs, m), λ l2 ml => wsame(l2, s.at_lvl(en, me, l2, ml)));
-    let cf2: CSt::CFit(tys, strs, s, m2.env, Mach::ixs(tys, strs, m2)) = λ en me y z hy hz dp dc cy cz => {
+    let cf2: CSt::CFit(tys, strs, s, m2.env, Mach::ixs(tys, strs, m2)) = λ en me w y z hy hz dp dc cy cz => {
         let old_v = λ (w0: Var) (k0: Nat) (hw: s.lvl(w0) = Some(k0)) (ne: ¬(k0 = l)) (dd: Dyn(tys)) (cw: (REnv::get(tys, m2.env, w0)).v = level2::Plain(dd)) =>
             trans(cong_fn(λ (cc: Cell(tys)) => cc.v, sym(mcell(w0, other(w0, k0, hw, ne)))), cw);
         let new_v = λ (w0: Var) (k0: Nat) (hw: s.lvl(w0) = Some(k0)) (eq: k0 = l) (dd: Dyn(tys)) (cw: (REnv::get(tys, m2.env, w0)).v = level2::Plain(dd)) =>
             trans(cong_fn(λ (cc: Cell(tys)) => cc.v, sym(m2root)), j(isroot(w0, k0, hw, eq), λ u _ => (REnv::get(tys, m2.env, u)).v = level2::Plain(dd), cw));
         let lt0: (en.par < en.lvl) = (inv.chain(en, me)).left;
         j(sym(ats(en, me)), λ q _ => CSt::CFitAt(tys, strs, q, dp, dc), match Nat::eq_or_ne(en.par, l) {
-            Inl(eq) => cpar(en, me, eq, z, hz, dp, dc, new_v(y, en.par, hy, eq, dp, cy), old_v(z, en.lvl, hz, λ e3 => Nat::lt_irrefl(l, j(eq, λ q _ => q < l, j(e3, λ q _ => en.par < q, lt0))), dc, cz)),
+            Inl(eq) => cpar(en, me, w, eq, z, hz, dp, dc, new_v(y, en.par, hy, eq, dp, cy), old_v(z, en.lvl, hz, λ e3 => Nat::lt_irrefl(l, j(eq, λ q _ => q < l, j(e3, λ q _ => en.par < q, lt0))), dc, cz)),
             Inr(np) => match Nat::eq_or_ne(en.lvl, l) {
-                Inl(eq) => cself(en, me, eq, y, hy, dp, dc, old_v(y, en.par, hy, np, dp, cy), new_v(z, en.lvl, hz, eq, dc, cz)),
-                Inr(nv) => inv.cfit(en, me, y, z, hy, hz, dp, dc, old_v(y, en.par, hy, np, dp, cy), old_v(z, en.lvl, hz, nv, dc, cz)),
+                Inl(eq) => cself(en, me, w, eq, y, hy, dp, dc, old_v(y, en.par, hy, np, dp, cy), new_v(z, en.lvl, hz, eq, dc, cz)),
+                Inr(nv) => inv.cfit(en, me, w, y, z, hy, hz, dp, dc, old_v(y, en.par, hy, np, dp, cy), old_v(z, en.lvl, hz, nv, dc, cz)),
             },
         })
     };
@@ -6868,8 +6868,8 @@ theorem Stmt::stage_write_plain(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(ty
         j(sym(hp2), λ rr _ => Cell::Agrees(tys, strs, m.heap, rr, c2, f2(old)), cong_fn(λ (q: Dyn(tys)) => level2::Plain(q), sym(wsv)));
     let code: ((f2(old)).code = (s.var(wi.l)).code) = trans(cong_fn(λ (q: Dyn(tys)) => q.code, wsv), trans(wk.left, sim.codes(p.root, wi.l, wi.hl)));
     let iv = Inv::set_cell(tys, strs, inv, p.root, wi.l, wi.hl, wf.nrf, f2, c2, cong_fn(λ (q: Env(tys)) => Env::get(tys, q, p.root), s.patched_none(tys, strs, e, m, none)), trans(s.patched_none(tys, strs, Env::set(tys, e, p.root, f2), Mach(m.heap, REnv::set(tys, m.env, p.root, c2), m.io), none), cong_fn(λ (q: Env(tys)) => Env::set(tys, q, p.root, f2), sym(s.patched_none(tys, strs, e, m, none)))), agr, code, λ r0 eq => absurd(eq), cong_fn(λ (u: Value(tys)) => Value::refers(tys, u), pc),
-        λ en me pq z hz dp dc _ _ => false_elim(s.parent_plain(en, j(sym(pq), λ q _ => s.role(q) = KPlain, hp2), (inv.chain(en, me)).right)),
-        λ en me lq y hy dp dc _ _ => absurd(trans(sym((inv.vents(en, me)).right.right), trans(cong_fn(λ (q: Nat) => s.role(q), lq), hp2))));
+        λ en me _ pq z hz dp dc _ _ => false_elim(s.parent_plain(en, j(sym(pq), λ q _ => s.role(q) = KPlain, hp2), (inv.chain(en, me)).right)),
+        λ en me _ lq y hy dp dc _ _ => absurd(trans(sym((inv.vents(en, me)).right.right), trans(cong_fn(λ (q: Nat) => s.role(q), lq), hp2))));
     let wt: (s.wrote_to(wi.l) = s.written(wi.l)) = j(sym(hp2), λ r _ => (match r as λ _ => CSt { KPlain => s.written(wi.l), KHold(_, _) => s.written(wi.l).unback(wi.l), KView => s.written(wi.l).unback(wi.l), KGone => s.written(wi.l).unback(wi.l) }) = s.written(wi.l), refl);
     Stepped(Mach(m.heap, REnv::set(tys, m.env, p.root, c2), m.io), λ k => Stmt::write_runs_plain(tys, strs, fns, call, Act(lent, h0.len()), m, p, v, vd, wf.vx, old, pc, nw, put, k),
         j(sym(trans(wf.nst, wt)), λ q _ => Inv(tys, strs, q, Env::set(tys, e, p.root, f2), Mach(m.heap, REnv::set(tys, m.env, p.root, c2), m.io), h0, lent, root), Inv::touch(tys, strs, iv, Cons(wi.l, s.touched), Cons(wi.l, s.wrote))), REnv::kept_set(tys, m.env, p.root, c2, cong_fn(λ (u: Value(tys)) => Value::refers(tys, u), pc), λ r0 eq => absurd(eq)))
@@ -6932,14 +6932,14 @@ theorem Stmt::stage_write_hold(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(tys
             let agr: Cell::Agrees(tys, strs, m.heap, s.role(wi.l), c2, f2(old)) =
                 j(sym(hr2), λ rr _ => Cell::Agrees(tys, strs, m.heap, rr, c2, f2(old)), cong_fn(λ (q: Dyn(tys)) => Some(q), sym(wsv)));
             let iv = Inv::set_cell(tys, strs, inv, p.root, wi.l, wi.hl, wf.nrf, f2, c2, cong_fn(λ (q: Env(tys)) => Env::get(tys, q, p.root), s.patched_none(tys, strs, e, m, none)), trans(s.patched_none(tys, strs, Env::set(tys, e, p.root, f2), Mach(m.heap, REnv::set(tys, m.env, p.root, c2), m.io), none), cong_fn(λ (q: Env(tys)) => Env::set(tys, q, p.root, f2), sym(s.patched_none(tys, strs, e, m, none)))), agr, code, λ r0 eq => absurd(eq), cong_fn(λ (u: Value(tys)) => Value::refers(tys, u), pc),
-                λ en me pq z hz dp dc cp cz => {
+                λ en me w pq z hz dp dc cp cz => {
                     let ph = s.parent_hold(en, o, a, j(sym(pq), λ q _ => s.role(q) = KHold(o, a), hr2), (inv.chain(en, me)).right);
-                    let cf0 = inv.cfit(en, me, p.root, z, j(sym(pq), λ q _ => s.lvl(p.root) = Some(q), wi.hl), hz, old, dc, pc, cz);
+                    let cf0 = inv.cfit(en, me, w, p.root, z, j(sym(pq), λ q _ => s.lvl(p.root) = Some(q), wi.hl), hz, old, dc, pc, cz);
                     let ap = j(ph.right, λ q _ => Sel::Apart(tys, strs, Steps::sels(s.unsteps(q), wsm), ss), lic(en, me, sym(ph.left)));
                     let nwe: (nw = dp) = cong_fn(λ (u: Value(tys)) => match u { Plain(q) => q, Refer(_) => nw }, cp);
                     j(nwe, λ q _ => CSt::CFitAt(tys, strs, Steps::sels(s.unsteps(en.at), wsm), q, dc), CSt::cfit_apart(tys, strs, Steps::sels(s.unsteps(en.at), wsm), ss, ap, g, old, dc, cf0))
                 },
-                λ en me lq _ _ _ _ _ _ => false_elim(nolvl(en, me, lq)));
+                λ en me _ lq _ _ _ _ _ _ => false_elim(nolvl(en, me, lq)));
             Stepped(m2, λ k => Stmt::write_runs_plain(tys, strs, fns, call, Act(lent, h0.len()), m, p, v, vd, wf.vx, old, pc, nw, put, k),
                 j(nst, λ q _ => Inv(tys, strs, q, e2, m2, h0, lent, root), Inv::touch(tys, strs, iv, Cons(wi.l, s.touched), Cons(wi.l, s.wrote))), REnv::kept_set(tys, m.env, p.root, c2, cong_fn(λ (u: Value(tys)) => Value::refers(tys, u), pc), λ r0 eq => absurd(eq)))
         },
@@ -7211,9 +7211,9 @@ theorem Inv::rekin(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {ex: Env(tys)},
         λ x mx y z hy hz => match s.pre_rekin(f, kf, tl, wl, x, mx) {
             ⟨en, pe⟩ => inv.uni(en, pe.left, y, z, trans(hy, cong_fn(λ (n: Nat) => Some(n), pe.right.lvl)), trans(hz, cong_fn(λ (n: Nat) => Some(n), pe.right.par))),
         },
-        λ x mx y z hy hz dp dc cy cz => match s.pre_rekin(f, kf, tl, wl, x, mx) {
+        λ x mx w y z hy hz dp dc cy cz => match s.pre_rekin(f, kf, tl, wl, x, mx) {
             ⟨en, pe⟩ => j(sym(pe.right.at), λ q _ => CSt::CFitAt(tys, strs, Steps::sels(s.unsteps(q), ws), dp, dc),
-                inv.cfit(en, pe.left, y, z, trans(hy, cong_fn(λ (n: Nat) => Some(n), pe.right.par)), trans(hz, cong_fn(λ (n: Nat) => Some(n), pe.right.lvl)), dp, dc, cy, cz)),
+                inv.cfit(en, pe.left, trans(cong_fn(λ (md: Mode) => md.writes(), sym(pe.right.mode)), w), y, z, trans(hy, cong_fn(λ (n: Nat) => Some(n), pe.right.par)), trans(hz, cong_fn(λ (n: Nat) => Some(n), pe.right.lvl)), dp, dc, cy, cz)),
         },
         λ x1 x2 m1 m2 w pp ne => match s.pre_rekin(f, kf, tl, wl, x1, m1) {
             ⟨en1, p1⟩ => match s.pre_rekin(f, kf, tl, wl, x2, m2) {
@@ -8462,7 +8462,7 @@ theorem Stmt::stage_write_view(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(tys
                 let pp = CSt::atoms_plain(Steps::lvls(wi.xs), s, wi.ra, wi.hra);
                 let nlv = s.na + s.nd;
                 let iv = Inv::set_cell(tys, strs, inv, p.root, wi.l, wi.hl, wf.nrf, f2, c2, cong_fn(λ (q: Env(tys)) => Env::get(tys, q, p.root), s.patched_none(tys, strs, e, m, none)), trans(s.patched_none(tys, strs, Env::set(tys, e, p.root, f2), Mach(m.heap, REnv::set(tys, m.env, p.root, c2), m.io), none), cong_fn(λ (q: Env(tys)) => Env::set(tys, q, p.root, f2), sym(s.patched_none(tys, strs, e, m, none)))), agr, code, λ r0 eq => absurd(eq), cong_fn(λ (u: Value(tys)) => Value::refers(tys, u), pc),
-                    λ en me pq z hz dp dc cp cz => {
+                    λ en me w pq z hz dp dc cp cz => {
                         let rv: (s.role(en.par) = KView) = j(sym(pq), λ q _ => s.role(q) = KView, hr2);
                         let eo: (s.ents(en.par) = [pe]) = j(sym(pq), λ q _ => s.ents(q) = [pe], ppe.left);
                         let po = s.parent_one(en, pe, rv, eo, (inv.chain(en, me)).right);
@@ -8473,12 +8473,12 @@ theorem Stmt::stage_write_view(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(tys
                         let ap0 = Inv::sib_lic(tys, cx, sl, inv, none, Writing, wi.l, [Pl(pe.obj, pe.reg ++ wi.xs)], wf.rl, ppe.right.right, wf.resl, en, me, mt, Pl(pe.obj, pe.reg ++ wi.xs), Inl(refl),
                             sym(po.left), pe.reg, wi.xs, po.right, refl, rp, pp);
                         let ap = j(trans(cong_fn(λ (q: List<Step>) => Steps::sels(q, wsm), unst), wf.same), λ q _ => Sel::Apart(tys, strs, Steps::sels(s.unsteps(en.at), wsm), q), ap0);
-                        let cf0 = inv.cfit(en, me, p.root, z, j(sym(pq), λ q _ => s.lvl(p.root) = Some(q), wi.hl), hz, old, dc, pc, cz);
+                        let cf0 = inv.cfit(en, me, w, p.root, z, j(sym(pq), λ q _ => s.lvl(p.root) = Some(q), wi.hl), hz, old, dc, pc, cz);
                         let nwe: (nw = dp) = cong_fn(λ (u: Value(tys)) => match u { Plain(q) => q, Refer(_) => nw }, cp);
                         j(nwe, λ q _ => CSt::CFitAt(tys, strs, Steps::sels(s.unsteps(en.at), wsm), q, dc), CSt::cfit_apart(tys, strs, Steps::sels(s.unsteps(en.at), wsm), ss, ap, g, old, dc, cf0))
                     },
-                    λ en me lq y hy dp dc cy cc => {
-                        let cf0 = inv.cfit(en, me, y, p.root, hy, j(sym(lq), λ q _ => s.lvl(p.root) = Some(q), wi.hl), dp, old, cy, pc);
+                    λ en me w lq y hy dp dc cy cc => {
+                        let cf0 = inv.cfit(en, me, w, y, p.root, hy, j(sym(lq), λ q _ => s.lvl(p.root) = Some(q), wi.hl), dp, old, cy, pc);
                         let nwe: (nw = dc) = cong_fn(λ (u: Value(tys)) => match u { Plain(q) => q, Refer(_) => nw }, cc);
                         j(nwe, λ q _ => CSt::CFitAt(tys, strs, Steps::sels(s.unsteps(en.at), wsm), dp, q), CSt::cfit_like(tys, strs, Steps::sels(s.unsteps(en.at), wsm), dp, old, nw, cf0, wk.left, wk.right))
                     });
@@ -10393,7 +10393,7 @@ theorem Stmt::stage_back_copy(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(tys,
             let same: (Steps::sels(p.steps, wsm) = ss) = trans(cong_fn(λ (xs: List<Step>) => Steps::sels(xs, wsm), sym(unst)),
                 trans(Inv::at_sels(tys, strs, inv, ce, mce), cong_fn(λ (xs: List<Step>) => Steps::sels(xs, wse), unst)));
             let ase: (Steps::sels(s.unsteps(ce.at), wsm) = ss) = trans(cong_fn(λ (xs: List<Step>) => Steps::sels(xs, wsm), unst), same);
-            let cf0: CSt::CFitAt(tys, strs, ss, old, vd) = j(ase, λ q _ => CSt::CFitAt(tys, strs, q, old, vd), inv.cfit(ce, mce, p.root, v, hlp, hlc, old, vd, hpe, hce));
+            let cf0: CSt::CFitAt(tys, strs, ss, old, vd) = j(ase, λ q _ => CSt::CFitAt(tys, strs, q, old, vd), inv.cfit(ce, mce, bf.cw, p.root, v, hlp, hlc, old, vd, hpe, hce));
             let g = λ (_: Dyn(tys)) => vd;
             let nw = Sel::write_at(tys, strs, ss, g, old);
             let wk = Sel::write_keeps(tys, strs, sl, g, ss, old, cf0.right.left, cf0.right.right);
@@ -10422,7 +10422,7 @@ theorem Stmt::stage_back_copy(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(tys,
                     s.patched_copy_set(tys, strs, e, m, tr, inv.uni, ea, el, words, wi.l, lln, lnp, kin, rll, c2, refl, f2));
             let nwq = λ (dq: Dyn(tys)) (cq: c2.v = level2::Plain(dq)) => cong_fn(λ (u: Value(tys)) => match u { Plain(q) => q, Refer(_) => nw }, cq);
             let iv = Inv::set_cell(tys, strs, inv, p.root, wi.l, wi.hl, nrf, f2, c2, gp, pn2, agr, code, λ r0 eq => absurd(eq), cong_fn(λ (u: Value(tys)) => Value::refers(tys, u), hpe),
-                λ en me pq z hz dpn dcn cpn czn => match Nat::eq_or_ne(en.lvl, wi.lv) {
+                λ en me w pq z hz dpn dcn cpn czn => match Nat::eq_or_ne(en.lvl, wi.lv) {
                     Inl(el) => {
                         let ence: (en = ce) = VEnt::mem_one(en, ce, j(bf.he, λ q _ => Mem(en, q),
                             VEnt::mem_filter_lvl(s.views, wi.lv, en, j(el, λ q _ => en.lvl.same(q) = True, en.lvl.same_self()), me)));
@@ -10437,12 +10437,12 @@ theorem Stmt::stage_back_copy(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(tys,
                         let ap0 = inv.sib(ce, en, mce, me, bf.cw, trans(bf.cpar, sym(pq)), λ eq => nv(trans(sym(eq), cl)));
                         let ap: Sel::Apart(tys, strs, Steps::sels(s.unsteps(en.at), wsm), ss) =
                             j(ase, λ q _ => Sel::Apart(tys, strs, Steps::sels(s.unsteps(en.at), wsm), q), Sel::apart_sym(tys, strs, Steps::sels(s.unsteps(ce.at), wsm), Steps::sels(s.unsteps(en.at), wsm), ap0));
-                        let cfe = inv.cfit(en, me, p.root, z, trans(wi.hl, cong_fn(λ (q: Nat) => Some(q), sym(pq))), hz, old, dcn, hpe, czn);
+                        let cfe = inv.cfit(en, me, w, p.root, z, trans(wi.hl, cong_fn(λ (q: Nat) => Some(q), sym(pq))), hz, old, dcn, hpe, czn);
                         j(nwq(dpn, cpn), λ q _ => CSt::CFitAt(tys, strs, Steps::sels(s.unsteps(en.at), wsm), q, dcn), CSt::cfit_apart(tys, strs, Steps::sels(s.unsteps(en.at), wsm), ss, ap, g, old, dcn, cfe))
                     },
                 },
-                λ en me lq y hy dpp dcs cy ccs => {
-                    let cfe = inv.cfit(en, me, y, p.root, hy, trans(wi.hl, cong_fn(λ (q: Nat) => Some(q), sym(lq))), dpp, old, cy, hpe);
+                λ en me w lq y hy dpp dcs cy ccs => {
+                    let cfe = inv.cfit(en, me, w, y, p.root, hy, trans(wi.hl, cong_fn(λ (q: Nat) => Some(q), sym(lq))), dpp, old, cy, hpe);
                     j(nwq(dcs, ccs), λ q _ => CSt::CFitAt(tys, strs, Steps::sels(s.unsteps(en.at), wsm), dpp, q), CSt::cfit_like(tys, strs, Steps::sels(s.unsteps(en.at), wsm), dpp, old, nw, cfe, wk.left, wk.right))
                 });
             let rin = s.var_inside(p.root, wi.l, wi.hl);
@@ -10576,7 +10576,7 @@ theorem Inv::drop_view(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys
             CSt::wpar_keep(s, s2, en, other(en.par, pb, noch(en, d.left)), s.drop_ents(l, en.par, noch(en, d.left)), inv.wpar(en, d.left, w))
         },
         λ en mem x y hx hy => inv.uni(en, (dm(en, mem)).left, x, y, hx, hy),
-        λ en mem y z hy hz dp dc cy cz => inv.cfit(en, (dm(en, mem)).left, y, z, hy, hz, dp, dc, cy, cz),
+        λ en mem w y z hy hz dp dc cy cz => inv.cfit(en, (dm(en, mem)).left, w, y, z, hy, hz, dp, dc, cy, cz),
         λ e1 e2 m1 m2 => inv.sib(e1, e2, (dm(e1, m1)).left, (dm(e2, m2)).left),
         inv.args, CSt::href_gone(tys, s.with_views(s.views.filter(λ e => !e.lvl.same(l))), l, b, root, m.env, inv.href), inv.made, inv.nbase, inv.stays,
         CSt::hown_gone(tys, s.with_views(s.views.filter(λ e => !e.lvl.same(l))), l, b, root, m.env, inv.hown))
@@ -10994,9 +10994,10 @@ theorem Inv::take_view(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys
                 }
             },
         },
-        λ y my zv yv hz hy dp dc cz cy => match src(y, my) {
+        λ y my w zv yv hz hy dp dc cz cy => match src(y, my) {
             ⟨en, pe⟩ => {
                 let k0 = aly(y, en, pe.right);
+                let wy: (en.mode.writes() = True) = trans(cong_fn(λ (md: Mode) => md.writes(), sym(k0.mode)), w);
                 let pb: (en.par < nl) = omega(lt(en, pe.left), lv(en, pe.left));
                 let ats: (Steps::sels(t.unsteps(y.at), ws2) = Steps::sels(s.unsteps(en.at), ws)) =
                     trans(cong_fn(λ (a0: List<Step>) => Steps::sels(t.unsteps(a0), ws2), k0.at), wsel(en.at, rat(en, pe.left)));
@@ -11009,7 +11010,7 @@ theorem Inv::take_view(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys
                             j(sym(ats), λ ss _ => CSt::CFitAt(tys, strs, ss, dp, dc), match sm.push_lvl(cv, yv, y.lvl, hy) {
                                 Inl(py) => {
                                     let el: (en.lvl = l) = match lvy(y, en, pe.right, pe.left) { Inl(pp) => pp.left, Inr(pp) => false_elim(Nat::lt_irrefl(nl, j(trans(sym(pp.right), py.right), λ z _ => z < nl, lv(en, pe.left)))) };
-                                    inv.cfit(en, pe.left, z0, x, hz0, trans(hx, cong_fn(λ (z: Nat) => Some(z), sym(el))), dp, dc, cz0, j(py.left, λ z _ => (REnv::get(tys, m2.env, z)).v = level2::Plain(dc), cy))
+                                    inv.cfit(en, pe.left, wy, z0, x, hz0, trans(hx, cong_fn(λ (z: Nat) => Some(z), sym(el))), dp, dc, cz0, j(py.left, λ z _ => (REnv::get(tys, m2.env, z)).v = level2::Plain(dc), cy))
                                 },
                                 Inr(ey) => match ey {
                                     ⟨y0, qy⟩ => {
@@ -11017,7 +11018,7 @@ theorem Inv::take_view(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys
                                             Inl(pp) => false_elim(Nat::lt_irrefl(nl, j(pp.right, λ z _ => z < nl, s.lvl_below(y0, y.lvl, qy.right)))),
                                             Inr(pp) => pp.right,
                                         };
-                                        inv.cfit(en, pe.left, z0, y0, hz0, trans(qy.right, cong_fn(λ (z: Nat) => Some(z), yl)), dp, dc, cz0,
+                                        inv.cfit(en, pe.left, wy, z0, y0, hz0, trans(qy.right, cong_fn(λ (z: Nat) => Some(z), yl)), dp, dc, cz0,
                                             trans(cong_fn(λ (z: Cell(tys)) => z.v, sym(cell_up(y0))), j(qy.left, λ z _ => (REnv::get(tys, m2.env, z)).v = level2::Plain(dc), cy)))
                                     },
                                 },
@@ -11294,7 +11295,7 @@ theorem Inv::back_like(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys
                 absurd(tf)
             },
             Plain(dp) => λ hp => {
-                let cf = inv.cfit(en, mem, y, z, hy, hz2, dp, dc, hp, hc);
+                let cf = inv.cfit(en, mem, cw, y, z, hy, hz2, dp, dc, hp, hc);
                 let ez: (dc = dz) = Option::some_inj(dc, dz, j(hc, λ u _ => Value::Reads(tys, strs, m.heap, u, dz), zv));
                 let ey: (dp = dy) = Option::some_inj(dp, dy, j(hp, λ u _ => Value::Reads(tys, strs, m.heap, u, dy), yv));
                 j(ez, λ q _ => Dyn::Like(tys, strs, q, Sel::read_at(tys, strs, a, dy)), j(ey, λ q _ => Dyn::Like(tys, strs, dc, Sel::read_at(tys, strs, a, q)), cf.right))
