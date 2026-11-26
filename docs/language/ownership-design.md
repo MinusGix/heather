@@ -4212,8 +4212,11 @@ clauses:
 - `eq`: the equation from the entry heap to the run's.
 - `pw`: the lent references pairwise apart by position (`Ref::Pairwise`),
   from `Lendable.apart` at entry (`Value::lent_pairwise`) and constant.
-- `like`: each lent reference fits the entry's value, and what it reads now
-  has the entry's code and length there (`Sel::LikeAt`).
+- `like`: at a block nothing was lent whole (as for `eq`), each lent
+  reference fits the entry's value, and what it reads now has the entry's
+  code and length there (`Sel::LikeAt`). A block lent whole and passed on by
+  take is the callee's, its length not promised, so the exemption is the
+  equation's.
 
 The third is **a gap in the proof's own invariant, fixed**: the store's step
 of the equation (`Sel::put_lent_store`) writes at a lent reference `r` after
@@ -4237,4 +4240,27 @@ like-ness already (the holder write's `WriteVal`, the view write's `UpAt`).
 `Body::stage_ret` passes `inv.frame.eq`. The probe `lend_under_checked` (a
 view of `x[0]` lent, written back, all of `x` returned) waits for the call's
 proof to become a theorem.
+
+**P4's frame: the caller's equation after a call** (`LentFrame::call`). The
+callee's references lent to change into a block the caller was lent part of
+extend the caller's (`Ref::Under`: an object something may change through has
+its root lent or made here, and a lent argument is its root narrowed); none
+is whole there. At such a block, with `d` the entry's value, `mm` the value
+before the call and `aa` after: `mm = put_C(mm, d)` (the caller's) and
+`aa = put_K(aa, mm)` (the callee's) give `aa = put_C(aa, d)`
+(`Sel::put_lent_compose`) in three steps, each a lens law under the like-ness
+the conditional model asks:
+
+1. the callee's puts keep each caller reference fitting and reading `mm`'s
+   code and length (`Sel::keeps_fold`); so `aa` does;
+2. the caller's fold absorbs the callee's (`Sel::put_lent_absorb_all`): each
+   callee put is a write at a caller reference `c` (`Sel::put_under`), which
+   the caller's put at `c` overwrites (`Sel::write_write`), the other caller
+   puts being apart from it; so `aa = put_C(aa, mm)` (with `put_lent_self`);
+3. the caller's two puts at each reference are one (`Sel::put_lent_twice`),
+   so `put_C(aa, put_C(mm, d)) = put_C(aa, d)`.
+
+The callee's references need only be under the caller's, not pairwise
+apart; what each callee reference reads after has the code and length it
+read before (from `Value::Written`'s fit and `ReadAll` at both heaps).
 
