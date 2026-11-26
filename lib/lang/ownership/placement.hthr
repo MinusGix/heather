@@ -35,6 +35,11 @@
 //   argument's own slots. That is `SafeAt`'s `Value::Written` clause ("a
 //   referring argument's slot is the argument itself") read as a calling
 //   convention, and `placement_sound` needs it of every callee (§25).
+// - **A narrow word is held zero-extended**: a load leaves its bytes zero
+//   above them (`MOVZX`), a literal is a 64-bit constant, so a test on two
+//   narrow words is the unsigned comparison of their 64-bit views, which the
+//   lowering can test (it holds a loaded byte as a word, not at 8 bits).
+//   Narrow arithmetic, which would leave bits above the width, is refused.
 // - **A join** copies what follows it into each arm that reaches its
 //   `Yield` (the surface's own reading of an early return, §22 items 5 and
 //   8), so the bytes level's branch has no join point and every path ends
@@ -43,8 +48,10 @@
 // - **A `Jump` makes the routine a loop**: the routine's body is one plain
 //   loop whose state is the parameters' slots then the results' slots. A
 //   `Jump` sets the next state to its arguments (the results' slots zero)
-//   and clears the exit bit; a `Ret` keeps the parameters, sets the
-//   results and sets it. Level 2 spends a fuel at each `Jump` (a call), and
+//   and a flag word to zero; a `Ret` keeps the parameters, sets the results
+//   and the flag to one. After every path the pass compares the flag with
+//   one: that comparison is the exit bit, since the lowering tests an exit
+//   bit only where a comparison made it. Level 2 spends a fuel at each `Jump` (a call), and
 //   the bytes level one at each turn back: the same count (§25 on fuel).
 // - **A `Ret`** moves its values into the routine's result ids, fixed for
 //   the routine, so every path binds the same ones.
@@ -433,8 +440,13 @@ fn Stmt::place(self st: Stmt, tys: Nat → Type, cx: PCx(tys), e: PEnv, next: Na
                             Some(tb) => match op.node(w.bits(), next, ta.id, tb.id) {
                                 None => None,
                                 Some(nd) => match w.size() {
+                                    // Narrow arithmetic would leave a word not
+                                    // zero above its width: refused here.
+                                    Some(size) => match size.same(8) {
+                                        False => None,
+                                        True => Some(SOut(leaf([Compute(nd)]), e.push(PSlot(SWord(w), [word_id(next)], PNone, False)), next + 1)),
+                                    },
                                     None => None,
-                                    Some(_) => Some(SOut(leaf([Compute(nd)]), e.push(PSlot(SWord(w), [word_id(next)], PNone, False)), next + 1)),
                                 },
                             },
                         },
@@ -444,7 +456,7 @@ fn Stmt::place(self st: Stmt, tys: Nat → Type, cx: PCx(tys), e: PEnv, next: Na
         },
         Stmt::Lit(w, n) => match w.size() {
             None => None,
-            Some(_) => Some(SOut(leaf([Compute(Const(w.bits(), next, n))]), e.push(PSlot(SWord(w), [word_id(next)], PNone, False)), next + 1)),
+            Some(_) => Some(SOut(leaf([Compute(Const(64, next, n % Nat::pow(2, w.bits())))]), e.push(PSlot(SWord(w), [word_id(next)], PNone, False)), next + 1)),
         },
         Stmt::Read(p) => e.read_place(tys, strs, p, next),
         Stmt::Write(p, v) => match e.get(v) {
@@ -536,8 +548,8 @@ fn copies(dsts, srcs: List<Typed>, zero: Nat) → Option<List<Instr>> {
 }
 
 // How a path leaves the routine: into its result ids, or (a loop's pass)
-// into the next state with the exit bit.
-inductive Leave { TRet(results: List<Typed>), TLoop(params: List<Typed>, results: List<Typed>, next: List<Typed>, exit: Nat) }
+// into the next state with the exit flag, a word one where the loop ends.
+inductive Leave { TRet(results: List<Typed>), TLoop(params: List<Typed>, results: List<Typed>, next: List<Typed>, flag: Nat) }
 
 // A `Ret`'s values as the routine answers them: the results' slots, then
 // each written word (a written sequence is the argument itself).
@@ -556,10 +568,18 @@ fn zeros(ts: List<Typed>) → Option<List<Instr>> {
     }
 }
 
+// The zero word a reference's copy adds, where a reference is copied.
+fn zero_for(dsts: List<Typed>, next: Nat) → List<Instr> { match dsts.any_bit(λ (t: Typed) => !t.kind.same(WordKind)) { True => [Compute(Const(64, next, 0))], False => Nil } }
+
 fn Leave::ret(self t: Leave, vals: List<Typed>, next: Nat) → Option<bytes_level::Body> {
     match t {
-        TRet(res) => copies(res, vals, next).map(λ is => leaf(Cons(Compute(Const(64, next, 0)), is))),
-        TLoop(ps, res, nx, exit) => copies(nx, ps ++ vals, next).map(λ is => leaf(Cons(Compute(Const(64, next, 0)), is ++ [Compute(Const(1, exit, 1))]))),
+        TRet(res) => copies(res, vals, next).map(λ is => leaf(zero_for(res, next) ++ is)),
+        // The results first: a parameter's copy is to its own state
+        // register, after which the register holds the next state's id.
+        TLoop(ps, res, nx, exit) => match copies(nx.drop(ps.len()), match res { Nil => Nil, Cons(_, _) => vals }, next) {
+            None => None,
+            Some(rs) => copies(nx.take(ps.len()), ps, next).map(λ is => leaf(zero_for(nx, next) ++ rs ++ is ++ [Compute(Const(64, exit, 1))])),
+        },
     }
 }
 
@@ -568,7 +588,7 @@ fn Leave::jump(self t: Leave, vals: List<Typed>, next: Nat) → Option<bytes_lev
         TRet(_) => None,
         TLoop(ps, res, nx, exit) => match copies(nx.take(ps.len()), vals, next) {
             None => None,
-            Some(is) => zeros(nx.drop(ps.len())).map(λ zs => leaf(Cons(Compute(Const(64, next, 0)), is ++ zs ++ [Compute(Const(1, exit, 0))]))),
+            Some(is) => zeros(nx.drop(ps.len())).map(λ zs => leaf(zero_for(nx.take(ps.len()), next) ++ is ++ zs ++ [Compute(Const(64, exit, 0))])),
         },
     }
 }
@@ -622,7 +642,7 @@ fn PEnv::less(self e: PEnv, a, b: Var, swap: Bool, next: Nat) → Option<Pair<Li
                 SNamed(_) => None,
                 SWord(w) => match sa.word() {
                     None => None,
-                    Some(ta) => match sb.word() { None => None, Some(tb) => Some(Pair([Compute(UnsignedLessThan(w.bits(), next, ta.id, tb.id))], swap)) },
+                    Some(ta) => match sb.word() { None => None, Some(tb) => Some(Pair([Compute(UnsignedLessThan(64, next, ta.id, tb.id))], swap)) },
                 },
             },
         },
@@ -690,6 +710,45 @@ fn Sig::placed_codes(self s: Sig) → List<Shape> {
     s.results.map(λ r => r.code) ++ s.written().map(λ i => s.params.nth(i).map(λ p => p.code).unwrap_or(SWord(WNat))).filter(λ c => c.word_size().is_some())
 }
 
+// Where every `Ret` answers, as its results, parameters themselves at the
+// same positions: those positions. A loop whose answers are its state
+// needs no results in its state.
+fn arg_of(v: Var) → Option<Nat> { match v { Arg(i) => Some(i), Loc(_) => None } }
+
+fn args_of(vs: List<Var>) → Option<List<Nat>> {
+    match vs { Nil => Some(Nil), Cons(v, rest) => match arg_of(v) { None => None, Some(i) => args_of(rest).map(λ is => Cons(i, is)) } }
+}
+
+fn nats_eqb(xs, ys: List<Nat>) → Bool {
+    match xs { Nil => match ys { Nil => True, Cons(_, _) => False }, Cons(a, xr) => match ys { Nil => False, Cons(b, yr) => a.same(b) && nats_eqb(xr, yr) } }
+}
+
+fn agree_rets(a, b: Option<Option<List<Nat>>>) → Option<Option<List<Nat>>> {
+    match a {
+        None => b,
+        Some(x) => match b {
+            None => a,
+            Some(y) => match x { None => Some(None), Some(xs) => match y { None => Some(None), Some(ys) => match nats_eqb(xs, ys) { True => a, False => Some(None) } } },
+        },
+    }
+}
+
+// `None`: no `Ret`; `Some(None)`: some `Ret` answers another value.
+fn rets_args(b: body::Body, nres: Nat) → Option<Option<List<Nat>>> {
+    match b {
+        Ret(rs) => Some(args_of(rs.take(nres))),
+        Yield(_) => None,
+        Jump(_) => None,
+        Do(_, rest) => rets_args(rest, nres),
+        Join(_, y, n, rest) => agree_rets(agree_rets(rets_args(y, nres), rets_args(n, nres)), rets_args(rest, nres)),
+    }
+}
+
+// The ids of the parameters at positions `is` among slots.
+fn PSlot::at(ss: List<PSlot>, is: List<Nat>) → Option<List<Typed>> {
+    match is { Nil => Some(Nil), Cons(i, rest) => match ss.nth(i) { None => None, Some(s) => PSlot::at(ss, rest).map(λ ts => s.ids ++ ts) } }
+}
+
 // A function as a routine.
 fn Func::place(self f: Func, tys: Nat → Type, cx: PCx(tys)) → Option<Routine> {
     let strs = cx.strs;
@@ -706,28 +765,54 @@ fn Func::place(self f: Func, tys: Nat → Type, cx: PCx(tys)) → Option<Routine
                     // The loop: inputs the parameters and zero results; a
                     // pass from its own parameters; the next state; the
                     // outputs, whose results part the routine answers.
-                    True => match zeros(rs.ids) {
-                        None => None,
-                        Some(zs) => match PSlot::many(tys, strs, f.sig.params, rs.next) {
+                    True => {
+                        // The state's results part: none where every `Ret`
+                        // answers parameters (the answer is then read from
+                        // the outputs at their positions), else the codes
+                        // the routine answers, zero to start.
+                        let kept: Option<List<Nat>> = match rets_args(f.body, f.sig.results.len()) {
+                            Some(o) => match f.sig.placed_codes().len().same(f.sig.results.len()) { True => o, False => None },
                             None => None,
-                            Some(qs) => match PSlot::fresh_all(tys, strs, f.sig.placed_codes(), qs.snd) {
+                        };
+                        let rcodes = match kept { Some(_) => Nil, None => f.sig.placed_codes() };
+                        match PSlot::fresh_all(tys, strs, rcodes, ps.snd) {
+                            None => None,
+                            Some(zr) => match zeros(zr.ids) {
                                 None => None,
-                                Some(qr) => match PSlot::fresh_all(tys, strs, f.sig.params.map(λ p => p.code) ++ f.sig.placed_codes(), qr.next) {
+                                Some(zs) => match PSlot::many(tys, strs, f.sig.params, zr.next) {
                                     None => None,
-                                    Some(nx) => match PSlot::fresh_all(tys, strs, f.sig.params.map(λ p => p.code) ++ f.sig.placed_codes(), nx.next + 1) {
+                                    Some(qs) => match PSlot::fresh_all(tys, strs, rcodes, qs.snd) {
                                         None => None,
-                                        Some(outs) => {
-                                            let qids = PSlot::ids_of(qs.fst);
-                                            let tail = TLoop(qids, qr.ids, nx.ids, nx.next);
-                                            place_go(fuel, f.body, tys, cx, f.sig, tail, Nil, PEnv(f.sig.params.len(), qs.fst), outs.next).map(λ o =>
-                                                Routine(pids,
-                                                    bytes_level::Seq(leaf(zs), bytes_level::Loop(pids ++ rs.ids, qids ++ qr.ids, o.code, nx.next, nx.ids, outs.ids)),
-                                                    outs.ids.drop(pids.len())))
+                                        Some(qr) => match PSlot::fresh_all(tys, strs, f.sig.params.map(λ p => p.code) ++ rcodes, qr.next) {
+                                            None => None,
+                                            // The flag at `nx.next`; the exit bit, the
+                                            // flag's comparison with one after every
+                                            // path, past it.
+                                            Some(nx) => match PSlot::many(tys, strs, f.sig.params, nx.next + 3) {
+                                                None => None,
+                                                Some(op) => match PSlot::fresh_all(tys, strs, rcodes, op.snd) {
+                                                    None => None,
+                                                    Some(orr) => {
+                                                        let qids = PSlot::ids_of(qs.fst);
+                                                        let outs = PSlot::ids_of(op.fst) ++ orr.ids;
+                                                        let answer = match kept { Some(ks) => PSlot::at(op.fst, ks), None => Some(orr.ids) };
+                                                        let tail = TLoop(qids, qr.ids, nx.ids, nx.next);
+                                                        let test = leaf([Compute(Const(64, nx.next + 1, 1)), Compute(Equal(64, nx.next + 2, nx.next, nx.next + 1))]);
+                                                        match answer {
+                                                            None => None,
+                                                            Some(res) => place_go(fuel, f.body, tys, cx, f.sig, tail, Nil, PEnv(f.sig.params.len(), qs.fst), orr.next).map(λ o =>
+                                                                Routine(pids,
+                                                                    bytes_level::Seq(leaf(zs), bytes_level::Loop(pids ++ zr.ids, qids ++ qr.ids, bytes_level::Seq(o.code, test), nx.next + 2, nx.ids, outs)),
+                                                                    res)),
+                                                        }
+                                                    },
+                                                },
+                                            },
                                         },
                                     },
                                 },
                             },
-                        },
+                        }
                     },
                 },
             }
