@@ -14959,3 +14959,107 @@ theorem Heap::puts_block(tys: Nat → Type, strs: Strs(tys), vs: List<Value(tys)
         },
     }
 }
+
+// The references passed to written parameters, by position (`Value::lent`
+// without the taken ones).
+fn Value::wlent(tys: Nat → Type, ps: List<Param>, vs: List<Value(tys)>) → List<Ref> {
+    match vs {
+        Nil => Nil,
+        Cons(v, rest) => match ps {
+            Nil => Nil,
+            Cons(p, pr) => match v { Refer(r) => match p.mode { ByWrite => Cons(r, Value::wlent(tys, pr, rest)), ByRead => Value::wlent(tys, pr, rest), ByTake => Value::wlent(tys, pr, rest) }, Plain(_) => Value::wlent(tys, pr, rest) },
+        },
+    }
+}
+
+theorem List::drop_zero<A>(self xs: List<A>): xs.drop(0) = xs { match xs { Nil => refl, Cons(_, _) => refl } }
+
+theorem List::drop_cons<A>(self xs: List<A>): (k: Nat) → (v: A) → (t: List<A>) → xs.drop(k) = Cons(v, t) → (xs.nth(k) = Some(v)) ∧ (xs.drop(Succ(k)) = t) {
+    match xs {
+        Nil => λ k v t no => absurd(no),
+        Cons(h, rest) => λ k => match k {
+            Zero => λ v t e => { let ce = List::cons_inj(h, v, rest, t, e); ⟨cong_fn(λ (z: A) => Some(z), ce.left), trans(rest.drop_zero(), ce.right)⟩ },
+            Succ(k1) => λ v t e => rest.drop_cons(k1, v, t, e),
+        },
+    }
+}
+
+theorem List::drop_nil<A>(self xs: List<A>): (k: Nat) → xs.drop(k) = Nil → (xs.nth(k) = None) ∧ (xs.drop(Succ(k)) = Nil) {
+    match xs {
+        Nil => λ k _ => ⟨refl, refl⟩,
+        Cons(h, rest) => λ k => match k {
+            Zero => λ no => absurd(no),
+            Succ(k1) => λ e => rest.drop_nil(k1, e),
+        },
+    }
+}
+
+// The written list's references are the written parameters', by position.
+theorem Value::wrefs_wlent(tys: Nat → Type, vsf: List<Value(tys)>, ps: List<Param>): (k: Nat) → Value::wrefs(tys, vsf, Param::written_from(ps)(k)) = Value::wlent(tys, ps, vsf.drop(k)) {
+    match ps {
+        Nil => λ k => (match vsf.drop(k) as λ z => Nil<Ref>() = Value::wlent(tys, Nil<Param>(), z) { Nil => refl, Cons(_, _) => refl }),
+        Cons(q, pr) => λ k => {
+            let ih = Value::wrefs_wlent(tys, vsf, pr, k + 1);
+            let W = Param::written_from(pr)(k + 1);
+            (match vsf.drop(k) as λ z => vsf.drop(k) = z →
+                    Value::wrefs(tys, vsf, match q.mode { ByWrite => Cons(k, W), ByRead => W, ByTake => W }) = Value::wlent(tys, Cons(q, pr), z) {
+                Nil => λ dz => {
+                    let dn0 = vsf.drop_nil(k, dz);
+                    let ee: (Succ(k) = k + 1) = omega();
+                    let dn: ((vsf.nth(k) = None<Value(tys)>()) ∧ (vsf.drop(k + 1) = Nil<Value(tys)>())) = ⟨dn0.left, j(ee, λ z _ => vsf.drop(z) = Nil<Value(tys)>(), dn0.right)⟩;
+                    let rest0: (Value::wrefs(tys, vsf, W) = Nil<Ref>()) = trans(ih, j(sym(dn.right), λ z _ => Value::wlent(tys, pr, z) = Nil<Ref>(), (match pr as λ pp => Value::wlent(tys, pp, Nil<Value(tys)>()) = Nil<Ref>() { Nil => refl, Cons(_, _) => refl })));
+                    (match q.mode as λ md => Value::wrefs(tys, vsf, match md { ByWrite => Cons(k, W), ByRead => W, ByTake => W }) = Nil<Ref>() {
+                        ByWrite => j(sym(dn.left), λ o _ => (match o as λ _ => List<Ref> { Some(v) => match v as λ _ => List<Ref> { Refer(kk) => Cons(kk, Value::wrefs(tys, vsf, W)), Plain(_) => Value::wrefs(tys, vsf, W) }, None => Value::wrefs(tys, vsf, W) }) = Nil<Ref>(), rest0),
+                        ByRead => rest0,
+                        ByTake => rest0,
+                    })
+                },
+                Cons(v, t) => λ dz => {
+                    let dc0 = vsf.drop_cons(k, v, t, dz);
+                    let ee: (Succ(k) = k + 1) = omega();
+                    let dc: ((vsf.nth(k) = Some(v)) ∧ (vsf.drop(k + 1) = t)) = ⟨dc0.left, j(ee, λ z _ => vsf.drop(z) = t, dc0.right)⟩;
+                    let ih2: (Value::wrefs(tys, vsf, W) = Value::wlent(tys, pr, t)) = trans(ih, cong_fn(λ (z: List<Value(tys)>) => Value::wlent(tys, pr, z), dc.right));
+                    (match q.mode as λ md => Value::wrefs(tys, vsf, match md { ByWrite => Cons(k, W), ByRead => W, ByTake => W }) =
+                            (match v as λ _ => List<Ref> { Refer(r) => match md { ByWrite => Cons(r, Value::wlent(tys, pr, t)), ByRead => Value::wlent(tys, pr, t), ByTake => Value::wlent(tys, pr, t) }, Plain(_) => Value::wlent(tys, pr, t) }) {
+                        ByWrite => j(sym(dc.left), λ o _ => (match o as λ _ => List<Ref> { Some(v2) => match v2 as λ _ => List<Ref> { Refer(kk) => Cons(kk, Value::wrefs(tys, vsf, W)), Plain(_) => Value::wrefs(tys, vsf, W) }, None => Value::wrefs(tys, vsf, W) }) =
+                                (match v as λ _ => List<Ref> { Refer(r) => Cons(r, Value::wlent(tys, pr, t)), Plain(_) => Value::wlent(tys, pr, t) }),
+                            (match v as λ v2 => (match v2 as λ _ => List<Ref> { Refer(kk) => Cons(kk, Value::wrefs(tys, vsf, W)), Plain(_) => Value::wrefs(tys, vsf, W) }) =
+                                    (match v2 as λ _ => List<Ref> { Refer(r) => Cons(r, Value::wlent(tys, pr, t)), Plain(_) => Value::wlent(tys, pr, t) }) {
+                                Refer(kk) => cong_fn(λ (z: List<Ref>) => Cons(kk, z), ih2),
+                                Plain(_) => ih2,
+                            })),
+                        ByRead => (match v as λ v2 => Value::wrefs(tys, vsf, W) = (match v2 as λ _ => List<Ref> { Refer(r) => Value::wlent(tys, pr, t), Plain(_) => Value::wlent(tys, pr, t) }) { Refer(_) => ih2, Plain(_) => ih2 }),
+                        ByTake => (match v as λ v2 => Value::wrefs(tys, vsf, W) = (match v2 as λ _ => List<Ref> { Refer(r) => Value::wlent(tys, pr, t), Plain(_) => Value::wlent(tys, pr, t) }) { Refer(_) => ih2, Plain(_) => ih2 }),
+                    })
+                },
+            })(refl)
+        },
+    }
+}
+
+// At a block no taken argument reaches, the references lent to change put as
+// the written ones do.
+theorem Value::lent_put_w(tys: Nat → Type, strs: Strs(tys), b: Nat, a: Dyn(tys), vs: List<Value(tys)>): (ps: List<Param>) →
+    ((i: Nat) → (p: Param) → ps.nth(i) = Some(p) → p.mode = ByTake → (r: Ref) → vs.nth(i) = Some(Refer(r)) → ¬(r.b = b)) →
+    (d: Dyn(tys)) → Sel::put_lent(tys, strs, Value::lent(tys, ps, vs), b, a, d) = Sel::put_lent(tys, strs, Value::wlent(tys, ps, vs), b, a, d)
+{
+    match vs {
+        Nil => λ ps _ d => (match ps as λ pp => Sel::put_lent(tys, strs, Value::lent(tys, pp, Nil<Value(tys)>()), b, a, d) = Sel::put_lent(tys, strs, Value::wlent(tys, pp, Nil<Value(tys)>()), b, a, d) { Nil => refl, Cons(_, _) => refl }),
+        Cons(v, rest) => λ ps => match ps {
+            Nil => λ _ d => refl,
+            Cons(q, pr) => λ nt d => {
+                let ih = λ (d2: Dyn(tys)) => Value::lent_put_w(tys, strs, b, a, rest, pr, λ i p hp pm r hv => nt(Succ(i), p, hp, pm, r, hv), d2);
+                (match v as λ u => (Cons(v, rest)).nth(0) = Some(u) → Sel::put_lent(tys, strs, Value::lent(tys, Cons(q, pr), Cons(u, rest)), b, a, d) = Sel::put_lent(tys, strs, Value::wlent(tys, Cons(q, pr), Cons(u, rest)), b, a, d) {
+                    Plain(_) => λ _ => ih(d),
+                    Refer(r) => λ hv0 => (match q.mode as λ md => q.mode = md →
+                            Sel::put_lent(tys, strs, match md.changes() { True => Cons(r, Value::lent(tys, pr, rest)), False => Value::lent(tys, pr, rest) }, b, a, d) =
+                                Sel::put_lent(tys, strs, match md { ByWrite => Cons(r, Value::wlent(tys, pr, rest)), ByRead => Value::wlent(tys, pr, rest), ByTake => Value::wlent(tys, pr, rest) }, b, a, d) {
+                        ByWrite => λ _ => ih(Sel::put_ref(tys, strs, r, b, a, d)),
+                        ByRead => λ _ => ih(d),
+                        ByTake => λ pm => trans(cong_fn(λ (z: Dyn(tys)) => Sel::put_lent(tys, strs, Value::lent(tys, pr, rest), b, a, z), Sel::put_ref_out(tys, strs, r, b, a, d, nt(0, q, refl, pm, r, hv0))), ih(d)),
+                    })(refl),
+                })(refl)
+            },
+        },
+    }
+}
