@@ -48,6 +48,12 @@ Every known defect is found as a mutant, the search runs in the PR lane within a
 - The world is the meanings unfolded `depth()` deep. An instance is tried only where one more unfolding changes nothing at its arguments (`gen_pinned`).
 - Fuels tried are 0, 1, 2 and 5.
 
+**What the choices hide.**
+- *The precondition* `Coded ∧ Due` is the strongest the theorem allows. It hides exactly the inputs at which some residual fails, which are outside `check_sound`'s scope, so that is correct.
+- *`Lendable.apart`* is decided syntactically: other blocks, or a common prefix and then two selections `Sel::apart` finds apart. That implies the semantic `Sel::Apart`, so the search tries a subset of the inputs the theorem covers. Degenerate apart inputs are not tried yet: selections that are semantically apart because one reads a constant, which the proof sessions tripped on.
+- *Whole checked programs only.* A defect that needs an ill-formed signature in the table, with a well-behaved callee behind it, is outside this search and belongs to the proof (the coordinator's note).
+- *The world*: `Prog::Coded` holds of the one primitive (`len` answers a word).
+
 **Next, in order.**
 1. Whatever calibration missed (the log's table) is a generator hole: fix it first.
 2. Generated callees in place of the catalogue (signatures over every mode and origin, two-owning-result callees), and `Call(0, …)` of itself.
