@@ -5,7 +5,7 @@ labels: [mathematics,reals,floating-point,design]
 area: mathematics
 milestone: [math-float]
 created: 2026-10-20
-updated: 2026-11-25
+updated: 2026-11-26
 ---
 
 Owns the roadmap's `math-float` milestone (`docs/roadmap.md`): binary
@@ -96,3 +96,4 @@ of the area.
 - 2026-11-05: gardener: cites a file it shares with [[cast-carrier-reader]] (`lib/std/num/float/arith.hthr`); [[class-inherited-field-implementations]] (`lib/std/num/creal.hthr`, `lib/std/num/float/dyadic.hthr`); [[match-on-proof-call-cost]] (`lib/std/num/float/eft.hthr`).
 - 2026-11-25: P3109 put in scope after the FLoPS paper (`docs/papers/2602.15965v3.pdf`): roadmap `float-p3109`, tracked in [[float-p3109]]. Also filed against the current library: [[float-fast2sum-saturated]] and [[float-extract-scalar]].
 - 2026-11-25: P3109 round 1 landed; see [[float-p3109]].
+- 2026-11-26: Filed after the P3109 rounds, ranked (most important first): [[float-p3109-operations]] (mixed-format operations through the projection; absorbs [[float-project-infinite-inputs]]), [[float-p3109-layout-generic]] and [[float-code-decode-shift]] (finishing touches on the codes), then [[float-conformance-vectors]], [[float-double-rounding]], [[float-extract-scalar]]; design follow-ups [[float-datum-equality]], [[float-unsigned-subtype]], [[float-block-scaled-formats]]. Proof-ergonomics issues the rounds kept hitting: [[match-motive-after-arm-reduction]], [[type-position-constructor-diagnostic]], [[omega-reduced-literal-spelling]].

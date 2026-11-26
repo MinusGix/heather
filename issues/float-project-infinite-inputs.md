@@ -5,7 +5,7 @@ labels: [mathematics,floating-point]
 area: mathematics
 milestone: [math-float]
 created: 2026-11-25
-updated: 2026-11-25
+updated: 2026-11-26
 ---
 
 `Format::project` (`lib/std/num/float/project.hthr`) projects an exact
@@ -30,3 +30,7 @@ tables in `arith.hthr`; this is the projection's half.
 - **`lib/std/num/float/project.hthr`** owns the projection of finite values
   (docs/library/float-p3109-design.md §6). Assumed here: only `sat_up`,
   `sat_down` and `unsigned_low`.
+
+## Log
+
+- 2026-11-26: Part of [[float-p3109-operations]]; do it there.
