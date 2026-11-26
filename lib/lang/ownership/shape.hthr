@@ -204,6 +204,11 @@ theorem Dyn::back_any(tys: Nat → Type, t: Shape, w: Dyn(tys), x1, x2: El(tys, 
     })(l)
 }
 
+// A value of the code itself is put back as it is.
+theorem Dyn::back_self(tys: Nat → Type, t: Shape, x, r: El(tys, t)): Dyn::back(tys, t, Dyn(t, x), r) = x {
+    j(sym(Shape::dec_self(t)), λ o _ => (match o as λ _ => El(tys, t) { Inl(h) => Shape::cast(tys, h, x), Inr(_) => r }) = x, refl)
+}
+
 // ---------------------------------------------------------------------------
 // Structures: what a derived instance supplies
 
@@ -269,6 +274,7 @@ fn Dyn::len(tys: Nat → Type, strs: Strs(tys), d: Dyn(tys)) → Nat { Dyn::len_
 record FieldLaws(tys: Nat → Type, T: Type, f: Field(tys, T)) {
     get_set: (v: T) → (x: El(tys, f.shape)) → f.get(f.set(v, x)) = x,
     set_set: (v: T) → (x, y: El(tys, f.shape)) → f.set(f.set(v, x), y) = f.set(v, y),
+    put_back: (v: T) → f.set(v, f.get(v)) = v,
 }
 
 // Two fields apart: a write of either leaves the other's read, and the
@@ -301,6 +307,8 @@ record SeqLaws(tys: Nat → Type, T: Type, q: Seq(tys, T)) {
     // only the length, so a write that keeps lengths keeps every fit.
     pre_inside: (v: T) → (i: Ix) → q.Pre(v, i) → q.inside(v, i) = True,
     inside_len: (v, w: T) → (i: Ix) → q.len(v) = q.len(w) → q.inside(v, i) = q.inside(w, i),
+    // Writing back what was read changes nothing, inside or out.
+    put_back: (v: T) → (i: Ix) → q.set(v, i, q.get(v, i)) = v,
 }
 
 // Its windows: the same, relative to the length of what was read, and
@@ -319,6 +327,7 @@ record WinLaws(tys: Nat → Type, T: Type, q: Seq(tys, T), w: Win(tys, T)) {
         w.set(w.set(v, lo2, n2, zs), lo, n, ys) = w.set(w.set(v, lo, n, ys), lo2, n2, zs),
     pre_inside: (v: T) → (lo, n: Ix) → w.Pre(v, lo, n) → w.inside(v, lo, n) = True,
     inside_len: (v, u: T) → (lo, n: Ix) → q.len(v) = q.len(u) → w.inside(v, lo, n) = w.inside(u, lo, n),
+    put_back: (v: T) → (lo, n: Ix) → w.set(v, lo, n, w.get(v, lo, n)) = v,
 }
 
 fn Seq::Windows(tys: Nat → Type, {T: Type}, q: Seq(tys, T)) → Type { match q.win { Some(w) => WinLaws(tys, T, q, w), None => True } }
@@ -426,6 +435,7 @@ record PartLaws(tys: Nat → Type, c: Shape, p: Part(tys, c)) {
     get_set: (v: El(tys, c)) → p.fits(v) = True → (x: El(tys, p.t)) → p.same(p.get(v), x) = True → p.get(p.set(v, x)) = x,
     set_set: (v: El(tys, c)) → (x, y: El(tys, p.t)) → p.same(p.get(v), y) = True → p.set(p.set(v, x), y) = p.set(v, y),
     still: (v: El(tys, c)) → p.fits(v) = False → (x: El(tys, p.t)) → p.set(v, x) = v,
+    put_back: (v: El(tys, c)) → p.set(v, p.get(v)) = v,
 }
 
 // What the step's `like` says of a write, the part's `same` says of what is
@@ -445,6 +455,15 @@ theorem Dyn::in_still(tys: Nat → Type, strs: Strs(tys), sel: Sel, {c: Shape}, 
         Some(p) => λ pl f => pl.laws.still(v, f, Dyn::back(tys, p.t, g(Dyn(p.t, p.get(v))), p.get(v))),
         None => λ _ _ => refl,
     })(ol, off)
+}
+
+theorem Dyn::in_put_back(tys: Nat → Type, strs: Strs(tys), sel: Sel, {c: Shape}, len: El(tys, c) → Nat, o: Option<Part(tys, c)>, ol: Dyn::OptLaws(tys, strs, sel, len, o), v: El(tys, c)):
+    Dyn::over_in(tys, o, λ _ => Dyn::at_in(tys, o, v), v) = v
+{
+    (match o as λ o2 => Dyn::OptLaws(tys, strs, sel, len, o2) → Dyn::over_in(tys, o2, λ _ => Dyn::at_in(tys, o2, v), v) = v {
+        Some(p) => λ pl => trans(cong_fn(λ (y: El(tys, p.t)) => p.set(v, y), Dyn::back_self(tys, p.t, p.get(v), p.get(v))), pl.laws.put_back(v)),
+        None => λ _ => refl,
+    })(ol)
 }
 
 theorem Dyn::in_over_at(tys: Nat → Type, strs: Strs(tys), sel: Sel, {c: Shape}, len: El(tys, c) → Nat, o: Option<Part(tys, c)>, ol: Dyn::OptLaws(tys, strs, sel, len, o), g: Dyn(tys) → Dyn(tys), v: El(tys, c),
@@ -573,13 +592,13 @@ theorem Dyn::in_commute(tys: Nat → Type, {c: Shape}, o1, o2: Option<Part(tys, 
 theorem Field::part_ok(tys: Nat → Type, strs: Strs(tys), k, i: Nat, len: tys(k) → Nat, f: Field(tys, tys(k)), fl: FieldLaws(tys, tys(k), f), keep: (v: tys(k)) → (x: El(tys, f.shape)) → len(f.set(v, x)) = len(v)):
     PartOk(tys, strs, OnField(i), SNamed(k), len, Field::part(tys, f))
 {
-    PartOk(PartLaws(λ v _ x _ => fl.get_set(v, x), λ v x y _ => fl.set_set(v, x, y), λ v no x => absurd(no)), λ r w _ => refl, keep)
+    PartOk(PartLaws(λ v _ x _ => fl.get_set(v, x), λ v x y _ => fl.set_set(v, x, y), λ v no x => absurd(no), λ v => fl.put_back(v)), λ r w _ => refl, keep)
 }
 
 theorem Seq::elem_ok(tys: Nat → Type, strs: Strs(tys), k: Nat, i: Ix, q: Seq(tys, tys(k)), ql: SeqLaws(tys, tys(k), q)):
     PartOk(tys, strs, OnSeq(SeqOne(i)), SNamed(k), q.len, Seq::elem_part(tys, q, i))
 {
-    PartOk(PartLaws(λ v f x _ => ql.get_set(v, i, f, x), λ v x y _ => ql.set_set(v, i, x, y), λ v f x => ql.still(v, i, f, x)), λ r w _ => refl, λ v x => ql.len_set(v, i, x))
+    PartOk(PartLaws(λ v f x _ => ql.get_set(v, i, f, x), λ v x y _ => ql.set_set(v, i, x, y), λ v f x => ql.still(v, i, f, x), λ v => ql.put_back(v, i)), λ r w _ => refl, λ v x => ql.len_set(v, i, x))
 }
 
 theorem Seq::win_ok(tys: Nat → Type, strs: Strs(tys), k: Nat, lo, n: Ix, q: Seq(tys, tys(k)), w: Win(tys, tys(k)), wl: WinLaws(tys, tys(k), q, w),
@@ -591,6 +610,7 @@ theorem Seq::win_ok(tys: Nat → Type, strs: Strs(tys), k: Nat, lo, n: Ix, q: Se
             λ v f ys s => wl.get_set(v, lo, n, f, ys, w.len(ys).same_sound(w.len(w.get(v, lo, n)), s)),
             λ v ys zs s => wl.set_set(v, lo, n, ys, zs, w.len(zs).same_sound(w.len(w.get(v, lo, n)), s)),
             λ v f ys => wl.still(v, lo, n, f, ys),
+            λ v => wl.put_back(v, lo, n),
         ),
         λ r d l => {
             let parts = Bool::and_true_parts(d.code.same(w.shape), Dyn::len(tys, strs, d).same(Dyn::len(tys, strs, Dyn(w.shape, r))), l);
@@ -776,6 +796,8 @@ theorem Dyn::model_laws(tys: Nat → Type, strs: Strs(tys), sl: StrsLaws(tys, st
             λ f g s => cong_fn(λ (u: El(tys, s.code)) => Dyn(s.code, u),
                 Dyn::in_commute(tys, Dyn::part(tys, strs, a, s.code), Dyn::part(tys, strs, b, s.code), Dyn::parts_apart(tys, strs, sl, a, b, v, s.code), f, g, s.val)),
         ),
+        λ a s => cong_fn(λ (u: El(tys, s.code)) => Dyn(s.code, u),
+            Dyn::in_put_back(tys, strs, a, Dyn::len_at(tys, strs, s.code), Dyn::part(tys, strs, a, s.code), Dyn::part_ok(tys, strs, sl, a, s.code), s.val)),
     )
 }
 

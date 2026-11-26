@@ -127,7 +127,7 @@ theorem empty_no_refer(i: Nat, r: Ref): ¬(empty_in().nth(i) = Some(Refer(r))) {
 }
 
 theorem empty_lendable(): Lendable(tys(), strs(), pick_r().sig.params, Nil, empty_in()) {
-    Lendable(λ i r e => false_elim(empty_no_refer(i, r, e)), λ i p _ _ _ r => empty_no_refer(i, r), λ i k _ p _ _ r q e _ => false_elim(empty_no_refer(i, r, e)))
+    Lendable(refl, λ i r e => false_elim(empty_no_refer(i, r, e)), λ i p _ _ _ r => empty_no_refer(i, r), λ i k _ p _ _ r q e _ => false_elim(empty_no_refer(i, r, e)))
 }
 
 theorem empty_stuck(io: Io): (pick_prog(λ _ => True)).run(tys(), 0, 0, empty_in(), Nil, io) = Stuck { refl }

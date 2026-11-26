@@ -188,6 +188,9 @@ record StepModelLaws<S>(m: StepModel<S>) {
     like_refl: (a: Sel) → (x: S) → m.like(a, x, x) = True,
     keeps: (a, b: Sel) → (x, s: S) → m.like(a, x, s) = True → (g: S → S) → m.like(a, x, m.over(b, g, s)) = True,
     apart: (a, b: Sel) → a.apart(b).IsTrue() → ApartAt<S>(m.at(a), m.over(a), m.at(b), m.over(b)),
+    // Writing back what was read changes nothing, where the step fits and
+    // where it does not.
+    put_back: (a: Sel) → (s: S) → m.over(a, λ _ => m.at(a, s), s) = s,
 }
 
 // The steps from the root, the first outermost: read, and modified.

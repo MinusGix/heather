@@ -191,6 +191,18 @@ theorem List::ix_commute<A>(self xs: List<A>, i, j: Ix, apart: Ix::Apart(i, INat
     })(apart)
 }
 
+// Updating an index with what it reads leaves the list.
+theorem List::update_own<A>(self xs: List<A>, k: Nat, pad: A): xs.update(k, λ _ => xs.nth(k).unwrap_or(pad)) = xs {
+    match k.lt_or_ge(xs.len()) {
+        Inl(lt) => match xs.nth_present(k, lt) {
+            ⟨c, at⟩ => j(sym(at), λ o _ => xs.update(k, λ _ => o.unwrap_or(pad)) = xs, xs.update_nth_self(k, c, at)),
+        },
+        Inr(ge) => xs.update_past(k, λ _ => xs.nth(k).unwrap_or(pad), ge),
+    }
+}
+
+theorem List::ix_put_back<A>(self xs: List<A>, i: Ix, pad: A): xs.ix_set(i, xs.ix_get(i, pad)) = xs { match i { INat(k) => xs.update_own(k, pad), IWord(_, _) => refl } }
+
 theorem Seq::list_laws(tys: Nat → Type, a: Shape, pad: El(tys, a), win: Option<Win(tys, List<El(tys, a)>)>): SeqLaws(tys, List<El(tys, a)>, Seq::list(tys, a, pad, win)) {
     SeqLaws(
         λ v i h x => v.ix_get_set(i, pad, h, x),
@@ -201,6 +213,7 @@ theorem Seq::list_laws(tys: Nat → Type, a: Shape, pad: El(tys, a), win: Option
         λ v i j h x y => v.ix_commute(i, j, h, x, y),
         λ v i q => v.ix_pre_inside(i, q),
         λ v w i e => List::ix_inside_len(v, w, i, e),
+        λ v i => v.ix_put_back(i, pad),
     )
 }
 
@@ -227,6 +240,10 @@ theorem Seq::vec_laws(tys: Nat → Type, a: Shape, n: Nat, pad: El(tys, a)): Seq
         },
         λ v i q => Bool::squash_true((i.toNat() + 1).leb(n), Nat::lt_leb_reflects(i.toNat(), n), q),
         λ v w i e => refl,
+        λ v i => match i.toNat().lt_or_ge(n) {
+            Inl(lt) => vector_update_self(n, v, i.toNat(), pad, lt),
+            Inr(ge) => vector_update_past(n, v, i.toNat(), vector_get(v, i.toNat(), pad), ge),
+        },
     )
 }
 
@@ -365,6 +382,21 @@ theorem Bytes::ix_commute({n: u64}, self s: Bytes(n), i, k: Ix, apart: Ix::Apart
     })(refl)
 }
 
+theorem Bytes::u64_put_back({n: u64}, s: Bytes(n), x: u64): s.stored_under(n, x, s.bytes.byte_within(n, x)) = s {
+    Bytes::ext(s.stored_under(n, x, s.bytes.byte_within(n, x)), s,
+        match x.unsigned_lt_bit(n) as λ b => (match b { False => s.bytes, True => s.bytes.with_byte(x, match b { False => BitVec::ofNat(0), True => s.bytes.byte_at(x) }) }) = s.bytes {
+            False => refl,
+            True => s.bytes.update_own(x.toNat(), BitVec::ofNat(0)),
+        })
+}
+
+theorem Bytes::ix_put_back({n: u64}, self s: Bytes(n), i: Ix): s.ix_set(i, s.ix_get(i)) = s {
+    match i.as_u64() as λ o => (match o { Some(x) => s.stored_under(n, x, match o { Some(x2) => s.bytes.byte_within(n, x2), None => BitVec::ofNat(0) }), None => s }) = s {
+        Some(x) => Bytes::u64_put_back(s, x),
+        None => refl,
+    }
+}
+
 theorem Seq::bytes_laws(tys: Nat → Type, n: u64): SeqLaws(tys, Bytes(n), Seq::bytes(tys, n)) {
     SeqLaws(
         λ s i h v => s.ix_get_set(i, h, v),
@@ -375,6 +407,7 @@ theorem Seq::bytes_laws(tys: Nat → Type, n: u64): SeqLaws(tys, Bytes(n), Seq::
         λ s i k h v w => s.ix_commute(i, k, h, v, w),
         λ s i q => s.ix_pre_inside(i, q),
         λ s t i e => refl,
+        λ s i => s.ix_put_back(i),
     )
 }
 
@@ -677,6 +710,24 @@ theorem List::w_commute_win<A>(xs: List<A>, l, m, l2, m2: Nat, apart: Span(l, m)
 // ---------------------------------------------------------------------------
 // The list's windows, at indices
 
+// Writing back the window read leaves the list.
+theorem List::ix_win_put_back<A>(self xs: List<A>, lo, n: Ix): xs.ix_put_win(lo, n, xs.ix_win(lo, n)) = xs {
+    match lo {
+        INat(l) => match n {
+            INat(m) => {
+                let e: ((l + m) - l = m) = omega();
+                let pw: (xs.put_window(l, xs.drop(l).take(m)) = xs) = j(e, λ q _ => xs.put_window(l, xs.drop(l).take(q)) = xs, xs.put_window_window(l, l + m));
+                match (l + m).leb(xs.len()) && xs.drop(l).take(m).len().same(m) as λ b => (match b { True => xs.put_window(l, xs.drop(l).take(m)), False => xs }) = xs {
+                    True => pw,
+                    False => refl,
+                }
+            },
+            IWord(_, _) => refl,
+        },
+        IWord(_, _) => refl,
+    }
+}
+
 theorem Seq::list_win_laws(tys: Nat → Type, a: Shape, pad: El(tys, a), me: Shape, to: El(tys, me) → List<El(tys, a)>, of: List<El(tys, a)> → El(tys, me),
     to_of: (l: List<El(tys, a)>) → to(of(l)) = l, of_to: (y: El(tys, me)) → of(to(y)) = y, win: Option<Win(tys, List<El(tys, a)>)>):
     WinLaws(tys, List<El(tys, a)>, Seq::list(tys, a, pad, win), Seq::list_win(tys, a, me, to, of))
@@ -768,5 +819,6 @@ theorem Seq::list_win_laws(tys: Nat → Type, a: Shape, pad: El(tys, a), me: Sha
         },
         λ v lo n q => v.ix_win_pre_inside(lo, n, q),
         λ v u lo n e => List::ix_win_inside_len(v, u, lo, n, e),
+        λ v lo n => trans(cong_fn(λ (t: List<El(tys, a)>) => v.ix_put_win(lo, n, t), to_of(v.ix_win(lo, n))), v.ix_win_put_back(lo, n)),
     )
 }

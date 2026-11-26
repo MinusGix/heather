@@ -3406,7 +3406,8 @@ the probes do not use:
   changes a view to write, the only statements until it is written back are
   write-backs and deaths of views already written back; a join, a `Yield`,
   a `Ret` and a `Jump` are refused while one is pending (`CSt::pending`,
-  `CSt::writes_back`; probes `between_refused`, `between_after_checked`). So
+  `CSt::writes_back`; probes `between_refused`, `between_after_checked`).
+  This is §15.2's rule made a refusal, `between_refused` its probe. So
   between statements at most the chain of a just-changed view is stale, and
   the invariant's patch is only along that chain.
 - **Atoms read plain variables only** (`CSt::atoms_ok`): an index cannot move
@@ -3420,25 +3421,35 @@ the probes do not use:
 variable's run-time cell agrees with the meaning's value as its role says
 (a plain variable holds the value; a holder or a view reads it through the
 heap, its block live, its selections fitting; a gone variable owes
-nothing). Still to add: each object's root reference, the views' references
-as their objects' narrowed by their regions at the words, objects one of
-which may change apart (`Lendable`'s clause, kept), the frame, codes, and,
-for the one pending chain, the meaning's value as the heap's with the old
-value at the pending place.
+nothing), with the environments' lengths and each variable's code as the
+checker records it. Still to add: each object's root reference, the views'
+references as their objects' narrowed by their regions at the words,
+objects one of which may change apart (`Lendable`'s clause, kept), the
+frame, and, for the one pending chain, the meaning's value as the heap's
+with the old value at the pending place.
 
 **Built** (`sound.hthr`, probes `sound_tests.hthr`): reads, writes and fits
 along appended selection paths; a place's steps as selections at the words;
 levels and variables, and a push keeping every earlier level; `Sim::push`,
 the one lemma every binding statement uses; `Value::get_more`; and
 `Place::fit_from`: a place whose codes have parts and whose accessors'
-residuals hold fits in the run, from `pre_inside`.
+residuals hold fits in the run, from `pre_inside`. A read's verdict split
+once into its parts (`ReadInv`); the stage lemmas for `Lit` and `Op`
+(`Stepped`: the run continues, the invariant holds after); and the words:
+an atom the checker reads at plain levels reads one index in the run and in
+the meaning (`Sim::atom_ix`), so a place's steps make one list of
+selections in both (`Sim::steps_same`).
 
-**Needed of the interfaces** (proposed): writing back what was read is the
-identity, `over(a, λ _ => at(a, s), s) = s`, the lens law `StepModelLaws`,
-`FieldLaws`, `SeqLaws` and `WinLaws` lack beside `get_set` and `set_set`. The
-write-back stage needs it: the run stores, at the view's place, what the
-block holds there. `Lendable` also needs the arity (as many arguments as
-parameters), since the checker's levels assume it.
+**Added to the interfaces** (decided 2026-11-26): writing back what was
+read changes nothing, `put_back`, a law of the model rather than of this
+proof: `FieldLaws` (`f.set(v, f.get(v)) = v`), `SeqLaws` and `WinLaws` (at
+every index, inside or out: outside it is `still`), `PartLaws`, and
+`StepModelLaws` (`over(a, λ _ => at(a, s), s) = s`, with no fit hypothesis),
+derived for `Dyn::model` by `Dyn::in_put_back` and proved for the list,
+`[A; n]`, `Bytes(n)` and list-window instances. The write-back stage needs
+it: the run stores, at the view's place, what the block holds there.
+`Lendable` carries the arity (`arity`: as many arguments as parameters),
+since the checker's levels assume it.
 
 **What remains for straight-line bodies and calls**: the invariant's other
 parts and its entry from `ReadAll` and `Lendable`; the stage lemmas for

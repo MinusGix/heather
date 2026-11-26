@@ -199,11 +199,12 @@ fn Sel::Apart(tys: Nat → Type, strs: Strs(tys), xs, ys: List<Sel>) → Type {
 fn Ref::Apart(tys: Nat → Type, strs: Strs(tys), r, q: Ref) → Type { (r.b = q.b) → Sel::Apart(tys, strs, r.sels, q.sels) }
 
 // What a function may assume of its inputs (§15.8: a function requires only
-// that what it may change is not aliased), named once: each referring
-// argument's block is live and has no holes, and its selections fit there;
+// that what it may change is not aliased), named once: one argument per
+// parameter; each referring argument's block is live and has no holes, and its selections fit there;
 // an argument taken at a plain code is a plain value; and an argument the
 // callee may change is apart from every other argument.
 record Lendable(tys: Nat → Type, strs: Strs(tys), ps: List<Param>, h: Heap(tys), vs: List<Value(tys)>) {
+    arity: vs.len() = ps.len(),
     live: (i: Nat) → (r: Ref) → vs.nth(i) = Some(Refer(r)) → Exists<Dyn(tys)>(λ d => (Heap::obj(tys, h, r.b) = Some(Obj(d, Nil))) ∧ (Sel::fit(tys, strs, r.sels, d) = True)),
     plain: (i: Nat) → (p: Param) → ps.nth(i) = Some(p) → p.mode = ByTake → Shape::plain(tys, strs, p.code) = True → (r: Ref) → ¬(vs.nth(i) = Some(Refer(r))),
     apart: (i, k: Nat) → ¬(i = k) → (p: Param) → ps.nth(i) = Some(p) → p.mode.changes() = True → (r, q: Ref) → vs.nth(i) = Some(Refer(r)) → vs.nth(k) = Some(Refer(q)) →

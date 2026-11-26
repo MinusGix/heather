@@ -129,9 +129,9 @@ theorem window_pin(n: u64, xs: List<Nat>, lo, k: Nat): rd(n, [INat(lo), INat(k)]
 theorem Point::fields(n: u64): RecordLaws(tys(n), Point, [Point::fx(n), Point::fy(n)]) {
     RecordLaws(
         λ i => match i {
-            Zero => λ h e => j(Option::some_inj(Point::fx(n), h, e), λ k _ => FieldLaws(tys(n), Point, k), FieldLaws(λ v x => refl, λ v x y => refl)),
+            Zero => λ h e => j(Option::some_inj(Point::fx(n), h, e), λ k _ => FieldLaws(tys(n), Point, k), FieldLaws(λ v x => refl, λ v x y => refl, λ v => refl)),
             Succ(i1) => match i1 {
-                Zero => λ h e => j(Option::some_inj(Point::fy(n), h, e), λ k _ => FieldLaws(tys(n), Point, k), FieldLaws(λ v x => refl, λ v x y => refl)),
+                Zero => λ h e => j(Option::some_inj(Point::fy(n), h, e), λ k _ => FieldLaws(tys(n), Point, k), FieldLaws(λ v x => refl, λ v x y => refl, λ v => refl)),
                 Succ(_) => λ h no => absurd(no),
             },
         },
