@@ -1,6 +1,6 @@
 ---
 title: Project infinite inputs per saturation mode (P3109)
-status: open
+status: closed
 labels: [mathematics,floating-point]
 area: mathematics
 milestone: [math-float]
@@ -34,3 +34,4 @@ tables in `arith.hthr`; this is the projection's half.
 ## Log
 
 - 2026-11-26: Part of [[float-p3109-operations]]; do it there.
+- 2026-11-26: LANDED with [[float-p3109-operations]]: project_x and sat_inf_up/sat_inf_down in p3109_ops.hthr, tests inf_se_prop … u_ninf_fin (design §8).

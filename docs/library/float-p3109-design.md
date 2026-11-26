@@ -451,3 +451,47 @@ formats' encodings, are `float-bits`, which this round does not close.
   predicate defined by the same `match` as the function) did not; stating
   one lemma per outcome (`half_dec_inf`, `half_dec_nan`) did.
 
+## 8. Operations (`issues/float-p3109-operations.md`, 2026-11-26)
+
+Module: `lib/std/num/float/p3109_ops.hthr`; tests
+`lib/_tests/std/num/float/p3109_ops_tests.hthr`.
+
+**Operands in any format, result through the projection.** `XReal` is the
+closed extended reals (`XFin(x)`, `XPosInf`, `XNegInf`, `XNaN`) and
+`Float::xval` decodes any float into it, IEEE formats included: a finite
+operand's value is exact whatever its format, so the report's
+`Op<fx, fy, fr, ρ>` needs nothing per operand format. The `ω` operations
+follow report §4.10's tables (`XReal::add`, `sub`, `mul`, `div`, `fma`,
+`neg`, `abs`). Where P3109 departs from IEEE: division by zero is NaN, and
+a finite value over an infinity is 0. `fma` is `add(mul(x, y), z)`, which
+the report states as equivalent.
+
+**One rounding argument.** `Rnd` is `RMode(m)`, `RToOdd` or
+`RStochA/B/C(n, r)`; `project_rnd` sends each to its projection from §6,
+and `project_rnd_faithful` covers them all. `Rnd::low_mode` is the
+direction the unsigned `SatNone` rule reads (only the IEEE directed modes
+toward zero or upward are finite below `Mlo`).
+
+**Infinite inputs** (closing `issues/float-project-infinite-inputs.md`).
+`project_x` projects an extended real into a format of a given signedness
+with NaN: finite values through `project_rnd` (and `unsigned_of` for an
+unsigned format), `+∞` by `sat_inf_up` (`SatPropagate` keeps an infinity
+the format has, `SatFinite` clamps, `SatNone` keeps it or is NaN), and an
+unsigned format's `-∞` to NaN under `SatNone` even toward zero (the report's
+`X ≠ -∞` exception) and 0 otherwise.
+
+**Theorems.** `op_add_correct`, `op_mul_correct`, `op_fma_correct`,
+`op_convert_correct`: on finite operands an IEEE-mode result `Projects` the
+exact value, whatever the operand formats. `project_x_datum`: every
+projection, so every operation's result, is a datum of the result format
+(`Float::DatumOf`), and an unsigned format's is never negative and never
+`-∞` (`Float::unsigned_of_nonneg` turns the projection's `NonNeg` into the
+codes' `Unsigned`).
+
+**Not here.** `sqrt` and the elementary functions of report §4.10.8–§4.10.16
+need an exact value that is not rational: they go through the library's
+square root (`arith.hthr`) and `CReal` rounding (`round_real.hthr`) and are
+a later round. A result format is given as its signedness and NaN proof
+rather than a `P3109Layout`, so an IEEE result format (binary32) works the
+same way.
+
