@@ -437,4 +437,3 @@ fn sum_places() → List<function_ir_lower::Place> { [CallSlots(1), Into(Rcx), I
 fn sum_lowered() → Option<x86_64_asm::Prog> { placed(sum_fns()).and_then(λ (q: Program) => q.lower(sum_places())) }
 
 theorem sum_lowers(): sum_lowered().is_some() = True { refl }
-
