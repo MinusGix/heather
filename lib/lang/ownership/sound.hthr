@@ -1124,7 +1124,6 @@ record Inv(tys: Nat → Type, strs: Strs(tys), s: CSt, e: Env(tys), m: Mach(tys)
     nbase: s.na <= s.nobj,
 }
 
-
 // Where nothing is pending, the invariant's first part is `Sim` itself.
 theorem Inv::sim_now(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: Nat → Bool}, inv: Inv(tys, strs, s, e, m, h0, lent),
     none: s.pending() = False): Sim(tys, strs, s, e, m)
@@ -1662,7 +1661,6 @@ theorem Inv::start(tys: Nat → Type, strs: Strs(tys), sig: Sig, vs: List<Value(
         λ o ge r rt => absurd(trans(sym(rt), CSt::start_root_past(tys, vs, o, omega(ge, lv)))),
         omega())
 }
-
 
 // ---------------------------------------------------------------------------
 // The words a region reads, kept: a level's index at a state, and a
@@ -9256,7 +9254,6 @@ theorem CSt::sig_atom_cases(self s: CSt, all: List<Nat>, k: Nat, b: Atom, h: s.s
         },
     })(refl, h)
 }
-
 
 // What a signature's words read at the call's words, its levels read in the
 // run's: a returned view's place as the signature names it (at the levels

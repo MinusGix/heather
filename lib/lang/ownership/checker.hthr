@@ -787,7 +787,6 @@ fn CSt::keeps_place(self s: CSt, xs: List<Var>, i: Nat) → Bool {
     match xs.nth(i).and_then(λ x => s.lvl(x)) { Some(l) => match s.role(l) { KHold(o, _) => o.same(i), _ => False }, None => False }
 }
 
-
 fn CSt::jump(self s: CSt, tys: Nat → Type, strs: Strs(tys), sig: Sig, mo: Bool, me: Nat, xs: List<Var>) → Option<List<Residual>> {
     let kept = (sig.written() ++ sig.results.foldr(λ (r: Result) (acc: List<Nat>) => r.param() ++ acc, Nil)).all_bit(λ i => s.keeps_place(xs, i));
     kept.then(s.lend_all(tys, strs, sig.params, xs).and_then(λ nl => s.apart_args(s.lent(sig.params, xs)).map(λ ra => nl.rs ++ ra ++ Cons(RPre(me, xs), Residual::measure(mo, me, xs)))))
