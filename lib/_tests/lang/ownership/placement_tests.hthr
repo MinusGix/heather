@@ -315,22 +315,31 @@ fn copy_span_r() → Func {
             Ret([Arg(3), Arg(0)])))
 }
 
-// The windows opened, lent, written back (the call's written window to the
-// view, the view to its place), each dead once written back, and the count
-// answered.
+// The lengths read and tested as the export tests them (`end` past either
+// span's length, or before `from`, answers 0 with nothing stored); then the
+// windows opened, lent, written back (the call's written window to the
+// view, the view to its place: `Back`, §23.23), each dead once written back,
+// and the count answered.
+fn zero_ret() → body::Body { seq([Stmt::Lit(WBits(64), 0)], Ret([Loc(0), Arg(0)])) }
+
 fn copy_window_r() → Func {
     Func(Sig([wr(0), rd(0), word_p(), word_p()], [word_r()]),
-        seq([Op(PSub, Arg(3), Arg(2)),                                   // [k]
-             View(win(Arg(0), Var(2), Var(4)), Writing),                 // [w, k]
-             View(win(Arg(1), Var(2), Var(5)), Reading),                 // [t, w, k]
-             Stmt::Lit(WBits(64), 0),                                    // [z, t, w, k]
-             Stmt::Call(0, [Loc(2), Loc(1), Loc(3), Loc(0)], 2),         // [w', r, z, t, w, k]
-             Stmt::Write(whole(Loc(4)), Loc(0)),
-             Death(whole(Loc(0))),
-             Stmt::Write(win(Arg(0), Var(2), Var(9)), Loc(4)),
-             Death(whole(Loc(4))),
-             Death(whole(Loc(3)))],
-            Ret([Loc(1), Arg(0)])))
+        seq([Stmt::Len(whole(Arg(0)), WBits(64))],                          // [ol]
+            Join(TLt(Loc(0), Arg(3)), zero_ret(), Yield(Nil),
+                seq([Stmt::Len(whole(Arg(1)), WBits(64))],                  // [tl, ol]
+                    Join(TLt(Loc(0), Arg(3)), zero_ret(), Yield(Nil),
+                        Join(TLt(Arg(3), Arg(2)), zero_ret(), Yield(Nil),
+                            seq([Op(PSub, Arg(3), Arg(2)),                                   // [k, tl, ol]
+                                 View(win(Arg(0), Var(2), Var(4)), Writing),                 // [w, k, ..]
+                                 View(win(Arg(1), Var(2), Var(5)), Reading),                 // [t, w, k, ..]
+                                 Stmt::Lit(WBits(64), 0),                                    // [z, t, w, k, ..]
+                                 Stmt::Call(0, [Loc(2), Loc(1), Loc(3), Loc(0)], 2),         // [w', r, z, t, w, k, ..]
+                                 Stmt::Back(whole(Loc(4)), Loc(0)),
+                                 Death(whole(Loc(0))),
+                                 Stmt::Back(win(Arg(0), Var(2), Var(9)), Loc(4)),
+                                 Death(whole(Loc(4))),
+                                 Death(whole(Loc(3)))],
+                                Ret([Loc(1), Arg(0)]))))))))
 }
 
 fn cw_fns() → List<Func> { [copy_span_r(), copy_window_r()] }
@@ -381,6 +390,12 @@ theorem cw_level2(): l2_seen(cw_fns(), 1, run2(cw_fns(), cw_world(), 5, 1, [obj(
 
 theorem cw_agree(): b_seen(runb(cw_fns(), first_written(), 5, 1, [obj(0), obj(1), word(1), word(4)], heap2()))
     = l2_seen(cw_fns(), 1, run2(cw_fns(), cw_world(), 5, 1, [obj(0), obj(1), word(1), word(4)], heap2())) { refl }
+
+// `end` past both lengths: the tests answer 0 and store nothing, on both.
+theorem cw_past_end(): Pair(b_seen(runb(cw_fns(), first_written(), 5, 1, [obj(0), obj(1), word(1), word(9)], heap2())),
+        l2_seen(cw_fns(), 1, run2(cw_fns(), cw_world(), 5, 1, [obj(0), obj(1), word(1), word(9)], heap2())))
+    = Pair(Some(Seen(Some([x86_64_call_contract::Word(BitVec::ofNat(0))]), [Some(outb()), Some(text())])),
+        Some(Seen(Some([x86_64_call_contract::Word(BitVec::ofNat(0))]), [Some(outb()), Some(text())]))) { refl }
 
 // ---------------------------------------------------------------------------
 // 3. sum: a recursion
@@ -436,11 +451,12 @@ fn nl_lowered() → Option<x86_64_asm::Prog> { placed(nl_fns()).and_then(λ (q: 
 
 theorem nl_lowers(): nl_lowered().is_some() = True { refl }
 
-fn cw_places() → List<function_ir_lower::Place> { [Into(Rdi), Into(Rsi), Into(Rdx), Into(Rcx), Into(R8), Into(R9), Into(R10), Into(R11), Into(Rax), Into(R10), Into(Rax), Into(Rax), Into(R9), Into(R10), Into(Rdi), Into(Rsi), Into(Rdx), Into(Rcx), Into(R8), Into(R9), Into(Rax), Into(R10), Into(Rdi), Into(Rsi), Into(Rdx), Into(Rcx), Into(R8), Into(R9), Into(Rax), Into(R10), Into(R11), CallSlots(0), Into(Rcx), Into(Rsi), Into(Rdx), Into(Rdi), Spilling(0), Into(Rax)] }
+fn cw_places() → List<function_ir_lower::Place> { [Into(Rdi), Into(Rsi), Into(Rdx), Into(Rcx), Into(R8), Into(R9), Into(R10), Into(R11), Into(Rax), Into(R10), Into(Rax), Into(Rax), Into(R9), Into(R10), Into(Rdi), Into(Rsi), Into(Rdx), Into(Rcx), Into(R8), Into(R9), Into(Rax), Into(R10), Into(Rdi), Into(Rsi), Into(Rdx), Into(Rcx), Into(R8), Into(R9), Into(Rax), Into(R10), Into(R11), CallSlots(0), Into(R10), Into(R11), Into(Rax), Into(R10), Into(R11), Into(Rax), Into(R10), Into(R11), Into(Rax), Into(Rcx), Into(Rsi), Into(Rdx), Into(Rdi), Spilling(0), Into(Rax)] }
 
 fn cw_lowered() → Option<x86_64_asm::Prog> { placed(cw_fns()).and_then(λ (q: Program) => q.lower(cw_places())) }
 
 theorem cw_lowers(): cw_lowered().is_some() = True { refl }
+
 
 fn sum_places() → List<function_ir_lower::Place> { [CallSlots(1), Into(Rcx), Into(Rdx), Into(Rsi), Into(R8), Spilling(8), Into(Rdi), Into(Rax), Into(Rax)] }
 
@@ -459,8 +475,9 @@ fn word_view_r() → Func { Func(Sig([rd(0), word_p()], [word_r()]), seq([View(e
 // A word variable written: `n := 1; n`.
 fn word_write_r() → Func { Func(Sig([word_p()], [word_r()]), seq([Stmt::Lit(WBits(64), 1), Stmt::Write(whole(Arg(0)), Loc(0))], Ret([Arg(0)]))) }
 
-// A taken word answered back (`OParam`), placed since §25.5.
-fn word_back_r() → Func { Func(Sig([word_p()], [Result(u64_s(), OParam(0))]), Ret([Arg(0)])) }
+// A taken word answered back, as a fresh word (a plain value answered back
+// is `OFresh`).
+fn word_back_r() → Func { Func(Sig([word_p()], [Result(u64_s(), OFresh)]), Ret([Arg(0)])) }
 
 // A narrow index, placed since §25.5: `text[i as u32]`.
 fn narrow_index_r() → Func {
@@ -469,10 +486,10 @@ fn narrow_index_r() → Func {
 
 // The checker's verdict and whether `place` answers: a view of a word is
 // refused by its codes (not a finding); a word variable written is checked
-// and not placed (the finding); a taken word answered back is refused by
-// `Sig::ok`'s modes; a narrow index is checked and placed.
+// and placed since its slot rebinds (§25.9); a taken word answered back
+// fresh is checked and placed; a narrow index is checked and placed.
 theorem refusals_sorted(): [word_view_r(), word_write_r(), word_back_r(), narrow_index_r()].map(λ (f: Func) => Pair(why([f], 0), placed([f]).is_some()))
-    = [Pair(Some(WCodes), False), Pair(None, False), Pair(Some(WOwn), True), Pair(None, True)] { refl }
+    = [Pair(Some(WCodes), False), Pair(None, True), Pair(None, True), Pair(None, True)] { refl }
 
 // Codes compared (§25.8): `1u64 + 2u8` reads the u8 as zero on level 2
 // (`Dyn::words`) and adds it on the bytes level, so `place` refuses it; the
@@ -483,8 +500,8 @@ theorem codes_compared(): Pair(why([mixed_r()], 0), placed([mixed_r()]).is_some(
 
 fn in_fragment(fs: List<Func>) → List<Bool> { fs.map(λ (f: Func) => f.fragment(tys(), strs(), sigs_of(fs), no_prim())) }
 
-// The three programs are in the fragment; so is the written word variable,
-// which `place` refuses today: `PlaceComplete` does not hold yet, by it.
+// The three programs are in the fragment, and so is the written word
+// variable, now placed.
 theorem fragments(): in_fragment(nl_fns()) ++ in_fragment(cw_fns()) ++ in_fragment(sum_fns()) ++ in_fragment([word_write_r()]) = [True, True, True, True, True, True] { refl }
 
 // ---------------------------------------------------------------------------
@@ -613,10 +630,10 @@ theorem mixed_reads_zero(): mixed_l2() = Some([x86_64_call_contract::Word(BitVec
 
 fn owner_env() → REnv(tys()) { REnv([Cell(obj(0), True)], Nil) }
 
-fn owner_slot() → PSlot { PSlot(buf_s(), [ref_id(0), word_id(1)], PNone, True) }
+fn owner_slot() → PSlot { PSlot(buf_s(), [ref_id(0), word_id(1)]) }
 
 fn after_death() → Option<level2::Heap(tys())> {
-    match (Death(whole(Arg(0)))).run(tys(), strs(), funcs_at(Nil), λ _ _ _ _ => level2::Stuck, Mach(heap1(text()), owner_env(), io0()), λ m2 => Done(Answer(Nil, m2.heap, m2.io))) {
+    match (Death(whole(Arg(0)))).run(tys(), strs(), funcs_at(Nil), λ _ _ _ _ => level2::Stuck, Act(Nil, 0), Mach(heap1(text()), owner_env(), io0()), λ m2 => Done(Answer(Nil, m2.heap, m2.io))) {
         Done(a) => Some(a.heap), Exited(_, _) => None, Going(_) => None, Stuck => None,
     }
 }
