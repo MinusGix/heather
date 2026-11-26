@@ -1759,8 +1759,28 @@ fn sys_prog(prog: Prog, moves: List<Instruction>, call: SysCall) → Prog {
 // RAX, RCX and R11 are none the body keeps.
 fn sys_clear(saves: Nat) → Bool { Rax.apart(body_kept(saves)) && (Rcx.apart(body_kept(saves)) && R11.apart(body_kept(saves))) }
 
+// What the call clobbers and the file still holds there is moved to a free
+// spare first, so that a value live in RAX, RCX or R11 survives the call:
+// the moves are judged by the file after them, as the arguments' are.
+fn keep_port(slot: Option<Held>) → List<Port> {
+    match slot {
+        None => [],
+        Some(held) => match held.kind { Word => [Port(held.id, 64)], Bit => [Port(held.id, 1)], Narrow(_) => [], Low(_) => [] },
+    }
+}
+
+fn sys_kept(file: File) → List<Port> { keep_port(file.at(Rax)) ++ (keep_port(file.at(Rcx)) ++ keep_port(file.at(R11))) }
+
+fn sys_spares(file: File) → List<Gpr> { [R8, R9, R10].filter(λ (r: Gpr) => file.at(r).is_none()) }
+
+fn sys_entries(file: File, call: SysCall) → List<Port> { sys_kept(file) ++ ArgumentMove::ports(file.call_moves(call.words())) }
+
+fn sys_targets(file: File, call: SysCall) → List<Gpr> {
+    sys_spares(file).take(sys_kept(file).len()) ++ ArgumentMove::registers(file.call_moves(call.words()))
+}
+
 fn emit_sys(saves: Nat, prog: Prog, file: File, call: SysCall, placement: List<Place>, names: Nat) → Option<Emitted> {
-    match file.move_outputs(ArgumentMove::ports(file.call_moves(call.words())), ArgumentMove::registers(file.call_moves(call.words()))) {
+    match file.move_outputs(sys_entries(file, call), sys_targets(file, call)) {
         None => None,
         Some(moves) => match moves.file.outputs_check(word_ports(call.words()), sys_registers()) &&
             (leaves_all(moves.code, body_kept(saves)) && sys_clear(saves)) {
@@ -2386,8 +2406,8 @@ theorem sys_emits<M>(saves: Nat, site: Site<M>, laid: site.program.laid_out().Is
     MayEmitNow<M>(saves, site, stack, spans, values, d, s0, prog, file, call.Lands(spans, blocks, values, before, after), before, after,
         emit_sys(saves, prog, file, call, placement, names)) {
     let facts = call.Lands(spans, blocks, values, before, after);
-    let entries = ArgumentMove::ports(file.call_moves(call.words()));
-    let registers = ArgumentMove::registers(file.call_moves(call.words()));
+    let entries = sys_entries(file, call);
+    let registers = sys_targets(file, call);
     (match file.move_outputs(entries, registers) as λ o => MayKeep<M>(values, file, True, o) →
         MayEmitNow<M>(saves, site, stack, spans, values, d, s0, prog, file, facts, before, after, match o {
             None => None,
@@ -3928,7 +3948,7 @@ theorem exit_stops<M>(x: Stop, saves: Nat, site: Site<M>, laid: site.program.lai
 theorem sys_stops<M>(x: Stop, saves: Nat, site: Site<M>, stack: Stack<M>(site.fetch, site.data), spans: Spans, values: Valuation(), d: Nat,
     s0: MachineState<M>, prog: Prog, file: File, call: SysCall, placement: List<Place>, names: Nat, before: Now, least: Nat):
     MayStopHeap<M>(x, saves, site, stack, spans, values, d, s0, prog, file, False, before, least, emit_sys(saves, prog, file, call, placement, names)) {
-    match file.move_outputs(ArgumentMove::ports(file.call_moves(call.words())), ArgumentMove::registers(file.call_moves(call.words()))) as λ o =>
+    match file.move_outputs(sys_entries(file, call), sys_targets(file, call)) as λ o =>
         MayStopHeap<M>(x, saves, site, stack, spans, values, d, s0, prog, file, False, before, least, match o {
             None => None,
             Some(moves) => match moves.file.outputs_check(word_ports(call.words()), sys_registers()) &&

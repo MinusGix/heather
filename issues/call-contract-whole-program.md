@@ -39,3 +39,12 @@ A theorem from `Site::Meets` at the entry routine to the program's `RunsAs` at e
      An answerable world keeps every answer one Linux gives (`io.Answerable()`).
 
   What remains: the image's start (its `_start` CALL into the entry routine and the exit after a done return), and reading `Io.past` as an itree trace for `RunsAs`.
+- 2026-11-26: From [[bytes-level-lowering-world]] item 5: `Site::tracks_runs_as` (`lib/native/bytes_level/bytes_level_whole.hthr`).
+  - What it gives: `Tracks` at every routine, at every fuel, in every answerable world, is `RunsAs` of the trace the meaning's outcome reads (`Ran::trace`). Done and going end in `TEnd`, exited in `TRet(status)`, stuck in nothing.
+  - How: through `Site::linux_runs_as`, for any Linux claim whose goal pins the world.
+  - Probe: `echo_runs_as` (bytes_level_routines_tests).
+  - Remaining for this issue's done-when:
+    - the image's `_start`, which calls the entry routine and exits after a done return;
+    - `Sim` over the meaning read as an itree, or over its fuel-indexed traces;
+    - `Trace::LinuxValid` of the trace, from `Io::Answerable`;
+    - the probe at a two-call program.

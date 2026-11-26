@@ -1,0 +1,160 @@
+// The whole program from `Tracks` (issues/call-contract-whole-program.md,
+// docs/language/ownership-design.md §17.7): a claim at Linux whose goal
+// pins the world is the Linux model's `RunsAs` (linux_x86_64_sim) of the
+// trace its world's new exchanges are, oldest first. Its silent steps are
+// the claim's machine runs, and each resumption is one answered call:
+// `Site::linux_resumes` asks what `LinuxAnswered` does. So `Tracks` at a
+// routine, at every fuel, is `RunsAs` of the trace the meaning's outcome
+// reads (`Ran::trace`): done and going end in `TEnd`, exited in `TRet` with
+// its status, stuck claims nothing.
+import x86_64_memory_contract;
+import x86_64_call_contract;
+import x86_64_stack;
+import x86_64_stack_runs;
+import x86_64_asm;
+import x86_64_asm_runs;
+import x86_64;
+import linux_calls;
+import linux_world;
+import linux_trees;
+import linux_x86_64_io;
+import linux_x86_64_sim;
+import itree_trace;
+import call_system;
+import transition;
+import bitvec;
+import list;
+import logic;
+import nat;
+import option;
+import omega;
+
+fn LinuxTrace() → Type { Trace<BitVec(64)>(Events::linux()) }
+
+// The `k` newest exchanges of a history, oldest first, then `last`.
+fn trace_of(past: List<Exchange>, k: Nat, last: LinuxTrace()) → LinuxTrace() {
+    match k { Zero => last, Succ(j) => match past.nth(j) { None => last, Some(e) => TAns(e.cmd, e.answer, trace_of(past, j, last)) } }
+}
+
+// A claim at Linux whose goal fixes the world at `o` reaches it from a
+// start whose history `o`'s ends with.
+theorem Site::linux_performs_suffix<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), goal: Running<M, Io> → Type, o: Io,
+    pins: (t: Running<M, Io>) → goal(t) → t.io = o, calls: Nat):
+    (least: Nat) → (from: Running<M, Io>) → site.LinuxPerforms(stack, goal, calls, least, from) →
+    Exists<List<Exchange>>(λ xs => o.past = xs ++ from.io.past) {
+    match calls {
+        Zero => λ least from p => Exists(Nil, sym(cong_fn<Io, List<Exchange>>(λ w => w.past, pins(Running(p.witness, from.io), p.proof.proof.right.right)))),
+        Succ(more) => λ least from p => match p.proof.proof.right {
+            Inl(reached) => Exists(Nil, sym(cong_fn<Io, List<Exchange>>(λ w => w.past, pins(Running(p.witness, from.io), reached.right)))),
+            Inr(called) => {
+                let c = called.witness;
+                let a = from.io.answer(c);
+                let zero = BitVec::zero(n := 64);
+                let u = linux_answered(site.linux(stack), p.witness, c, a, Nil, zero, zero);
+                let later = site.linux_performs_suffix(stack, goal, o, pins, more, least - p.proof.witness, Running(u, from.io.exchanged(c, a)),
+                    called.proof.right(Nil, linux_leaves_nil(c, a), zero, zero));
+                let xs = later.witness;
+                Exists(xs ++ [Exchange(c, a)], trans(later.proof, sym(List::append_assoc(xs, [Exchange(c, a)], from.io.past))))
+            },
+        },
+    }
+}
+
+// The claim, read as the Linux model reads a process: `RunsAs` of the
+// trace of the exchanges its goal's world has beyond the start's, then
+// whatever `last` the goal's states run as.
+theorem Site::linux_runs_as<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), goal: Running<M, Io> → Type, o: Io, last: LinuxTrace(),
+    pins: (t: Running<M, Io>) → goal(t) → t.io = o, ends: (t: Running<M, Io>) → goal(t) → RunsAs(site.linux(stack), last, t.state), calls: Nat):
+    (least: Nat) → (from: Running<M, Io>) → site.LinuxPerforms(stack, goal, calls, least, from) →
+    RunsAs(site.linux(stack), trace_of(o.past, o.past.len() - from.io.past.len(), last), from.state) {
+    let io = site.linux(stack);
+    let sys = CallSystem::linux_claims(io);
+    let at_goal = λ (from: Running<M, Io>) (t: MachineState<M>) (n: Nat)
+        (runs: MachineRuns(site.fetch, site.data, stack.writes, n, from.state, t)) (reached: goal(Running(t, from.io))) => {
+        let same: (from.io = o) = pins(Running(t, from.io), reached);
+        let none: (o.past.len() - from.io.past.len() = 0) = { let lens = cong_fn<Io, Nat>(λ w => w.past.len(), same); omega };
+        j(sym(none), λ k _ => RunsAs(io, trace_of(o.past, k, last), from.state),
+            CallSystem::after_star(Events::linux(), sys, last, from.state, t,
+                Star::of_n(λ (x: MachineState<M>) (y: MachineState<M>) => LinuxStep(io, x, y), n, from.state, t, runs),
+                ends(Running(t, from.io), reached)))
+    };
+    match calls {
+        Zero => λ least from p => at_goal(from, p.witness, p.proof.witness, p.proof.proof.left, p.proof.proof.right.right),
+        Succ(more) => λ least from p => match p.proof.proof.right {
+            Inl(reached) => at_goal(from, p.witness, p.proof.witness, p.proof.proof.left, reached.right),
+            Inr(called) => {
+                let t = p.witness;
+                let n = p.proof.witness;
+                let c = called.witness;
+                let a = from.io.answer(c);
+                let after = from.io.exchanged(c, a);
+                let zero = BitVec::zero(n := 64);
+                let first = called.proof.right(Nil, linux_leaves_nil(c, a), zero, zero);
+                let suffix = site.linux_performs_suffix(stack, goal, o, pins, more, least - n,
+                    Running(linux_answered(io, t, c, a, Nil, zero, zero), after), first);
+                let xs = suffix.witness;
+                let lens: (o.past.len() = xs.len() + (from.io.past.len() + 1)) =
+                    trans(cong_fn<List<Exchange>, Nat>(λ l => l.len(), suffix.proof), xs.len_append(Cons(Exchange(c, a), from.io.past)));
+                let k: (o.past.len() - from.io.past.len() = Succ(xs.len())) = { omega };
+                let k2: (o.past.len() - after.past.len() = xs.len()) = { let e = exchanged_len(from.io, c, a); omega };
+                let at_end: (xs.len() = 0 + xs.len()) = { omega };
+                let found: (o.past.nth(xs.len()) = Some(Exchange(c, a))) = trans(cong_fn<List<Exchange>, Option<Exchange>>(λ l => l.nth(xs.len()), suffix.proof),
+                    trans(cong_fn<Nat, Option<Exchange>>(λ i => (xs ++ Cons(Exchange(c, a), from.io.past)).nth(i), at_end),
+                        xs.nth_append_r(Cons(Exchange(c, a), from.io.past), 0)));
+                let rest = trace_of(o.past, xs.len(), last);
+                let answered: RunsAs(io, TAns(c, a, rest), from.state) = Exists(t, ⟨Star::of_n(λ (x: MachineState<M>) (y: MachineState<M>) => LinuxStep(io, x, y),
+                        n, from.state, t, p.proof.proof.left),
+                    ⟨called.proof.left.left, ⟨called.proof.left.right.left, ⟨called.proof.left.right.right, λ junk leaves rcx r11 =>
+                        j(k2, λ q _ => RunsAs(io, trace_of(o.past, q, last), linux_answered(io, t, c, a, junk, rcx, r11)),
+                            site.linux_runs_as(stack, goal, o, last, pins, ends, more, least - n, Running(linux_answered(io, t, c, a, junk, rcx, r11), after),
+                                called.proof.right(junk, leaves, rcx, r11)))⟩⟩⟩⟩);
+                j(sym(k), λ q _ => RunsAs(io, trace_of(o.past, q, last), from.state),
+                    j(sym(found), λ x _ => RunsAs(io, match x { None => last, Some(e) => TAns(e.cmd, e.answer, rest) }, from.state), answered))
+            },
+        },
+    }
+}
+
+// The trace a routine's outcome reads from the world it was entered in:
+// its world's new exchanges, then nothing (done, going), the exit with its
+// status (exited); stuck, nothing at all.
+fn Ran::trace(self outcome: Ran<Answer>, io: Io) → LinuxTrace() {
+    match outcome {
+        Done(a) => trace_of(a.io.past, a.io.past.len() - io.past.len(), TEnd),
+        Exited(status, o) => trace_of(o.past, o.past.len() - io.past.len(), TRet(status)),
+        Going(o) => trace_of(o.past, o.past.len() - io.past.len(), TEnd),
+        Stuck(_) => TEnd,
+    }
+}
+
+// What `Tracked` buys: `RunsAs` of the outcome's trace from the entry.
+theorem Site::tracked_runs_as<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), spans: Spans, s: MachineState<M>, i: Nat, ret: BitVec(64),
+    io: Io, n: Nat): (outcome: Ran<Answer>) → site.Tracked(stack, spans, s, i, ret, io, n, outcome) → RunsAs(site.linux(stack), outcome.trace(io), s) {
+    λ outcome => match outcome {
+        Done(a) => λ tracked => site.linux_runs_as(stack, site.Reached(stack, spans, s, i, ret, Done(a)), a.io, TEnd, λ t r => r.right.right.right,
+            λ t r => trivial, tracked.witness, 0, Running(s, io), tracked.proof),
+        Exited(status, o) => λ tracked => site.linux_runs_as(stack, site.Reached(stack, spans, s, i, ret, Exited(status, o)), o, TRet(status),
+            λ t r => r.right, λ t r => Exists(t.state, ⟨Star::refl(λ (x: MachineState<M>) (y: MachineState<M>) => LinuxStep(site.linux(stack), x, y), t.state),
+                ⟨r.left.left, r.left.right⟩⟩), tracked.witness, 0, Running(s, io), tracked.proof),
+        Going(o) => λ tracked => site.linux_runs_as(stack, site.Reached(stack, spans, s, i, ret, Going(o)), o, TEnd, λ t r => r,
+            λ t r => trivial, tracked.witness, n - 1, Running(s, io), tracked.proof),
+        Stuck(_) => λ _ => trivial,
+    }
+}
+
+// `Tracks`, at every routine entered as the contract enters one, in every
+// world whose answers Linux may give, and at every fuel: the machine runs as
+// the trace of the meaning's outcome there.
+fn Site::RunsAsMeaning<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), spans: Spans, top: Nat, lent: Type, room: Nat → Nat → Nat,
+    peak: Nat → Nat → List<Value> → Heap → Io → Nat, bound: Nat, meaning: Nat → Calls()) → Type {
+    site.Entering(stack, spans, top, lent, room, peak, bound, λ n f args heap io s i ret => io.Answerable() →
+        RunsAs(site.linux(stack), meaning(n, f, args, heap, io).trace(io), s))
+}
+
+theorem Site::tracks_runs_as<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), spans: Spans, top: Nat, lent: Type, room: Nat → Nat → Nat,
+    peak: Nat → Nat → List<Value> → Heap → Io → Nat, bound: Nat, meaning: Nat → Calls(),
+    tracks: site.Tracks(stack, spans, top, lent, room, peak, bound, meaning)): site.RunsAsMeaning(stack, spans, top, lent, room, peak, bound, meaning) {
+    λ loan law f below args heap io s here resident i rsp inside passed high injected ret saved n roomy answerable =>
+        site.tracked_runs_as(stack, spans, s, i, ret, io, n, meaning(n, f, args, heap, io),
+            tracks(loan, law, f, below, args, heap, io, s, here, resident, i, rsp, inside, passed, high, injected, ret, saved, n, roomy, answerable))
+}

@@ -2302,6 +2302,32 @@ clobber. `Body::fresh` accepts it, binding its result word.
   re-establishes it for free. `Tracks` supplies it at the entry. No fact,
   `holds_of` or loop-pass lemma carries it.
 
+**Tracks with the world, and `RunsAs` (same round, items 4 and 5).**
+`lower_program_tracks` and `lower_program_meets` cover every program the
+lowering returns, system calls included, under `EmptyEnds`.
+
+The probes found one completeness gap in the emission: the call's
+`MOV RAX, n` and Linux's clobbers lost a value the file still held in RAX,
+RCX or R11, so `echo`'s read count, which is live across its write, made it
+unlowerable. Such values now move to a free R8 to R10 first (`sys_kept`),
+judged by the same `outputs_check`.
+
+The language's `echo`, `read_then_load` and `exits`, and a pass that writes
+forever, are compiled and meet the whole contract. Each is read where it
+applies: done, stuck, and going with the history as long as the fuel
+(`bytes_level_routines_tests`).
+
+`bytes_level_whole` reads `Tracks` as the Linux model reads a process.
+- A Linux claim whose goal pins the world is `RunsAs` of the trace of the
+  world's new exchanges (`Site::linux_runs_as`). Silent steps are the
+  claim's machine runs, and each resumption is a `LinuxAnswered` call.
+- So `Tracks` gives `RunsAs` of the meaning's outcome at every fuel
+  (`Site::tracks_runs_as`).
+
+What stands between this and `Sim` for a whole image is in
+`issues/call-contract-whole-program.md`: the image's `_start`, the meaning
+as an itree, and `LinuxValid`.
+
 ## 18. The world, termination, and level 2 fixed (2026-11-25)
 
 Round six of the design review. Where this section and §15.4, §15.5 or §17

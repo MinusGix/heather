@@ -174,17 +174,6 @@ fn Site::LinuxPerforms<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.d
 // ---------------------------------------------------------------------------
 // Counting system calls by the world
 
-// Linux may resume a call leaving nothing behind.
-theorem linux_leaves_nil(c: LinuxCmd<Nat>, a: c.Resp()): LinuxLeaves(c, a, Nil) {
-    (match c as λ d => (b: d.Resp()) → LinuxLeaves(d, b, Nil) {
-        ReadCmd(fd, max) => λ b => match b as λ r => LinuxLeaves(ReadCmd(fd, max), r, Nil) { ReadBytes(_) => refl, ReadFailed(_) => trivial },
-        WriteCmd(_, _) => λ b => refl,
-        OpenCmd(_) => λ b => refl,
-        CloseCmd(_) => λ b => refl,
-        StatCmd(target) => λ b => match b as λ r => LinuxLeaves(StatCmd(target), r, Nil) { Stated(_) => refl, StatFailed(_) => trivial },
-    })(a)
-}
-
 // Each exchange is one more in the history.
 theorem exchanged_len(io: Io, c: LinuxCmd<Nat>, a: c.Resp()): io.exchanged(c, a).past.len() = io.past.len() + 1 { refl }
 

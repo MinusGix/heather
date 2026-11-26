@@ -953,8 +953,7 @@ theorem Body::emit_grows(self body: Body, saves, slots: Nat, short: List<Nat>, b
                     })(inner.emit_grows(saves, slots, short, bound, spare, plain_head(prog, entry.code, names), entry.head, taken.rest, names + 4)),
                 },
             },
-        Sys(call) => λ prog file placement names => match file.move_outputs(ArgumentMove::ports(file.call_moves(call.words())),
-                ArgumentMove::registers(file.call_moves(call.words()))) as λ o => Grows(prog, match o {
+        Sys(call) => λ prog file placement names => match file.move_outputs(sys_entries(file, call), sys_targets(file, call)) as λ o => Grows(prog, match o {
                 None => None,
                 Some(moves) => match moves.file.outputs_check(word_ports(call.words()), sys_registers()) &&
                     (leaves_all(moves.code, body_kept(saves)) && sys_clear(saves)) {
