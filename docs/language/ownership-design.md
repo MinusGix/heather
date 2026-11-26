@@ -2998,9 +2998,11 @@ Func  = signature (§15.8), body
   that ends the body is the join none of whose leaves is a `Yield`; it is
   not a second node. In every case what follows a join is read once.
 - **A view as an output.** A read view chosen by a join is an output like
-  any other, its region the union (§15.3). A write view is an output only
-  where both arms view one root, its slot the convoy of the arms' steps;
-  otherwise it is dead at the join.
+  any other, its region the union (§15.3). A view to write survives a join
+  only where both arms hold it at one parent and one place; otherwise it is
+  written back before the join. (An earlier text here allowed one root with
+  the slot a convoy of the arms' steps; a write-back's place is static, so
+  there is nothing to write back to. §23.)
 - **A loop is a function**, which is what the surface makes it: `while`
   is the library's loop combinator run on a named step over the state
   (`docs/language/loop-combinator-design.md`; an earlier text here described
