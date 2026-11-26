@@ -11669,3 +11669,184 @@ theorem Heap::frame_whole(tys: Nat → Type, strs: Strs(tys), before, after: Hea
 {
     fr(b, bl, λ r mr eb _ => none(r, mr, eb), Nil, λ r mr eb => false_elim(none(r, mr, eb)))
 }
+
+// ---------------------------------------------------------------------------
+// The call, in parts (P1–P9)
+
+// P1: passing. A cell passes a value that reads what the cell reads: the
+// cell's own (read, written, or an owned object moved) or a plain copy.
+theorem Cell::pass_get(tys: Nat → Type, strs: Strs(tys), h: Heap(tys), p: Param, c: Cell(tys), d: Dyn(tys), g: Value::get(tys, strs, h, c.v, Nil) = Some(d)):
+    Exists<Value(tys)>(λ v => (Cell::pass(tys, strs, h, p, c) = Some(v)) ∧ ((Value::get(tys, strs, h, v, Nil) = Some(d)) ∧ ((v = c.v) ∨ (v = level2::Plain(d)))))
+{
+    let tk = λ (b: Bool) => match b as λ _ => Option<Value(tys)> { True => Some(c.v), False => Value::get(tys, strs, h, c.v, Nil).map(λ q => level2::Plain(q)) };
+    let goal: (Option<Value(tys)> → Type) = λ o => Exists<Value(tys)>(λ v => (o = Some(v)) ∧ ((Value::get(tys, strs, h, v, Nil) = Some(d)) ∧ ((v = c.v) ∨ (v = level2::Plain(d)))));
+    let mine: goal(Some(c.v)) = Exists(c.v, ⟨refl, ⟨g, Inl(refl)⟩⟩);
+    (match p.mode as λ md => goal(match md as λ _ => Option<Value(tys)> { ByTake => tk(c.own && !Shape::plain(tys, strs, p.code)), ByRead => Some(c.v), ByWrite => Some(c.v) }) {
+        ByRead => mine,
+        ByWrite => mine,
+        ByTake => (match c.own && !Shape::plain(tys, strs, p.code) as λ b => goal(tk(b)) {
+            True => mine,
+            False => Exists(level2::Plain(d), ⟨j(sym(g), λ o _ => o.map(λ q => level2::Plain(q)) = Some(level2::Plain(d)), refl), ⟨refl, Inr(refl)⟩⟩),
+        }),
+    })
+}
+
+// A lend reads its argument, and leaves the state as it was or with one
+// level gone (an owned object moved).
+theorem CSt::lend_st(self s: CSt, tys: Nat → Type, strs: Strs(tys), p: Param, x: Var, n: Next, ok: s.lend(tys, strs, p, x) = Some(n)):
+    Exists<Got>(λ g => s.read_var(tys, strs, x) = Some(g)) ∧ ((n.st = s) ∨ Exists<Nat>(λ l => (l < s.na + s.nd) ∧ (n.st = s.set(l, KGone))))
+{
+    let body = λ (g: Got) => match p.mode as λ _ => Option<Next> {
+        ByRead => Some(checker::Next(s, g.rs)),
+        ByWrite => s.write_at(g.root, Nil).map(λ rw => checker::Next(s, g.rs ++ rw)),
+        ByTake => match s.role(g.root) as λ _ => Option<Next> {
+            KHold(o, a) => match a.writes() && Shape::moves(tys, strs, p.code) as λ _ => Option<Next> {
+                True => match a as λ _ => Option<Next> { AcOwn => (!s.has_obj_views(o)).then(Some(checker::Next(s.set(g.root, KGone), g.rs))), AcRead => Some(checker::Next(s, g.rs)), AcWrite => Some(checker::Next(s, g.rs)) },
+                False => Some(checker::Next(s, g.rs)),
+            },
+            KPlain => Some(checker::Next(s, g.rs)),
+            KView => Some(checker::Next(s, g.rs)),
+            KGone => Some(checker::Next(s, g.rs)),
+        },
+    };
+    let a1 = Option::and_then_some(s.read_var(tys, strs, x), body, n, ok);
+    let g = a1.witness;
+    let P: (Next → Type) = λ q => (q.st = s) ∨ Exists<Nat>(λ l => (l < s.na + s.nd) ∧ (q.st = s.set(l, KGone)));
+    let same = λ (rs: List<Residual>) (h: Some(checker::Next(s, rs)) = Some(n)) => j(Option::some_inj(checker::Next(s, rs), n, h), λ q _ => P(q), Inl(refl));
+    let ri = s.read_inv(tys, strs, Place(x, Nil), g, a1.proof.left);
+    let rb: (g.root < s.na + s.nd) = s.lvl_below(x, g.root, ri.lvl);
+    let st: P(n) = (match p.mode as λ md => (match md as λ _ => Option<Next> {
+            ByRead => Some(checker::Next(s, g.rs)),
+            ByWrite => s.write_at(g.root, Nil).map(λ rw => checker::Next(s, g.rs ++ rw)),
+            ByTake => match s.role(g.root) as λ _ => Option<Next> {
+                KHold(o, a) => match a.writes() && Shape::moves(tys, strs, p.code) as λ _ => Option<Next> {
+                    True => match a as λ _ => Option<Next> { AcOwn => (!s.has_obj_views(o)).then(Some(checker::Next(s.set(g.root, KGone), g.rs))), AcRead => Some(checker::Next(s, g.rs)), AcWrite => Some(checker::Next(s, g.rs)) },
+                    False => Some(checker::Next(s, g.rs)),
+                },
+                KPlain => Some(checker::Next(s, g.rs)),
+                KView => Some(checker::Next(s, g.rs)),
+                KGone => Some(checker::Next(s, g.rs)),
+            },
+        }) = Some(n) → P(n) {
+        ByRead => λ h => same(g.rs, h),
+        ByWrite => λ h => match Option::map_some_inv(s.write_at(g.root, Nil), λ rw => checker::Next(s, g.rs ++ rw), n, h) { ⟨rw, pr⟩ => j(pr.right, λ q _ => P(q), Inl(refl)) },
+        ByTake => λ h => (match s.role(g.root) as λ r => (match r as λ _ => Option<Next> {
+                KHold(o, a) => match a.writes() && Shape::moves(tys, strs, p.code) as λ _ => Option<Next> {
+                    True => match a as λ _ => Option<Next> { AcOwn => (!s.has_obj_views(o)).then(Some(checker::Next(s.set(g.root, KGone), g.rs))), AcRead => Some(checker::Next(s, g.rs)), AcWrite => Some(checker::Next(s, g.rs)) },
+                    False => Some(checker::Next(s, g.rs)),
+                },
+                KPlain => Some(checker::Next(s, g.rs)),
+                KView => Some(checker::Next(s, g.rs)),
+                KGone => Some(checker::Next(s, g.rs)),
+            }) = Some(n) → P(n) {
+            KPlain => λ h2 => same(g.rs, h2),
+            KView => λ h2 => same(g.rs, h2),
+            KGone => λ h2 => same(g.rs, h2),
+            KHold(o, a) => λ h2 => (match a.writes() && Shape::moves(tys, strs, p.code) as λ b => (match b as λ _ => Option<Next> {
+                    True => match a as λ _ => Option<Next> { AcOwn => (!s.has_obj_views(o)).then(Some(checker::Next(s.set(g.root, KGone), g.rs))), AcRead => Some(checker::Next(s, g.rs)), AcWrite => Some(checker::Next(s, g.rs)) },
+                    False => Some(checker::Next(s, g.rs)),
+                }) = Some(n) → P(n) {
+                False => λ h3 => same(g.rs, h3),
+                True => λ h3 => (match a as λ a2 => (match a2 as λ _ => Option<Next> { AcOwn => (!s.has_obj_views(o)).then(Some(checker::Next(s.set(g.root, KGone), g.rs))), AcRead => Some(checker::Next(s, g.rs)), AcWrite => Some(checker::Next(s, g.rs)) }) = Some(n) → P(n) {
+                    AcRead => λ h4 => same(g.rs, h4),
+                    AcWrite => λ h4 => same(g.rs, h4),
+                    AcOwn => λ h4 => {
+                        let eq = Option::some_inj(checker::Next(s.set(g.root, KGone), g.rs), n, (Bool::then_some(!s.has_obj_views(o), Some(checker::Next(s.set(g.root, KGone), g.rs)), n, h4)).right);
+                        j(eq, λ q _ => P(q), Inr(Exists(g.root, ⟨rb, refl⟩)))
+                    },
+                })(h3),
+            })(h2),
+        })(h),
+    })(a1.proof.right);
+    ⟨Exists(g, a1.proof.left), st⟩
+}
+
+// The arguments passed: each read as the meaning holds it, the state after
+// the lends agreeing still (a moved level is gone).
+theorem Sim::pass_all(tys: Nat → Type, strs: Strs(tys), {e: Env(tys)}, {m: Mach(tys)}, xs: List<Var>): (s: CSt) → Sim(tys, strs, s, e, m) → (ps: List<Param>) → (n: Next) →
+    s.lend_all(tys, strs, ps, xs) = Some(n) →
+    Sim(tys, strs, n.st, e, m) ∧ Exists<List<Value(tys)>>(λ vs => (Cell::pass_all(tys, strs, m.heap, ps, xs.map(λ x => REnv::get(tys, m.env, x))) = Some(vs)) ∧
+        Value::ReadAll(tys, strs, m.heap, m.heap.len(), vs, xs.map(λ x => Env::get(tys, e, x))))
+{
+    match xs {
+        Nil => λ s sim ps n ok => ⟨j(Option::some_inj(checker::Next(s, Nil), n, ok), λ q _ => Sim(tys, strs, q.st, e, m), sim), Exists(Nil, ⟨refl, trivial⟩)⟩,
+        Cons(x, rest) => λ s sim ps => match ps {
+            Nil => λ n no => absurd(no),
+            Cons(p, prest) => λ n ok => {
+                let a1 = Option::and_then_some(s.lend(tys, strs, p, x), λ n1 => n1.st.lend_all(tys, strs, prest, rest).map(λ n2 => checker::Next(n2.st, n1.rs ++ n2.rs)), n, ok);
+                let n1 = a1.witness;
+                let a2 = Option::map_some_inv(n1.st.lend_all(tys, strs, prest, rest), λ n2 => checker::Next(n2.st, n1.rs ++ n2.rs), n, a1.proof.right);
+                let n2 = a2.witness;
+                let ls = s.lend_st(tys, strs, p, x, n1, a1.proof.left);
+                let sim1: Sim(tys, strs, n1.st, e, m) = match ls.right {
+                    Inl(eq) => j(sym(eq), λ q _ => Sim(tys, strs, q, e, m), sim),
+                    Inr(⟨l, pl⟩) => j(sym(pl.right), λ q _ => Sim(tys, strs, q, e, m), Sim::gone(tys, strs, sim, l, pl.left)),
+                };
+                let ih = Sim::pass_all(tys, strs, rest, n1.st, sim1, prest, n2, a2.proof.left);
+                let vx: (Mach::val(tys, strs, m, x) = Some(Env::get(tys, e, x))) = match ls.left { ⟨g, pg⟩ => Sim::read_val(tys, strs, sim, x, g, pg) };
+                match Cell::pass_get(tys, strs, m.heap, p, REnv::get(tys, m.env, x), Env::get(tys, e, x), vx) {
+                    ⟨v, pv⟩ => match ih.right {
+                        ⟨vr, pvr⟩ => {
+                            let pr: (Cell::pass_all(tys, strs, m.heap, prest.drop(0), rest.map(λ y => REnv::get(tys, m.env, y))) = Some(vr)) =
+                                j(sym(prest.drop_zero()), λ q _ => Cell::pass_all(tys, strs, m.heap, q, rest.map(λ y => REnv::get(tys, m.env, y))) = Some(vr), pvr.left);
+                            let all: (Cell::pass_all(tys, strs, m.heap, Cons(p, prest), Cons(REnv::get(tys, m.env, x), rest.map(λ y => REnv::get(tys, m.env, y)))) = Some(Cons(v, vr))) =
+                                j(sym(pv.left), λ o _ => (match o as λ _ => Option<List<Value(tys)>> { Some(v0) => Cell::pass_all(tys, strs, m.heap, prest.drop(0), rest.map(λ y => REnv::get(tys, m.env, y))).map(λ vs => Cons(v0, vs)), None => None }) = Some(Cons(v, vr)),
+                                    j(sym(pr), λ o _ => o.map(λ vs => Cons(v, vs)) = Some(Cons(v, vr)), refl));
+                            let rd: (Value::read(tys, v, strs, m.heap, m.heap.len()) = Some(Env::get(tys, e, x))) = Value::read_of_get(tys, strs, m.heap, v, Env::get(tys, e, x), pv.right.left);
+                            ⟨j(a2.proof.right, λ q _ => Sim(tys, strs, q.st, e, m), ih.left), Exists(Cons(v, vr), ⟨all, ⟨rd, pvr.right⟩⟩)⟩
+                        },
+                    },
+                }
+            },
+        },
+    }
+}
+
+// The arguments' codes are the parameters' (the code check's), so the
+// callee's meaning is entered coded.
+theorem Sim::coded_args(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, sim: Sim(tys, strs, s, e, m), xs: List<Var>): (ps: List<Param>) →
+    ((x: Var) → Mem(x, xs) → Exists<Nat>(λ l => s.lvl(x) = Some(l))) → Shape::same_list(s.codes(xs), ps.map(λ p => p.code)) = True → Dyn::Coded(tys, xs.map(λ x => Env::get(tys, e, x)), ps)
+{
+    match xs {
+        Nil => λ ps _ h => (match ps as λ q => Shape::same_list(Nil, q.map(λ p => p.code)) = True → Dyn::coded(tys, Nil, q) = True { Nil => λ _ => refl, Cons(_, _) => λ no => absurd(no) })(h),
+        Cons(x, rest) => λ ps lv h0 => (match ps as λ q => Shape::same_list(s.codes(Cons(x, rest)), q.map(λ p => p.code)) = True → Dyn::coded(tys, Cons(x, rest).map(λ y => Env::get(tys, e, y)), q) = True {
+            Nil => λ no => absurd(no),
+            Cons(p, pr) => λ h => {
+                let parts = Bool::and_true_parts(s.code(x).same(p.code), Shape::same_list(s.codes(rest), pr.map(λ q2 => q2.code)), h);
+                let cx: ((Env::get(tys, e, x)).code = s.code(x)) = match lv(x, Inl(refl)) {
+                    ⟨l, hl⟩ => trans(sim.codes(x, l, hl), sym(j(sym(hl), λ o _ => (match o as λ _ => Shape { Some(l2) => (s.var(l2)).code, None => SWord(WNat) }) = (s.var(l)).code, refl))),
+                };
+                let c1: ((Env::get(tys, e, x)).code.same(p.code) = True) = j(sym(cx), λ c _ => c.same(p.code) = True, parts.left);
+                j(sym(c1), λ b _ => (b && Dyn::coded(tys, rest.map(λ y => Env::get(tys, e, y)), pr)) = True,
+                    Sim::coded_args(tys, strs, sim, rest, pr, λ y my => lv(y, Inr(my)), parts.right))
+            },
+        })(h0),
+    }
+}
+
+// Every argument a lend reads has a level.
+theorem CSt::lend_all_lvls(tys: Nat → Type, strs: Strs(tys), xs: List<Var>): (s: CSt) → (ps: List<Param>) → (n: Next) → s.lend_all(tys, strs, ps, xs) = Some(n) →
+    (x: Var) → Mem(x, xs) → Exists<Nat>(λ l => s.lvl(x) = Some(l))
+{
+    match xs {
+        Nil => λ s ps n _ x no => false_elim(no),
+        Cons(y, rest) => λ s ps => match ps {
+            Nil => λ n no => absurd(no),
+            Cons(p, prest) => λ n ok x mx => {
+                let a1 = Option::and_then_some(s.lend(tys, strs, p, y), λ n1 => n1.st.lend_all(tys, strs, prest, rest).map(λ n2 => checker::Next(n2.st, n1.rs ++ n2.rs)), n, ok);
+                let n1 = a1.witness;
+                let a2 = Option::map_some_inv(n1.st.lend_all(tys, strs, prest, rest), λ n2 => checker::Next(n2.st, n1.rs ++ n2.rs), n, a1.proof.right);
+                let ls = s.lend_st(tys, strs, p, y, n1, a1.proof.left);
+                match mx {
+                    Inl(eq) => match ls.left { ⟨g, pg⟩ => j(sym(eq), λ q _ => Exists<Nat>(λ l => s.lvl(q) = Some(l)), Exists(g.root, (s.read_inv(tys, strs, Place(y, Nil), g, pg)).lvl)) },
+                    Inr(mr) => match CSt::lend_all_lvls(tys, strs, rest, n1.st, prest, a2.witness, a2.proof.left, x, mr) {
+                        ⟨l, hl⟩ => match ls.right {
+                            Inl(e1) => Exists(l, j(e1, λ q _ => q.lvl(x) = Some(l), hl)),
+                            Inr(⟨k, pk⟩) => Exists(l, j(pk.right, λ q _ => q.lvl(x) = Some(l), hl)),
+                        },
+                    },
+                }
+            },
+        },
+    }
+}
