@@ -2027,17 +2027,10 @@ theorem read_failed_kept<M>(site: Site<M>, stack: Stack<M>(site.fetch, site.data
 }
 
 // A read of no bytes into a window at its block's end, which the language
-// allows as an empty slice at a list's end is allowed. The loan's laws are
-// all for a byte inside a span, so this one case is a named hypothesis: a
-// store of no bytes changes nothing and needs no room, at every span's end
-// (issues/byte-writes-empty-range.md, the law of `ByteWrites` that will
-// discharge it).
-fn EmptyAt<M>(writes: ByteWrites<M>, address: BitVec(64)) → Type {
-    (memory: M) → writes.writable(memory, address, 0) ∧ (writes.store(memory, address, Nil) = memory)
-}
-
-fn EmptyEnds<M>(writes: ByteWrites<M>, spans: Spans) → Type { (b: Nat) → EmptyAt<M>(writes, spans.byte(b, spans.size(b))) }
-
+// allows as an empty slice at a list's end is allowed: no loan law reaches
+// that address, and the stack's writes' own law does (`stack.empty`,
+// `ByteWrites::EmptyRange`: a store of no bytes changes nothing and needs no
+// room).
 theorem nil_of_short<A>(xs: List<A>): xs.len() <= 0 → xs = Nil {
     match xs { Nil => λ _ => refl, Cons(_, _) => λ short => false_elim(short) }
 }
@@ -2217,10 +2210,9 @@ theorem sys_post<M>(saves: Nat, site: Site<M>, stack: Stack<M>(site.fetch, site.
 // in a written span; every way it resumes leaves the count or the errno in
 // RAX, the window holding what the heap now says (the bytes, or undefined),
 // the code resident and the world with the exchange recorded. A read of no
-// bytes at its block's end is the named case (`EmptyEnds`).
+// bytes at its block's end stores nothing (`stack.empty`).
 theorem sys_read_resumes<M>(saves: Nat, site: Site<M>, stack: Stack<M>(site.fetch, site.data), top: Nat, spans: Spans,
-    loan: Loan<M>(site.fetch, site.data, stack, top, spans), blocks: Blocks, lent: blocks.Lent(spans), ends: EmptyEnds<M>(stack.writes, spans),
-    values: Valuation(), d: Nat, s0: MachineState<M>, file: File, fd, buf, len, result: Nat, before, after: Now, clear: sys_clear(saves).IsTrue(),
+    loan: Loan<M>(site.fetch, site.data, stack, top, spans), blocks: Blocks, lent: blocks.Lent(spans),     values: Valuation(), d: Nat, s0: MachineState<M>, file: File, fd, buf, len, result: Nat, before, after: Now, clear: sys_clear(saves).IsTrue(),
     to: Nat, s: MachineState<M>, fetched: LinuxSyscallAt(site.linux(stack), s), resident: site.Resident(s.memory),
     arrive: next_rip(s.rip, 2) = next_rip(site.origin, to), answerable: before.io.Answerable(),
     held: SysAt<M>(saves, site, stack, spans, values, d, s0, file, Read(fd, buf, len, result),
@@ -2281,9 +2273,7 @@ theorem sys_read_resumes<M>(saves: Nat, site: Site<M>, stack: Stack<M>(site.fetc
         },
         Inr(past) => {
             let zero: (n = 0) = { omega };
-            let at_end: (k = spans.size(b)) = { omega };
-            let rsi_end: (read_gpr(Rsi, s.gprs) = spans.byte(b, spans.size(b))) = trans(rsi, cong_fn<Nat, BitVec(64)>(λ q => spans.byte(b, q), at_end));
-            let empty = j(sym(rsi_end), λ x _ => EmptyAt<M>(stack.writes, x), ends(b));
+            let empty = λ (m: M) => stack.empty(m, read_gpr(Rsi, s.gprs));
             let open: stack.writes.writable(s.memory, read_gpr(Rsi, s.gprs), n) =
                 j(sym(zero), λ q _ => stack.writes.writable(s.memory, read_gpr(Rsi, s.gprs), q), empty(s.memory).left);
             Exists(c, ⟨⟨fetched, ⟨⟨asks, open⟩, answers⟩⟩, λ junk leaves rcx r11 => {
@@ -2386,14 +2376,13 @@ theorem sys_emits_by<M>(saves: Nat, site: Site<M>, laid: site.program.laid_out()
 
 // The kernel's step for either call.
 theorem sys_core<M>(saves: Nat, site: Site<M>, stack: Stack<M>(site.fetch, site.data), top: Nat, spans: Spans,
-    loan: Loan<M>(site.fetch, site.data, stack, top, spans), blocks: Blocks, lent: blocks.Lent(spans), ends: EmptyEnds<M>(stack.writes, spans),
-    values: Valuation(), d: Nat, s0: MachineState<M>, file: File, before, after: Now, clear: sys_clear(saves).IsTrue(), to: Nat):
+    loan: Loan<M>(site.fetch, site.data, stack, top, spans), blocks: Blocks, lent: blocks.Lent(spans),     values: Valuation(), d: Nat, s0: MachineState<M>, file: File, before, after: Now, clear: sys_clear(saves).IsTrue(), to: Nat):
     (call: SysCall) → (s: MachineState<M>) → LinuxSyscallAt(site.linux(stack), s) → site.Resident(s.memory) → next_rip(s.rip, 2) = next_rip(site.origin, to) →
         before.io.Answerable() → SysAt<M>(saves, site, stack, spans, values, d, s0, file, call, call.Lands(spans, blocks, values, before, after), before)(s) →
         site.linux_resumes(stack, Running(s, before.io), NowPost<M>(saves, site, stack, spans, values, d, s0, to, sys_after(file, call.result()), after)) {
     λ call => match call {
         Read(fd, buf, len, result) => λ s fetched resident arrive answerable held => sys_read_resumes<M>(saves, site, stack, top, spans, loan, blocks, lent,
-            ends, values, d, s0, file, fd, buf, len, result, before, after, clear, to, s, fetched, resident, arrive, answerable, held),
+            values, d, s0, file, fd, buf, len, result, before, after, clear, to, s, fetched, resident, arrive, answerable, held),
         Write(fd, buf, len, result) => λ s fetched resident arrive answerable held => sys_write_resumes<M>(saves, site, stack, spans, blocks, values, d, s0,
             file, fd, buf, len, result, before, after, clear, to, s, fetched, resident, arrive, answerable, held),
     }
@@ -2401,8 +2390,7 @@ theorem sys_core<M>(saves: Nat, site: Site<M>, stack: Stack<M>(site.fetch, site.
 
 // A system call's code meets its meaning.
 theorem sys_emits<M>(saves: Nat, site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data), top: Nat, spans: Spans,
-    loan: Loan<M>(site.fetch, site.data, stack, top, spans), blocks: Blocks, lent: blocks.Lent(spans), ends: EmptyEnds<M>(stack.writes, spans),
-    values: Valuation(), d: Nat, s0: MachineState<M>, prog: Prog, file: File, call: SysCall, placement: List<Place>, names: Nat, before, after: Now):
+    loan: Loan<M>(site.fetch, site.data, stack, top, spans), blocks: Blocks, lent: blocks.Lent(spans),     values: Valuation(), d: Nat, s0: MachineState<M>, prog: Prog, file: File, call: SysCall, placement: List<Place>, names: Nat, before, after: Now):
     MayEmitNow<M>(saves, site, stack, spans, values, d, s0, prog, file, call.Lands(spans, blocks, values, before, after), before, after,
         emit_sys(saves, prog, file, call, placement, names)) {
     let facts = call.Lands(spans, blocks, values, before, after);
@@ -2432,7 +2420,7 @@ theorem sys_emits<M>(saves: Nat, site: Site<M>, laid: site.program.laid_out().Is
                     let rest = Bool::is_true_and(leaves, sys_clear(saves), parts.right);
                     sys_emits_by<M>(saves, site, laid, stack, spans, values, d, s0, prog, file, call, facts, placement, names, before, after, moves, keeps,
                         parts.left, rest.left, rest.right,
-                        sys_core<M>(saves, site, stack, top, spans, loan, blocks, lent, ends, values, d, s0, moves.file.write(Rax, None), before, after,
+                        sys_core<M>(saves, site, stack, top, spans, loan, blocks, lent, values, d, s0, moves.file.write(Rax, None), before, after,
                             rest.right, prog_len(sys_prog(prog, moves.code, call)), call))
                 },
             })(refl)
@@ -3214,7 +3202,7 @@ theorem may_emit_now_seq<M>(saves: Nat, site: Site<M>, stack: Stack<M>(site.fetc
 // body's own offset `w`.
 theorem Body::emit_emits<M>(self body: Body, saves, slots: Nat, site: Site<M>, laid: site.program.laid_out().IsTrue(),
     stack: Stack<M>(site.fetch, site.data), top: Nat, spans: Spans, loan: Loan<M>(site.fetch, site.data, stack, top, spans), blocks: Blocks,
-    lent: blocks.Lent(spans), ends: EmptyEnds<M>(stack.writes, spans), rooms: Nat → Nat, bound, avail: Nat, answers: RoutineAnswers(),
+    lent: blocks.Lent(spans), rooms: Nat → Nat, bound, avail: Nat, answers: RoutineAnswers(),
     callees: CalleesReturn<M>(site, stack, spans, rooms, top, bound, answers), values: Valuation(), spare: Nat, d, w: Nat, s0: MachineState<M>,
     framing: body.calls().IsTrue() → stack.CallFrame(top, avail, d, slots, w, s0), short: List<Nat>):
     body.Fits(rooms, bound, avail) → (prog: Prog) → (file: File) → (placement: List<Place>) → (names: Nat) → (before, after: Now) →
@@ -3238,10 +3226,10 @@ theorem Body::emit_emits<M>(self body: Body, saves, slots: Nat, site: Site<M>, l
                     λ (mid: Now) => first.Holds(spans, blocks, values, answers, spare, before, mid),
                     λ (mid: Now) => rest.Holds(spans, blocks, values, answers, spare, mid, after),
                     before, after, done, first_emits, rest.emit(saves, slots, short, bound, spare, done.prog, done.file, done.placement, done.names),
-                    λ mid => Body::emit_emits<M>(rest, saves, slots, site, laid, stack, top, spans, loan, blocks, lent, ends, rooms, bound, avail, answers, callees,
+                    λ mid => Body::emit_emits<M>(rest, saves, slots, site, laid, stack, top, spans, loan, blocks, lent, rooms, bound, avail, answers, callees,
                         values, spare, d, w, s0, λ c => framing(Bool::is_true_or_r(first.calls(), rest.calls(), c)), short, shallow.right, done.prog,
                         done.file, done.placement, done.names, mid, after)),
-            })(λ mid => Body::emit_emits<M>(first, saves, slots, site, laid, stack, top, spans, loan, blocks, lent, ends, rooms, bound, avail, answers, callees,
+            })(λ mid => Body::emit_emits<M>(first, saves, slots, site, laid, stack, top, spans, loan, blocks, lent, rooms, bound, avail, answers, callees,
                 values, spare, d, w, s0, λ c => framing(Bool::is_true_or_l(first.calls(), rest.calls(), c)), short, shallow.left, prog, file, placement,
                 names, before, mid)),
         Branch(condition, yes, no) => λ shallow prog file placement names before after =>
@@ -3292,11 +3280,11 @@ theorem Body::emit_emits<M>(self body: Body, saves, slots: Nat, site: Site<M>, l
                                 None => λ _ => trivial,
                                 Some(right) => λ no_emits => branch_heap_emits<M>(saves, site, laid, stack, spans, blocks, values, answers, spare, w, s0, prog,
                                     file, condition, yes, no, before, after, tested, names, short, left, right, yes_emits, no_emits),
-                            })(Body::emit_emits<M>(no, saves, slots, site, laid, stack, top, spans, loan, blocks, lent, ends, rooms, bound, avail, answers, callees,
+                            })(Body::emit_emits<M>(no, saves, slots, site, laid, stack, top, spans, loan, blocks, lent, rooms, bound, avail, answers, callees,
                                 values, spare, d, w, s0, λ c => framing(Bool::is_true_or_r(yes.calls(), no.calls(), c)), short, shallow.right, no_prog,
                                 file.know(Falsity(condition)), left.placement, left.names, before, after))
                         },
-                    })(Body::emit_emits<M>(yes, saves, slots, site, laid, stack, top, spans, loan, blocks, lent, ends, rooms, bound, avail, answers, callees,
+                    })(Body::emit_emits<M>(yes, saves, slots, site, laid, stack, top, spans, loan, blocks, lent, rooms, bound, avail, answers, callees,
                         values, spare, d, w, s0, λ c => framing(Bool::is_true_or_l(yes.calls(), no.calls(), c)), short, shallow.left, yes_prog,
                         file.know(Truth(condition)), placement, names + 2, before, after))
                 },
@@ -3313,10 +3301,10 @@ theorem Body::emit_emits<M>(self body: Body, saves, slots: Nat, site: Site<M>, l
         Loop(inputs, parameters, inner, exit, next, outputs) => λ shallow prog file placement names before after =>
             loop_heap_emits<M>(saves, slots, site, laid, stack, spans, blocks, answers, values, spare, w, s0, short, bound, inputs, parameters, inner, exit,
                 next, outputs, prog, file, placement, names, before, after,
-                λ start head rest v from to => Body::emit_emits<M>(inner, saves, slots, site, laid, stack, top, spans, loan, blocks, lent, ends, rooms, bound, avail,
+                λ start head rest v from to => Body::emit_emits<M>(inner, saves, slots, site, laid, stack, top, spans, loan, blocks, lent, rooms, bound, avail,
                     answers, callees, v, spare, d, w, s0, framing, short, shallow, start, head, rest, names + 4, from, to)),
         Sys(call) => λ shallow prog file placement names before after =>
-            sys_emits<M>(saves, site, laid, stack, top, spans, loan, blocks, lent, ends, values, w, s0, prog, file, call, placement, names, before, after),
+            sys_emits<M>(saves, site, laid, stack, top, spans, loan, blocks, lent, values, w, s0, prog, file, call, placement, names, before, after),
         Exit(status) => λ shallow prog file placement names before after =>
             emit_exit_emits<M>(saves, site, stack, spans, values, w, s0, prog, file, status, placement, names, before, after),
     }
@@ -3976,7 +3964,7 @@ theorem sys_stops<M>(x: Stop, saves: Nat, site: Site<M>, stack: Stack<M>(site.fe
 // entries, a CALL being one step more; an exit by `exit_stops`.
 theorem Body::emit_stops<M>(self body: Body, x: Stop, saves, slots: Nat, site: Site<M>, laid: site.program.laid_out().IsTrue(),
     stack: Stack<M>(site.fetch, site.data), top: Nat, spans: Spans, loan: Loan<M>(site.fetch, site.data, stack, top, spans), blocks: Blocks,
-    lent: blocks.Lent(spans), ends: EmptyEnds<M>(stack.writes, spans), rooms: Nat → Nat, bound, avail: Nat, answers: RoutineAnswers(),
+    lent: blocks.Lent(spans), rooms: Nat → Nat, bound, avail: Nat, answers: RoutineAnswers(),
     callees: CalleesReturn<M>(site, stack, spans, rooms, top, bound, answers), goes: RoutineStops(), callee_least: Nat,
     callees_stop: CalleesStop<M>(x, site, stack, spans, rooms, top, bound, goes, callee_least), cap: Nat, covered: x.least(cap) <= 1 + callee_least,
     values: Valuation(), spare: Nat, d, w: Nat, s0: MachineState<M>, framing: body.calls().IsTrue() → stack.CallFrame(top, avail, d, slots, w, s0),
@@ -4010,13 +3998,13 @@ theorem Body::emit_stops<M>(self body: Body, x: Stop, saves, slots: Nat, site: S
                     λ (mid: Now) => first.Holds(spans, blocks, values, answers, spare, before, mid),
                     λ (mid: Now) => rest.Stops(spans, blocks, values, answers, goes, x, spare, fuel, mid), before, x.least(fuel), done, first_emits, first_goes,
                     rest.emit(saves, slots, short, bound, spare, done.prog, done.file, done.placement, done.names),
-                    λ mid => Body::emit_stops<M>(rest, x, saves, slots, site, laid, stack, top, spans, loan, blocks, lent, ends, rooms, bound, avail, answers, callees,
+                    λ mid => Body::emit_stops<M>(rest, x, saves, slots, site, laid, stack, top, spans, loan, blocks, lent, rooms, bound, avail, answers, callees,
                         goes, callee_least, callees_stop, cap, covered, values, spare, d, w, s0,
                         λ c => framing(Bool::is_true_or_r(first.calls(), rest.calls(), c)), short, shallow.right, done.prog, done.file, done.placement,
                         done.names, fuel, capped, mid)),
-            })(λ mid => Body::emit_emits<M>(first, saves, slots, site, laid, stack, top, spans, loan, blocks, lent, ends, rooms, bound, avail, answers, callees,
+            })(λ mid => Body::emit_emits<M>(first, saves, slots, site, laid, stack, top, spans, loan, blocks, lent, rooms, bound, avail, answers, callees,
                     values, spare, d, w, s0, first_framing, short, shallow.left, prog, file, placement, names, before, mid),
-                Body::emit_stops<M>(first, x, saves, slots, site, laid, stack, top, spans, loan, blocks, lent, ends, rooms, bound, avail, answers, callees, goes,
+                Body::emit_stops<M>(first, x, saves, slots, site, laid, stack, top, spans, loan, blocks, lent, rooms, bound, avail, answers, callees, goes,
                     callee_least, callees_stop, cap, covered, values, spare, d, w, s0, first_framing, short, shallow.left, prog, file, placement, names, fuel,
                     capped, before))
         },
@@ -4070,12 +4058,12 @@ theorem Body::emit_stops<M>(self body: Body, x: Stop, saves, slots: Nat, site: S
                                     yes.Stops(spans, blocks, values, answers, goes, x, spare, fuel, before),
                                     no.Stops(spans, blocks, values, answers, goes, x, spare, fuel, before), before, x.least(fuel), tested, names, short, left, right,
                                     yes_goes, no_goes, yes_goes.left, no_goes.left),
-                            })(Body::emit_stops<M>(no, x, saves, slots, site, laid, stack, top, spans, loan, blocks, lent, ends, rooms, bound, avail, answers, callees,
+                            })(Body::emit_stops<M>(no, x, saves, slots, site, laid, stack, top, spans, loan, blocks, lent, rooms, bound, avail, answers, callees,
                                 goes, callee_least, callees_stop, cap, covered, values, spare, d, w, s0,
                                 λ c => framing(Bool::is_true_or_r(yes.calls(), no.calls(), c)), short, shallow.right, no_prog, file.know(Falsity(condition)),
                                 left.placement, left.names, fuel, capped, before))
                         },
-                    })(Body::emit_stops<M>(yes, x, saves, slots, site, laid, stack, top, spans, loan, blocks, lent, ends, rooms, bound, avail, answers, callees, goes,
+                    })(Body::emit_stops<M>(yes, x, saves, slots, site, laid, stack, top, spans, loan, blocks, lent, rooms, bound, avail, answers, callees, goes,
                         callee_least, callees_stop, cap, covered, values, spare, d, w, s0, λ c => framing(Bool::is_true_or_l(yes.calls(), no.calls(), c)),
                         short, shallow.left, yes_prog, file.know(Truth(condition)), placement, names + 2, fuel, capped, before))
                 },
@@ -4095,9 +4083,9 @@ theorem Body::emit_stops<M>(self body: Body, x: Stop, saves, slots: Nat, site: S
         Loop(inputs, parameters, inner, exit, next, outputs) => λ shallow prog file placement names fuel capped before =>
             loop_heap_stops<M>(x, saves, slots, site, laid, stack, spans, blocks, answers, goes, values, spare, w, s0, short, bound, inputs, parameters, inner,
                 exit, next, outputs, prog, file, placement, names, before, cap, fuel, capped,
-                λ start head rest v from to => Body::emit_emits<M>(inner, saves, slots, site, laid, stack, top, spans, loan, blocks, lent, ends, rooms, bound, avail,
+                λ start head rest v from to => Body::emit_emits<M>(inner, saves, slots, site, laid, stack, top, spans, loan, blocks, lent, rooms, bound, avail,
                     answers, callees, v, spare, d, w, s0, framing, short, shallow, start, head, rest, names + 4, from, to),
-                λ start head rest v k le from => Body::emit_stops<M>(inner, x, saves, slots, site, laid, stack, top, spans, loan, blocks, lent, ends, rooms, bound,
+                λ start head rest v k le from => Body::emit_stops<M>(inner, x, saves, slots, site, laid, stack, top, spans, loan, blocks, lent, rooms, bound,
                     avail, answers, callees, goes, callee_least, callees_stop, cap, covered, v, spare, d, w, s0, framing, short, shallow, start, head, rest,
                     names + 4, k, le, from)),
         Sys(call) => λ shallow prog file placement names fuel capped before =>

@@ -70,3 +70,4 @@ language do not change.
   unchanged; `HEATHER_PR_NATIVE=all scripts/test --pr`:
   `== suite: 4140 passed, 0 failed, 3 ignored ==`.
 - 2026-11-26: First filed by the bytes-level-lowering-world session on its own branch (the smallest program and the survey of instances); this file is the building session's, kept at the merge.
+- 2026-11-26: Origin: filed from [[bytes-level-lowering-world]] item 3 (the `Sys` read's zero-byte window at a block's end, carried there as the premise `EmptyEnds`); the lowering now proves it from `stack.empty`.
