@@ -47,7 +47,10 @@ fn linked_exports_are_what_the_compiler_emits() {
                     .args(heather_cli::showcase::native_image_args())
                     .output().unwrap();
                 if !result.status.success() {
-                    failures.lock().expect("failures").push(format!("compile-x86 {module} {function}:\n{}", String::from_utf8_lossy(&result.stderr)));
+                    // The exit status says a kill (a signal, empty stderr: the
+                    // shared memory limit) from a refusal
+                    // (issues/native-linked-gate-fails-under-load.md).
+                    failures.lock().expect("failures").push(format!("compile-x86 {module} {function} ({}):\n{}", result.status, String::from_utf8_lossy(&result.stderr)));
                     continue;
                 }
                 let emitted = std::fs::read_to_string(&assembly).unwrap();

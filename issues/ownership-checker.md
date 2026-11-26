@@ -60,27 +60,40 @@ Continue on branch `claude/ownership-checker-sound`. Read design §23.20
 - `issues/ownership-sound-consolidate.md` filed (the coordinating
   session's item 3). The roots-as-index step is its first piece.
 
-**Open questions, sent to the coordinating session (wait for the answers
-where they decide P5):**
-1. **A result's code**: `SafeAt` never says a result's meaning has the
-   result's code (`Sim.codes`); a primitive's world answer is arbitrary.
-   Until decided, take "the results are coded" as a hypothesis.
-2. **Forward atoms**: a view result's region may name a later result
-   (`found_sig`'s `Var(3)`; `beside_found_checked`). The results cannot be
-   bound one `Inv` at a time: a view's entries would read an unbound
-   level. P5 needs either a builder pushing all the results' variables
-   before the view entries are owed, or the view results bound after the
-   others in the proof's order (the levels are the checker's, so the
-   former).
-3. **Non-plain atoms**: a view result's region may name the caller's level
-   of a by-value argument that is itself a view of a word (`View(b[0])`
-   passed to `at`'s `ByTake` index: the probe `at_by_view0` was checked
-   and is not committed). `Inv.words` then fails at that level. Either the
-   call refuses it (as `View` does through `atoms_ok`) or the invariant
-   reads such a word from the meaning. This is a checker or invariant
-   decision; ask before changing either.
+**The coordinating session's rulings (after this session's reports):**
+- **Results' codes (accepted).** Add to `SafeAt`'s `Done` part
+  `Dyn::Coded(tys, (w(g, ds)).take(nres), result codes)`.
+  - A body gives it from its `Ret` (in `RetOk`).
+  - A primitive's from a new premise of `CheckSound`, `World::Coded`, in
+    `verdict.hthr` beside the world's type.
+  - Probes: the checked caller `y = g(); z = Read(y.f)`, and the `¬`
+    theorem that without the law the run is stuck at a world answering a
+    word.
+  - Add both to §23.17's list. Ask the same question of everything else
+    a primitive answers.
+- **`twice_param`.** Part 1 is done (e1f701d): the callee's `Ret` refuses
+  answering an owned object twice.
+  - Part 2: `Value::FreshApart` becomes "every owning result, fresh or a
+    moved parameter, in different blocks" (rename it, extend
+    `Inv::ret_fresh_apart`/`fresh_hold` to `OParam` of a taken parameter).
+    Watch for this: an owning holder at `Ret` need not be `AcOwn` by any
+    `Inv` clause. A cell with `own` gives `own`'s "alone in its block",
+    which may be the better route.
+  - Part 3: then drop the caller-side `CSt::holds` test, with `noh` from
+    the interface (two owning results in different blocks, both the
+    argument by `ViewIs`: a contradiction).
+- **P6 by peeling: accepted.**
+- **Suite rule:** `--pr` only on a clean committed tree with nothing else
+  heavy running. Edit in a second worktree with its own
+  `HEATHER_CACHE_DIR`, or wait.
+
+**Still open with the coordinating session:** forward atoms in a view
+result's region (`found_sig`), and a view result whose region names a
+caller level that is a view of a word (`at_by_view0`; §23.20).
 
 **Next, in this order:**
+0. The two interface changes above (codes, owning results apart) and the
+   `Ret` stage's proofs of them; then drop the caller-side `CSt::holds`.
 1. P5's binding over `CSt::results` and `Cell::results` (results first,
    then the slots, the run pushing all `n` cells at once). Carry the facts
    relating each state to the pre-call `s`:
@@ -146,3 +159,4 @@ where they decide P5):**
 - 2026-11-26: `scripts/test --pr` at `f278a42` (items 2, 3, P4's frame; `de9bc47` after it is docs and this issue): `== suite: 4140 passed, 0 failed, 3 ignored ==`. Probes `fresh_and_its_view_refused`, `fresh_and_its_view_fresh_refused` (one made object answered as owner and as a view under it: refused, a returned view must be of a parameter).
 - 2026-11-26 (ninth session): P4 built but for the swap and the assembly: the lends (`Inv::lends`), the frame's premises (`Inv::call_un`, `Inv::call_lk`), `Inv::heap_rest`, the licence across the lends (`CSt::license_eq`, `Inv::view_off_by`), the puts (`Inv::put_arg`, `Inv::puts`, `Inv::put_at_arg`), the swap's block and list lemmas; design §23.19. `scripts/test --pr` at `0ba781f`: `== suite: 4139 passed, 1 failed, 3 ignored ==`, the failure `native_linked.rs` (`linked_exports_are_what_the_compiler_emits`, the sha256 certificate check), which this branch does not touch (only `sound.hthr` changed); rerun alone (`scripts/test --pr --test native_linked`): `== suite: 2 passed, 0 failed, 0 ignored ==`, a flake under the suite's load beside the library gate. `f535c5a` (list lemmas) after it is checked by `heather check --cache` only.
 - 2026-11-26 (tenth session): P4 complete (`Inv::call_swap` over `Heap::call_block` and `Inv::call_untaken`; `Inv::call_after`); roots an index of `Inv`/`Stepped`; `Inv::fresh` as growth then `Inv::bind_fresh`; P5's builders `bind_fresh_plain`, `bind_moved`; checker fix: a moved parameter answered twice refused (`CSt::holds`, `twice_param_refused`). Issues `native-linked-gate-fails-under-load` (a resource kill, not a nondeterminism) and `ownership-sound-consolidate` filed; three questions for the coordinating session (results' codes, forward atoms, non-plain atoms in a result view's region). Design §23.20. `scripts/test --pr` at 42e9bfd: `== suite: 4140 passed, 0 failed, 3 ignored ==`.
+- 2026-11-26 (tenth session, after the rulings): native_linked prints a failed compile's exit status (a5405d9, issue closed); the callee's `Ret` answers an owned object once, `twice_param_refused` at the callee (e1f701d); rulings recorded in §23.20 and the handoff. `scripts/test --pr` at dfdc63c, clean tree, nothing else running: `== suite: 4140 passed, 0 failed, 3 ignored ==`.

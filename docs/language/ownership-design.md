@@ -5004,18 +5004,44 @@ the growth can use it before `Inv::words_after` is declared.
   object again;
 - a read view: `Inv::push_view`, its arguments still to be gathered.
 
-**A checker defect, fixed.** A signature could answer a taken parameter as
-two `OParam` results, and the caller bound each as an owned holder of the
-one object: the death of either freed the other's. `CSt::result` now
-refuses a moved result whose object a level already holds (`CSt::holds`).
-The probes are `twice_param_refused`, with `once_param_checked` and
-`twice_param_callee_checked`.
+**A checker defect, fixed at the callee.** A signature could answer a taken
+parameter as two `OParam` results (`twice_param`: `Ret([a, a])`, `a`
+taken). A caller bound each as an owned holder of the one object, and the
+death of either freed the other's.
+- **The callee's `Ret` now answers an owned object once**: `CSt::fresh_once`
+  covers a parameter result as it covers a made one. The probes are
+  `twice_param_refused` (the callee), `once_param_checked` and
+  `once_param_callee_checked`.
+- **The caller's binding also refuses it for now** (`CSt::holds` in
+  `CSt::result`, `twice_param_caller_refused`). This is because the
+  interface does not yet say it.
+- **The coordinating session's ruling** (to do next):
+  - `Value::FreshApart` becomes the clause for every owning result, fresh
+    or a moved parameter: two owning results are in different blocks
+    (renamed for that).
+  - The `Ret` stage proves it.
+  - The caller's test then goes. A caller binding two moved results of one
+    object has, from `SafeAt`, two owning results in different blocks that
+    `ViewIs` says are both the argument: a contradiction, so `noh` comes
+    from the interface.
+  - No primitive can name a moved parameter as a result:
+    `Sig::reads_only`, which `CSt::call` asks of a primitive, wants every
+    result fresh and plain.
+
+**A result's code, the ruling.** `SafeAt`'s `Done` part will conclude that
+the results are coded (`Dyn::Coded` of `w(g, ds)`'s results at the
+signature's result codes):
+- A body gives it from its checked `Ret` (the `Ret` code check and
+  `Sim.codes`, in `RetOk`).
+- A primitive's answer is the world's, so a law of the world is a premise
+  of `CheckSound` (`World::Coded`). The program is a primitive `g() → (S
+  fresh)` and the checked caller `y = g(); Read(y.f)`, stuck at a world
+  answering a word. The `¬` theorem without the law pins it.
+- Every other thing a primitive answers that the caller's invariant reads
+  is to be asked the same question. Written parameters' fit is
+  `Written`'s; a primitive has no written parameter (`reads_only`).
 
 **Open for the results' binding** (reported to the coordinating session):
-- **A result's code.** `SafeAt` does not say a result's meaning has the
-  result's code, which `Sim.codes` needs. For a primitive, the world's
-  answer is arbitrary: `g() → (S fresh)` answered a word leaves `y = g();
-  Read(y.f)` stuck.
 - **Forward atoms.** A view result's region may name a later result
   (`found_sig`'s `Var(3)`). At the moment the view is bound, its region
   reads a level not yet bound, so the results cannot be bound one
@@ -5028,7 +5054,8 @@ The probes are `twice_param_refused`, with `once_param_checked` and
   through `atoms_ok`, or the invariant reads a by-value argument's word
   from the meaning.
 
-**P6's agreement, the choice.** The fold by levels cannot be redefined in
+**P6's agreement, the choice (accepted).** The two folds cannot be one
+definition, so nobody should try again: the fold by levels cannot be redefined in
 the written list's order: it interleaves the chains' steps, and P4's per-put
 invariant needs whole walks. The agreement peels instead: `CSt::patched_back`
 applied level by level up each slot's chain, chain by chain in the written

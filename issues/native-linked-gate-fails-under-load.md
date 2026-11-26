@@ -1,6 +1,6 @@
 ---
 title: native_linked's export gate fails under load: compiles killed with empty stderr
-status: open
+status: closed
 labels: [native,testing]
 area: infrastructure
 created: 2026-11-26
@@ -34,3 +34,7 @@ Not a nondeterminism in the compiler: nothing was emitted that differed from the
 
 - The test should print each failed compile's exit status (signal) beside its stderr, so a kill reads as a kill (`result.status` is in hand at `native_linked.rs:50`).
 - Sessions: do not run a whole-file `heather check` beside the native gates (CLAUDE.md's rule to keep editing work light while the suite runs).
+
+## Log
+
+- 2026-11-26: The test now prints each failed compile's exit status beside its stderr (crates/cli/tests/native_linked.rs), so a kill at the shared memory limit reads as a signal. The run that showed it was not a clean one (an edited tree, a whole-file check beside the suite): suite runs are on a clean committed tree with nothing else heavy running.
