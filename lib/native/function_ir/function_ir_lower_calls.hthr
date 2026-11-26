@@ -4413,19 +4413,20 @@ theorem call_pushes<M, S>(saved: List<Gpr>, slots: Nat, eight: saved.len() <= 8,
 // The CALL against the callee's claim (`Pre`, `Post`): the CALL is one
 // machine step, counted; `enters` and `leaves` relate the caller's clause
 // and world to the callee's, as `call_step_by`'s do.
-theorem call_step_claim<M, S, W>(saved: List<Gpr>, slots: Nat, eight: saved.len() <= 8, slotted: saved.len() <= slots, site: Site<M>,
+theorem call_step_claim_kept<M, S, W>(saved: List<Gpr>, slots: Nat, eight: saved.len() <= 8, slotted: saved.len() <= slots, site: Site<M>,
     laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data), top: Nat, spans: Spans, Mem: S → M → Type, World: S → W → Type,
     kernel: Kernel<M, W>, loan: Loan<M>(site.fetch, site.data, stack, top, spans), stable: stack.ClauseStable(top, Mem), d: Nat, s0: MachineState<M>,
     fits: d + 8 * slots <= stack.size, under: (d + 8 * slots) + 8 <= top, prog: Prog, callee: Nat, deep: 24 <= d, count: Nat, few: count <= 2,
     words: List<BitVec(64)>, answer: BitVec(64), extra: List<BitVec(64)>, before, after: S, calls, least: Nat,
     Pre: Nat → Running<M, W> → Type, Post: Nat → Running<M, W> → Running<M, W> → Type,
     returns: site.ReturnsClaim(stack, kernel, calls, least, asm_labels(site.program)(callee + 1), Pre, Post),
-    enters: (u: Running<M, W>) → stack.Passed(words, (d - 8 * count) - 8, u.state) → Mem(before, u.state.memory) → World(before, u.io) →
+    g0: Gprs, enters: (u: Running<M, W>) → stack.Passed(words, (d - 8 * count) - 8, u.state) → Mem(before, u.state.memory) → World(before, u.io) →
+        Kept(callee_kept(), g0, u.state.gprs) →
         Pre((d - 8 * count) - 8, u),
     leaves: (u, t: Running<M, W>) → Mem(before, u.state.memory) → World(before, u.io) → Post((d - 8 * count) - 8, u, t) →
         (((read_gpr(Rax, t.state.gprs) = answer) ∧ ArgsIn(extra, answer_registers(), t.state.gprs)) ∧ (Kept(callee_kept(), u.state.gprs, t.state.gprs) ∧
             (stack.WroteIn((d - 8 * count) - 8, spans, u.state.memory, t.state.memory) ∧ Mem(after, t.state.memory)))) ∧ World(after, t.io),
-    g0: Gprs, k: Nat, at: asm_back(site.program, k) = At(prog, 0, CallTo(callee + 1))):
+    k: Nat, at: asm_back(site.program, k) = At(prog, 0, CallTo(callee + 1))):
     site.Claims(stack.writes, kernel, calls, 1 + least, prog_len(prog),
         λ (x: Running<M, W>) => stack.ArgsReadyBy(saved, spans, Mem, d, slots, s0, before, g0, count, words, x.state) ∧ World(before, x.io),
         site.Arrived(prog_len(prog) + 5, λ (t: Running<M, W>) => stack.CalledBy(saved, spans, Mem, d, slots, s0, after, g0, count, answer, extra, t.state) ∧
@@ -4449,7 +4450,8 @@ theorem call_step_claim<M, S, W>(saved: List<Gpr>, slots: Nat, eight: saved.len(
         λ x held => {
             let pushed = pushes(x.state, held.left);
             ⟨pushed.left, ⟨entered, enters(Running(call_near_after(stack.writes, displacement, x.state), x.io), pushed.right.right.right,
-                pushed.right.right.left.right, held.right)⟩⟩
+                pushed.right.right.left.right, held.right, kept_trans(callee_kept(), g0, x.state.gprs, call_near_after(stack.writes, displacement, x.state).gprs,
+                    held.left.right.right.left, kept_past_rsp(x.state.gprs, push_address(x.state.gprs))))⟩⟩
         },
         λ x t held rsp_t returned => {
             let pushed = pushes(x.state, held.left);
@@ -4467,6 +4469,26 @@ theorem call_step_claim<M, S, W>(saved: List<Gpr>, slots: Nat, eight: saved.len(
                stack.wrote_in_frame(d, spans, loan.stable_saved(d, d, g0, saved, 0, { omega }, saved_top), x.state.memory, t.state.memory, wrote,
                     held.left.right.right.right.right)⟩⟩⟩⟩, handed.right⟩
         })
+}
+
+theorem call_step_claim<M, S, W>(saved: List<Gpr>, slots: Nat, eight: saved.len() <= 8, slotted: saved.len() <= slots, site: Site<M>,
+    laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data), top: Nat, spans: Spans, Mem: S → M → Type, World: S → W → Type,
+    kernel: Kernel<M, W>, loan: Loan<M>(site.fetch, site.data, stack, top, spans), stable: stack.ClauseStable(top, Mem), d: Nat, s0: MachineState<M>,
+    fits: d + 8 * slots <= stack.size, under: (d + 8 * slots) + 8 <= top, prog: Prog, callee: Nat, deep: 24 <= d, count: Nat, few: count <= 2,
+    words: List<BitVec(64)>, answer: BitVec(64), extra: List<BitVec(64)>, before, after: S, calls, least: Nat,
+    Pre: Nat → Running<M, W> → Type, Post: Nat → Running<M, W> → Running<M, W> → Type,
+    returns: site.ReturnsClaim(stack, kernel, calls, least, asm_labels(site.program)(callee + 1), Pre, Post),
+    enters: (u: Running<M, W>) → stack.Passed(words, (d - 8 * count) - 8, u.state) → Mem(before, u.state.memory) → World(before, u.io) →
+        Pre((d - 8 * count) - 8, u),
+    leaves: (u, t: Running<M, W>) → Mem(before, u.state.memory) → World(before, u.io) → Post((d - 8 * count) - 8, u, t) →
+        (((read_gpr(Rax, t.state.gprs) = answer) ∧ ArgsIn(extra, answer_registers(), t.state.gprs)) ∧ (Kept(callee_kept(), u.state.gprs, t.state.gprs) ∧
+            (stack.WroteIn((d - 8 * count) - 8, spans, u.state.memory, t.state.memory) ∧ Mem(after, t.state.memory)))) ∧ World(after, t.io),
+    g0: Gprs, k: Nat, at: asm_back(site.program, k) = At(prog, 0, CallTo(callee + 1))):
+    site.Claims(stack.writes, kernel, calls, 1 + least, prog_len(prog),
+        λ (x: Running<M, W>) => stack.ArgsReadyBy(saved, spans, Mem, d, slots, s0, before, g0, count, words, x.state) ∧ World(before, x.io),
+        site.Arrived(prog_len(prog) + 5, λ (t: Running<M, W>) => stack.CalledBy(saved, spans, Mem, d, slots, s0, after, g0, count, answer, extra, t.state) ∧
+            World(after, t.io))) {
+    call_step_claim_kept<M, S, W>(saved, slots, eight, slotted, site, laid, stack, top, spans, Mem, World, kernel, loan, stable, d, s0, fits, under, prog, callee, deep, count, few, words, answer, extra, before, after, calls, least, Pre, Post, returns, g0, λ u passed held world _ => enters(u, passed, held, world), leaves, k, at)
 }
 
 // The CALL, against the callee's contract (`Pre`, `Post`): the return
@@ -4896,7 +4918,7 @@ fn CallClaims<M, S, W>(site: Site<M>, stack: Stack<M>(site.fetch, site.data), sp
 
 // The call, its argument moves found: under `Facts`, from which the CALL
 // is claimed for the registers the call starts with.
-theorem call_emits_claim<M, S, W>(saved: List<Gpr>, slots: Nat, eight: saved.len() <= 8, slotted: saved.len() <= slots, named: saves_named(saved).IsTrue(), saves: Nat, site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data), top: Nat,
+theorem call_emits_claim_kept<M, S, W>(saved: List<Gpr>, slots: Nat, eight: saved.len() <= 8, slotted: saved.len() <= slots, named: saves_named(saved).IsTrue(), saves: Nat, site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data), top: Nat,
     spans: Spans, Mem: S → M → Type, World: S → W → Type, kernel: Kernel<M, W>, calls, least: Nat, stable: stack.ClauseStable(top, Mem),
     values: Valuation(), d: Nat, s0: MachineState<M>,
     rsp0: read_gpr(Rsp, s0.gprs) = stack.at(d), fits: d + 8 * slots <= stack.size, under: (d + 8 * slots) + 8 <= top, deep: 24 <= d,
@@ -4907,7 +4929,7 @@ theorem call_emits_claim<M, S, W>(saved: List<Gpr>, slots: Nat, eight: saved.len
     moves: Lowered, moves_keeps: Keeps<M>(values, file.write(Rsp, None), True, moves),
     placed: moves.file.outputs_check(word_ports(arguments.take(6)), argument_registers()).IsTrue(),
     leaves: leaves_all(moves.code, callee_saved()).IsTrue(), Facts: Type, before, after: S,
-    step: Facts → (g0: Gprs) → file.Represents(values, g0) → read_gpr(Rsp, g0) = stack.at(d) → (k: Nat) →
+    step: Facts → (g0: Gprs) → file.Represents(values, g0) → read_gpr(Rsp, g0) = stack.at(d) → Kept(body_kept(saves), s0.gprs, g0) → (k: Nat) →
         asm_back(site.program, k) = At(At(call_staged(saved, prog, sources), 0, Block(moves.code)), 0, CallTo(callee + 1)) →
         CallClaims<M, S, W>(site, stack, spans, Mem, World, kernel, calls, least, saved, d, slots, s0, before, after, g0, sources.len(),
             words_of(values, arguments), values(64, result), words_of(values, also), At(call_staged(saved, prog, sources), 0, Block(moves.code)))):
@@ -4943,7 +4965,7 @@ theorem call_emits_claim<M, S, W>(saved: List<Gpr>, slots: Nat, eight: saved.len
                     t.state) ∧ World(after, t.io)),
                 site.Arrived(prog_len(out_prog), λ (t: Running<M, W>) => (file.called(saved, result, also).Represents(values, t.state.gprs) ∧
                     stack.TrailedBy(saves, spans, Mem, d + 8 * slots, s0, after, t.state)) ∧ World(after, t.io)),
-                step(holds.left.left.right, s.gprs, holds.left.left.left, rsp_s, called_in.witness, called_in.proof),
+                step(holds.left.left.right, s.gprs, holds.left.left.left, rsp_s, trailed.left, called_in.witness, called_in.proof),
                 λ x arrived => {
                     let raising = site.moves_then(stack.writes, prog_len(called), prog_len(raised),
                         λ (t: MachineState<M>) => stack.CalledBy(saved, spans, Mem, d, slots, s0, after, s.gprs, count, answer, extra, t),
@@ -4966,9 +4988,29 @@ theorem call_emits_claim<M, S, W>(saved: List<Gpr>, slots: Nat, eight: saved.len
      }⟩
 }
 
+theorem call_emits_claim<M, S, W>(saved: List<Gpr>, slots: Nat, eight: saved.len() <= 8, slotted: saved.len() <= slots, named: saves_named(saved).IsTrue(), saves: Nat, site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data), top: Nat,
+    spans: Spans, Mem: S → M → Type, World: S → W → Type, kernel: Kernel<M, W>, calls, least: Nat, stable: stack.ClauseStable(top, Mem),
+    values: Valuation(), d: Nat, s0: MachineState<M>,
+    rsp0: read_gpr(Rsp, s0.gprs) = stack.at(d), fits: d + 8 * slots <= stack.size, under: (d + 8 * slots) + 8 <= top, deep: 24 <= d,
+    prog: Prog, file: File, callee: Nat, arguments: List<Nat>, result: Nat, also: List<Nat>,
+    apart: answer_registers().take(also.len()).clear_of(saved).IsTrue(), placement: List<Place>, names: Nat,
+    sources: List<Gpr>, few: sources.len() <= 2, same: sources.len() = arguments.drop(6).len(),
+    sourced: file.write(Rsp, None).outputs_check(word_ports(arguments.drop(6)), sources).IsTrue(),
+    moves: Lowered, moves_keeps: Keeps<M>(values, file.write(Rsp, None), True, moves),
+    placed: moves.file.outputs_check(word_ports(arguments.take(6)), argument_registers()).IsTrue(),
+    leaves: leaves_all(moves.code, callee_saved()).IsTrue(), Facts: Type, before, after: S,
+    step: Facts → (g0: Gprs) → file.Represents(values, g0) → read_gpr(Rsp, g0) = stack.at(d) → (k: Nat) →
+        asm_back(site.program, k) = At(At(call_staged(saved, prog, sources), 0, Block(moves.code)), 0, CallTo(callee + 1)) →
+        CallClaims<M, S, W>(site, stack, spans, Mem, World, kernel, calls, least, saved, d, slots, s0, before, after, g0, sources.len(),
+            words_of(values, arguments), values(64, result), words_of(values, also), At(call_staged(saved, prog, sources), 0, Block(moves.code)))):
+    EmitsClaim<M, S, W>(saves, site, stack, spans, Mem, World, kernel, calls, least, values, d + 8 * slots, s0, prog, file, Facts,
+        before, after, Emitted(call_prog(saved, prog, sources, moves.code, callee), file.called(saved, result, also), placement, names)) {
+    call_emits_claim_kept<M, S, W>(saved, slots, eight, slotted, named, saves, site, laid, stack, top, spans, Mem, World, kernel, calls, least, stable, values, d, s0, rsp0, fits, under, deep, prog, file, callee, arguments, result, also, apart, placement, names, sources, few, same, sourced, moves, moves_keeps, placed, leaves, Facts, before, after, λ facts g0 rep rsp _ k at => step(facts, g0, rep, rsp, k, at))
+}
+
 // The call once the stack pointer is no word of the file: its sources
 // found and checked, then its argument moves.
-theorem File::emit_call_staged_claim<M, S, W>(self file: File, saved: List<Gpr>, slots: Nat, eight: saved.len() <= 8, slotted: saved.len() <= slots, named: saves_named(saved).IsTrue(), saves: Nat, site: Site<M>, laid: site.program.laid_out().IsTrue(),
+theorem File::emit_call_staged_claim_kept<M, S, W>(self file: File, saved: List<Gpr>, slots: Nat, eight: saved.len() <= 8, slotted: saved.len() <= slots, named: saves_named(saved).IsTrue(), saves: Nat, site: Site<M>, laid: site.program.laid_out().IsTrue(),
     stack: Stack<M>(site.fetch, site.data), top: Nat, spans: Spans, Mem: S → M → Type,
     World: S → W → Type, kernel: Kernel<M, W>, calls, least: Nat, stable: stack.ClauseStable(top, Mem),
     values: Valuation(), d: Nat, s0: MachineState<M>, rsp0: read_gpr(Rsp, s0.gprs) = stack.at(d),
@@ -4976,7 +5018,7 @@ theorem File::emit_call_staged_claim<M, S, W>(self file: File, saved: List<Gpr>,
     also: List<Nat>, apart: answer_registers().take(also.len()).clear_of(saved).IsTrue(),
     placement: List<Place>, names: Nat, Facts: Type, before, after: S, few: arguments.drop(6).len() <= 2,
     step: (count: Nat) → count <= 2 → (moved: Prog) → Facts →
-        (g0: Gprs) → file.Represents(values, g0) → read_gpr(Rsp, g0) = stack.at(d) → (k: Nat) →
+        (g0: Gprs) → file.Represents(values, g0) → read_gpr(Rsp, g0) = stack.at(d) → Kept(body_kept(saves), s0.gprs, g0) → (k: Nat) →
         asm_back(site.program, k) = At(moved, 0, CallTo(callee + 1)) →
         CallClaims<M, S, W>(site, stack, spans, Mem, World, kernel, calls, least, saved, d, slots, s0, before, after, g0, count,
             words_of(values, arguments), values(64, result), words_of(values, also), moved)):
@@ -5017,7 +5059,7 @@ theorem File::emit_call_staged_claim<M, S, W>(self file: File, saved: List<Gpr>,
                                     leaves_all(moves.code, callee_saved()),
                                     is_true_of_eq(moves.file.outputs_check(ports, argument_registers()) && leaves_all(moves.code, callee_saved()),
                                         checked));
-                                call_emits_claim<M, S, W>(saved, slots, eight, slotted, named, saves, site, laid, stack, top, spans, Mem, World, kernel, calls, least, stable, values, d, s0, rsp0, fits, under, deep,
+                                call_emits_claim_kept<M, S, W>(saved, slots, eight, slotted, named, saves, site, laid, stack, top, spans, Mem, World, kernel, calls, least, stable, values, d, s0, rsp0, fits, under, deep,
                                     prog, file, callee, arguments, result, also, apart, placement, names, sources, few_sources, same, sourced.right,
                                     moves, keeps, both.left, both.right, Facts, before, after,
                                     step(sources.len(), few_sources, At(call_staged(saved, prog, sources), 0, Block(moves.code))))
@@ -5029,17 +5071,34 @@ theorem File::emit_call_staged_claim<M, S, W>(self file: File, saved: List<Gpr>,
     }
 }
 
+theorem File::emit_call_staged_claim<M, S, W>(self file: File, saved: List<Gpr>, slots: Nat, eight: saved.len() <= 8, slotted: saved.len() <= slots, named: saves_named(saved).IsTrue(), saves: Nat, site: Site<M>, laid: site.program.laid_out().IsTrue(),
+    stack: Stack<M>(site.fetch, site.data), top: Nat, spans: Spans, Mem: S → M → Type,
+    World: S → W → Type, kernel: Kernel<M, W>, calls, least: Nat, stable: stack.ClauseStable(top, Mem),
+    values: Valuation(), d: Nat, s0: MachineState<M>, rsp0: read_gpr(Rsp, s0.gprs) = stack.at(d),
+    fits: d + 8 * slots <= stack.size, under: (d + 8 * slots) + 8 <= top, deep: 24 <= d, prog: Prog, callee: Nat, arguments: List<Nat>, result: Nat,
+    also: List<Nat>, apart: answer_registers().take(also.len()).clear_of(saved).IsTrue(),
+    placement: List<Place>, names: Nat, Facts: Type, before, after: S, few: arguments.drop(6).len() <= 2,
+    step: (count: Nat) → count <= 2 → (moved: Prog) → Facts →
+        (g0: Gprs) → file.Represents(values, g0) → read_gpr(Rsp, g0) = stack.at(d) → (k: Nat) →
+        asm_back(site.program, k) = At(moved, 0, CallTo(callee + 1)) →
+        CallClaims<M, S, W>(site, stack, spans, Mem, World, kernel, calls, least, saved, d, slots, s0, before, after, g0, count,
+            words_of(values, arguments), values(64, result), words_of(values, also), moved)):
+    MayEmitClaim<M, S, W>(saves, site, stack, spans, Mem, World, kernel, calls, least, values, d + 8 * slots, s0, prog, file, Facts,
+        before, after, file.emit_call_staged(saved, file.write(Rsp, None), prog, callee, arguments, result, also, placement, names)) {
+    file.emit_call_staged_claim_kept<M, S, W>(saved, slots, eight, slotted, named, saves, site, laid, stack, top, spans, Mem, World, kernel, calls, least, stable, values, d, s0, rsp0, fits, under, deep, prog, callee, arguments, result, also, apart, placement, names, Facts, before, after, few, λ count few moved facts g0 rep rsp _ k at => step(count, few, moved, facts, g0, rep, rsp, k, at))
+}
+
 // The call, whatever its CALL is proved against: a callee entered over the
 // caller's file (`File::emit_call_runs`) or over views of it
 // (`File::emit_lend_runs`).
-theorem File::emit_call_saving_claim<M, S, W>(self file: File, saved: List<Gpr>, slots: Nat, eight: saved.len() <= 8, slotted: saved.len() <= slots, named: saves_named(saved).IsTrue(), saves: Nat, site: Site<M>, laid: site.program.laid_out().IsTrue(),
+theorem File::emit_call_saving_claim_kept<M, S, W>(self file: File, saved: List<Gpr>, slots: Nat, eight: saved.len() <= 8, slotted: saved.len() <= slots, named: saves_named(saved).IsTrue(), saves: Nat, site: Site<M>, laid: site.program.laid_out().IsTrue(),
     stack: Stack<M>(site.fetch, site.data), top: Nat, bound: Nat, spans: Spans, Mem: S → M → Type,
     World: S → W → Type, kernel: Kernel<M, W>, calls, least: Nat, stable: stack.ClauseStable(top, Mem),
     values: Valuation(), d: Nat, s0: MachineState<M>, rsp0: read_gpr(Rsp, s0.gprs) = stack.at(d),
     fits: d + 8 * slots <= stack.size, under: (d + 8 * slots) + 8 <= top, deep: 24 <= d, prog: Prog, callee: Nat, arguments: List<Nat>, result: Nat,
     also: List<Nat>, placement: List<Place>, names: Nat, counts: List<Nat>, homes: List<Lent>, Facts: Type, before, after: S,
     step: callee + 1 <= bound → args_lend(homes, lent_count(counts, callee), 0, arguments).IsTrue() → (count: Nat) → count <= 2 →
-        (moved: Prog) → Facts → (g0: Gprs) → file.Represents(values, g0) → read_gpr(Rsp, g0) = stack.at(d) → (k: Nat) →
+        (moved: Prog) → Facts → (g0: Gprs) → file.Represents(values, g0) → read_gpr(Rsp, g0) = stack.at(d) → Kept(body_kept(saves), s0.gprs, g0) → (k: Nat) →
         asm_back(site.program, k) = At(moved, 0, CallTo(callee + 1)) →
         CallClaims<M, S, W>(site, stack, spans, Mem, World, kernel, calls, least, saved, d, slots, s0, before, after, g0, count,
             words_of(values, arguments), values(64, result), words_of(values, also), moved)):
@@ -5055,16 +5114,61 @@ theorem File::emit_call_saving_claim<M, S, W>(self file: File, saved: List<Gpr>,
                 is_true_of_eq((callee + 1).leb(bound) && (lends && (short && landing)), under_bound));
             let rest = Bool::is_true_and(lends, short && landing, allowed.right);
             let last = Bool::is_true_and(short, landing, rest.right);
-            file.emit_call_staged_claim<M, S, W>(saved, slots, eight, slotted, named, saves, site, laid, stack, top, spans, Mem, World, kernel, calls, least, stable, values, d, s0, rsp0, fits, under, deep, prog, callee,
+            file.emit_call_staged_claim_kept<M, S, W>(saved, slots, eight, slotted, named, saves, site, laid, stack, top, spans, Mem, World, kernel, calls, least, stable, values, d, s0, rsp0, fits, under, deep, prog, callee,
                 arguments, result, also, last.right, placement, names, Facts, before, after, arguments.drop(6).len().leb_sound(2, last.left),
                 step((callee + 1).leb_sound(bound, allowed.left), rest.left))
         },
     }
 }
 
+theorem File::emit_call_saving_claim<M, S, W>(self file: File, saved: List<Gpr>, slots: Nat, eight: saved.len() <= 8, slotted: saved.len() <= slots, named: saves_named(saved).IsTrue(), saves: Nat, site: Site<M>, laid: site.program.laid_out().IsTrue(),
+    stack: Stack<M>(site.fetch, site.data), top: Nat, bound: Nat, spans: Spans, Mem: S → M → Type,
+    World: S → W → Type, kernel: Kernel<M, W>, calls, least: Nat, stable: stack.ClauseStable(top, Mem),
+    values: Valuation(), d: Nat, s0: MachineState<M>, rsp0: read_gpr(Rsp, s0.gprs) = stack.at(d),
+    fits: d + 8 * slots <= stack.size, under: (d + 8 * slots) + 8 <= top, deep: 24 <= d, prog: Prog, callee: Nat, arguments: List<Nat>, result: Nat,
+    also: List<Nat>, placement: List<Place>, names: Nat, counts: List<Nat>, homes: List<Lent>, Facts: Type, before, after: S,
+    step: callee + 1 <= bound → args_lend(homes, lent_count(counts, callee), 0, arguments).IsTrue() → (count: Nat) → count <= 2 →
+        (moved: Prog) → Facts → (g0: Gprs) → file.Represents(values, g0) → read_gpr(Rsp, g0) = stack.at(d) → (k: Nat) →
+        asm_back(site.program, k) = At(moved, 0, CallTo(callee + 1)) →
+        CallClaims<M, S, W>(site, stack, spans, Mem, World, kernel, calls, least, saved, d, slots, s0, before, after, g0, count,
+            words_of(values, arguments), values(64, result), words_of(values, also), moved)):
+    MayEmitClaim<M, S, W>(saves, site, stack, spans, Mem, World, kernel, calls, least, values, d + 8 * slots, s0, prog, file, Facts,
+        before, after, file.emit_call_saving(saved, prog, callee, arguments, result, also, placement, names, bound, counts, homes)) {
+    file.emit_call_saving_claim_kept<M, S, W>(saved, slots, eight, slotted, named, saves, site, laid, stack, top, bound, spans, Mem, World, kernel, calls, least, stable, values, d, s0, rsp0, fits, under, deep, prog, callee, arguments, result, also, placement, names, counts, homes, Facts, before, after, λ below lends count few moved facts g0 rep rsp _ k at => step(below, lends, count, few, moved, facts, g0, rep, rsp, k, at))
+}
+
 // The call as the placement has it saved: the list is checked, and the
 // CALL is proved for the list the placement names.
 // The call as the placement has it saved, its CALL a claim.
+theorem File::emit_call_steps_claim_kept<M, S, W>(self file: File, saves: Nat, slots: Nat, site: Site<M>, laid: site.program.laid_out().IsTrue(),
+    stack: Stack<M>(site.fetch, site.data), top: Nat, bound: Nat, spans: Spans, Mem: S → M → Type,
+    World: S → W → Type, kernel: Kernel<M, W>, calls, least: Nat, stable: stack.ClauseStable(top, Mem),
+    values: Valuation(), d: Nat, s0: MachineState<M>, rsp0: read_gpr(Rsp, s0.gprs) = stack.at(d),
+    fits: d + 8 * slots <= stack.size, under: (d + 8 * slots) + 8 <= top, deep: 24 <= d, prog: Prog, callee: Nat, arguments: List<Nat>, result: Nat,
+    also: List<Nat>, placement: List<Place>, names: Nat, counts: List<Nat>, homes: List<Lent>, Facts: Type, before, after: S,
+    step: call_saves(placement).len() <= 8 → call_saves(placement).len() <= slots → callee + 1 <= bound → args_lend(homes, lent_count(counts, callee), 0, arguments).IsTrue() →
+        (count: Nat) → count <= 2 →
+        (moved: Prog) → Facts → (g0: Gprs) → file.Represents(values, g0) → read_gpr(Rsp, g0) = stack.at(d) → Kept(body_kept(saves), s0.gprs, g0) → (k: Nat) →
+        asm_back(site.program, k) = At(moved, 0, CallTo(callee + 1)) →
+        CallClaims<M, S, W>(site, stack, spans, Mem, World, kernel, calls, least, call_saves(placement), d, slots, s0, before, after, g0, count,
+            words_of(values, arguments), values(64, result), words_of(values, also), moved)):
+    MayEmitClaim<M, S, W>(saves, site, stack, spans, Mem, World, kernel, calls, least, values, d + 8 * slots, s0, prog, file, Facts,
+        before, after, file.emit_call(slots, prog, callee, arguments, result, also, placement, names, bound, counts, homes)) {
+    let saved = call_saves(placement);
+    match ok: saves_ok(slots, saved) {
+        False => trivial,
+        True => {
+            let all = Bool::is_true_and(saved.len().leb(slots), saved.len().leb(8) && saves_named(saved), is_true_of_eq(saves_ok(slots, saved), ok));
+            let slotted = saved.len().leb_sound(slots, all.left);
+            let both = Bool::is_true_and(saved.len().leb(8), saves_named(saved), all.right);
+            let eight = saved.len().leb_sound(8, both.left);
+            file.emit_call_saving_claim_kept<M, S, W>(saved, slots, eight, slotted, both.right, saves, site, laid, stack, top, bound, spans, Mem, World, kernel, calls, least, stable, values, d, s0, rsp0,
+                fits, under, deep, prog, callee, arguments, result, also, after_saves(placement), names, counts, homes, Facts, before, after,
+                step(eight, slotted))
+        },
+    }
+}
+
 theorem File::emit_call_steps_claim<M, S, W>(self file: File, saves: Nat, slots: Nat, site: Site<M>, laid: site.program.laid_out().IsTrue(),
     stack: Stack<M>(site.fetch, site.data), top: Nat, bound: Nat, spans: Spans, Mem: S → M → Type,
     World: S → W → Type, kernel: Kernel<M, W>, calls, least: Nat, stable: stack.ClauseStable(top, Mem),
@@ -5079,19 +5183,7 @@ theorem File::emit_call_steps_claim<M, S, W>(self file: File, saves: Nat, slots:
             words_of(values, arguments), values(64, result), words_of(values, also), moved)):
     MayEmitClaim<M, S, W>(saves, site, stack, spans, Mem, World, kernel, calls, least, values, d + 8 * slots, s0, prog, file, Facts,
         before, after, file.emit_call(slots, prog, callee, arguments, result, also, placement, names, bound, counts, homes)) {
-    let saved = call_saves(placement);
-    match ok: saves_ok(slots, saved) {
-        False => trivial,
-        True => {
-            let all = Bool::is_true_and(saved.len().leb(slots), saved.len().leb(8) && saves_named(saved), is_true_of_eq(saves_ok(slots, saved), ok));
-            let slotted = saved.len().leb_sound(slots, all.left);
-            let both = Bool::is_true_and(saved.len().leb(8), saves_named(saved), all.right);
-            let eight = saved.len().leb_sound(8, both.left);
-            file.emit_call_saving_claim<M, S, W>(saved, slots, eight, slotted, both.right, saves, site, laid, stack, top, bound, spans, Mem, World, kernel, calls, least, stable, values, d, s0, rsp0,
-                fits, under, deep, prog, callee, arguments, result, also, after_saves(placement), names, counts, homes, Facts, before, after,
-                step(eight, slotted))
-        },
-    }
+    file.emit_call_steps_claim_kept<M, S, W>(saves, slots, site, laid, stack, top, bound, spans, Mem, World, kernel, calls, least, stable, values, d, s0, rsp0, fits, under, deep, prog, callee, arguments, result, also, placement, names, counts, homes, Facts, before, after, λ eight slotted below lends count few moved facts g0 rep rsp _ k at => step(eight, slotted, below, lends, count, few, moved, facts, g0, rep, rsp, k, at))
 }
 
 theorem File::emit_call_steps_by<M, S>(self file: File, saves: Nat, slots: Nat, site: Site<M>, laid: site.program.laid_out().IsTrue(),

@@ -2990,6 +2990,19 @@ nothing else in `lib/native/function_ir/` moved. The kept registers, not
 the floor, are the fact exposed: any routine-level invariant held in a
 callee-saved register needs the same.
 
+The same treatment at a call (as the coordinating session ruled after the
+floor's second boundary): `call_emits_claim_kept`, `File::emit_call_staged_claim_kept`,
+`File::emit_call_saving_claim_kept` and `File::emit_call_steps_claim_kept`
+tell a call's `step` the region's trail at the call's start registers
+(`Kept(body_kept(saves), s0.gprs, g0)`, read verbatim off the region's
+pre in `call_emits_claim`), and `call_step_claim_kept` tells a callee's
+`enters` the caller's kept registers at the callee's entry
+(`Kept(callee_kept(), g0, u.state.gprs)`, the CALL moving only RSP). The
+old names are their instances with unchanged statements. The pattern is
+now general: a routine-level fact held in a kept register is visible at a
+frame's body, at a call's start and at a callee's entry, so the next such
+fact needs no new lemma.
+
 ## 18. The world, termination, and level 2 fixed (2026-11-25)
 
 Round six of the design review. Where this section and §15.4, §15.5 or §17
