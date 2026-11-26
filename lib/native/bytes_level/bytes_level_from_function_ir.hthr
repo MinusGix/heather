@@ -23,7 +23,8 @@
 //   without the load back, where the function reads nothing at the output
 //   (the old lowering leaves it unheld, so no lowered program reads it).
 // - Word nodes are wrapped in `Compute`; a `Move` of a reference is a
-//   reference's copy (an `Offset` of zero), as the optimizer leaves one. A
+//   reference's copy (an `Offset` of zero), as the optimizer leaves one,
+//   and nothing where the function never reads the copy. A
 //   function's results are typed as its scope holds them: a structure
 //   returned through memory answers its reference. A node a later node of its leaf
 //   binds again before anything reads it is dropped (`rebound`): the
@@ -273,10 +274,12 @@ fn Scope::memory(self s: Scope, node: Node, t: Nat, reads: List<Nat>) → Memory
             },
         },
         // A copy of a reference is a reference: an offset of zero (`t` the
-        // zero word).
+        // zero word). One nothing reads is dropped: the old placement gives
+        // it its source's register, so the old code has no instruction for
+        // it either.
         Move(width, output, source) => match s.kind(source) {
             WordKind => Plain([Compute(node)]),
-            RefKind => Plain([Compute(Const(64, t, 0)), Offset(output, source, t)]),
+            RefKind => match mem_nat(output, reads) { True => Plain([Compute(Const(64, t, 0)), Offset(output, source, t)]), False => Plain([]) },
         },
         _ => Plain([Compute(node)]),
     }

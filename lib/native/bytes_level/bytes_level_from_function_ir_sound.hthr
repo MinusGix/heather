@@ -319,7 +319,8 @@ theorem pure_form(s: Scope, node: Node, t: Nat, reads: List<Nat>, words: (id: Na
         Const(_, _, _) => λ _ _ => refl,
         Move(w, o, source) => λ ws _ => j(sym(ws(source, Inl(refl))), λ b _ =>
             (match (match b { True => RefKind, False => WordKind }) { WordKind => Plain([Compute(Move(w, o, source))]),
-                RefKind => Plain([Compute(Const(64, t, 0)), bytes_level::Offset(o, source, t)]) }) = Plain([Compute(Move(w, o, source))]), refl),
+                RefKind => match mem_nat(o, reads) { True => Plain([Compute(Const(64, t, 0)), bytes_level::Offset(o, source, t)]), False => Plain([]) } }) =
+                Plain([Compute(Move(w, o, source))]), refl),
         Add(_, _, _, _) => λ _ _ => refl,
         Sub(_, _, _, _) => λ _ _ => refl,
         BitAnd(_, _, _, _) => λ _ _ => refl,

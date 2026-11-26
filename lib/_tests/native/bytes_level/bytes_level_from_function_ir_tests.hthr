@@ -226,3 +226,26 @@ fn adds() → List<Function> { [Function(parameters := [0, 1], body := leaf([Add
 fn adds_code() → Prog { match lower_program_roomed(adds(), [Into(Rax)], [], λ (_: Nat) => 0) { None => Start, Some(p) => p } }
 
 theorem adds_same(): compare_report(adds(), [], [Into(Rax)], adds_code()) = [5, 7] { refl }
+
+// A copy of the span's reference that nothing reads is dropped (the old
+// placement gives it its source's register, so the old code has no
+// instruction for it); a copy the function answers is kept as an offset of
+// zero. The byte load's own offset is the other one.
+fn copies_reference(answered: Bool) → List<Function> {
+    [Function(parameters := [0, 1, 2], body := leaf([Move(64, 3, 0), BufferLoad(4, 0, 2)]), result := match answered { True => 3, False => 4 }, lent := 1)]
+}
+
+fn offsets_in(body: Body) → Nat {
+    match body {
+        Leaf(instrs) => instrs.filter(λ (i: Instr) => match i { Offset(_, _, _) => True, _ => False }).len(),
+        Seq(first, rest) => offsets_in(first) + offsets_in(rest),
+        Branch(_, yes, no) => offsets_in(yes) + offsets_in(no),
+        _ => 0,
+    }
+}
+
+fn first_offsets(p: Program) → Nat { match p.routines { Nil => 0, Cons(r, _) => offsets_in(r.body) } }
+
+theorem dead_copy_dropped(): first_offsets(translated(copies_reference(False))) = 1 { refl }
+
+theorem answered_copy_kept(): first_offsets(translated(copies_reference(True))) = 2 { refl }
