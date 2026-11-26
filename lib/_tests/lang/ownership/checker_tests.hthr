@@ -492,6 +492,25 @@ fn fresh_two() → Func {
 
 theorem fresh_two_checked(): refusal_in([fresh_two()], 0) = None { refl }
 
+// A taken parameter answered twice (§23.20): the callee is checked, its
+// signature naming the moved argument as both results; a caller binding
+// them is refused, since it would hold one owned object at two levels and
+// the death of either frees the other's (`CSt::holds`). Answered once and
+// bound once: checked.
+fn twice_param() → Func { Func(Sig([Param(nx(), ByTake)], [Result(nx(), OParam(0)), Result(nx(), OParam(0))]), Ret([x(), x()])) }
+
+fn twice_caller() → Func { Func(Sig([Param(nx(), ByTake)], Nil), seq([Call(0, [x()], 2), Death(whole(Loc(0))), Read(el(Loc(1), Lit(0)))], Ret(Nil))) }
+
+theorem twice_param_callee_checked(): refusal_in([twice_param(), twice_caller()], 0) = None { refl }
+
+theorem twice_param_refused(): refusal_in([twice_param(), twice_caller()], 1) = Some(WOwn) { refl }
+
+fn once_param() → Func { Func(Sig([Param(nx(), ByTake)], [Result(nx(), OParam(0))]), Ret([x()])) }
+
+fn once_caller() → Func { Func(Sig([Param(nx(), ByTake)], Nil), seq([Call(0, [x()], 1), Death(whole(Loc(0)))], Ret(Nil))) }
+
+theorem once_param_checked(): refusal_in([once_param(), once_caller()], 1) = None { refl }
+
 // One owned object answered once as owner and once as a view under it:
 // refused. A returned view must be of a parameter (`CSt::returns` asks its
 // one entry's object to be the parameter `OView` names), and a fresh or

@@ -4956,3 +4956,91 @@ patch, a fold by levels (`CSt::patched`). They agree at every variable,
 the chains meeting only at places `sib` says are apart; P6 shows it, by
 peeling the slots' write-backs (`CSt::patched_back`) or by commuting the
 walks.
+
+### 23.20 P4 assembled; the results' builders; roots as an index (2026-11-26, tenth session)
+
+**P4's swap** (`Inv::call_swap`) moves the agreement from the puts' heap to
+the callee's, block by block (`Heap::call_block`): at a block a live
+variable reads, bare before the call, with no taken argument reaching it,
+the callee's block is the puts' one. With no reference lent to change whole
+into it, the frame's equation puts what the puts put (`Value::lent_put_w`,
+the taken references being outside the block). With a written one whole
+into it, both sides are the callee's value (`Sel::put_lent_whole_in`). No
+taken argument reaches a live variable's block (`Inv::call_untaken`):
+- a taken argument is an owned holder's whole root, alone in its block
+  (`own`);
+- its holder is gone after the lends (`CSt::lend_all_take`, with
+  `lend_all_gone` and `lend_all_thin`: the lends only make levels gone);
+- a second holder of the object would break `one`;
+- and the lend saw no view of it.
+
+**P4's assembly** (`Inv::call_after`) runs the puts at the state before the
+lends (`Inv::puts` with `Inv::put_at_arg`), then the lends (`Inv::lends`),
+then the swap. It ends at `Inv::heap_rest` with the caller's frame composed
+with the callee's (`LentFrame::call`) and the heap kept: the puts keep
+length, liveness and holes (`Heap::puts_len`, `puts_fwd`, `puts_holes`).
+
+**Roots are an index of `Inv` and `Stepped`, not a field.** The results'
+binding must see that the roots after P4 are the roots before the call:
+- the fresh block is no root's;
+- a moved argument's root is its whole block.
+
+A builder ending in `j(…)` hid the field from conversion (the ninth
+session's trap). Now every statement names its roots. Only `Inv::start`,
+`Inv::fresh`/`bind_fresh` and `Stmt::stage_fresh` state new ones.
+
+**`Inv::fresh` is heap growth then `Inv::bind_fresh`**: a fresh holder
+bound at a live bare block past the entry heap that no root reaches. A
+call's fresh result is that bind with the callee's block.
+`Inv::heap_rest_ws` is `heap_rest` taking the region words directly, so
+the growth can use it before `Inv::words_after` is declared.
+
+**The results' builders, one per kind:**
+- a plain value: `Inv::push_plain`;
+- a fresh object: `Inv::bind_fresh`;
+- a fresh result of an object's code passed by value: a holder of a new
+  object with no root (`Inv::bind_fresh_plain`, over `Inv::bump`);
+- a moved argument answered back: `Inv::bind_moved`, a holder of its
+  object again;
+- a read view: `Inv::push_view`, its arguments still to be gathered.
+
+**A checker defect, fixed.** A signature could answer a taken parameter as
+two `OParam` results, and the caller bound each as an owned holder of the
+one object: the death of either freed the other's. `CSt::result` now
+refuses a moved result whose object a level already holds (`CSt::holds`).
+The probes are `twice_param_refused`, with `once_param_checked` and
+`twice_param_callee_checked`.
+
+**Open for the results' binding** (reported to the coordinating session):
+- **A result's code.** `SafeAt` does not say a result's meaning has the
+  result's code, which `Sim.codes` needs. For a primitive, the world's
+  answer is arbitrary: `g() → (S fresh)` answered a word leaves `y = g();
+  Read(y.f)` stuck.
+- **Forward atoms.** A view result's region may name a later result
+  (`found_sig`'s `Var(3)`). At the moment the view is bound, its region
+  reads a level not yet bound, so the results cannot be bound one
+  invariant at a time. The binding needs every result's level pushed
+  before the view entries' `words` and `refs` are owed.
+- **Non-plain atoms.** A view result's region names the caller's level of
+  an argument passed by value. That level may be a view of a word
+  (`View(b[0])` passed to `at`'s `ByTake` index), so `Inv.words` (regions
+  read plain levels) fails. Either the call refuses it, as `View` does
+  through `atoms_ok`, or the invariant reads a by-value argument's word
+  from the meaning.
+
+**P6's agreement, the choice.** The fold by levels cannot be redefined in
+the written list's order: it interleaves the chains' steps, and P4's per-put
+invariant needs whole walks. The agreement peels instead: `CSt::patched_back`
+applied level by level up each slot's chain, chain by chain in the written
+order, turns the fold into the sequential walks, which are `puts_mean`
+(modulo the state: the walk reads only `ents`, `var_at` and the words).
+
+Two things are needed:
+- **`BackAt.nk` weakened** from "no writing child" to "no pending writing
+  child". Its uses are `step_keeps`, at a pending level, and `CSt::noanc`,
+  which recurses along a pending entry's ancestors. Those are pending at
+  the state before the back: an ancestor of the backed view's parent is
+  one of the backed view's own. Thread `pend_in` through `noanc`.
+- **Nested written arguments excluded.** The checker refuses them:
+  `apart_args` on related levels asks `Steps::apart(p, p ++ t)`, which is
+  `None`.

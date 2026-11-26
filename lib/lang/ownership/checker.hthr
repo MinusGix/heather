@@ -167,6 +167,14 @@ fn CSt::has_children(self s: CSt, l: Nat) → Bool { s.views.any_bit(λ e => e.p
 
 fn CSt::has_obj_views(self s: CSt, o: Nat) → Bool { s.views.any_bit(λ e => e.obj.same(o)) }
 
+// Whether some level holds object `o`. A taken parameter answered back is
+// the caller's object again, held once: a signature answering it twice
+// would give the caller two owned holders of one object, the death of either
+// freeing the other's (`twice_param_refused`).
+fn CVar::holds(self c: CVar, o: Nat) → Bool { match c.role { KHold(o2, _) => o2.same(o), KPlain => False, KView => False, KGone => False } }
+
+fn CSt::holds(self s: CSt, o: Nat) → Bool { s.args.any_bit(λ c => c.holds(o)) || s.locs.any_bit(λ c => c.holds(o)) }
+
 fn CSt::unsynced(self s: CSt, o: Nat) → Bool { s.views.any_bit(λ e => e.obj.same(o) && e.mode.writes() && !e.back) }
 
 // A view to write changed and not yet written back. §15.2's write-back is
@@ -621,7 +629,7 @@ fn CSt::result(self s: CSt, tys: Nat → Type, strs: Strs(tys), s0: CSt, sig: Si
             ByTake => match Shape::moves(tys, strs, r.code) {
                 False => Some(s.push(CVar(r.code, KPlain))),
                 True => xs.nth(i).and_then(λ x => s0.lvl(x)).and_then(λ l => match s0.role(l) {
-                    KHold(o, a) => match a { AcOwn => Some(s.push(CVar(r.code, KHold(o, AcOwn)))), AcRead => None, AcWrite => None },
+                    KHold(o, a) => match a { AcOwn => (!s.holds(o)).then(Some(s.push(CVar(r.code, KHold(o, AcOwn))))), AcRead => None, AcWrite => None },
                     _ => None,
                 }),
             },
