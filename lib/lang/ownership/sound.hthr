@@ -12159,3 +12159,105 @@ theorem CSt::apart_pl_sound(self s: CSt, tys: Nat → Type, cx: Ctx(tys), sl: St
 {
     s.against_sound(tys, cx, sl, env, VEnt(0, a.obj, a.at, Reading, 0, Nil, True), b, rs, ok, hold, same, Nil, a.at, b.at, refl, refl, r1, r2)
 }
+
+// A state the lends passed through: the same levels and views, a live
+// level's role as it was.
+record Thin(si, s: CSt) {
+    views: si.views = s.views,
+    lvl: (x: Var) → si.lvl(x) = s.lvl(x),
+    role: (l: Nat) → l < s.na + s.nd → ¬(si.role(l) = KGone) → si.role(l) = s.role(l),
+}
+
+theorem CSt::thin_gone(self s: CSt, k: Nat, kb: k < s.na + s.nd, si: CSt, th: Thin(si, s.set(k, KGone))): Thin(si, s) {
+    Thin(th.views, th.lvl, λ l lb ng => {
+        let r1 = th.role(l, lb, ng);
+        match Nat::eq_or_ne(l, k) {
+            Inl(lk) => false_elim(ng(trans(r1, j(sym(lk), λ q _ => (s.set(k, KGone)).role(q) = KGone, s.set_gone_role(k))))),
+            Inr(nk) => trans(r1, s.role_set_other(k, l, KGone, nk, kb, lb)),
+        }
+    })
+}
+
+// At each argument, its lend in a state the lends passed through.
+theorem CSt::lend_all_at(tys: Nat → Type, strs: Strs(tys), xs: List<Var>): (s: CSt) → (ps: List<Param>) → (n: Next) → s.lend_all(tys, strs, ps, xs) = Some(n) →
+    (i: Nat) → (x: Var) → xs.nth(i) = Some(x) → (p: Param) → ps.nth(i) = Some(p) → Exists<CSt>(λ si => Thin(si, s) ∧ Exists<Next>(λ ni => si.lend(tys, strs, p, x) = Some(ni)))
+{
+    match xs {
+        Nil => λ s ps n _ i x no => absurd(no),
+        Cons(y, rest) => λ s ps => match ps {
+            Nil => λ n no => absurd(no),
+            Cons(p0, prest) => λ n ok i x hx p hp => {
+                let a1 = Option::and_then_some(s.lend(tys, strs, p0, y), λ n1 => n1.st.lend_all(tys, strs, prest, rest).map(λ n2 => checker::Next(n2.st, n1.rs ++ n2.rs)), n, ok);
+                let n1 = a1.witness;
+                let a2 = Option::map_some_inv(n1.st.lend_all(tys, strs, prest, rest), λ n2 => checker::Next(n2.st, n1.rs ++ n2.rs), n, a1.proof.right);
+                match i {
+                    Zero => {
+                        let yx: (y = x) = Option::some_inj(y, x, hx);
+                        let pp: (p0 = p) = Option::some_inj(p0, p, hp);
+                        Exists(s, ⟨Thin(refl, λ _ => refl, λ _ _ _ => refl), Exists(n1, j(yx, λ q _ => s.lend(tys, strs, p, q) = Some(n1), j(pp, λ q _ => s.lend(tys, strs, q, y) = Some(n1), a1.proof.left)))⟩)
+                    },
+                    Succ(k) => match CSt::lend_all_at(tys, strs, rest, n1.st, prest, a2.witness, a2.proof.left, k, x, hx, p, hp) {
+                        ⟨si, psi⟩ => match (s.lend_st(tys, strs, p0, y, n1, a1.proof.left)).right {
+                            Inl(e1) => Exists(si, ⟨j(e1, λ q _ => Thin(si, q), psi.left), psi.right⟩),
+                            Inr(⟨kk, pk⟩) => Exists(si, ⟨s.thin_gone(kk, pk.left, si, j(pk.right, λ q _ => Thin(si, q), psi.left)), psi.right⟩),
+                        },
+                    },
+                }
+            },
+        },
+    }
+}
+
+// A lend to write: the argument's level has write access, as a holder or as
+// a view's one entry to write.
+theorem CSt::lend_write(self si: CSt, s: CSt, th: Thin(si, s), tys: Nat → Type, strs: Strs(tys), p: Param, pm: p.mode = ByWrite, x: Var, ni: Next, ok: si.lend(tys, strs, p, x) = Some(ni),
+    l: Nat, hl: s.lvl(x) = Some(l)):
+    (s.role(l) = KPlain) ∨ (Exists<Nat>(λ o => Exists<Acc>(λ a => (s.role(l) = KHold(o, a)) ∧ (a.writes() = True))) ∨ Exists<VEnt>(λ en => (s.ents(l) = [en]) ∧ (en.mode.writes() = True)))
+{
+    let body = λ (g: Got) => match p.mode as λ _ => Option<Next> {
+        ByRead => Some(checker::Next(si, g.rs)),
+        ByWrite => si.write_at(g.root, Nil).map(λ rw => checker::Next(si, g.rs ++ rw)),
+        ByTake => match si.role(g.root) as λ _ => Option<Next> {
+            KHold(o, a) => match a.writes() && Shape::moves(tys, strs, p.code) as λ _ => Option<Next> {
+                True => match a as λ _ => Option<Next> { AcOwn => (!si.has_obj_views(o)).then(Some(checker::Next(si.set(g.root, KGone), g.rs))), AcRead => Some(checker::Next(si, g.rs)), AcWrite => Some(checker::Next(si, g.rs)) },
+                False => Some(checker::Next(si, g.rs)),
+            },
+            KPlain => Some(checker::Next(si, g.rs)),
+            KView => Some(checker::Next(si, g.rs)),
+            KGone => Some(checker::Next(si, g.rs)),
+        },
+    };
+    let a1 = Option::and_then_some(si.read_var(tys, strs, x), body, ni, ok);
+    let g = a1.witness;
+    let ri = si.read_inv(tys, strs, Place(x, Nil), g, a1.proof.left);
+    let gl: (g.root = l) = Option::some_inj(g.root, l, trans(sym(ri.lvl), trans(th.lvl(x), hl)));
+    let h1: (si.write_at(g.root, Nil).map(λ rw => checker::Next(si, g.rs ++ rw)) = Some(ni)) = j(pm, λ md _ => (match md as λ _ => Option<Next> {
+        ByRead => Some(checker::Next(si, g.rs)),
+        ByWrite => si.write_at(g.root, Nil).map(λ rw => checker::Next(si, g.rs ++ rw)),
+        ByTake => match si.role(g.root) as λ _ => Option<Next> {
+            KHold(o, a) => match a.writes() && Shape::moves(tys, strs, p.code) as λ _ => Option<Next> {
+                True => match a as λ _ => Option<Next> { AcOwn => (!si.has_obj_views(o)).then(Some(checker::Next(si.set(g.root, KGone), g.rs))), AcRead => Some(checker::Next(si, g.rs)), AcWrite => Some(checker::Next(si, g.rs)) },
+                False => Some(checker::Next(si, g.rs)),
+            },
+            KPlain => Some(checker::Next(si, g.rs)),
+            KView => Some(checker::Next(si, g.rs)),
+            KGone => Some(checker::Next(si, g.rs)),
+        },
+    }) = Some(ni), a1.proof.right);
+    match Option::map_some_inv(si.write_at(g.root, Nil), λ rw => checker::Next(si, g.rs ++ rw), ni, h1) {
+        ⟨rw, prw⟩ => {
+            let wl: (si.write_at(l, Nil) = Some(rw)) = j(gl, λ q _ => si.write_at(q, Nil) = Some(rw), prw.left);
+            let ng: ¬(si.role(l) = KGone) = λ hg => absurd(trans(sym(wl), j(sym(hg), λ q _ => (match q { KGone => None<List<Residual>>(), KPlain => Some(Nil<Residual>), KHold(o2, a2) => a2.writes().then(si.license(si.views, Writing, l, [Pl(o2, Nil)])),
+                KView => match si.ents(l) { Cons(e1, rest) => match rest { Nil => e1.mode.writes().then(si.license(si.views, Writing, l, [Pl(e1.obj, e1.reg ++ Nil)])), Cons(_, _) => None<List<Residual>>() }, Nil => None<List<Residual>>() } }) = None<List<Residual>>(), refl)));
+            let lb: (l < s.na + s.nd) = s.lvl_below(x, l, hl);
+            let rr: (si.role(l) = s.role(l)) = th.role(l, lb, ng);
+            let ee: (si.ents(l) = s.ents(l)) = cong_fn(λ (vs: List<VEnt>) => vs.filter(λ e => e.lvl.same(l)), th.views);
+            (match s.role(l) as λ r => si.role(l) = r → (r = KPlain) ∨ (Exists<Nat>(λ o => Exists<Acc>(λ a => (r = KHold(o, a)) ∧ (a.writes() = True))) ∨ Exists<VEnt>(λ en => (s.ents(l) = [en]) ∧ (en.mode.writes() = True))) {
+                KHold(o, a) => λ hr => Inr(Inl(Exists(o, Exists(a, ⟨refl, (si.write_lic_hold(l, Nil, rw, wl, o, a, hr)).left⟩)))),
+                KView => λ hr => match si.write_lic_view(l, Nil, rw, wl, hr) { ⟨en, pen⟩ => Inr(Inr(Exists(en, ⟨trans(sym(ee), pen.left), pen.right.left⟩))) },
+                KPlain => λ _ => Inl(refl),
+                KGone => λ hr => false_elim(ng(hr)),
+            })(rr)
+        },
+    }
+}
