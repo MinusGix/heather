@@ -29,28 +29,40 @@ The composed theorem's type is written and checks with `placement_sound` as its 
 - 2026-11-26: Statement and the three programs landed (design note §25). `placement.hthr`: `place`, a checked body as a bytes-level routine, layouts from codes through `Strs`. `placement_seam.hthr`: `HeapInjects`, `value_lower`, `PlacementSound`/`PlacementSoundAll` (no hypothesis about the program: a translation theorem), `EndToEnd`/`EndToEndAll` (from `PlacementSoundAll` and `CheckSound`; it typechecks). `placement_tests.hthr`: `count_newlines`, `copy_window`, `sum`, each with verdict, closed pin, `place`, level-2 and bytes-level runs agreeing, `Program::lower` = `Some`, all by `refl`. Bytes against the export rows: count_newlines loop 273 → 219, caller 18 → 15; copy_span 217 → 123, copy_window 96 → 39 (no bounded-loop counter, no guarded load, the window tests are preconditions; paid: self-copies of references, the flag's comparison per pass, the copied tail). Thirteen findings in §25.4, the main ones: `SafeAt` says nothing of a run's internal calls, so `place` checks the written-sequence convention syntactically; level 2 has no writability, so `place` refuses a store not reaching a write-lent parameter and `WritesLent` is the premise; fuel is a bound (exact without calls inside a loop pass); the loop's exit bit must come from a comparison; `Bytes(n)` has no windows and `List<A>` a number index. Reported to the coordinating session; nothing is proved over `place` before the ruling.
 - 2026-11-26: After the ruling (§25.5, §25.6): `Seq::words` with windows and its laws added to `sequences.hthr` (additive), the probes on it and lawful; `end_to_end` proved, no axioms (`safe_below`, `place_len`, then `SafeAt`, `PlacementSound` and `lower_program_tracks`; the program's functions are the list's by definition, every index checked, no primitive); `place`'s refusals sorted, a narrow index and a taken word answered back now placed, one checked in-fragment program refused (a word variable written), `Func::fragment` and `PlaceComplete` stated; the stages of `PlacementSound` stated as types, each concluding in the bytes level's claim for its form. Waiting on the run's three changes (items 2, 3, 8) before deleting `place`'s tests and proving the stages.
 
-## Handoff (2026-11-26, end of the slice's third session)
+## Handoff (2026-11-26, end of the slice's fourth session)
 
-**Done** (design note §25.9; on `claude/ownership-slice`, which has merged the coordinating branch at 320441e6 and the proof thread at 4bf882b):
-- `Strs::Laid` from numbered instances: `SeqNum`/`WinNum`/`WinsNum` and `Seq::words_num`, `Seq::words_win_num`, `Seq::vec_num` at the end of `sequences.hthr` (which imports nothing of `placement*`, ever); `Strs::laid_of` in `placement_laid.hthr`; `KindNum` asks a record of words `RecLaid` directly (owed: derive it from `RecordLaws` when a record instance is placed).
-- Probes: `strs_laid`, `list_not_laid`, `first_disagrees`, `ill_coded`, `mixed_reads_zero`, `death_breaks_rel` (F7's old statement), `cw_past_end`, `view_loop_refused`.
-- F7 ruled: a cell over a dead block constrains nothing (`value_live` in `SlotHolds`); `slot_kill` beside `injects_kill`.
-- `place` after the run's changes: no ownership tests, `PSlot` is code + ids, `Back`, `Len` at 64 bits, a word variable written whole rebinds, the `JCopy` `Yield` frame defect fixed. Seam: `ActWrites` in `StageRel` (in place of `SlotsWritable`), the `Act` threaded through the stage types, `StageBack`, `StageLen`; `WritesLent` is the entry premise only.
-- Stages proved (`placement_stages.hthr`): `stage_lit`, `stage_death`; shared: `rel_push`, `rel_kill`, `holds_map`, `slot_of`, `word_slot`, `cells_at`.
+**Done** (design note §25.10; on `claude/ownership-slice`):
+- Stages proved:
+  - `stage_lit`, `stage_death`, `stage_op`, `stage_test` (in `placement_stages.hthr`).
+  - The whole-variable cases of Take and Read: `take_whole_goal`, `read_word_goal` (in `placement_places.hthr`).
+- The walk, whole: `walk_sound` (in `placement_walk.hthr`), with its element, window and field steps, the atom (`atom_sound`), the scaled index (`scaled_ran`), the byte round trip (`round_bytes`) and the injected load (`load_injected`).
+- `place` refactored into named steps, one inversion lemma per step: `place_op`, `less`, `atom`, `walk_step`. This is a trap too, see below.
+- `scaled` fixed. `placement_widths_tests.hthr` covers 64-, 32- and 16-bit elements (the 16-bit one does not lower: `MOVZX r, word`).
+- F8 ruled (a): `SlotHolds` says a word slot's cell is plain.
 
 **Next, in order**:
-1. `StageOp`. `place`'s `Op` is now `PEnv::place_op`, an `and_then` chain: invert `hp` by `let h0: PEnv::place_op(…) = Some(o) = hp;` then `Option::bind_some` step by step (`Bool::guard_some` at a guard). Unification needs the equation's head to be the chain after one unfolding; `Stmt::place` itself does not unfold far enough. Then `slot_of` + `word_slot` for each operand (level 2 stuck where `Value::get` is `None`); the size guard gives `w = WBits(64)`; rewrite each `Dyn` to `Dyn(u64, Dyn::back(…))` (`Dyn::back_like`) so `Dyn::words` reduces; the codes agree by one named lemma from the guard (`sb.code.same(sa.code)`); the word by `BitVec::ofNat_toNat`; finish with `rel_push` and `Locals::agree_set`.
-2. Refactor the other kinds the same way (`Test::place`/`PEnv::less`, `read_place`, `PEnv::locate`/`walk`, `View`, `Take`, `Back`, `Len`, `write_word`) and prove `StageTest` (64-bit unsigned comparison of zero-extended narrow words: needs `toNat` < 2^b ≤ 2^64), `StageTake`, `StageRead`, `StageView`, `StageBack` (the reference case is the identity; the copy case is the store), `StageLen`, then `StageWrite` (`put_image`, `injects_store`; the store allowed by `ActWrites` from `Act::may` in `Stmt::write_run`).
-3. `StageRet`, `StageJump`, the packed join.
-4. `PlaceComplete` waits on two things (§25.9, the coordinator's ruling): §26.5's run for the code comparisons, and `issues/bytes-level-loop-exits.md` for a view answered out of a loop (`view_loop_refused`). Nothing to do here until either lands.
+1. **Read through a reference** (`read_place`'s `Cons` case; Take's `Cons` case is the same leaf with the same run, `read_go`).
+   - The start, `walk_root`. From `slot_of` and the root cell's `Refer(rho)` over a live block:
+     - `WalkAt(rho.b, o.val, rho.sels, Walk(Nil, r.id, len, s.code, next), c0, next, c0)`;
+     - the slot's `read_values` equals `Ref::lower`, which gives the reference and length ids;
+     - the code clause gives `rho.sels` fits.
+     - One gap: the reference id is bound only where `Ref::lower` is `Some`, so either prove `locate_of_fit` or ask the coordinator for the `SlotHolds` clause (§25.10, last paragraph). I asked in the report.
+   - Then `walk_sound` gives the reference to `inj(b)` at `Sel::locate`'s offset.
+   - `locate_image` gives the window of the block's bytes, which is `word_bytes_at(size, index X)`.
+   - `load_injected` and `round_bytes` give the word: `ofNat(index X)`. Get `X`'s width from `Width::sized` and its bound from `toNat_lt_pow` via `Dyn::back_like`.
+   - Finish with `rel_push`. Level 2 is stuck where `Heap::val` is `None` or the selections do not fit.
+2. **`StageView`**: the walk's reference and length word, with the new slot `[ref_id(at.place), word_id(len)]` lowering through `Ref::lower` of `rho.narrow(...)`; `Ref::narrow`'s selections are `rho.sels ++ Steps::sels`. **`StageLen`**: the walk's length word. **`StageBack`**: the reference case is the identity; the copy case is `write_word`'s.
+3. **`StageWrite`**: the walk, then `Store`; `put_image` and `injects_store`; the store allowed by `ActWrites` from `Act::may` in `Stmt::write_run`. Refactor `write_word` into named steps first.
+4. `StageRet`, `StageJump`, the packed join; then what is left of `PlacementSound` (the call, the routine, the fuel induction).
 
 **Traps**: as before, and:
-- `cong_fn` is at `Type` only: an equation over a kind or a window (`Type<1>`) goes through `cong_big` (placement_laid) or `j`.
-- `Value::live` would clash (two `Value`s in scope): the function is `value_live`; `Slots::Below` cannot attach (no `Slots` type): `slots_below`; `split` is a keyword.
-- Constructor patterns of `x86_64_call_contract::Value` are written unqualified (`Word(w)`, `Ref(_)`), expressions qualified.
-- A collection literal in a motive needs `Cons(…, Nil)`.
-- The untrusted evaluator runs out of fuel on full runs and on lowering sizes: read a size off the kernel with closed `n.leb(k) = True { refl }` probes.
-- Suite: `HEATHER_PR_BASE=0bd0515 scripts/test --pr` (0bd0515 passed the full gate and is the coordinating branch's head), no native gates. The coordinator will say when to merge the coordinating branch again (sound.hthr split, `Sig::ok` on `OParam`).
+- **Never invert a chain in one proof.** Nested `Option::bind_some` matches or lets re-type every earlier step's equation at each level (exponential kernel cost). Write `place`'s code as named steps, define callees first (no forward references), and invert one step per lemma, each a single `match ... as λ _ => Goal { Exists(x, p) => ... }`.
+- `omega` cannot substitute `size = 2` into `x * size`: rewrite the hypothesis with `j` first. It also needs a `let` name for terms such as `x.shift_left_one()`.
+- `Var(w)` as an expression resolves as the type `Var`; write `Atom::ix(Var(w), ...)`.
+- `x86_64_memory_contract::{Loc, Slot}` clash with `body`/`store`: qualify them.
+- Records with parameters are built positionally (`WalkAt(ran, mem, ...)`), the parameters inferred from the expected type.
+- `heather check --cache` is fast (seconds) once a run has stored the module. A run that aborts at the rail stores nothing, and the next run re-elaborates every import (minutes).
+
 - 2026-11-26: Second session: F1-F6 found and ruled (§25.8); the statement corrected in placement_seam.hthr (Strs::Laid and StrsLaws premises, arguments coded, images below 2^64, StageRel with codes and ids below next, leaf stages stuck-or-step), end_to_end re-checked; place compares codes as a marked interim; the injection's lemmas proved in placement_inject.hthr (locate_image, put_image, window_kept, injects_store, injects_kill). Suite at 4678039, HEATHER_PR_BASE=a7965e15 scripts/test --pr: == suite: 847 passed, 0 failed, 1 ignored ==. Handoff rewritten.
 - 2026-11-26: Third session: Strs::Laid from numbered instances (SeqNum/WinNum in sequences.hthr, placement_laid.hthr's Strs::laid_of); F1/F2/F4 probes; F7 (StageRel vs a death of an owner) ruled (b), slot_kill; stage_lit, stage_death; merged 4bf882b and adapted place (three ownership tests gone, Back, Len at 64, word write rebinds, JCopy Yield frame defect fixed), ActWrites in StageRel, StageBack/StageLen; copy_window tests its lengths with Len (138 bytes vs 96 old). Suite at 7c2d5db, HEATHER_PR_BASE=60d3371 scripts/test --pr: == suite: 847 passed, 0 failed, 1 ignored ==.
 - 2026-11-26: Third session, handoff: place's Op as an and_then chain (PEnv::place_op) with Option::bind_some for inverting place; slot_of, cells_at, word_slot; rulings recorded (Len at 64, PlaceComplete waits on §26.5 and loop exits, view_loop_r in bytes-level-loop-exits). Suite at f31b6f6, HEATHER_PR_BASE=60d3371 scripts/test --pr: == suite: 847 passed, 0 failed, 1 ignored ==. Handoff rewritten.

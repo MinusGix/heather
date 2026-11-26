@@ -5837,6 +5837,36 @@ routine is 138 bytes against the old export's 96 (the program 261, with
 The difference is in the early returns: each is a constant moved into the
 result id and its own path to the end.
 
+### 25.10 The leaf stages begun, F8, and `scaled` (2026-11-26, the slice's fourth session)
+
+**Proved** (`placement_stages.hthr`, `placement_places.hthr`, `placement_walk.hthr`, no axioms):
+
+- `stage_op`. Both operands' words go through `word_slot`, and the size guard gives 64 bits (`Width::is_64`). The node's run is `node_runs`, and level 2's value is read at 64 bits through `Dyn::back` (`word64_back`).
+- `stage_test`. Narrow unsigned comparisons are widened to 64 bits (`widen_lt`, `cmp_word`), and `<=` is a flipped `<` (`le_flip`) for the swapped arm.
+- The whole-variable cases of `Take` and `Read` (`take_whole_goal`, `read_word_goal`).
+- The walk, whole (`walk_sound`, `WalkAt`). From the walk's invariant at selections `ss`, a step's code leaves the invariant at `ss` plus the step's selection:
+  - an element (`elem_walk_goal`): the index atom (`atom_sound`, a word modulo 2^64 that is exact under the encoding's bound), scaled (`scaled_ran`), offset;
+  - a window (`win_walk_goal`): two atoms, and the length word the window's own;
+  - a field (`field_walk_goal`).
+- What a read's load needs. A word stored as the encoding lays it reads back as itself (`round_bytes`, definitional per size at `ofNat`). A load from a block with no reference and every byte defined reads its window (`load_injected`).
+
+**How inversion is written.** `place`'s statement kinds are written as named steps: `place_op`, `less`, `atom`, `walk_step`/`elem_at`/`win_at`/`field_at`. Each is inverted by one lemma per step, a single `match` on `Option::bind_some`. Nested in one proof, the kernel re-typed every earlier step's equation at each level: 85M steps for `stage_op`, against about 20k as lemmas.
+
+**`scaled` was wrong** (fixed; `scaled_shifts`, `scaled_value`). It shifted an index by the id it had stored the shift amount in, but `ShiftLeft`'s amount is the literal. Every element wider than a byte was indexed wrong. The probes had only byte sequences.
+
+`placement_widths_tests.hthr` now varies the width: `xs[i]` over 64-, 32- and 16-bit words at index 2.
+- All three are checked and placed, and both runs answer 30.
+- The 64- and 32-bit ones lower. The 16-bit one is refused by the emitter: a two-byte load waits for `MOVZX r, word`.
+- With the old `scaled`, the bytes level's answers differ (the negative control, run by hand).
+
+**F8, ruled (a).** An index atom reads its variable through `Mach::ixs`, which does not stick: a variable that reads nothing gives `INat(0)`. Under F7, a word slot over a cell referring to a dead block held any word. `f8_atom_dead` shows the case: `text[x]` reads element 0 at level 2 and element 1 in its placed leaf.
+
+`SlotHolds` now says, outside the liveness guard, that a word slot's cell is plain. That is the seam's own typing fact about slots; every leaf's new slot is a plain cell, and a death keeps it. The run's becoming stuck there is on §26.5's list (`REnv::ixs` answering `Dyn::none`). When that lands, the clause is still true.
+
+**Open, for the read through a reference.** The walk's start needs the root's reference id bound. `SlotHolds` gives that only where the root's lowering is `Some`. It is `Some` wherever `Sel::locate` reaches through the reference's own selections, and `locate` reaches wherever they fit, starting from a laid block. Either way works:
+- a lemma, `locate_of_fit`, by the kind's `Dyn::part` at each step; or
+- one more clause in `SlotHolds`: a live cell's lowering is `Some`. Every stage keeps it: the entry and calls through `values_lower`, a view through the walk, words by their size.
+
 ## 26. The soundness proof restated: local agreement, footprints, shape (2026-11-26, the coordinating session)
 
 Minus, on the state of `check_sound`'s proof (one file of sixteen thousand
