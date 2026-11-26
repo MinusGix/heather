@@ -6255,3 +6255,373 @@ theorem CSt::up_sim(self f: Nat, tys: Nat → Type, strs: Strs(tys), sl: StrsLaw
         },
     }
 }
+
+// ---------------------------------------------------------------------------
+// A write through a view
+
+// Two meanings both agreeing with machines of one environment are the same
+// at a plain level.
+theorem Sim::plain_same(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e1, e2: Env(tys)}, {m1, m2: Mach(tys)}, sim1: Sim(tys, strs, s, e1, m1), sim2: Sim(tys, strs, s, e2, m2),
+    envs: m2.env = m1.env, k: Nat, kb: k < s.na + s.nd, pl: (s.role(k)).plain() = True): Env::get(tys, e2, s.var_at(k)) = Env::get(tys, e1, s.var_at(k))
+{
+    let hx = s.lvl_var_at(k, kb);
+    let c1 = Sim::plain_cell(tys, strs, sim1, s.var_at(k), k, hx, pl);
+    let c2 = Sim::plain_cell(tys, strs, sim2, s.var_at(k), k, hx, pl);
+    let un: (level2::Plain(Env::get(tys, e2, s.var_at(k))) = level2::Plain(Env::get(tys, e1, s.var_at(k)))) =
+        trans(sym(c2), trans(cong_fn(λ (env: REnv(tys)) => (REnv::get(tys, env, s.var_at(k))).v, envs), c1));
+    cong_fn(λ (v: Value(tys)) => match v { Plain(d) => d, Refer(_) => Env::get(tys, e1, s.var_at(k)) }, un)
+}
+
+// A write through a view to write `l` (its one entry `pe`) into its block:
+// every variable that is neither `l` nor an ancestor of it reads what it
+// read. Another object's references are apart from the root; a view of the
+// same object is a descendant of `l`, which the licence found apart, or
+// neither, which `excl` says is apart; a holder of the object is the chain's
+// top, an ancestor.
+theorem Inv::view_off(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(tys, cx.strs), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: Nat → Bool}, inv: Inv(tys, cx.strs, s, e, m, h0, lent),
+    none: s.pending() = False, l: Nat, hr: s.role(l) = KView, pe: VEnt, hents: s.ents(l) = [pe], pw: pe.mode.writes() = True, xs: List<Step>, rl: List<Residual>,
+    lic: s.license(s.views, Writing, l, [Pl(pe.obj, pe.reg ++ xs)]) = Some(rl), resl: Residual::All(rl, tys, cx, e, True),
+    rpw: s.InRange(Steps::lvls(pe.reg ++ xs)), ppw: (k: Nat) → k.member(Steps::lvls(pe.reg ++ xs)) = True → (s.role(k)).plain() = True,
+    r0: Ref, rt0: inv.root(pe.obj) = Some(r0), ss: List<Sel>, sxs: Steps::sels(s.unsteps(xs), Mach::ixs(tys, cx.strs, m)) = ss,
+    ob: Dyn(tys), hv: Heap::val(tys, cx.strs, m.heap, r0.b) = Some(ob), g: Dyn(tys) → Dyn(tys),
+    fq: Sel::fit(tys, cx.strs, r0.sels ++ Steps::sels(s.unsteps(pe.reg), Mach::ixs(tys, cx.strs, m)), ob) = True,
+    hc: (g(Sel::read_at(tys, cx.strs, ss, Sel::read_at(tys, cx.strs, r0.sels ++ Steps::sels(s.unsteps(pe.reg), Mach::ixs(tys, cx.strs, m)), ob)))).code =
+        (Sel::read_at(tys, cx.strs, ss, Sel::read_at(tys, cx.strs, r0.sels ++ Steps::sels(s.unsteps(pe.reg), Mach::ixs(tys, cx.strs, m)), ob))).code,
+    hl: Dyn::len(tys, cx.strs, g(Sel::read_at(tys, cx.strs, ss, Sel::read_at(tys, cx.strs, r0.sels ++ Steps::sels(s.unsteps(pe.reg), Mach::ixs(tys, cx.strs, m)), ob)))) =
+        Dyn::len(tys, cx.strs, Sel::read_at(tys, cx.strs, ss, Sel::read_at(tys, cx.strs, r0.sels ++ Steps::sels(s.unsteps(pe.reg), Mach::ixs(tys, cx.strs, m)), ob)))):
+    (y: Var) → (k: Nat) → s.lvl(y) = Some(k) → ¬(k = l) → k.member(s.anc_of(pe, s.na + s.nd)) = False →
+        Cell::Agrees(tys, cx.strs, Heap::store(tys, m.heap, r0.b, Sel::write_at(tys, cx.strs, (r0.sels ++ Steps::sels(s.unsteps(pe.reg), Mach::ixs(tys, cx.strs, m))) ++ ss, g, ob)),
+            s.role(k), REnv::get(tys, m.env, y), Env::get(tys, e, y))
+{
+    let strs = cx.strs;
+    let sim = Inv::sim_now(tys, strs, inv, none);
+    let ws = Mach::ixs(tys, strs, m);
+    let nl = s.na + s.nd;
+    let rp = Steps::sels(s.unsteps(pe.reg), ws);
+    let nw = Sel::write_at(tys, strs, (r0.sels ++ rp) ++ ss, g, ob);
+    let h2 = Heap::store(tys, m.heap, r0.b, nw);
+    let lt = λ (x: VEnt) (mx: Mem(x, s.views)) => (inv.chain(x, mx)).left;
+    let mpe: Mem(pe, s.ents(l)) = j(sym(hents), λ es _ => Mem(pe, es), Inl(refl));
+    let pmem: Mem(pe, s.views) = s.views.mem_filter(pe, λ q => q.lvl.same(l), mpe);
+    let pl: (pe.lvl = l) = pe.lvl.same_sound(l, s.views.mem_filter_holds(pe, λ q => q.lvl.same(l), mpe));
+    let ch: s.Changes(pe.obj) = Inr(Exists(pe, ⟨pmem, ⟨refl, pw⟩⟩));
+    let hn: ((obj: Obj(tys)) → Heap::obj(tys, m.heap, r0.b) = Some(obj) → obj.holes = Nil) = inv.bare(pe.obj, r0, rt0);
+    let nwa: (nw = Sel::write_at(tys, strs, r0.sels ++ (rp ++ ss), g, ob)) = cong_fn(λ (q: List<Sel>) => Sel::write_at(tys, strs, q, g, ob), List::append_assoc(r0.sels, rp, ss));
+    let fpr = Bool::and_true_parts(Sel::fit(tys, strs, r0.sels, ob), Sel::fit(tys, strs, rp, Sel::read_at(tys, strs, r0.sels, ob)), trans(sym(Sel::fit_append(tys, strs, r0.sels, rp, ob)), fq));
+    let rr: (Sel::read_at(tys, strs, ss, Sel::read_at(tys, strs, r0.sels ++ rp, ob)) = Sel::read_at(tys, strs, rp ++ ss, Sel::read_at(tys, strs, r0.sels, ob))) =
+        trans(cong_fn(λ (z: Dyn(tys)) => Sel::read_at(tys, strs, ss, z), Sel::read_append(tys, strs, r0.sels, rp, ob)), sym(Sel::read_append(tys, strs, rp, ss, Sel::read_at(tys, strs, r0.sels, ob))));
+    let away = λ (x: List<Sel>) (ap: Sel::Apart(tys, strs, r0.sels, x)) =>
+        trans(cong_fn(λ (d: Dyn(tys)) => Sel::get(tys, strs, x, d), nwa), Sel::get_apart(tys, strs, r0.sels ++ (rp ++ ss), x, Sel::apart_ext_l(tys, strs, r0.sels, rp ++ ss, x, ap), g, ob));
+    let under = λ (vs: List<Sel>) (ap: Sel::Apart(tys, strs, vs, rp ++ ss)) =>
+        trans(cong_fn(λ (d: Dyn(tys)) => Sel::get(tys, strs, r0.sels ++ vs, d), nwa),
+            Sel::get_under(tys, strs, sl, r0.sels, rp ++ ss, vs, ap, g, ob, fpr.left, j(rr, λ z _ => (g(z)).code = z.code, hc), j(rr, λ z _ => Dyn::len(tys, strs, g(z)) = Dyn::len(tys, strs, z), hl)));
+    let wsel: (Steps::sels(s.unsteps(pe.reg ++ xs), ws) = rp ++ ss) =
+        trans(cong_fn(λ (q: List<Step>) => Steps::sels(q, ws), s.unsteps_app(pe.reg, xs)), trans(List::map_append(s.unsteps(pe.reg), s.unsteps(xs), λ (a: Step) => a.sel(ws)), cong_fn(λ (q: List<Sel>) => rp ++ q, sxs)));
+    let ah = CSt::anc_holder(nl, s, inv.chain, pe, pmem, omega((inv.vents(pe, pmem)).right.left));
+    λ y k hy kne nk => {
+        let kb = s.lvl_below(y, k, hy);
+        let same = λ (q2: Ref) (cq: (REnv::get(tys, m.env, y)).v = Refer(q2)) (live: ¬((s.role(k)).same(KGone) = True)) (eb: q2.b = r0.b) =>
+            (match s.role(k) as λ rr0 => s.role(k) = rr0 → (match rr0 { KHold(o, _) => inv.root(o) = Some(q2),
+                    KView => VEnt::Any(s.ents(k), λ en => ((inv.root(en.obj)).map(λ r1 => r1.narrow(ws, s.unsteps(en.reg))) = Some(q2))), KPlain => False, KGone => True }) →
+                    ¬(rr0.same(KGone) = True) → Sel::get(tys, strs, q2.sels, nw) = Sel::get(tys, strs, q2.sels, ob) {
+                KHold(o2, a2) => λ er ok _ => {
+                    let no: ¬(o2 = pe.obj) = λ eo => match ah {
+                        ⟨k2, pk⟩ => match pk.right {
+                            ⟨a3, pa⟩ => match Nat::eq_or_ne(k, k2) {
+                                Inl(eq) => absurd(trans(sym(nk), trans(cong_fn(λ (n: Nat) => n.member(s.anc_of(pe, nl)), eq), pk.left))),
+                                Inr(ne) => inv.one(k, k2, pe.obj, a2, a3, kb, omega(CSt::anc_below(nl, s, lt, pe, pmem, k2, pk.left), (inv.vents(pe, pmem)).right.left), ne,
+                                    j(eo, λ z _ => s.role(k) = KHold(z, a2), er), pa),
+                            },
+                        },
+                    };
+                    away(q2.sels, inv.apart(pe.obj, o2, λ eo => no(sym(eo)), ch, r0, q2, rt0, ok)(sym(eb)))
+                },
+                KView => λ _ ok _ => match VEnt::any_mem(s.ents(k), λ en => ((inv.root(en.obj)).map(λ r1 => r1.narrow(ws, s.unsteps(en.reg))) = Some(q2)), ok) {
+                    ⟨ey, pey⟩ => {
+                        let my: Mem(ey, s.views) = s.views.mem_filter(ey, λ q => q.lvl.same(k), pey.left);
+                        let yl: (ey.lvl = k) = ey.lvl.same_sound(k, s.views.mem_filter_holds(ey, λ q => q.lvl.same(k), pey.left));
+                        match Option::map_some_inv(inv.root(ey.obj), λ r1 => r1.narrow(ws, s.unsteps(ey.reg)), q2, pey.right) {
+                            ⟨r3, pr3⟩ => {
+                                let ry = Steps::sels(s.unsteps(ey.reg), ws);
+                                let qs: (q2.sels = r3.sels ++ ry) = cong_fn(λ (z: Ref) => z.sels, sym(pr3.right));
+                                let qb: (q2.b = r3.b) = cong_fn(λ (z: Ref) => z.b, sym(pr3.right));
+                                let at: (Sel::get(tys, strs, r3.sels ++ ry, nw) = Sel::get(tys, strs, r3.sels ++ ry, ob)) = match Nat::eq_or_ne(ey.obj, pe.obj) {
+                                    Inr(no) => away(r3.sels ++ ry, Sel::apart_ext_r(tys, strs, r0.sels, r3.sels, ry, inv.apart(pe.obj, ey.obj, λ eo => no(sym(eo)), ch, r0, r3, rt0, pr3.left)(trans(sym(eb), qb)))),
+                                    Inl(eo) => {
+                                        let r3r: (r3 = r0) = Option::some_inj(r3, r0, trans(sym(pr3.left), trans(cong_fn(λ (z: Nat) => inv.root(z), eo), rt0)));
+                                        let yne: ¬(ey.lvl = l) = λ eq => kne(trans(sym(yl), eq));
+                                        let ap: Sel::Apart(tys, strs, ry, rp ++ ss) = (match l.member(s.anc_of(ey, nl)) as λ b => l.member(s.anc_of(ey, nl)) = b → Sel::Apart(tys, strs, ry, rp ++ ss) {
+                                            True => λ an => {
+                                                let mt = s.meets_view(l, Writing, ey, hr, yne, refl, an);
+                                                j(wsel, λ q _ => Sel::Apart(tys, strs, ry, q),
+                                                    Inv::lic_apart(tys, cx, sl, inv, none, Writing, l, [Pl(pe.obj, pe.reg ++ xs)], rl, lic, resl, ey, my, mt, Pl(pe.obj, pe.reg ++ xs), Inl(refl), eo, rpw, ppw))
+                                            },
+                                            False => λ an => {
+                                                let ex = inv.excl(pe, ey, pmem, my, pw, sym(eo), λ eq => yne(trans(sym(eq), pl)),
+                                                    j(sym(pl), λ n _ => n.member(s.anc_of(ey, nl)) = False, an), j(sym(yl), λ n _ => n.member(s.anc_of(pe, nl)) = False, nk));
+                                                Sel::apart_sym(tys, strs, rp ++ ss, ry, Sel::apart_ext_l(tys, strs, rp, ss, ry, ex))
+                                            },
+                                        })(refl);
+                                        j(sym(r3r), λ z _ => Sel::get(tys, strs, z.sels ++ ry, nw) = Sel::get(tys, strs, z.sels ++ ry, ob), under(ry, ap))
+                                    },
+                                };
+                                j(sym(qs), λ q _ => Sel::get(tys, strs, q, nw) = Sel::get(tys, strs, q, ob), at)
+                            },
+                        }
+                    },
+                },
+                KPlain => λ _ no _ => false_elim(no),
+                KGone => λ _ _ no => false_elim(no(refl)),
+            })(refl, inv.refs(y, k, hy, q2, cq), live);
+        Cell::agrees_store(tys, strs, m.heap, h2, s.role(k), REnv::get(tys, m.env, y), Env::get(tys, e, y), sim.vars(y, k, hy), λ q2 cq live =>
+            match s.refok_block(inv.root, ws, k, q2, inv.refs(y, k, hy, q2, cq), live) {
+                ⟨o3, ⟨r3, pr⟩⟩ => Value::get_store(tys, strs, m.heap, r0.b, ob, nw, hv, hn, q2,
+                    j(pr.right, λ bb _ => (obj: Obj(tys)) → Heap::obj(tys, m.heap, bb) = Some(obj) → obj.holes = Nil, inv.bare(o3, r3, pr.left)), same(q2, cq, live)),
+            })
+    }
+}
+
+// The walk's start at a write through a view whose cell refers, `qq` its
+// reference: the view reads its new meaning, every other variable that is not
+// an ancestor reads what it read (`Inv::view_off`).
+theorem Stmt::write_view_upat(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(tys, cx.strs), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: Nat → Bool}, inv: Inv(tys, cx.strs, s, e, m, h0, lent),
+    none: s.pending() = False, {p: Place}, {v: Var}, {n: Next}, wi: WriteInv(tys, cx.strs, s, p, v, n), wf: WriteFacts(tys, cx, s, e, m, p, v, n, wi), hr2: s.role(wi.l) = KView,
+    pe: VEnt, hents: s.ents(wi.l) = [pe], pw: pe.mode.writes() = True, lic: s.license(s.views, Writing, wi.l, [Pl(pe.obj, pe.reg ++ wi.xs)]) = Some(wf.rl),
+    r0: Ref, rt0: inv.root(pe.obj) = Some(r0), ob: Dyn(tys), hv: Heap::val(tys, cx.strs, m.heap, r0.b) = Some(ob),
+    cv2: (REnv::get(tys, m.env, p.root)).v = Refer(r0.narrow(Mach::ixs(tys, cx.strs, m), s.unsteps(pe.reg))),
+    fr: Sel::fit(tys, cx.strs, r0.sels ++ Steps::sels(s.unsteps(pe.reg), Mach::ixs(tys, cx.strs, m)), ob) = True,
+    rdo: Sel::read_at(tys, cx.strs, r0.sels ++ Steps::sels(s.unsteps(pe.reg), Mach::ixs(tys, cx.strs, m)), ob) = Env::get(tys, e, p.root)):
+    UpAt(tys, cx.strs, s, e, m,
+        Heap::store(tys, m.heap, r0.b, Sel::write_at(tys, cx.strs, (r0.sels ++ Steps::sels(s.unsteps(pe.reg), Mach::ixs(tys, cx.strs, m))) ++ Steps::sels(p.steps, Env::ixs(tys, e)), λ _ => Env::get(tys, e, v), ob)),
+        r0.b, ob, Sel::write_at(tys, cx.strs, (r0.sels ++ Steps::sels(s.unsteps(pe.reg), Mach::ixs(tys, cx.strs, m))) ++ Steps::sels(p.steps, Env::ixs(tys, e)), λ _ => Env::get(tys, e, v), ob),
+        λ _ => Env::get(tys, e, v), wi.l, Env::set(tys, e, p.root, λ d => Dyn::write(tys, cx.strs, Env::ixs(tys, e), p.steps, λ _ => Env::get(tys, e, v), d)), pe,
+        r0.narrow(Mach::ixs(tys, cx.strs, m), s.unsteps(pe.reg)), Steps::sels(p.steps, Env::ixs(tys, e)))
+{
+    let strs = cx.strs;
+    let sim = Inv::sim_now(tys, strs, inv, none);
+    let nl = s.na + s.nd;
+    let ws = Env::ixs(tys, e);
+    let wsm = Mach::ixs(tys, strs, m);
+    let vd = Env::get(tys, e, v);
+    let old = Env::get(tys, e, p.root);
+    let ss = Steps::sels(p.steps, ws);
+    let g = λ (_: Dyn(tys)) => vd;
+    let qq = r0.narrow(wsm, s.unsteps(pe.reg));
+    let nwb = Sel::write_at(tys, strs, qq.sels ++ ss, g, ob);
+    let h2 = Heap::store(tys, m.heap, qq.b, nwb);
+    let f2 = λ (d: Dyn(tys)) => Dyn::write(tys, strs, ws, p.steps, g, d);
+    let e2 = Env::set(tys, e, p.root, f2);
+    let wk = Sel::write_keeps(tys, strs, sl, g, ss, old, wf.wv.code, wf.wv.len);
+    let wsv: (f2(old) = Sel::write_at(tys, strs, ss, g, old)) = Steps::write_sels(tys, strs, ws, p.steps, g, old);
+    let code: ((f2(old)).code = (s.var(wi.l)).code) = trans(cong_fn(λ (q: Dyn(tys)) => q.code, wsv), trans(wk.left, sim.codes(p.root, wi.l, wi.hl)));
+    let mpe: Mem(pe, s.ents(wi.l)) = j(sym(hents), λ es _ => Mem(pe, es), Inl(refl));
+    let pmem: Mem(pe, s.views) = s.views.mem_filter(pe, λ q => q.lvl.same(wi.l), mpe);
+    let pl: (pe.lvl = wi.l) = pe.lvl.same_sound(wi.l, s.views.mem_filter_holds(pe, λ q => q.lvl.same(wi.l), mpe));
+    let xr: (s.var_at(wi.l) = p.root) = s.lvl_var(p.root, wi.l, wi.hl);
+    let rin = s.var_inside(p.root, wi.l, wi.hl);
+    let ein: Var::In(p.root, e.args.len(), e.locs.len()) = j(sym(sim.elocs), λ q _ => Var::In(p.root, e.args.len(), q), j(sym(sim.eargs), λ q _ => Var::In(p.root, q, s.nd), rin));
+    let hc: ((g(Sel::read_at(tys, strs, ss, Sel::read_at(tys, strs, qq.sels, ob)))).code = (Sel::read_at(tys, strs, ss, Sel::read_at(tys, strs, qq.sels, ob))).code) =
+        j(sym(rdo), λ t _ => vd.code = (Sel::read_at(tys, strs, ss, t)).code, wf.wv.code);
+    let hln: (Dyn::len(tys, strs, g(Sel::read_at(tys, strs, ss, Sel::read_at(tys, strs, qq.sels, ob)))) = Dyn::len(tys, strs, Sel::read_at(tys, strs, ss, Sel::read_at(tys, strs, qq.sels, ob)))) =
+        j(sym(rdo), λ t _ => Dyn::len(tys, strs, vd) = Dyn::len(tys, strs, Sel::read_at(tys, strs, ss, t)), wf.wv.len);
+    let ff = λ (y: Dyn(tys)) => Sel::write_at(tys, strs, ss, g, y);
+    let wa: (nwb = Sel::write_at(tys, strs, qq.sels, ff, ob)) = Sel::write_append(tys, strs, qq.sels, ss, g, ob);
+    let wk2 = Sel::write_keeps(tys, strs, sl, g, ss, Sel::read_at(tys, strs, qq.sels, ob), hc, hln);
+    let wg = Sel::write_get(tys, strs, sl, ff, qq.sels, ob, fr, wk2.left, wk2.right);
+    let rdn: (Sel::read_at(tys, strs, qq.sels, nwb) = f2(old)) =
+        trans(cong_fn(λ (t: Dyn(tys)) => Sel::read_at(tys, strs, qq.sels, t), wa), trans(wg.right, trans(cong_fn(ff, rdo), sym(wsv))));
+    let fnw: (Sel::fit(tys, strs, qq.sels, nwb) = True) = j(sym(wa), λ t _ => Sel::fit(tys, strs, qq.sels, t) = True, wg.left);
+    let hn: ((obj: Obj(tys)) → Heap::obj(tys, m.heap, qq.b) = Some(obj) → obj.holes = Nil) = inv.bare(pe.obj, r0, rt0);
+    let rdh = λ (o: Option<Dyn(tys)>) => match o { Some(d) => Sel::get(tys, strs, qq.sels ++ Nil, d), None => None<Dyn(tys)>() };
+    let hv2: (Heap::val(tys, strs, h2, qq.b) = Some(nwb)) = match Heap::obj_of_val(tys, strs, m.heap, qq.b, ob, hv) {
+        ⟨obj, pobj⟩ => Heap::val_store_here(tys, strs, m.heap, qq.b, nwb, obj, pobj, hn(obj, pobj)),
+    };
+    let rootreads: (Value::get(tys, strs, h2, Refer(qq), Nil) = Some(f2(old))) =
+        trans(cong_fn(rdh, hv2), trans(cong_fn(λ (t: List<Sel>) => Sel::get(tys, strs, t, nwb), List::append_nil(qq.sels)), trans(Sel::get_fit(tys, strs, qq.sels, nwb, fnw), cong_fn(λ (t: Dyn(tys)) => Some(t), rdn))));
+    let unst: (s.unsteps(wi.xs) = p.steps) = CSt::unsteps_steps(p.steps, s, wi.xs, wi.hxs);
+    let sxs: (Steps::sels(s.unsteps(wi.xs), wsm) = ss) = trans(cong_fn(λ (z: List<Step>) => Steps::sels(z, wsm), unst), wf.same);
+    let rlv = CSt::steps_range(p.steps, s, wi.xs, wi.hxs);
+    let plv = CSt::atoms_plain(Steps::lvls(wi.xs), s, wi.ra, wi.hra);
+    let regw = s.lvls_app(pe.reg, wi.xs, λ k => (k < nl) ∧ ((s.role(k)).plain() = True), λ k mk => inv.words(k, s.region_lvl(pe, pmem, k, mk)), λ k mk => ⟨rlv(k, mk), plv(k, mk)⟩);
+    let vo = Inv::view_off(tys, cx, sl, inv, none, wi.l, hr2, pe, hents, pw, wi.xs, wf.rl, lic, wf.resl, λ k mk => (regw(k, mk)).left, λ k mk => (regw(k, mk)).right,
+        r0, rt0, ss, sxs, ob, hv, g, fr, hc, hln);
+    let other = λ (y: Var) (k: Nat) (hy: s.lvl(y) = Some(k)) (kne: ¬(k = wi.l)) => λ (eq: p.root = y) => s.var_ne(y, p.root, k, wi.l, hy, wi.hl, kne)(sym(eq));
+    let isroot = λ (y: Var) (k: Nat) (hy: s.lvl(y) = Some(k)) (eq: k = wi.l) => trans(sym(s.lvl_var(y, k, hy)), trans(cong_fn(λ (z: Nat) => s.var_at(z), eq), xr));
+    let ecell = λ (y: Var) (yn: ¬(p.root = y)) => Env::get_set_other(tys, e, p.root, y, f2, yn);
+    let e2root: (Env::get(tys, e2, p.root) = f2(old)) = Env::get_set_same(tys, e, p.root, f2, ein);
+    UpAt(hents, pmem, pw, trans(cong_fn(λ (x: Var) => (REnv::get(tys, m.env, x)).v, xr), cv2), refl, fr, refl, hc, hln,
+        λ y k hy nk => match Nat::eq_or_ne(k, wi.l) {
+            Inl(eq) => j(sym(isroot(y, k, hy, eq)), λ z _ => Cell::Agrees(tys, strs, h2, s.role(k), REnv::get(tys, m.env, z), Env::get(tys, e2, z)),
+                j(sym(eq), λ z _ => Cell::Agrees(tys, strs, h2, s.role(z), REnv::get(tys, m.env, p.root), Env::get(tys, e2, p.root)),
+                    j(sym(hr2), λ rr _ => Cell::Agrees(tys, strs, h2, rr, REnv::get(tys, m.env, p.root), Env::get(tys, e2, p.root)),
+                        j(sym(cv2), λ u _ => Value::Reads(tys, strs, h2, u, Env::get(tys, e2, p.root)),
+                            j(sym(e2root), λ d _ => Value::Reads(tys, strs, h2, Refer(qq), d), rootreads))))),
+            Inr(kne) => j(sym(ecell(y, other(y, k, hy, kne))), λ d _ => Cell::Agrees(tys, strs, h2, s.role(k), REnv::get(tys, m.env, y), d), vo(y, k, hy, kne, nk)),
+        },
+        λ k hk => {
+            let kl: (k < wi.l) = j(pl, λ z _ => k < z, CSt::anc_below(nl, s, λ x mx => (inv.chain(x, mx)).left, pe, pmem, k, hk));
+            ecell(s.var_at(k), other(s.var_at(k), k, s.lvl_var_at(k, omega(kl, s.lvl_below(p.root, wi.l, wi.hl))), λ eq => Nat::lt_irrefl(k, omega(kl, eq))))
+        },
+        s.regions_other(tys, e, e2, p.root, wi.l, wi.hl, wf.nrf, λ k ir => (inv.words(k, ir)).left, ecell),
+        λ y k hy => match Nat::eq_or_ne(k, wi.l) {
+            Inl(eq) => j(sym(isroot(y, k, hy, eq)), λ z _ => (Env::get(tys, e2, z)).code = (s.var(k)).code,
+                trans(cong_fn(λ (d: Dyn(tys)) => d.code, e2root), trans(code, cong_fn(λ (z: Nat) => (s.var(z)).code, sym(eq))))),
+            Inr(kne) => trans(cong_fn(λ (d: Dyn(tys)) => d.code, ecell(y, other(y, k, hy, kne))), sim.codes(y, k, hy)),
+        },
+        trans(Env::set_args(tys, e, p.root, f2), sim.eargs), trans(Env::set_locs(tys, e, p.root, f2), sim.elocs))
+}
+
+// The invariant after a write through a view whose cell refers: the chain
+// walked up (`CSt::up_sim`), the store's clauses, the view's entry no longer
+// written back.
+theorem Stmt::write_view_inv(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(tys, cx.strs), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: Nat → Bool}, inv: Inv(tys, cx.strs, s, e, m, h0, lent),
+    none: s.pending() = False, {p: Place}, {v: Var}, {n: Next}, wi: WriteInv(tys, cx.strs, s, p, v, n),
+    pe: VEnt, hents: s.ents(wi.l) = [pe], pw: pe.mode.writes() = True, r0: Ref, rt0: inv.root(pe.obj) = Some(r0), ob: Dyn(tys), hv: Heap::val(tys, cx.strs, m.heap, r0.b) = Some(ob),
+    cv2: (REnv::get(tys, m.env, p.root)).v = Refer(r0.narrow(Mach::ixs(tys, cx.strs, m), s.unsteps(pe.reg))),
+    u: UpAt(tys, cx.strs, s, e, m,
+        Heap::store(tys, m.heap, r0.b, Sel::write_at(tys, cx.strs, (r0.sels ++ Steps::sels(s.unsteps(pe.reg), Mach::ixs(tys, cx.strs, m))) ++ Steps::sels(p.steps, Env::ixs(tys, e)), λ _ => Env::get(tys, e, v), ob)),
+        r0.b, ob, Sel::write_at(tys, cx.strs, (r0.sels ++ Steps::sels(s.unsteps(pe.reg), Mach::ixs(tys, cx.strs, m))) ++ Steps::sels(p.steps, Env::ixs(tys, e)), λ _ => Env::get(tys, e, v), ob),
+        λ _ => Env::get(tys, e, v), wi.l, Env::set(tys, e, p.root, λ d => Dyn::write(tys, cx.strs, Env::ixs(tys, e), p.steps, λ _ => Env::get(tys, e, v), d)), pe,
+        r0.narrow(Mach::ixs(tys, cx.strs, m), s.unsteps(pe.reg)), Steps::sels(p.steps, Env::ixs(tys, e)))):
+    Inv(tys, cx.strs, s.written(wi.l).unback(wi.l), Env::set(tys, e, p.root, λ d => Dyn::write(tys, cx.strs, Env::ixs(tys, e), p.steps, λ _ => Env::get(tys, e, v), d)),
+        Mach(Heap::store(tys, m.heap, r0.b, Sel::write_at(tys, cx.strs, (r0.sels ++ Steps::sels(s.unsteps(pe.reg), Mach::ixs(tys, cx.strs, m))) ++ Steps::sels(p.steps, Env::ixs(tys, e)), λ _ => Env::get(tys, e, v), ob)), m.env, m.io),
+        h0, lent)
+{
+    let strs = cx.strs;
+    let sim = Inv::sim_now(tys, strs, inv, none);
+    let nl = s.na + s.nd;
+    let s1 = s.written(wi.l).unback(wi.l);
+    let wsm = Mach::ixs(tys, strs, m);
+    let qq = r0.narrow(wsm, s.unsteps(pe.reg));
+    let ss = Steps::sels(p.steps, Env::ixs(tys, e));
+    let g = λ (_: Dyn(tys)) => Env::get(tys, e, v);
+    let nwb = Sel::write_at(tys, strs, qq.sels ++ ss, g, ob);
+    let e2 = Env::set(tys, e, p.root, λ d => Dyn::write(tys, strs, Env::ixs(tys, e), p.steps, g, d));
+    let h2 = Heap::store(tys, m.heap, r0.b, nwb);
+    let m2: Mach(tys) = Mach(h2, m.env, m.io);
+    let hn: ((obj: Obj(tys)) → Heap::obj(tys, m.heap, r0.b) = Some(obj) → obj.holes = Nil) = inv.bare(pe.obj, r0, rt0);
+    let hv2: (Heap::val(tys, strs, h2, r0.b) = Some(nwb)) = match Heap::obj_of_val(tys, strs, m.heap, r0.b, ob, hv) {
+        ⟨obj, pobj⟩ => Heap::val_store_here(tys, strs, m.heap, r0.b, nwb, obj, pobj, hn(obj, pobj)),
+    };
+    let mpe: Mem(pe, s.ents(wi.l)) = j(sym(hents), λ es _ => Mem(pe, es), Inl(refl));
+    let pmem: Mem(pe, s.views) = s.views.mem_filter(pe, λ q => q.lvl.same(wi.l), mpe);
+    let us: Sim(tys, strs, s, s1.up(tys, strs, e2, wi.l, nl), m2) =
+        CSt::up_sim(nl, tys, strs, sl, inv, none, wi.l, h2, r0.b, ob, nwb, g, hv, hv2, wi.l, e2, pe, qq, ss, s.lvl_below(p.root, wi.l, wi.hl), u);
+    let ivp = Inv::store_rest(tys, strs, inv, none, pe.obj, r0, rt0, Inr(Exists(pe, ⟨pmem, ⟨refl, pw⟩⟩)), nwb, s1.up(tys, strs, e2, wi.l, nl), us,
+        λ k ir => Sim::plain_same(tys, strs, sim, us, refl, k, (inv.words(k, ir)).left, (inv.words(k, ir)).right));
+    let cl: ((REnv::get(tys, m2.env, s.var_at(wi.l))).v = Refer(qq)) = trans(cong_fn(λ (x: Var) => (REnv::get(tys, m.env, x)).v, s.lvl_var(p.root, wi.l, wi.hl)), cv2);
+    let pe2: (s1.patched(tys, strs, e2, m2) = s1.up(tys, strs, e2, wi.l, nl)) =
+        trans(s.patched_unback(tys, strs, wi.l, pe, none, hents, pw, e2, m2), cong_fn(λ (w: Value(tys)) => match w as λ _ => Env(tys) { Refer(_) => s1.up(tys, strs, e2, wi.l, s.na + s.nd), Plain(_) => e2 }, cl));
+    Inv::unback(tys, strs, ivp, wi.l, e2, j(sym(pe2), λ z _ => Sim(tys, strs, s1, z, m2), us))
+}
+
+// The referring case of a write through a view: its reference is its
+// entry's object's root narrowed; the run stores into that block.
+theorem Stmt::write_view_ref(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(tys, cx.strs), fns: Nat → Func, call: Caller(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: Nat → Bool},
+    inv: Inv(tys, cx.strs, s, e, m, h0, lent), none: s.pending() = False, p: Place, v: Var, n: Next, wi: WriteInv(tys, cx.strs, s, p, v, n), wf: WriteFacts(tys, cx, s, e, m, p, v, n, wi),
+    hr2: s.role(wi.l) = KView, pe: VEnt, hents: s.ents(wi.l) = [pe], pw: pe.mode.writes() = True, lic: s.license(s.views, Writing, wi.l, [Pl(pe.obj, pe.reg ++ wi.xs)]) = Some(wf.rl),
+    nst: s.written(wi.l).unback(wi.l) = n.st, q: Ref, cv: (REnv::get(tys, m.env, p.root)).v = Refer(q), rdr: Value::Reads(tys, cx.strs, m.heap, Refer(q), Env::get(tys, e, p.root))):
+    Stepped(tys, cx.strs, fns, call, Write(p, v), n.st, Env::set(tys, e, p.root, λ d => Dyn::write(tys, cx.strs, Env::ixs(tys, e), p.steps, λ _ => Env::get(tys, e, v), d)), m, h0, lent)
+{
+    let strs = cx.strs;
+    let wsm = Mach::ixs(tys, strs, m);
+    let vd = Env::get(tys, e, v);
+    let old = Env::get(tys, e, p.root);
+    let ss = Steps::sels(p.steps, Env::ixs(tys, e));
+    let e2 = Env::set(tys, e, p.root, λ d => Dyn::write(tys, strs, Env::ixs(tys, e), p.steps, λ _ => vd, d));
+    let okq = inv.refs(p.root, wi.l, wi.hl, q, cv);
+    let anyq: VEnt::Any(s.ents(wi.l), λ y => ((inv.root(y.obj)).map(λ r1 => r1.narrow(wsm, s.unsteps(y.reg))) = Some(q))) =
+        j(hr2, λ rr _ => match rr { KHold(o, _) => inv.root(o) = Some(q), KView => VEnt::Any(s.ents(wi.l), λ y => ((inv.root(y.obj)).map(λ r1 => r1.narrow(wsm, s.unsteps(y.reg))) = Some(q))),
+            KPlain => False, KGone => True }, okq);
+    let any1: VEnt::Any([pe], λ y => ((inv.root(y.obj)).map(λ r1 => r1.narrow(wsm, s.unsteps(y.reg))) = Some(q))) =
+        j(hents, λ es _ => VEnt::Any(es, λ y => ((inv.root(y.obj)).map(λ r1 => r1.narrow(wsm, s.unsteps(y.reg))) = Some(q))), anyq);
+    let h1: ((inv.root(pe.obj)).map(λ r1 => r1.narrow(wsm, s.unsteps(pe.reg))) = Some(q)) = match any1 { Inl(x) => x, Inr(no) => false_elim(no) };
+    match Option::map_some_inv(inv.root(pe.obj), λ r1 => r1.narrow(wsm, s.unsteps(pe.reg)), q, h1) {
+        ⟨r0, pr0⟩ => {
+            let qq = r0.narrow(wsm, s.unsteps(pe.reg));
+            let cv2: ((REnv::get(tys, m.env, p.root)).v = Refer(qq)) = trans(cv, cong_fn(λ (z: Ref) => Refer(z), sym(pr0.right)));
+            let rdq: Value::Reads(tys, strs, m.heap, Refer(qq), old) = j(sym(pr0.right), λ z _ => Value::Reads(tys, strs, m.heap, Refer(z), old), rdr);
+            match Value::refer_inv(tys, strs, m.heap, qq, old, rdq) {
+                ⟨ob, pob⟩ => {
+                    let fr = pob.right.left;
+                    let rdo: (Sel::read_at(tys, strs, qq.sels, ob) = old) = pob.right.right;
+                    let nwb = Sel::write_at(tys, strs, qq.sels ++ ss, λ _ => vd, ob);
+                    let fss: (Sel::fit(tys, strs, ss, Sel::read_at(tys, strs, qq.sels, ob)) = True) = j(sym(rdo), λ t _ => Sel::fit(tys, strs, ss, t) = True, wf.fit);
+                    let fall: (Sel::fit(tys, strs, qq.sels ++ ss, ob) = True) =
+                        trans(Sel::fit_append(tys, strs, qq.sels, ss, ob), Bool::and_of(Sel::fit(tys, strs, qq.sels, ob), Sel::fit(tys, strs, ss, Sel::read_at(tys, strs, qq.sels, ob)), fr, fss));
+                    let put: (Sel::put(tys, strs, qq.sels ++ Steps::sels(p.steps, wsm), vd, ob) = Some(nwb)) =
+                        j(sym(wf.same), λ z _ => Sel::put(tys, strs, qq.sels ++ z, vd, ob) = Some(nwb), Sel::put_fit(tys, strs, qq.sels ++ ss, vd, ob, fall));
+                    let u = Stmt::write_view_upat(tys, cx, sl, inv, none, wi, wf, hr2, pe, hents, pw, lic, r0, pr0.left, ob, pob.left, cv2, fr, rdo);
+                    let iv = Stmt::write_view_inv(tys, cx, sl, inv, none, wi, pe, hents, pw, r0, pr0.left, ob, pob.left, cv2, u);
+                    let m2: Mach(tys) = Mach(Heap::store(tys, m.heap, r0.b, nwb), m.env, m.io);
+                    Stepped(m2, λ k => Stmt::write_runs_ref(tys, strs, fns, call, m, p, v, vd, wf.vx, qq, cv2, ob, pob.left, nwb, put, k),
+                        j(nst, λ z _ => Inv(tys, strs, z, e2, m2, h0, lent), iv))
+                },
+            }
+        },
+    }
+}
+
+// A write through a view to write: into its cell where it is a copy, into
+// its object's block where it refers. Its entry is then not written back; the
+// invariant's meaning is the chain written up where the view refers, the
+// meaning itself where it is a copy.
+theorem Stmt::stage_write_view(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(tys, cx.strs), fns: Nat → Func, call: Caller(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: Nat → Bool},
+    inv: Inv(tys, cx.strs, s, e, m, h0, lent), none: s.pending() = False, p: Place, v: Var, n: Next, ok: s.write(tys, cx.strs, p, v) = Some(n),
+    cok: (match Shape::steps_ok(tys, cx.strs, p.steps, s.code(p.root)) as λ _ => Bool { Some(c) => s.code(v).same(c), None => False }) = True,
+    l: Nat, hl: s.lvl(p.root) = Some(l), hr: s.role(l) = KView,
+    nb: (xs: List<Step>) → s.steps(p.steps) = Some(xs) → (lv: Nat) → s.lvl(v) = Some(lv) → s.is_back(l, xs, lv) = False,
+    tail: Type, res: Residual::All(n.rs, tys, cx, e, tail)):
+    Stepped(tys, cx.strs, fns, call, Write(p, v), n.st, Env::set(tys, e, p.root, λ d => Dyn::write(tys, cx.strs, Env::ixs(tys, e), p.steps, λ _ => Env::get(tys, e, v), d)), m, h0, lent)
+{
+    let strs = cx.strs;
+    let sim = Inv::sim_now(tys, strs, inv, none);
+    let wi = s.write_inv(tys, strs, p, v, n, ok);
+    let ll: (l = wi.l) = Option::some_inj(l, wi.l, trans(sym(hl), wi.hl));
+    let hr2: (s.role(wi.l) = KView) = j(ll, λ q _ => s.role(q) = KView, hr);
+    let wf = WriteInv::facts(tys, cx, sl, sim, wi, j(ll, λ q _ => s.is_back(q, wi.xs, wi.lv) = False, nb(wi.xs, wi.hxs, wi.lv, wi.hlv)), cok, tail, res);
+    let ws = Env::ixs(tys, e);
+    let wsm = Mach::ixs(tys, strs, m);
+    let vd = Env::get(tys, e, v);
+    let old = Env::get(tys, e, p.root);
+    let ss = Steps::sels(p.steps, ws);
+    let g = λ (_: Dyn(tys)) => vd;
+    let nw = Sel::write_at(tys, strs, ss, g, old);
+    let wk = Sel::write_keeps(tys, strs, sl, g, ss, old, wf.wv.code, wf.wv.len);
+    let f2 = λ (d: Dyn(tys)) => Dyn::write(tys, strs, ws, p.steps, g, d);
+    let e2 = Env::set(tys, e, p.root, f2);
+    let wsv: (f2(old) = nw) = Steps::write_sels(tys, strs, ws, p.steps, g, old);
+    let s1 = s.written(wi.l).unback(wi.l);
+    let wt: (s.wrote_to(wi.l) = s1) = j(sym(hr2), λ rr _ => (match rr as λ _ => CSt { KPlain => s, KHold(_, _) => s.written(wi.l).unback(wi.l),
+        KView => s.written(wi.l).unback(wi.l), KGone => s.written(wi.l).unback(wi.l) }) = s.written(wi.l).unback(wi.l), refl);
+    let nst: (s1 = n.st) = sym(trans(wf.nst, wt));
+    let rd0: Value::Reads(tys, strs, m.heap, (REnv::get(tys, m.env, p.root)).v, old) =
+        j(hr2, λ rr _ => Cell::Agrees(tys, strs, m.heap, rr, REnv::get(tys, m.env, p.root), old), sim.vars(p.root, wi.l, wi.hl));
+    match s.write_lic_view(wi.l, wi.xs, wf.rl, wf.hrl, hr2) {
+        ⟨pe, ppe⟩ => (match (REnv::get(tys, m.env, p.root)).v as λ u => (REnv::get(tys, m.env, p.root)).v = u → Value::Reads(tys, strs, m.heap, u, old) →
+                Stepped(tys, strs, fns, call, Write(p, v), n.st, e2, m, h0, lent) {
+            Plain(dh) => λ cv rdh => {
+                let pc: ((REnv::get(tys, m.env, p.root)).v = level2::Plain(old)) = trans(cv, cong_fn(λ (q: Dyn(tys)) => level2::Plain(q), Option::some_inj(dh, old, rdh)));
+                let put: (Sel::put(tys, strs, Steps::sels(p.steps, wsm), vd, old) = Some(nw)) =
+                    j(sym(wf.same), λ q _ => Sel::put(tys, strs, q, vd, old) = Some(nw), Sel::put_fit(tys, strs, ss, vd, old, wf.fit));
+                let c2 = Cell(level2::Plain(nw), (REnv::get(tys, m.env, p.root)).own);
+                let m2: Mach(tys) = Mach(m.heap, REnv::set(tys, m.env, p.root, c2), m.io);
+                let agr: Cell::Agrees(tys, strs, m.heap, s.role(wi.l), c2, f2(old)) =
+                    j(sym(hr2), λ rr _ => Cell::Agrees(tys, strs, m.heap, rr, c2, f2(old)), cong_fn(λ (q: Dyn(tys)) => Some(q), sym(wsv)));
+                let code: ((f2(old)).code = (s.var(wi.l)).code) = trans(cong_fn(λ (q: Dyn(tys)) => q.code, wsv), trans(wk.left, sim.codes(p.root, wi.l, wi.hl)));
+                let iv = Inv::set_cell(tys, strs, inv, none, p.root, wi.l, wi.hl, wf.nrf, f2, c2, agr, code, λ r0 eq => absurd(eq), cong_fn(λ (u: Value(tys)) => Value::refers(tys, u), pc));
+                let rin = s.var_inside(p.root, wi.l, wi.hl);
+                let min: Var::In(p.root, (m.env).args.len(), (m.env).locs.len()) =
+                    j(sym(sim.mlocs), λ q _ => Var::In(p.root, (m.env).args.len(), q), j(sym(sim.margs), λ q _ => Var::In(p.root, q, s.nd), rin));
+                let cl: ((REnv::get(tys, m2.env, s.var_at(wi.l))).v = level2::Plain(nw)) =
+                    trans(cong_fn(λ (x: Var) => (REnv::get(tys, m2.env, x)).v, s.lvl_var(p.root, wi.l, wi.hl)), cong_fn(λ (c: Cell(tys)) => c.v, REnv::get_set_same(tys, m.env, p.root, c2, min)));
+                let pe2: (s1.patched(tys, strs, e2, m2) = e2) = trans(s.patched_unback(tys, strs, wi.l, pe, none, ppe.left, ppe.right.left, e2, m2),
+                    cong_fn(λ (u: Value(tys)) => match u as λ _ => Env(tys) { Refer(_) => s1.up(tys, strs, e2, wi.l, s.na + s.nd), Plain(_) => e2 }, cl));
+                let sim1: Sim(tys, strs, s1, s1.patched(tys, strs, e2, m2), m2) = j(sym(pe2), λ q _ => Sim(tys, strs, s1, q, m2), Inv::sim_now(tys, strs, iv, none));
+                Stepped(m2, λ k => Stmt::write_runs_plain(tys, strs, fns, call, m, p, v, vd, wf.vx, old, pc, nw, put, k),
+                    j(nst, λ q _ => Inv(tys, strs, q, e2, m2, h0, lent), Inv::unback(tys, strs, iv, wi.l, e2, sim1)))
+            },
+            Refer(q) => λ cv rdr => Stmt::write_view_ref(tys, cx, sl, fns, call, inv, none, p, v, n, wi, wf, hr2, pe, ppe.left, ppe.right.left, ppe.right.right, nst, q, cv, rdr),
+        })(refl, rd0),
+    }
+}
