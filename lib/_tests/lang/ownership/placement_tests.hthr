@@ -34,6 +34,8 @@ import placement_seam;
 import placement_inject;
 import placement_laid;
 import placement_stages;
+import placement_walk;
+import placement_places;
 import bytes_memory;
 import bytes_level;
 import bytes_level_routines;
