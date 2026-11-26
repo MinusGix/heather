@@ -9554,3 +9554,61 @@ theorem Inv::ret_one(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}
         },
     })(ok)
 }
+
+theorem Inv::ret_views(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: Nat → Bool}, inv: Inv(tys, strs, s, e, m, h0, lent),
+    ps: List<Param>, vs: List<Value(tys)>, ent: REnv::ArgsKept(tys, m.env, REnv(Cell::args(tys, ps, vs), Nil)), vl: vs.len() = s.na,
+    ws: List<Ix>, all: List<Nat>, sw: CSt::SigWords(s, all, ws, Mach::ixs(tys, strs, m)), rs: List<Result>):
+    (xs: List<Var>) → (ls: List<Nat>) → s.lvls(xs) = Some(ls) → s.returns_all(tys, strs, all, ls, rs) = True →
+    Value::Views(tys, strs, h0.len(), vs, ws, rs, xs.map(λ x => (REnv::get(tys, m.env, x)).v))
+{
+    match rs {
+        Nil => λ _ _ _ _ => trivial,
+        Cons(r, rest) => λ xs => match xs {
+            Nil => λ ls hl ok => absurd(j(sym(Option::some_inj(Nil, ls, hl)), λ q _ => s.returns_all(tys, strs, all, q, Cons(r, rest)) = True, ok)),
+            Cons(x, xr) => λ ls hl ok => {
+                let a = Option::and_then_some(s.lvl(x), λ l => s.lvls(xr).map(λ lt => Cons(l, lt)), ls, hl);
+                match Option::map_some_inv(s.lvls(xr), λ (lt: List<Nat>) => Cons(a.witness, lt), ls, a.proof.right) {
+                    ⟨lr, pl⟩ => {
+                        let ok2: (s.returns_all(tys, strs, all, Cons(a.witness, lr), Cons(r, rest)) = True) = j(sym(pl.right), λ q _ => s.returns_all(tys, strs, all, q, Cons(r, rest)) = True, ok);
+                        let parts = Bool::and_true_parts(s.returns(tys, strs, all, a.witness, r), s.returns_all(tys, strs, all, lr, rest), ok2);
+                        ⟨Inv::ret_one(tys, strs, inv, ps, vs, ent, vl, ws, all, sw, x, a.witness, a.proof.left, r.code, r.origin, parts.left),
+                            Inv::ret_views(tys, strs, inv, ps, vs, ent, vl, ws, all, sw, rest, xr, lr, pl.left, parts.right)⟩
+                    },
+                }
+            },
+        },
+    }
+}
+
+// What `SafeAt` asks of a `Done` answer, at the answer's values `rv`, the
+// heap `h` it leaves and the meaning's answer `outs`.
+record RetOk(tys: Nat → Type, strs: Strs(tys), sig: Sig, vs: List<Value(tys)>, ds: List<Dyn(tys)>, h0: Heap(tys), lent: Nat → Bool, rv: List<Value(tys)>, h: Heap(tys), outs: List<Dyn(tys)>) {
+    reads: Value::ReadAll(tys, strs, h, h.len(), rv, outs),
+    written: Value::Written(tys, strs, vs, ds, sig.written(), rv.drop(sig.results.len()), outs.drop(sig.results.len())),
+    frame: Heap::Frame(tys, h0, h, lent),
+    views: Value::Views(tys, strs, h0.len(), vs, Dyn::ixs(tys, ds ++ outs), sig.results, rv),
+}
+
+// The `Ret` stage: from the invariant, `Like`, and the argument cells as
+// passed, what `SafeAt` asks of the answer the run gives there.
+theorem Body::stage_ret(tys: Nat → Type, strs: Strs(tys), sig: Sig, {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: Nat → Bool}, inv: Inv(tys, strs, s, e, m, h0, lent),
+    ds: List<Dyn(tys)>, lk: Like(tys, strs, sig.params, ds, s, e), vs: List<Value(tys)>, ent: REnv::ArgsKept(tys, m.env, REnv(Cell::args(tys, sig.params, vs), Nil)),
+    na: s.na = sig.params.len(), vl: vs.len() = s.na, dl: ds.len() = s.na, xs: List<Var>, ok: s.ret(tys, strs, sig, xs) = True):
+    RetOk(tys, strs, sig, vs, ds, h0, lent, xs.map(λ x => (REnv::get(tys, m.env, x)).v), m.heap, xs.map(λ x => Env::get(tys, e, x)))
+{
+    let ri = s.ret_inv(tys, strs, sig, xs, ok);
+    let sim = Inv::sim_now(tys, strs, inv, ri.none);
+    let nr = sig.results.len();
+    let aw0: Param::AllW(sig.params, sig.params.len(), sig.written()) = Param::written_all(sig.params, sig.params, 0, λ i p h => {
+        let ee: (i = i + 0) = omega();
+        j(ee, λ n _ => sig.params.nth(n) = Some(p), h)
+    }, omega());
+    let aw: Param::AllW(sig.params, s.na, sig.written()) = j(sym(na), λ n _ => Param::AllW(sig.params, n, sig.written()), aw0);
+    let wr = Inv::ret_written(tys, strs, inv, sig.params, ds, lk, vs, ent, sig.written(), aw, xs.drop(nr), ri.ls.drop(nr), s.lvls_drop(xs, ri.ls, nr, ri.lvls), ri.gives);
+    let wr2: Value::Written(tys, strs, vs, ds, sig.written(), (xs.map(λ x => (REnv::get(tys, m.env, x)).v)).drop(nr), (xs.map(λ x => Env::get(tys, e, x))).drop(nr)) =
+        j(sym(xs.map_drop(λ x => Env::get(tys, e, x), nr)), λ q _ => Value::Written(tys, strs, vs, ds, sig.written(), (xs.map(λ x => (REnv::get(tys, m.env, x)).v)).drop(nr), q),
+            j(sym(xs.map_drop(λ x => (REnv::get(tys, m.env, x)).v, nr)), λ q _ => Value::Written(tys, strs, vs, ds, sig.written(), q, (xs.drop(nr)).map(λ x => Env::get(tys, e, x))), wr));
+    let sw = Inv::ret_words(tys, strs, inv, ri.none, sig.params, ds, lk, dl, xs, ri.ls, ri.lvls);
+    RetOk(Sim::read_all(tys, strs, sim, xs, Nil, ri.reads), wr2, inv.frame,
+        Inv::ret_views(tys, strs, inv, sig.params, vs, ent, vl, Dyn::ixs(tys, ds ++ xs.map(λ x => Env::get(tys, e, x))), ri.ls, sw, sig.results, xs, ri.ls, ri.lvls, ri.rets))
+}
