@@ -646,7 +646,6 @@ inductive JFrame { JCopy(rest: body::Body, env: PEnv), JShare(env: PEnv, outs: O
 // join's outputs fixed by the first `Yield` that reached it).
 record BOut { code: bytes_level::Body, next: Nat, frames: List<JFrame> }
 
-
 // A comparison of two words at the first's width: its one-bit word at
 // `next`, and whether the arms swap (`a <= b` is `!(b < a)`).
 fn PEnv::less(self e: PEnv, a, b: Var, swap: Bool, next: Nat) → Option<Pair<List<Instr>, Bool>> {
