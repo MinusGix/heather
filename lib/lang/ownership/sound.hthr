@@ -7954,3 +7954,287 @@ theorem Stmt::stage_back(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(tys, cx.s
         })(refl),
     })(refl)
 }
+
+// ---------------------------------------------------------------------------
+// The death of a view: its entries dropped, its level gone
+
+theorem List::filter_keep<A>(self xs: List<A>, p, q: A → Bool): ((x: A) → q(x) = True → p(x) = True) → xs.filter(p).filter(q) = xs.filter(q) {
+    match xs {
+        Nil => λ _ => refl,
+        Cons(h, t) => λ k => {
+            let ih = t.filter_keep(p, q, k);
+            (match q(h) as λ c => q(h) = c → (Cons(h, t)).filter(p).filter(q) = (Cons(h, t)).filter(q) {
+                True => λ eq => {
+                    let pe = k(h, eq);
+                    let l1: ((Cons(h, t)).filter(p) = Cons(h, t.filter(p))) = j(sym(pe), λ y _ => (match y as λ _ => List<A> { True => Cons(h, t.filter(p)), False => t.filter(p) }) = Cons(h, t.filter(p)), refl);
+                    let l2: ((Cons(h, t.filter(p))).filter(q) = Cons(h, t.filter(p).filter(q))) =
+                        j(sym(eq), λ y _ => (match y as λ _ => List<A> { True => Cons(h, t.filter(p).filter(q)), False => t.filter(p).filter(q) }) = Cons(h, t.filter(p).filter(q)), refl);
+                    let r1: ((Cons(h, t)).filter(q) = Cons(h, t.filter(q))) = j(sym(eq), λ y _ => (match y as λ _ => List<A> { True => Cons(h, t.filter(q)), False => t.filter(q) }) = Cons(h, t.filter(q)), refl);
+                    trans(cong_fn(λ (r: List<A>) => r.filter(q), l1), trans(l2, trans(cong_fn(λ (r: List<A>) => Cons(h, r), ih), sym(r1))))
+                },
+                False => λ eq => {
+                    let r1: ((Cons(h, t)).filter(q) = t.filter(q)) = j(sym(eq), λ y _ => (match y as λ _ => List<A> { True => Cons(h, t.filter(q)), False => t.filter(q) }) = t.filter(q), refl);
+                    let lft: ((Cons(h, t)).filter(p).filter(q) = t.filter(p).filter(q)) = (match p(h) as λ c => p(h) = c → (Cons(h, t)).filter(p).filter(q) = t.filter(p).filter(q) {
+                        True => λ pe => {
+                            let l1: ((Cons(h, t)).filter(p) = Cons(h, t.filter(p))) = j(sym(pe), λ y _ => (match y as λ _ => List<A> { True => Cons(h, t.filter(p)), False => t.filter(p) }) = Cons(h, t.filter(p)), refl);
+                            let l2: ((Cons(h, t.filter(p))).filter(q) = t.filter(p).filter(q)) =
+                                j(sym(eq), λ y _ => (match y as λ _ => List<A> { True => Cons(h, t.filter(p).filter(q)), False => t.filter(p).filter(q) }) = t.filter(p).filter(q), refl);
+                            trans(cong_fn(λ (r: List<A>) => r.filter(q), l1), l2)
+                        },
+                        False => λ pe => cong_fn(λ (r: List<A>) => r.filter(q), j(sym(pe), λ y _ => (match y as λ _ => List<A> { True => Cons(h, t.filter(p)), False => t.filter(p) }) = t.filter(p), refl)),
+                    })(refl);
+                    trans(lft, trans(ih, sym(r1)))
+                },
+            })(refl)
+        },
+    }
+}
+
+// Dropping what no test picks changes neither whether one is picked nor
+// which is first.
+theorem List::any_bit_drop<A>(self xs: List<A>, p, q: A → Bool): ((x: A) → Mem(x, xs) → p(x) = False → q(x) = False) → xs.filter(p).any_bit(q) = xs.any_bit(q) {
+    match xs {
+        Nil => λ _ => refl,
+        Cons(h, t) => λ k => {
+            let ih = t.any_bit_drop(p, q, λ x mx => k(x, Inr(mx)));
+            (match p(h) as λ c => p(h) = c → (Cons(h, t)).filter(p).any_bit(q) = (Cons(h, t)).any_bit(q) {
+                True => λ pe => trans(cong_fn(λ (r: List<A>) => r.any_bit(q), j(sym(pe), λ y _ => (match y as λ _ => List<A> { True => Cons(h, t.filter(p)), False => t.filter(p) }) = Cons(h, t.filter(p)), refl)),
+                    cong_fn(λ (b: Bool) => q(h) || b, ih)),
+                False => λ pe => trans(cong_fn(λ (r: List<A>) => r.any_bit(q), j(sym(pe), λ y _ => (match y as λ _ => List<A> { True => Cons(h, t.filter(p)), False => t.filter(p) }) = t.filter(p), refl)),
+                    trans(ih, j(sym(k(h, Inl(refl), pe)), λ y _ => t.any_bit(q) = (y || t.any_bit(q)), refl))),
+            })(refl)
+        },
+    }
+}
+
+theorem List::find_drop<A>(self xs: List<A>, p, q: A → Bool): ((x: A) → Mem(x, xs) → p(x) = False → q(x) = False) → xs.filter(p).find(q) = xs.find(q) {
+    match xs {
+        Nil => λ _ => refl,
+        Cons(h, t) => λ k => {
+            let ih = t.find_drop(p, q, λ x mx => k(x, Inr(mx)));
+            (match p(h) as λ c => p(h) = c → (Cons(h, t)).filter(p).find(q) = (Cons(h, t)).find(q) {
+                True => λ pe => trans(cong_fn(λ (r: List<A>) => r.find(q), j(sym(pe), λ y _ => (match y as λ _ => List<A> { True => Cons(h, t.filter(p)), False => t.filter(p) }) = Cons(h, t.filter(p)), refl)),
+                    cong_fn(λ (r: Option<A>) => match q(h) as λ _ => Option<A> { True => Some(h), False => r }, ih)),
+                False => λ pe => trans(cong_fn(λ (r: List<A>) => r.find(q), j(sym(pe), λ y _ => (match y as λ _ => List<A> { True => Cons(h, t.filter(p)), False => t.filter(p) }) = t.filter(p), refl)),
+                    trans(ih, j(sym(k(h, Inl(refl), pe)), λ y _ => t.find(q) = (match y as λ _ => Option<A> { True => Some(h), False => t.find(q) }), refl))),
+            })(refl)
+        },
+    }
+}
+
+theorem List::any_bit_sub<A>(self xs: List<A>, p, q: A → Bool, h: xs.filter(p).any_bit(q) = True): xs.any_bit(q) = True {
+    match xs.filter(p).any_bit_sound(q, h) { ⟨a, pa⟩ => xs.any_bit_mem(q, a, xs.mem_filter(a, p, pa.left), pa.right) }
+}
+
+// The state a view's death leaves, and what does not change: its other
+// levels' entries, the walk from a level not its own, ancestry from an entry
+// not its child.
+fn CSt::drop(self s: CSt, l: Nat) → CSt { (s.with_views(s.views.filter(λ e => !e.lvl.same(l)))).set(l, KGone) }
+
+theorem CSt::drop_ents(self s: CSt, l, k: Nat, ne: ¬(k = l)): (s.drop(l)).ents(k) = s.ents(k) {
+    s.views.filter_keep(λ e => !e.lvl.same(l), λ e => e.lvl.same(k), λ x hx => {
+        let sf: (x.lvl.same(l) = False) = Nat::same_false(x.lvl, l, λ eq => ne(trans(sym(x.lvl.same_sound(k, hx)), eq)));
+        j(sym(sf), λ c _ => (!c) = True, refl)
+    })
+}
+
+theorem CSt::drop_mem(self s: CSt, l: Nat, en: VEnt, mem: Mem(en, (s.drop(l)).views)): Mem(en, s.views) ∧ ¬(en.lvl = l) {
+    let np = λ (e: VEnt) => !e.lvl.same(l);
+    let hn: ((!en.lvl.same(l)) = True) = s.views.mem_filter_holds(en, np, mem);
+    ⟨s.views.mem_filter(en, np, mem), λ eq => absurd(trans(sym(hn), j(sym(eq), λ q _ => (!q.same(l)) = False, j(sym(l.same_self()), λ c _ => (!c) = False, refl))))⟩
+}
+
+theorem CSt::up_drop(self fu: Nat, s: CSt, tys: Nat → Type, strs: Strs(tys), l: Nat, noch: (en: VEnt) → Mem(en, s.views) → ¬(en.par = l)):
+    (e: Env(tys)) → (c: Nat) → ¬(c = l) → (s.drop(l)).up(tys, strs, e, c, fu) = s.up(tys, strs, e, c, fu)
+{
+    match fu {
+        Zero => λ e c _ => refl,
+        Succ(f1) => λ e c ne => {
+            let s2 = s.drop(l);
+            let he = s.drop_ents(l, c, ne);
+            (match s.ents(c) as λ es => s.ents(c) = es → s2.up(tys, strs, e, c, Succ(f1)) = s.up(tys, strs, e, c, Succ(f1)) {
+                Nil => λ h => trans(CSt::up_nil(Succ(f1), s2, tys, strs, e, c, trans(he, h)), sym(CSt::up_nil(Succ(f1), s, tys, strs, e, c, h))),
+                Cons(x, rest) => λ h => {
+                    let h2: (s2.ents(c) = Cons(x, rest)) = trans(he, h);
+                    let mx: Mem(x, s.ents(c)) = j(sym(h), λ es _ => Mem(x, es), Inl(refl));
+                    let xm: Mem(x, s.views) = s.views.mem_filter(x, λ q => q.lvl.same(c), mx);
+                    (match x.par.same(c) as λ b => x.par.same(c) = b → s2.up(tys, strs, e, c, Succ(f1)) = s.up(tys, strs, e, c, Succ(f1)) {
+                        True => λ sp => trans(s2.up_stop(tys, strs, e, c, f1, x, rest, h2, sp), sym(s.up_stop(tys, strs, e, c, f1, x, rest, h, sp))),
+                        False => λ np => {
+                            let e1 = Env::set(tys, e, s.var_at(x.par), λ d => Dyn::write(tys, strs, Env::ixs(tys, e), s.unsteps(x.at), λ _ => Env::get(tys, e, s.var_at(c)), d));
+                            trans(s2.up_step(tys, strs, e, c, f1, x, rest, h2, np),
+                                trans(CSt::up_drop(f1, s, tys, strs, l, noch, e1, x.par, noch(x, xm)), sym(s.up_step(tys, strs, e, c, f1, x, rest, h, np))))
+                        },
+                    })(refl)
+                },
+            })(refl)
+        },
+    }
+}
+
+theorem CSt::anc_drop(self f: Nat, s: CSt, l: Nat, noch: (en: VEnt) → Mem(en, s.views) → ¬(en.par = l)): (e: VEnt) → ¬(e.par = l) → (s.drop(l)).anc_of(e, f) = s.anc_of(e, f) {
+    match f {
+        Zero => λ e _ => refl,
+        Succ(f1) => λ e np => match e.par.same(e.lvl) {
+            True => refl,
+            False => cong_fn(λ (t: List<Nat>) => Cons(e.par, t),
+                trans(cong_fn(λ (q: List<VEnt>) => q.foldr(λ (pe: VEnt) (acc: List<Nat>) => (s.drop(l)).anc_of(pe, f1) ++ acc, Nil), s.drop_ents(l, e.par, np)),
+                    VEnt::foldr_anc(s.ents(e.par), λ pe => (s.drop(l)).anc_of(pe, f1), λ pe => s.anc_of(pe, f1), λ pe mf => {
+                        let mv: Mem(pe, s.views) = s.views.mem_filter(pe, λ q => q.lvl.same(e.par), mf);
+                        CSt::anc_drop(f1, s, l, noch, pe, noch(pe, mv))
+                    }))),
+        },
+    }
+}
+
+theorem CSt::patched_drop(self s: CSt, tys: Nat → Type, strs: Strs(tys), e: Env(tys), m: Mach(tys), l: Nat, noch: (en: VEnt) → Mem(en, s.views) → ¬(en.par = l),
+    nwp: (en: VEnt) → Mem(en, s.views) → en.lvl = l → (en.mode.writes() && !en.back) = False): (s.drop(l)).patched(tys, strs, e, m) = s.patched(tys, strs, e, m)
+{
+    let s2 = s.drop(l);
+    let nl = s.na + s.nd;
+    let q = λ (en: VEnt) => en.mode.writes() && !en.back;
+    let np = λ (en: VEnt) => !en.lvl.same(l);
+    let kq: ((x: VEnt) → Mem(x, s.views) → np(x) = False → q(x) = False) = λ x mx hx => {
+        let st: (x.lvl.same(l) = True) = (match x.lvl.same(l) as λ c => (!c) = False → c = True { True => λ _ => refl, False => λ no => absurd(no) })(hx);
+        nwp(x, mx, x.lvl.same_sound(l, st))
+    };
+    let pe: (s2.pending() = s.pending()) = s.views.any_bit_drop(np, q, kq);
+    let fe: (s2.views.find(q) = s.views.find(q)) = s.views.find_drop(np, q, kq);
+    let h2 = λ (o: Option<VEnt>) => match o as λ _ => Env(tys) {
+        Some(en) => match (REnv::get(tys, m.env, s.var_at(en.lvl))).v as λ _ => Env(tys) { Refer(_) => s2.up(tys, strs, e, en.lvl, nl), Plain(_) => e },
+        None => e,
+    };
+    let h1 = λ (o: Option<VEnt>) => match o as λ _ => Env(tys) {
+        Some(en) => match (REnv::get(tys, m.env, s.var_at(en.lvl))).v as λ _ => Env(tys) { Refer(_) => s.up(tys, strs, e, en.lvl, nl), Plain(_) => e },
+        None => e,
+    };
+    let a1: (s2.patched(tys, strs, e, m) = (match s.pending() as λ _ => Env(tys) { False => e, True => h2(s2.views.find(q)) })) =
+        j(pe, λ b _ => (match s2.pending() as λ _ => Env(tys) { False => e, True => h2(s2.views.find(q)) }) = (match b as λ _ => Env(tys) { False => e, True => h2(s2.views.find(q)) }), refl);
+    let a2 = cong_fn(λ (o: Option<VEnt>) => match s.pending() as λ _ => Env(tys) { False => e, True => h2(o) }, fe);
+    let a3: (h2(s.views.find(q)) = h1(s.views.find(q))) = (match s.views.find(q) as λ o => s.views.find(q) = o → h2(o) = h1(o) {
+        None => λ _ => refl,
+        Some(y) => λ hy => {
+            let fs = List::find_sound(s.views, q, y, hy);
+            let ny: ¬(y.lvl = l) = λ eq => absurd(trans(sym(fs.right), nwp(y, fs.left, eq)));
+            cong_fn(λ (z: Env(tys)) => match (REnv::get(tys, m.env, s.var_at(y.lvl))).v as λ _ => Env(tys) { Refer(_) => z, Plain(_) => e },
+                CSt::up_drop(nl, s, tys, strs, l, noch, e, y.lvl, ny))
+        },
+    })(refl);
+    trans(a1, trans(a2, cong_fn(λ (z: Env(tys)) => match s.pending() as λ _ => Env(tys) { False => e, True => z }, a3)))
+}
+
+theorem CSt::changes_drop(self s: CSt, l: Nat, b: l < s.na + s.nd, o: Nat, h: (s.drop(l)).Changes(o)): s.Changes(o) {
+    let sw = s.with_views(s.views.filter(λ e => !e.lvl.same(l)));
+    match sw.changes_gone(l, b, o, h) {
+        Inl(x) => Inl(x),
+        Inr(ev) => match ev { ⟨en, pe⟩ => Inr(Exists(en, ⟨s.views.mem_filter(en, λ e => !e.lvl.same(l), pe.left), pe.right⟩)) },
+    }
+}
+
+// A view without children and with nothing pending dropped: the invariant
+// at the state it leaves, the patch the same.
+theorem Inv::drop_view(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: Nat → Bool}, inv: Inv(tys, strs, s, e, m, h0, lent),
+    l: Nat, b: l < s.na + s.nd, hr: s.role(l) = KView, noch: (en: VEnt) → Mem(en, s.views) → ¬(en.par = l),
+    nwp: (en: VEnt) → Mem(en, s.views) → en.lvl = l → (en.mode.writes() && !en.back) = False):
+    Inv(tys, strs, s.drop(l), e, m, h0, lent)
+{
+    let sw = s.with_views(s.views.filter(λ e => !e.lvl.same(l)));
+    let s2 = s.drop(l);
+    let nl = s.na + s.nd;
+    let ws = Mach::ixs(tys, strs, m);
+    let other = λ (l2: Nat) (b2: l2 < s.na + s.nd) (ne: ¬(l2 = l)) => sw.role_set_other(l, l2, KGone, ne, b, b2);
+    let notl = λ (l2: Nat) (r: Role) (h2: s2.role(l2) = r) (ng: ¬(r = KGone)) => λ (eq: l2 = l) => ng(trans(sym(h2), j(sym(eq), λ q _ => s2.role(q) = KGone, sw.set_gone_role(l))));
+    let simw: Sim(tys, strs, sw, s.patched(tys, strs, e, m), m) = inv.sim;
+    let sim2 = j(sym(s.patched_drop(tys, strs, e, m, l, noch, nwp)), λ q _ => Sim(tys, strs, s2, q, m), Sim::gone(tys, strs, simw, l, b));
+    let dm = λ (en: VEnt) (mem: Mem(en, s2.views)) => s.drop_mem(l, en, mem);
+    Inv(sim2, inv.root,
+        λ x l2 h r cr => match Nat::eq_or_ne(l2, l) {
+            Inl(eq) => j(sym(eq), λ q _ => s2.RefOk(inv.root, ws, q, r),
+                j(sym(sw.set_gone_role(l)), λ q _ => match q { KHold(o, _) => inv.root(o) = Some(r), KView => VEnt::Any(s2.ents(l), λ en => (inv.root(en.obj)).map(λ r0 => r0.narrow(ws, s2.unsteps(en.reg))) = Some(r)),
+                    KPlain => False, KGone => True }, trivial)),
+            Inr(ne) => CSt::refok_keep(s, s2, inv.root, inv.root, ws, ws, l2, r, other(l2, s.lvl_below(x, l2, h), ne), s.drop_ents(l, l2, ne), λ _ _ _ => refl, λ _ _ => refl, λ _ _ => refl,
+                inv.refs(x, l2, h, r, cr)),
+        },
+        λ o1 o2 ne ch => inv.apart(o1, o2, ne, s.changes_drop(l, b, o1, ch)),
+        inv.inheap,
+        λ o ch => inv.owned(o, s.changes_drop(l, b, o, ch)),
+        λ x l2 h lv co r cr => {
+            let b2 = s.lvl_below(x, l2, h);
+            let ne: ¬(l2 = l) = λ eq => lv(j(sym(eq), λ q _ => (s2.role(q)).same(KGone) = True, j(sym(sw.set_gone_role(l)), λ q _ => q.same(KGone) = True, refl)));
+            let ro = other(l2, b2, ne);
+            match inv.own(x, l2, h, λ g => lv(trans(cong_fn(λ (q: Role) => q.same(KGone), ro), g)), co, r, cr) { ⟨o, po⟩ => Exists(o, ⟨trans(ro, po.left), po.right⟩) }
+        },
+        λ l1 l2 o a1 a2 b1 b2 ne h1 h2 => inv.one(l1, l2, o, a1, a2, b1, b2, ne,
+            trans(sym(other(l1, b1, notl(l1, KHold(o, a1), h1, λ no => absurd(no)))), h1), trans(sym(other(l2, b2, notl(l2, KHold(o, a2), h2, λ no => absurd(no)))), h2)),
+        λ l2 w => {
+            let ww = inv.words(l2, s.views.any_bit_sub(λ e => !e.lvl.same(l), λ e => l2.member(Steps::lvls(e.reg)) || l2.member(Steps::lvls(e.at)), w));
+            let ne: ¬(l2 = l) = λ eq => absurd(trans(sym(ww.right), trans(cong_fn(λ (q: Nat) => (s.role(q)).plain(), eq), cong_fn(λ (q: Role) => q.plain(), hr))));
+            ⟨ww.left, trans(cong_fn(λ (q: Role) => q.plain(), other(l2, ww.left, ne)), ww.right)⟩
+        },
+        inv.frame,
+        inv.grows,
+        inv.young,
+        λ l2 o a b2 hr2 => inv.held(l2, o, a, b2, trans(sym(other(l2, b2, notl(l2, KHold(o, a), hr2, λ no => absurd(no)))), hr2)),
+        λ en mem => {
+            let d = dm(en, mem);
+            let vv = inv.vents(en, d.left);
+            ⟨vv.left, ⟨vv.right.left, trans(other(en.lvl, vv.right.left, d.right), vv.right.right)⟩⟩
+        },
+        inv.bare,
+        λ en mem => {
+            let d = dm(en, mem);
+            let cc = inv.chain(en, d.left);
+            let pb: (en.par < nl) = omega(cc.left, (inv.vents(en, d.left)).right.left);
+            ⟨cc.left, CSt::parent_keep(s, s2, en, other(en.par, pb, noch(en, d.left)), s.drop_ents(l, en.par, noch(en, d.left)), cc.right)⟩
+        },
+        λ e1 e2 m1 m2 w eo n12 a1 a2 => {
+            let d1 = dm(e1, m1);
+            let d2 = dm(e2, m2);
+            inv.excl(e1, e2, d1.left, d2.left, w, eo, n12,
+                j(CSt::anc_drop(nl, s, l, noch, e2, noch(e2, d2.left)), λ q _ => e1.lvl.member(q) = False, a1),
+                j(CSt::anc_drop(nl, s, l, noch, e1, noch(e1, d1.left)), λ q _ => e2.lvl.member(q) = False, a2))
+        },
+        λ en mem w => {
+            let d = dm(en, mem);
+            let pb: (en.par < nl) = omega((inv.chain(en, d.left)).left, (inv.vents(en, d.left)).right.left);
+            CSt::wpar_keep(s, s2, en, other(en.par, pb, noch(en, d.left)), s.drop_ents(l, en.par, noch(en, d.left)), inv.wpar(en, d.left, w))
+        },
+        λ en mem x y hx hy => inv.uni(en, (dm(en, mem)).left, x, y, hx, hy),
+        λ e1 e2 m1 m2 => inv.pone(e1, e2, (dm(e1, m1)).left, (dm(e2, m2)).left),
+        λ en mem y z hy hz dp dc cy cz => inv.cfit(en, (dm(en, mem)).left, y, z, hy, hz, dp, dc, cy, cz),
+        λ e1 e2 m1 m2 => inv.sib(e1, e2, (dm(e1, m1)).left, (dm(e2, m2)).left))
+}
+
+// The death of a view: it has no children, and is not pending; the run
+// changes nothing (a view's cell does not own).
+theorem Stmt::stage_death_view(tys: Nat → Type, strs: Strs(tys), fns: Nat → Func, call: Caller(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: Nat → Bool},
+    inv: Inv(tys, strs, s, e, m, h0, lent), x: Var, l: Nat, hl: s.lvl(x) = Some(l), hr: s.role(l) = KView, nch: s.has_children(l) = False,
+    allb: (s.ents(l)).all_bit(λ e => !e.mode.writes() || e.back) = True):
+    Stepped(tys, strs, fns, call, Death(Place(x, Nil)), s.with_views(s.views.filter(λ e => !e.lvl.same(l))).set(l, KGone), e, m, h0, lent)
+{
+    let b = s.lvl_below(x, l, hl);
+    let noch: ((en: VEnt) → Mem(en, s.views) → ¬(en.par = l)) = λ en mem eq => {
+        let lt = (inv.chain(en, mem)).left;
+        let nls: (en.lvl.same(l) = False) = Nat::same_false(en.lvl, l, λ e2 => Nat::lt_irrefl(l, j(eq, λ q _ => q < l, j(e2, λ q _ => en.par < q, lt))));
+        let pt: ((en.par.same(l) && !en.lvl.same(l)) = True) = j(sym(nls), λ c _ => (en.par.same(l) && !c) = True, j(sym(eq), λ q _ => (q.same(l) && !False) = True, j(sym(l.same_self()), λ c _ => (c && !False) = True, refl)));
+        absurd(trans(sym(nch), s.views.any_bit_mem(λ e2 => e2.par.same(l) && !e2.lvl.same(l), en, mem, pt)))
+    };
+    let nwp: ((en: VEnt) → Mem(en, s.views) → en.lvl = l → (en.mode.writes() && !en.back) = False) = λ en mem el => {
+        let me: Mem(en, s.ents(l)) = VEnt::mem_filter_lvl(s.views, l, en, j(el, λ q _ => en.lvl.same(q) = True, en.lvl.same_self()), mem);
+        let ok = (s.ents(l)).all_bit_sound(λ e => !e.mode.writes() || e.back, allb, en, me);
+        (match en.mode.writes() as λ a => ((!a) || en.back) = True → (a && !en.back) = False {
+            False => λ _ => refl,
+            True => λ h => j(sym(h), λ c _ => (True && !c) = False, refl),
+        })(ok)
+    };
+    let gone = Inv::drop_view(tys, strs, inv, l, b, hr, noch, nwp);
+    let live: ¬((s.role(l)).same(KGone) = True) = λ g => absurd(trans(sym(g), cong_fn(λ (q: Role) => q.same(KGone), hr)));
+    let c = REnv::get(tys, m.env, x);
+    (match c.own as λ ow => c.own = ow → Stepped(tys, strs, fns, call, Death(Place(x, Nil)), s.drop(l), e, m, h0, lent) {
+        False => λ co => Stepped(m, λ k => Stmt::death_keeps(tys, strs, fns, call, m, x, k, Inl(co)), gone),
+        True => λ co => (match c.v as λ v => c.v = v → Stepped(tys, strs, fns, call, Death(Place(x, Nil)), s.drop(l), e, m, h0, lent) {
+            Plain(d) => λ cv => Stepped(m, λ k => Stmt::death_keeps(tys, strs, fns, call, m, x, k, Inr(Exists(d, cv))), gone),
+            Refer(r) => λ cr => match inv.own(x, l, hl, live, co, r, cr) { ⟨o1, po⟩ => absurd(trans(sym(hr), po.left)) },
+        })(refl),
+    })(refl)
+}
