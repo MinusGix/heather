@@ -7666,11 +7666,11 @@ theorem Sim::plain_same(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e1, e2: E
 // same object is a descendant of `l`, which the licence found apart, or
 // neither, which `excl` says is apart; a holder of the object is the chain's
 // top, an ancestor.
-theorem Inv::view_off(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(tys, cx.strs), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>}, inv: Inv(tys, cx.strs, s, e, m, h0, lent),
-    none: s.pending() = False, l: Nat, hr: s.role(l) = KView, pe: VEnt, hents: s.ents(l) = [pe], pw: pe.mode.writes() = True, xs: List<Step>, rl: List<Residual>,
-    lic: s.license(s.views, Writing, l, [Pl(pe.obj, pe.reg ++ xs)]) = Some(rl), resl: Residual::All(rl, tys, cx, e, True),
-    rpw: s.InRange(Steps::lvls(pe.reg ++ xs)), ppw: (k: Nat) → k.member(Steps::lvls(pe.reg ++ xs)) = True → (s.role(k)).plain() = True,
-    r0: Ref, rt0: inv.root(pe.obj) = Some(r0), ss: List<Sel>, sxs: Steps::sels(s.unsteps(xs), Mach::ixs(tys, cx.strs, m)) = ss,
+theorem Inv::view_off_by(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(tys, cx.strs), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>}, inv: Inv(tys, cx.strs, s, e, m, h0, lent),
+    none: s.pending() = False, l: Nat, hr: s.role(l) = KView, pe: VEnt, hents: s.ents(l) = [pe], pw: pe.mode.writes() = True,
+    r0: Ref, rt0: inv.root(pe.obj) = Some(r0), ss: List<Sel>,
+    desc: (ey: VEnt) → Mem(ey, s.views) → ey.obj = pe.obj → ¬(ey.lvl = l) → l.member(s.anc_of(ey, s.na + s.nd)) = True →
+        Sel::Apart(tys, cx.strs, Steps::sels(s.unsteps(ey.reg), Mach::ixs(tys, cx.strs, m)), Steps::sels(s.unsteps(pe.reg), Mach::ixs(tys, cx.strs, m)) ++ ss),
     ob: Dyn(tys), hv: Heap::val(tys, cx.strs, m.heap, r0.b) = Some(ob), g: Dyn(tys) → Dyn(tys),
     fq: Sel::fit(tys, cx.strs, r0.sels ++ Steps::sels(s.unsteps(pe.reg), Mach::ixs(tys, cx.strs, m)), ob) = True,
     hc: (g(Sel::read_at(tys, cx.strs, ss, Sel::read_at(tys, cx.strs, r0.sels ++ Steps::sels(s.unsteps(pe.reg), Mach::ixs(tys, cx.strs, m)), ob)))).code =
@@ -7703,8 +7703,6 @@ theorem Inv::view_off(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(tys, cx.strs
     let under = λ (vs: List<Sel>) (ap: Sel::Apart(tys, strs, vs, rp ++ ss)) =>
         trans(cong_fn(λ (d: Dyn(tys)) => Sel::get(tys, strs, r0.sels ++ vs, d), nwa),
             Sel::get_under(tys, strs, sl, r0.sels, rp ++ ss, vs, ap, g, ob, fpr.left, j(rr, λ z _ => (g(z)).code = z.code, hc), j(rr, λ z _ => Dyn::len(tys, strs, g(z)) = Dyn::len(tys, strs, z), hl)));
-    let wsel: (Steps::sels(s.unsteps(pe.reg ++ xs), ws) = rp ++ ss) =
-        trans(cong_fn(λ (q: List<Step>) => Steps::sels(q, ws), s.unsteps_app(pe.reg, xs)), trans(List::map_append(s.unsteps(pe.reg), s.unsteps(xs), λ (a: Step) => a.sel(ws)), cong_fn(λ (q: List<Sel>) => rp ++ q, sxs)));
     let ah = CSt::anc_holder(nl, s, inv.chain, pe, pmem, omega((inv.vents(pe, pmem)).right.left));
     λ y k hy kne nk => {
         let kb = s.lvl_below(y, k, hy);
@@ -7739,11 +7737,7 @@ theorem Inv::view_off(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(tys, cx.strs
                                         let r3r: (r3 = r0) = Option::some_inj(r3, r0, trans(sym(pr3.left), trans(cong_fn(λ (z: Nat) => inv.root(z), eo), rt0)));
                                         let yne: ¬(ey.lvl = l) = λ eq => kne(trans(sym(yl), eq));
                                         let ap: Sel::Apart(tys, strs, ry, rp ++ ss) = (match l.member(s.anc_of(ey, nl)) as λ b => l.member(s.anc_of(ey, nl)) = b → Sel::Apart(tys, strs, ry, rp ++ ss) {
-                                            True => λ an => {
-                                                let mt = s.meets_view(l, Writing, ey, hr, yne, refl, an);
-                                                j(wsel, λ q _ => Sel::Apart(tys, strs, ry, q),
-                                                    Inv::lic_apart(tys, cx, sl, inv, none, Writing, l, [Pl(pe.obj, pe.reg ++ xs)], rl, lic, resl, ey, my, mt, Pl(pe.obj, pe.reg ++ xs), Inl(refl), eo, rpw, ppw))
-                                            },
+                                            True => λ an => desc(ey, my, eo, yne, an),
                                             False => λ an => {
                                                 let ex = inv.excl(pe, ey, pmem, my, pw, sym(eo), λ eq => yne(trans(sym(eq), pl)),
                                                     j(sym(pl), λ n _ => n.member(s.anc_of(ey, nl)) = False, an), j(sym(yl), λ n _ => n.member(s.anc_of(pe, nl)) = False, nk));
@@ -7767,6 +7761,30 @@ theorem Inv::view_off(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(tys, cx.strs
                     j(pr.right, λ bb _ => (obj: Obj(tys)) → Heap::obj(tys, m.heap, bb) = Some(obj) → obj.holes = Nil, inv.bare(o3, r3, pr.left)), same(q2, cq, live)),
             })
     }
+}
+
+theorem Inv::view_off(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(tys, cx.strs), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>}, inv: Inv(tys, cx.strs, s, e, m, h0, lent),
+    none: s.pending() = False, l: Nat, hr: s.role(l) = KView, pe: VEnt, hents: s.ents(l) = [pe], pw: pe.mode.writes() = True, xs: List<Step>, rl: List<Residual>,
+    lic: s.license(s.views, Writing, l, [Pl(pe.obj, pe.reg ++ xs)]) = Some(rl), resl: Residual::All(rl, tys, cx, e, True),
+    rpw: s.InRange(Steps::lvls(pe.reg ++ xs)), ppw: (k: Nat) → k.member(Steps::lvls(pe.reg ++ xs)) = True → (s.role(k)).plain() = True,
+    r0: Ref, rt0: inv.root(pe.obj) = Some(r0), ss: List<Sel>, sxs: Steps::sels(s.unsteps(xs), Mach::ixs(tys, cx.strs, m)) = ss,
+    ob: Dyn(tys), hv: Heap::val(tys, cx.strs, m.heap, r0.b) = Some(ob), g: Dyn(tys) → Dyn(tys),
+    fq: Sel::fit(tys, cx.strs, r0.sels ++ Steps::sels(s.unsteps(pe.reg), Mach::ixs(tys, cx.strs, m)), ob) = True,
+    hc: (g(Sel::read_at(tys, cx.strs, ss, Sel::read_at(tys, cx.strs, r0.sels ++ Steps::sels(s.unsteps(pe.reg), Mach::ixs(tys, cx.strs, m)), ob)))).code =
+        (Sel::read_at(tys, cx.strs, ss, Sel::read_at(tys, cx.strs, r0.sels ++ Steps::sels(s.unsteps(pe.reg), Mach::ixs(tys, cx.strs, m)), ob))).code,
+    hl: Dyn::len(tys, cx.strs, g(Sel::read_at(tys, cx.strs, ss, Sel::read_at(tys, cx.strs, r0.sels ++ Steps::sels(s.unsteps(pe.reg), Mach::ixs(tys, cx.strs, m)), ob)))) =
+        Dyn::len(tys, cx.strs, Sel::read_at(tys, cx.strs, ss, Sel::read_at(tys, cx.strs, r0.sels ++ Steps::sels(s.unsteps(pe.reg), Mach::ixs(tys, cx.strs, m)), ob)))):
+    (y: Var) → (k: Nat) → s.lvl(y) = Some(k) → ¬(k = l) → k.member(s.anc_of(pe, s.na + s.nd)) = False →
+        Cell::Agrees(tys, cx.strs, Heap::store(tys, m.heap, r0.b, Sel::write_at(tys, cx.strs, (r0.sels ++ Steps::sels(s.unsteps(pe.reg), Mach::ixs(tys, cx.strs, m))) ++ ss, g, ob)),
+            s.role(k), REnv::get(tys, m.env, y), Env::get(tys, e, y))
+{
+    let ws = Mach::ixs(tys, cx.strs, m);
+    let wsel: (Steps::sels(s.unsteps(pe.reg ++ xs), ws) = Steps::sels(s.unsteps(pe.reg), ws) ++ ss) =
+        trans(cong_fn(λ (q: List<Step>) => Steps::sels(q, ws), s.unsteps_app(pe.reg, xs)), trans(List::map_append(s.unsteps(pe.reg), s.unsteps(xs), λ (a: Step) => a.sel(ws)), cong_fn(λ (q: List<Sel>) => Steps::sels(s.unsteps(pe.reg), ws) ++ q, sxs)));
+    Inv::view_off_by(tys, cx, sl, inv, none, l, hr, pe, hents, pw, r0, rt0, ss,
+        λ ey my eo yne an => j(wsel, λ q _ => Sel::Apart(tys, cx.strs, Steps::sels(s.unsteps(ey.reg), ws), q),
+            Inv::lic_apart(tys, cx, sl, inv, none, Writing, l, [Pl(pe.obj, pe.reg ++ xs)], rl, lic, resl, ey, my, s.meets_view(l, Writing, ey, hr, yne, refl, an), Pl(pe.obj, pe.reg ++ xs), Inl(refl), eo, rpw, ppw)),
+        ob, hv, g, fq, hc, hl)
 }
 
 // The walk's start at a write through a view whose cell refers, `qq` its
@@ -12831,6 +12849,8 @@ record Thin(si, s: CSt) {
     views: si.views = s.views,
     lvl: (x: Var) → si.lvl(x) = s.lvl(x),
     role: (l: Nat) → l < s.na + s.nd → ¬(si.role(l) = KGone) → si.role(l) = s.role(l),
+    na: si.na = s.na,
+    nd: si.nd = s.nd,
 }
 
 theorem CSt::thin_gone(self s: CSt, k: Nat, kb: k < s.na + s.nd, si: CSt, th: Thin(si, s.set(k, KGone))): Thin(si, s) {
@@ -12840,7 +12860,7 @@ theorem CSt::thin_gone(self s: CSt, k: Nat, kb: k < s.na + s.nd, si: CSt, th: Th
             Inl(lk) => false_elim(ng(trans(r1, j(sym(lk), λ q _ => (s.set(k, KGone)).role(q) = KGone, s.set_gone_role(k))))),
             Inr(nk) => trans(r1, s.role_set_other(k, l, KGone, nk, kb, lb)),
         }
-    })
+    }, th.na, th.nd)
 }
 
 // At each argument, its lend in a state the lends passed through.
@@ -12859,7 +12879,7 @@ theorem CSt::lend_all_at(tys: Nat → Type, strs: Strs(tys), xs: List<Var>): (s:
                     Zero => {
                         let yx: (y = x) = Option::some_inj(y, x, hx);
                         let pp: (p0 = p) = Option::some_inj(p0, p, hp);
-                        Exists(s, ⟨Thin(refl, λ _ => refl, λ _ _ _ => refl), Exists(n1, j(yx, λ q _ => s.lend(tys, strs, p, q) = Some(n1), j(pp, λ q _ => s.lend(tys, strs, q, y) = Some(n1), a1.proof.left)))⟩)
+                        Exists(s, ⟨Thin(refl, λ _ => refl, λ _ _ _ => refl, refl, refl), Exists(n1, j(yx, λ q _ => s.lend(tys, strs, p, q) = Some(n1), j(pp, λ q _ => s.lend(tys, strs, q, y) = Some(n1), a1.proof.left)))⟩)
                     },
                     Succ(k) => match CSt::lend_all_at(tys, strs, rest, n1.st, prest, a2.witness, a2.proof.left, k, x, hx, p, hp) {
                         ⟨si, psi⟩ => match (s.lend_st(tys, strs, p0, y, n1, a1.proof.left)).right {
@@ -14064,6 +14084,134 @@ theorem Inv::call_lk(tys: Nat → Type, strs: Strs(tys), mh, ah: Heap(tys), ps: 
                     },
                 },
             })(refl, pp.right),
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// P4, the invariant on the heap a call leaves: given every variable's
+// agreement there (`sim2`, with the words regions read as they were), the
+// frame after (`LentFrame::call`) and the heap kept (`Heap::Kept`), the
+// other clauses carry over. The builder is the call's `Inv::store_rest`:
+// no clause but `sim`, `frame` and those of the heap's blocks reads the heap.
+theorem Inv::heap_rest(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>}, inv: Inv(tys, strs, s, e, m, h0, lent),
+    none: s.pending() = False, h2: Heap(tys), io2: Io, lf: LentFrame(tys, strs, h0, h2, lent), gr: m.heap.len() <= h2.len(), st: Heap::Stays(tys, m.heap, h2),
+    ex: Env(tys), sim2: Sim(tys, strs, s, ex, Mach(h2, m.env, io2)),
+    ecw: (k: Nat) → s.in_regions(k) = True → Env::get(tys, ex, s.var_at(k)) = Env::get(tys, e, s.var_at(k))):
+    Inv(tys, strs, s, ex, Mach(h2, m.env, io2), h0, lent)
+{
+    let m2: Mach(tys) = Mach(h2, m.env, io2);
+    let ws = Mach::ixs(tys, strs, m);
+    let wsame = Inv::words_after(tys, strs, inv, Inv::sim_now(tys, strs, inv, none), sim2, ecw);
+    let ws2 = Mach::ixs(tys, strs, m2);
+    let regs: ((en: VEnt) → Mem(en, s.views) → Steps::sels(s.unsteps(en.reg), ws2) = Steps::sels(s.unsteps(en.reg), ws)) =
+        λ en me => CSt::sels_keep(en.reg, s, ws2, s, ws, λ l2 ml => wsame(l2, s.region_lvl(en, me, l2, ml)));
+    let ats: ((en: VEnt) → Mem(en, s.views) → Steps::sels(s.unsteps(en.at), ws2) = Steps::sels(s.unsteps(en.at), ws)) =
+        λ en me => CSt::sels_keep(en.at, s, ws2, s, ws, λ l2 ml => wsame(l2, s.at_lvl(en, me, l2, ml)));
+    let le0: (s.na + s.nd <= s.na + s.nd) = omega();
+    Inv(j(sym(s.patched_none(tys, strs, ex, m2, none)), λ q _ => Sim(tys, strs, s, q, m2), sim2), inv.root,
+        λ y l2 hy q cq => CSt::refok_keep(s, s, inv.root, inv.root, ws, ws2, l2, q, refl, refl, λ _ _ _ => refl, λ _ _ => refl,
+            λ en me => regs(en, s.views.mem_filter(en, λ e0 => e0.lvl.same(l2), me)), inv.refs(y, l2, hy, q, cq)),
+        inv.apart,
+        λ o3 r3 h3 => omega(inv.inheap(o3, r3, h3), gr),
+        inv.owned, inv.own, inv.one, inv.words,
+        lf,
+        omega(inv.grows, gr),
+        inv.young, inv.held, inv.vents,
+        λ o3 r3 h3 ob ho => match st(r3.b, inv.inheap(o3, r3, h3), ob, ho) { ⟨ob1, p1⟩ => p1.right(inv.bare(o3, r3, h3, ob1, p1.left)) },
+        inv.chain,
+        CSt::excl_keep(tys, strs, s, s, ws, ws2, refl, le0, λ en me => (inv.chain(en, me)).left, λ en me => (inv.vents(en, me)).right.left, regs, inv.excl), inv.wpar, inv.uni,
+        CSt::cfit_ws(tys, strs, s, m.env, ws, ws2, ats, inv.cfit), CSt::sib_keep(tys, strs, s, s, ws, ws2, refl, ats, inv.sib),
+        inv.args, inv.href, inv.made, inv.nbase, Heap::stays_trans(tys, h0, m.heap, h2, inv.stays, st, inv.grows))
+}
+
+// ---------------------------------------------------------------------------
+// P4, the licence of a lend: computed in a state the lends passed through,
+// it is the licence in the state before them (the same views and counts,
+// the lending level's role as it was).
+
+theorem CSt::unatom_eq(s1, s2: CSt, na: s1.na = s2.na, nd: s1.nd = s2.nd, a: Atom): s1.unatom(a) = s2.unatom(a) {
+    match a {
+        Lit(n) => refl,
+        Var(l) => {
+            let F = λ (x: Nat) (y: Nat) => match (l + 1).leb(x) as λ _ => Atom { True => Var(l), False => Var(x + (y - 1 - (l - x))) };
+            trans(cong_fn(λ (z: Nat) => F(z, s1.nd), na), cong_fn(λ (z: Nat) => F(s2.na, z), nd))
+        },
+    }
+}
+
+theorem CSt::owed_all_eq(s1, s2: CSt, na: s1.na = s2.na, nd: s1.nd = s2.nd, os: List<Obligation>): s1.owed_all(os) = s2.owed_all(os) {
+    match os {
+        Nil => refl,
+        Cons(o, rest) => {
+            let ih = CSt::owed_all_eq(s1, s2, na, nd, rest);
+            let u = λ (a: Atom) => CSt::unatom_eq(s1, s2, na, nd, a);
+            let oe: (s1.owed(o) = s2.owed(o)) = match o {
+                Spans(a, b, c, d) => trans(cong_fn(λ (q: Atom) => Some(RApart(q, s1.unatom(b), s1.unatom(c), s1.unatom(d))), u(a)),
+                    trans(cong_fn(λ (q: Atom) => Some(RApart(s2.unatom(a), q, s1.unatom(c), s1.unatom(d))), u(b)),
+                        trans(cong_fn(λ (q: Atom) => Some(RApart(s2.unatom(a), s2.unatom(b), q, s1.unatom(d))), u(c)),
+                            cong_fn(λ (q: Atom) => Some(RApart(s2.unatom(a), s2.unatom(b), s2.unatom(c), q)), u(d))))),
+                Keys(_, _, _, _) => refl,
+            };
+            trans(cong_fn(λ (z: Option<Residual>) => z.and_then(λ r => s1.owed_all(rest).map(λ rs => Cons(r, rs))), oe),
+                (match s2.owed(o) as λ z => z.and_then(λ r => s1.owed_all(rest).map(λ rs => Cons(r, rs))) = z.and_then(λ r => s2.owed_all(rest).map(λ rs => Cons(r, rs))) {
+                    None => refl,
+                    Some(r) => cong_fn(λ (w: Option<List<Residual>>) => w.map(λ rs => Cons(r, rs)), ih),
+                }))
+        },
+    }
+}
+
+theorem CSt::against_eq(s1, s2: CSt, na: s1.na = s2.na, nd: s1.nd = s2.nd, e: VEnt, p: Pl): s1.against(e, p) = s2.against(e, p) {
+    (match e.obj.same(p.obj) as λ b => (match b as λ _ => Option<List<Residual>> { False => Some(Nil<Residual>), True => Steps::apart(e.reg, p.at).and_then(λ os => s1.owed_all(os)) }) =
+            (match b as λ _ => Option<List<Residual>> { False => Some(Nil<Residual>), True => Steps::apart(e.reg, p.at).and_then(λ os => s2.owed_all(os)) }) {
+        False => refl,
+        True => (match Steps::apart(e.reg, p.at) as λ o => o.and_then(λ os => s1.owed_all(os)) = o.and_then(λ os => s2.owed_all(os)) {
+            None => refl,
+            Some(os) => CSt::owed_all_eq(s1, s2, na, nd, os),
+        }),
+    })
+}
+
+theorem CSt::against_all_eq(s1, s2: CSt, na: s1.na = s2.na, nd: s1.nd = s2.nd, e: VEnt, ps: List<Pl>): s1.against_all(e, ps) = s2.against_all(e, ps) {
+    match ps {
+        Nil => refl,
+        Cons(p, rest) => {
+            let ih = CSt::against_all_eq(s1, s2, na, nd, e, rest);
+            trans(cong_fn(λ (z: Option<List<Residual>>) => z.and_then(λ r1 => s1.against_all(e, rest).map(λ r2 => r1 ++ r2)), CSt::against_eq(s1, s2, na, nd, e, p)),
+                (match s2.against(e, p) as λ z => z.and_then(λ r1 => s1.against_all(e, rest).map(λ r2 => r1 ++ r2)) = z.and_then(λ r1 => s2.against_all(e, rest).map(λ r2 => r1 ++ r2)) {
+                    None => refl,
+                    Some(r1) => cong_fn(λ (w: Option<List<Residual>>) => w.map(λ r2 => r1 ++ r2), ih),
+                }))
+        },
+    }
+}
+
+theorem CSt::meets_eq(s1, s2: CSt, vs: s1.views = s2.views, na: s1.na = s2.na, nd: s1.nd = s2.nd, l: Nat, rl: s1.role(l) = s2.role(l), md: Mode, e: VEnt): s1.meets(l, md, e) = s2.meets(l, md, e) {
+    let G = λ (r: Role) (a: List<Nat>) => match r as λ _ => Bool { KView => l.member(a), KHold(_, _) => True, KPlain => True, KGone => True };
+    let fe: (s1.na + s1.nd = s2.na + s2.nd) = omega(na, nd);
+    let ae: (s1.anc_of(e, s1.na + s1.nd) = s2.anc_of(e, s2.na + s2.nd)) = trans(CSt::anc_views(s1.na + s1.nd, s2, s1, vs, e), cong_fn(λ (f: Nat) => s2.anc_of(e, f), fe));
+    let ge: (G(s1.role(l), s1.anc_of(e, s1.na + s1.nd)) = G(s2.role(l), s2.anc_of(e, s2.na + s2.nd))) =
+        trans(cong_fn(λ (r: Role) => G(r, s1.anc_of(e, s1.na + s1.nd)), rl), cong_fn(λ (a: List<Nat>) => G(s2.role(l), a), ae));
+    cong_fn(λ (z: Bool) => (md.writes() || e.mode.writes()) && !e.lvl.same(l) && z, ge)
+}
+
+theorem CSt::license_eq(s1, s2: CSt, vw: s1.views = s2.views, na: s1.na = s2.na, nd: s1.nd = s2.nd, l: Nat, rl: s1.role(l) = s2.role(l), md: Mode, ps: List<Pl>, vs: List<VEnt>):
+    s1.license(vs, md, l, ps) = s2.license(vs, md, l, ps)
+{
+    match vs {
+        Nil => refl,
+        Cons(e, rest) => {
+            let ih = CSt::license_eq(s1, s2, vw, na, nd, l, rl, md, ps, rest);
+            let H = λ (b: Bool) (a: Option<List<Residual>>) => match b as λ _ => Option<List<Residual>> { True => a, False => Some(Nil<Residual>) };
+            let he: (H(s1.meets(l, md, e), s1.against_all(e, ps)) = H(s2.meets(l, md, e), s2.against_all(e, ps))) =
+                trans(cong_fn(λ (b: Bool) => H(b, s1.against_all(e, ps)), CSt::meets_eq(s1, s2, vw, na, nd, l, rl, md, e)),
+                    cong_fn(λ (a: Option<List<Residual>>) => H(s2.meets(l, md, e), a), CSt::against_all_eq(s1, s2, na, nd, e, ps)));
+            trans(cong_fn(λ (z: Option<List<Residual>>) => z.and_then(λ r1 => s1.license(rest, md, l, ps).map(λ r2 => r1 ++ r2)), he),
+                (match H(s2.meets(l, md, e), s2.against_all(e, ps)) as λ z => z.and_then(λ r1 => s1.license(rest, md, l, ps).map(λ r2 => r1 ++ r2)) = z.and_then(λ r1 => s2.license(rest, md, l, ps).map(λ r2 => r1 ++ r2)) {
+                    None => refl,
+                    Some(r1) => cong_fn(λ (w: Option<List<Residual>>) => w.map(λ r2 => r1 ++ r2), ih),
+                }))
         },
     }
 }
