@@ -1,0 +1,134 @@
+// A place's code, against level 2's read of it (docs/language/
+// ownership-design.md §25.10; issues/ownership-end-to-end-slice.md): what
+// `PEnv::locate` and `PEnv::walk` (placement.hthr) leave, where
+// `Sel::locate` (placement_seam.hthr) reaches, and what a load there reads.
+//
+// - **Words in bytes**: a word of `s` bytes stored as the encoding lays it
+//   (`low_bytes`) reads back as itself (`round_bytes`, definitional at
+//   each size from `ofNat`); a load from a block the injection lays out, no
+//   reference in it and every byte defined, reads its bytes there
+//   (`load_injected`).
+// - **The scaled index** (`shl_toNat`): shifted left without overflow, a
+//   word's number is multiplied by the power.
+// - **The walk** (`walk_sound`): each step's code ends with a reference to
+//   `inj` of the block at the offset `Sel::locate` reaches through the
+//   selections level 2 reads, the length word of a sequence beside it, and
+//   leaves every id below where it started as it was.
+import logic;
+import bool;
+import nat;
+import omega;
+import option;
+import list;
+import list_window;
+import pair;
+import bitvec;
+import bitvec_nat;
+import span_set;
+import store;
+import atom;
+import steps;
+import shape;
+import body;
+import level2;
+import run;
+import placement;
+import placement_seam;
+import placement_inject;
+import placement_stages;
+import bytes_memory;
+import bytes_level;
+import function_ir;
+import function_ir_eval;
+import x86_64;
+import x86_64_store;
+import x86_64_memory_contract;
+import x86_64_call_contract;
+
+// ---------------------------------------------------------------------------
+// Words in bytes
+
+theorem round_1(k: Nat, lt: k < Nat::pow(2, 8)): word_of_bytes(low_bytes(1, BitVec::ofNat(k, n := 64))) = BitVec::ofNat(k, n := 64) {
+    let a: (word_of_bytes(low_bytes(1, BitVec::ofNat(k, n := 64))) = (BitVec::ofNat(k, n := 8)).zero_extend(56)) = refl;
+    trans(a, trans(sym(BitVec::ofNat_toNat_zero_extend(8, 56, BitVec::ofNat(k, n := 8))), cong_fn(λ (x: Nat) => BitVec::ofNat(x, n := 64), BitVec::toNat_ofNat(8, k, lt))))
+}
+
+theorem round_2(k: Nat, lt: k < Nat::pow(2, 16)): word_of_bytes(low_bytes(2, BitVec::ofNat(k, n := 64))) = BitVec::ofNat(k, n := 64) {
+    let a: (word_of_bytes(low_bytes(2, BitVec::ofNat(k, n := 64))) = (BitVec::ofNat(k, n := 16)).zero_extend(48)) = refl;
+    trans(a, trans(sym(BitVec::ofNat_toNat_zero_extend(16, 48, BitVec::ofNat(k, n := 16))), cong_fn(λ (x: Nat) => BitVec::ofNat(x, n := 64), BitVec::toNat_ofNat(16, k, lt))))
+}
+
+theorem round_4(k: Nat, lt: k < Nat::pow(2, 32)): word_of_bytes(low_bytes(4, BitVec::ofNat(k, n := 64))) = BitVec::ofNat(k, n := 64) {
+    let a: (word_of_bytes(low_bytes(4, BitVec::ofNat(k, n := 64))) = (BitVec::ofNat(k, n := 32)).zero_extend(32)) = refl;
+    trans(a, trans(sym(BitVec::ofNat_toNat_zero_extend(32, 32, BitVec::ofNat(k, n := 32))), cong_fn(λ (x: Nat) => BitVec::ofNat(x, n := 64), BitVec::toNat_ofNat(32, k, lt))))
+}
+
+theorem round_8(x: BitVec(64)): word_of_bytes(low_bytes(8, x)) = x { immediate_bytes_roundtrip(x) }
+
+// A word of a width with a size, below its bound, stored as the encoding
+// lays it, reads back as itself.
+theorem round_bytes(b, s, k: Nat, sz: (WBits(b)).size() = Some(s), lt: k < Nat::pow(2, b)): word_of_bytes(low_bytes(s, BitVec::ofNat(k, n := 64))) = BitVec::ofNat(k, n := 64) {
+    let goal = λ (z: Nat) => word_of_bytes(low_bytes(z, BitVec::ofNat(k, n := 64))) = BitVec::ofNat(k, n := 64);
+    match bool_arm(b.same(8), Some(1), size_from16(b), s, sz) {
+        Inl(p) => j(Option::some_inj(1, s, p.right), λ z _ => goal(z), round_1(k, j(Nat::same_sound(b, 8, p.left), λ z _ => k < Nat::pow(2, z), lt))),
+        Inr(p) => match bool_arm(b.same(16), Some(2), size_from32(b), s, p.right) {
+            Inl(p2) => j(Option::some_inj(2, s, p2.right), λ z _ => goal(z), round_2(k, j(Nat::same_sound(b, 16, p2.left), λ z _ => k < Nat::pow(2, z), lt))),
+            Inr(p2) => match bool_arm(b.same(32), Some(4), size_from64(b), s, p2.right) {
+                Inl(p3) => j(Option::some_inj(4, s, p3.right), λ z _ => goal(z), round_4(k, j(Nat::same_sound(b, 32, p3.left), λ z _ => k < Nat::pow(2, z), lt))),
+                Inr(p3) => match bool_arm(b.same(64), Some(8), None, s, p3.right) {
+                    Inl(p4) => j(Option::some_inj(8, s, p4.right), λ z _ => goal(z), round_8(BitVec::ofNat(k, n := 64))),
+                    Inr(p4) => absurd(p4.right),
+                },
+            },
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// A load from a block with no reference in it and every byte defined
+
+theorem cuts_other(e: Pointer, c, k, n: Nat, ne: ¬(e.block = c)): e.cuts(c, k, n) = False {
+    j(sym(Nat::same_false_of(e.block, c, ne)), λ bb _ => (bb && ((e.at + 1).leb(k + n) && (k + 1).leb(e.at + 8))) && !(bb && (k.leb(e.at) && (e.at + 8).leb(k + n))) = False, refl)
+}
+
+theorem within_other(e: Pointer, c, k, n: Nat, ne: ¬(e.block = c)): e.within(c, k, n) = False {
+    j(sym(Nat::same_false_of(e.block, c, ne)), λ bb _ => (bb && (k.leb(e.at) && (e.at + 8).leb(k + n))) = False, refl)
+}
+
+theorem cut_none(c, k, n: Nat, sh: List<Pointer>): ((e: Pointer) → Mem(e, sh) → ¬(e.block = c)) → cut(sh, c, k, n) = False {
+    match sh {
+        Nil => λ _ => refl,
+        Cons(e, rest) => λ np => eq2(λ (x: Bool) (y: Bool) => x || y, cuts_other(e, c, k, n, np(e, Inl(refl))), cut_none(c, k, n, rest, λ e2 m => np(e2, Inr(m)))),
+    }
+}
+
+theorem slots_none(c, k, n: Nat, sh: List<Pointer>): ((e: Pointer) → Mem(e, sh) → ¬(e.block = c)) → slots_within(sh, c, k, n) = Nil {
+    match sh {
+        Nil => λ _ => refl,
+        Cons(e, rest) => λ np => trans(cong_fn(λ (bb: Bool) => match bb as λ _ => List<x86_64_memory_contract::Slot> { True => Cons(x86_64_memory_contract::Slot(e.at - k, e.target), slots_within(rest, c, k, n)), False => slots_within(rest, c, k, n) },
+            within_other(e, c, k, n, np(e, Inl(refl)))), slots_none(c, k, n, rest, λ e2 m => np(e2, Inr(m)))),
+    }
+}
+
+theorem flags_none(hb: x86_64_memory_contract::Heap, c: Nat, df: (j: Nat) → hb.undefined(c, j) = False, n: Nat): (k: Nat) → none_set(hb.flags_at(c, k, n)) = True {
+    match n {
+        Zero => λ k => refl,
+        Succ(m) => λ k => eq2(λ (x: Bool) (y: Bool) => !x && y, df(k), flags_none(hb, c, df, m, k + 1)),
+    }
+}
+
+theorem load_injected(hb: x86_64_memory_contract::Heap, c, off, n: Nat, np: Heap::NoPointerIn(hb, c), df: (j: Nat) → hb.undefined(c, j) = False,
+    fits: off + n <= hb.bytes(c).len()): hb.load(x86_64_memory_contract::Loc(c, off), n) = Some(word_of_bytes(hb.bytes(c).window(off, off + n)))
+{
+    let loc = x86_64_memory_contract::Loc(c, off);
+    let fit: (hb.fits(loc, n) = True) = eq2(λ (x: Bool) (y: Bool) => x && !y, eq_true_of_is_true((off + n).leb(hb.bytes(c).len()), Nat::leb_complete(off + n, hb.bytes(c).len(), fits)),
+        cut_none(c, off, n, hb.shadow, np));
+    let taken: (hb.take(loc, n) = Some(hb.piece(loc, n))) =
+        cong_fn(λ (bb: Bool) => match bb as λ _ => Option<Piece> { False => None, True => Some(hb.piece(loc, n)) }, fit);
+    let plain: ((hb.piece(loc, n)).plain_bytes() = Some(hb.bytes(c).window(off, off + n))) =
+        trans(cong_fn(λ (sl: List<x86_64_memory_contract::Slot>) => (Piece(hb.bytes(c).window(off, off + n), sl, hb.flags_at(c, off, n))).plain_bytes(), slots_none(c, off, n, hb.shadow, np)),
+            cong_fn(λ (bb: Bool) => match bb as λ _ => Option<List<BitVec(8)>> { True => Some(hb.bytes(c).window(off, off + n)), False => None }, flags_none(hb, c, df, n, off)));
+    let read: (hb.read_bytes(loc, n) = Some(hb.bytes(c).window(off, off + n))) =
+        trans(cong_fn(λ (o: Option<Piece>) => match o as λ _ => Option<List<BitVec(8)>> { None => None, Some(piece) => piece.plain_bytes() }, taken), plain);
+    cong_fn(λ (o: Option<List<BitVec(8)>>) => match o as λ _ => Option<BitVec(64)> { None => None, Some(bytes) => Some(word_of_bytes(bytes)) }, read)
+}

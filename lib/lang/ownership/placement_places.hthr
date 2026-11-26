@@ -1,0 +1,118 @@
+// The leaf stages that read a place (docs/language/ownership-design.md
+// §25.6, §25.10; issues/ownership-end-to-end-slice.md): `Take`, `Read`,
+// then `View`, `Len`, `Back`, `Write`, each a `LeafStage`
+// (placement_seam.hthr) proved from `placement_stages.hthr`'s shared lemmas
+// and the walk's (`placement_walk.hthr`).
+//
+// - **A whole variable** is its own slot: taken, the slot itself; read (a
+//   word), a copy of its ids. A word slot's cell is plain (F8), so level 2
+//   reads the value the slot holds.
+// - **A place through a reference** is the walk's: its code ends at a
+//   reference into the block's image where `Sel::locate` reaches, and a
+//   load there reads the element's word.
+import logic;
+import bool;
+import nat;
+import omega;
+import option;
+import list;
+import pair;
+import bitvec;
+import bitvec_nat;
+import span_set;
+import store;
+import atom;
+import steps;
+import shape;
+import body;
+import level2;
+import run;
+import placement;
+import placement_seam;
+import placement_inject;
+import placement_stages;
+import bytes_memory;
+import bytes_level;
+import function_ir;
+import function_ir_eval;
+import x86_64_memory_contract;
+import x86_64_call_contract;
+
+// ---------------------------------------------------------------------------
+// A slot holding, by the cell's value alone
+
+fn ValueHolds(tys: Nat → Type, strs: Strs(tys), inj: Nat → Nat, h: level2::Heap(tys), s: PSlot, v: level2::Value(tys), l: Locals) → Type {
+    (value_live(tys, h, v) = True →
+        (read_values(s.ids, l) = value_lower(tys, strs, inj, h, v)) ∧ ((Value::get(tys, strs, h, v, Nil)).map(λ (d: Dyn(tys)) => d.code) = Some(s.code))) ∧
+    (s.word().is_some() = True → Value::refers(tys, v) = False)
+}
+
+theorem holds_value(tys: Nat → Type, strs: Strs(tys), inj: Nat → Nat, h: level2::Heap(tys), s: PSlot, c1, c2: Cell(tys), l: Locals, e: c1.v = c2.v,
+    hs: SlotHolds(tys, strs, inj, h, s, c1, l)): SlotHolds(tys, strs, inj, h, s, c2, l)
+{
+    j(e, λ v _ => ValueHolds(tys, strs, inj, h, s, v, l), hs)
+}
+
+// A word slot's cell is a plain value.
+theorem word_cell(tys: Nat → Type, strs: Strs(tys), inj: Nat → Nat, h: level2::Heap(tys), s: PSlot, c: Cell(tys), l: Locals,
+    hs: SlotHolds(tys, strs, inj, h, s, c, l), t: Typed, sw: s.word() = Some(t)): Exists<Dyn(tys)>(λ d => c.v = Plain(d))
+{
+    let nr: (Value::refers(tys, c.v) = False) = hs.right(cong_fn(λ (o: Option<Typed>) => o.is_some(), sw));
+    (match c.v as λ v => Value::refers(tys, v) = False → Exists<Dyn(tys)>(λ d => v = Plain(d)) {
+        Plain(d) => λ _ => Exists(d, refl),
+        Refer(_) => λ no => absurd(no),
+    })(nr)
+}
+
+// ---------------------------------------------------------------------------
+// A whole variable taken: its slot, its cell
+
+fn take_go(tys: Nat → Type, m: Mach(tys), k: Mach(tys) → level2::Ran(tys), cell: Cell(tys), ov: Option<Dyn(tys)>) → level2::Ran(tys) {
+    match ov { Some(_) => k(Mach::push(tys, m, cell)), None => level2::Stuck }
+}
+
+theorem take_cases(tys: Nat → Type, m: Mach(tys), cell: Cell(tys), ov: Option<Dyn(tys)>):
+    ((k: Mach(tys) → level2::Ran(tys)) → take_go(tys, m, k, cell, ov) = level2::Stuck) ∨ ((k: Mach(tys) → level2::Ran(tys)) → take_go(tys, m, k, cell, ov) = k(Mach::push(tys, m, cell)))
+{
+    match ov { Some(_) => Inr(λ k => refl), None => Inl(λ k => refl) }
+}
+
+theorem take_whole_goal(tys: Nat → Type, strs: Strs(tys), fns: Nat → Func, call: Caller(tys), blocks: Blocks, x: Var, e: PEnv, next: Nat, s: PSlot, eg: e.get(x) = Some(s)):
+    LeafGoal(tys, strs, fns, call, blocks, Take(Place(x, Nil)), e, next, SOut(leaf(Nil), e.push(s), next))
+{
+    λ act inj m c rel => {
+        let sl = slot_of(tys, strs, inj, blocks, act, e, m, c, next, rel, x, s, eg);
+        let cell = REnv::get(tys, m.env, x);
+        match take_cases(tys, m, cell, Mach::val(tys, strs, m, x)) {
+            Inl(stuck) => Inl(stuck),
+            Inr(steps) => Inr(Exists(Mach::push(tys, m, cell), ⟨steps, Exists(Config(c.locals, c.memory, c.io), ⟨refl,
+                rel_push(tys, strs, inj, blocks, act, e, m, c, next, rel, c.locals, Locals::agree_refl(c.locals, next), s, cell, next, { omega }, sl.right, sl.left)⟩)⟩)),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// A word variable read: a copy of its ids
+
+fn read_go(tys: Nat → Type, m: Mach(tys), k: Mach(tys) → level2::Ran(tys), ov: Option<Dyn(tys)>) → level2::Ran(tys) {
+    match ov { Some(d) => k(Mach::push(tys, m, Cell::plain(tys, d))), None => level2::Stuck }
+}
+
+theorem read_word_goal(tys: Nat → Type, strs: Strs(tys), fns: Nat → Func, call: Caller(tys), blocks: Blocks, x: Var, e: PEnv, next: Nat, s: PSlot, t: Typed,
+    eg: e.get(x) = Some(s), sw: s.word() = Some(t)):
+    LeafGoal(tys, strs, fns, call, blocks, Stmt::Read(Place(x, Nil)), e, next, SOut(leaf(Nil), e.push(PSlot(s.code, s.ids)), next))
+{
+    λ act inj m c rel => {
+        let sl = slot_of(tys, strs, inj, blocks, act, e, m, c, next, rel, x, s, eg);
+        let cell = REnv::get(tys, m.env, x);
+        let pd = word_cell(tys, strs, inj, m.heap, s, cell, c.locals, sl.left, t, sw);
+        let d = pd.witness;
+        let vd = val_plain(tys, strs, m, x, d, pd.proof);
+        let sh: SlotHolds(tys, strs, inj, m.heap, PSlot(s.code, s.ids), Cell::plain(tys, d), c.locals) =
+            holds_value(tys, strs, inj, m.heap, s, cell, Cell::plain(tys, d), c.locals, pd.proof, sl.left);
+        Inr(Exists(Mach::push(tys, m, Cell::plain(tys, d)), ⟨λ k => cong_fn(λ (ov: Option<Dyn(tys)>) => read_go(tys, m, k, ov), vd),
+            Exists(Config(c.locals, c.memory, c.io), ⟨refl,
+                rel_push(tys, strs, inj, blocks, act, e, m, c, next, rel, c.locals, Locals::agree_refl(c.locals, next), PSlot(s.code, s.ids), Cell::plain(tys, d), next, { omega },
+                    sl.right, sh)⟩)⟩))
+    }
+}
