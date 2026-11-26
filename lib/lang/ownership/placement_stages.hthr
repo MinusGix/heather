@@ -99,7 +99,7 @@ theorem holds_agree(tys: Nat → Type, strs: Strs(tys), inj: Nat → Nat, h: lev
         Nil => λ _ cs hs => hs,
         Cons(s, sr) => λ b cs => (match cs as λ c2 => SlotsHold(tys, strs, inj, h, Cons(s, sr), c2, l) → SlotsHold(tys, strs, inj, h, Cons(s, sr), c2, l2) {
             Nil => λ hs => hs,
-            Cons(c, cr) => λ hs => ⟨λ live => ⟨trans(read_values_agree(l, l2, next, a, s.ids, b(0, s, refl)), (hs.left(live)).left), (hs.left(live)).right⟩,
+            Cons(c, cr) => λ hs => ⟨⟨λ live => ⟨trans(read_values_agree(l, l2, next, a, s.ids, b(0, s, refl)), ((hs.left).left(live)).left), ((hs.left).left(live)).right⟩, (hs.left).right⟩,
                 holds_agree(tys, strs, inj, h, l, l2, next, a, sr, λ k s2 e2 => b(Succ(k), s2, e2), cr, hs.right)⟩,
         }),
     }
@@ -213,7 +213,7 @@ theorem lit_goal(tys: Nat → Type, strs: Strs(tys), fns: Nat → Func, call: Ca
         let lowered: (value_lower(tys, strs, inj, m.heap, cell.v) = Some([x86_64_call_contract::Word(BitVec::ofNat(v))])) =
             trans(cong_fn(λ (z: Option<Nat>) => match z as λ _ => Option<List<x86_64_call_contract::Value>> { Some(_) => Some([x86_64_call_contract::Word(BitVec::ofNat((BitVec::ofNat(n, n := b)).toNat()))]), None => None }, sz),
                 cong_fn(λ (x: Nat) => Some([x86_64_call_contract::Word(BitVec::ofNat(x))]), BitVec::toNat_ofNat_mod(b, n)));
-        let sh: SlotHolds(tys, strs, inj, m.heap, PSlot(SWord(WBits(b)), [word_id(next)]), cell, l2) = λ _ => ⟨trans(read, sym(lowered)), refl⟩;
+        let sh: SlotHolds(tys, strs, inj, m.heap, PSlot(SWord(WBits(b)), [word_id(next)]), cell, l2) = ⟨λ _ => ⟨trans(read, sym(lowered)), refl⟩, λ _ => refl⟩;
         Inr(Exists(Mach::push(tys, m, cell), ⟨λ k => refl, Exists(Config(l2, c.memory, c.io), ⟨refl,
             rel_push(tys, strs, inj, blocks, act, e, m, c, next, rel, l2, Locals::agree_set(c.locals, next, λ (w: Nat) => BitVec::ofNat(v), next, { omega }),
                 PSlot(SWord(WBits(b)), [word_id(next)]), cell, next + 1, { omega }, one_below(next), sh)⟩)⟩))
@@ -506,7 +506,7 @@ theorem word_slot(tys: Nat → Type, strs: Strs(tys), inj: Nat → Nat, h: level
                 false_elim(absurd(trans(bad, ref_lower_not_word(tys, strs, inj, r, o))))
             },
         })(p),
-    })(hs)
+    })(hs.left)
 }
 
 // ---------------------------------------------------------------------------
@@ -637,7 +637,7 @@ theorem op_goal(tys: Nat → Type, strs: Strs(tys), fns: Nat → Func, call: Cal
                         let ww: (bv_op(op, 64, c.locals.words(64, ta.id), c.locals.words(64, tb.id)) = BitVec::ofNat((bv_op(op, 64, u, v)).toNat())) =
                             trans(eq2(λ (p: BitVec(64)) (q: BitVec(64)) => bv_op(op, 64, p, q), wu, wv), sym(BitVec::ofNat_toNat(64, bv_op(op, 64, u, v))));
                         let sh0: SlotHolds(tys, strs, inj, m.heap, s, Cell::plain(tys, Dyn::words<Dyn(tys)>(tys, Dyn(SWord(WBits(64)), u), y, λ wd p q => Dyn(SWord(wd), Width::op(wd, op, p, q)))), l2) =
-                            λ _ => ⟨trans(rd, cong_fn(λ (z: BitVec(64)) => Some([x86_64_call_contract::Word(z)]), ww)), refl⟩;
+                            ⟨λ _ => ⟨trans(rd, cong_fn(λ (z: BitVec(64)) => Some([x86_64_call_contract::Word(z)]), ww)), refl⟩, λ _ => refl⟩;
                         let sh: SlotHolds(tys, strs, inj, m.heap, s, Cell::plain(tys, Dyn::words<Dyn(tys)>(tys, x, y, λ wd p q => Dyn(SWord(wd), Width::op(wd, op, p, q)))), l2) =
                             j(word64_back(tys, x, cx), λ x2 _ => SlotHolds(tys, strs, inj, m.heap, s, Cell::plain(tys, Dyn::words<Dyn(tys)>(tys, x2, y, λ wd p q => Dyn(SWord(wd), Width::op(wd, op, p, q)))), l2), sh0);
                         let cell = Cell::plain(tys, Dyn::words<Dyn(tys)>(tys, x, y, λ wd p q => Dyn(SWord(wd), Width::op(wd, op, p, q))));
@@ -789,7 +789,7 @@ theorem word_sized(tys: Nat → Type, strs: Strs(tys), inj: Nat → Nat, h: leve
     let wi = one_word_is(s.ids, t, sw);
     let rd: (read_values(s.ids, l) = Some([x86_64_call_contract::Word(l.word(t.id))])) =
         trans(cong_fn(λ (ids: List<Typed>) => read_values(ids, l), wi.left), read_word(t, l, wi.right));
-    let q = hs(j(sym(ev), λ v _ => value_live(tys, h, v) = True, refl));
+    let q = hs.left(j(sym(ev), λ v _ => value_live(tys, h, v) = True, refl));
     let low: (Some([x86_64_call_contract::Word(l.word(t.id))]) = value_lower(tys, strs, inj, h, Plain(d))) =
         trans(sym(rd), trans(q.left, cong_fn(λ (v: level2::Value(tys)) => value_lower(tys, strs, inj, h, v), ev)));
     (match d.code.word_size() as λ z => Some(Cons(x86_64_call_contract::Word(l.word(t.id)), Nil)) =

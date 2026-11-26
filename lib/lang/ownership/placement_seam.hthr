@@ -501,10 +501,13 @@ fn value_live(tys: Nat → Type, h: level2::Heap(tys), v: level2::Value(tys)) �
 // A cell's slots read its value lowered, and the slot's code is the code of
 // the value the cell reads (§25.8, F2). A cell referring to a dead block
 // constrains nothing, as a dead block constrains nothing in `HeapInjects`
-// (§25.9, F7): level 2 is stuck at any read through it.
+// (§25.9, F7): level 2 is stuck at any read through it. Whatever the heap,
+// a word slot's cell is plain (§25.10, F8): an index atom reads a variable
+// through `Mach::ixs`, which does not stick.
 fn SlotHolds(tys: Nat → Type, strs: Strs(tys), inj: Nat → Nat, h: level2::Heap(tys), s: PSlot, c: Cell(tys), l: Locals) → Type {
-    value_live(tys, h, c.v) = True →
-        (read_values(s.ids, l) = value_lower(tys, strs, inj, h, c.v)) ∧ ((Value::get(tys, strs, h, c.v, Nil)).map(λ (d: Dyn(tys)) => d.code) = Some(s.code))
+    (value_live(tys, h, c.v) = True →
+        (read_values(s.ids, l) = value_lower(tys, strs, inj, h, c.v)) ∧ ((Value::get(tys, strs, h, c.v, Nil)).map(λ (d: Dyn(tys)) => d.code) = Some(s.code))) ∧
+    (s.word().is_some() = True → Value::refers(tys, c.v) = False)
 }
 
 // Every id of the environment's slots is below `next` (§25.8, F3).

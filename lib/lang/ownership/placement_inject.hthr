@@ -1203,7 +1203,7 @@ theorem slot_kill(tys: Nat → Type, strs: Strs(tys), inj: Nat → Nat, h: level
     s: PSlot, c: Cell(tys), l: Locals, hs: SlotHolds(tys, strs, inj, h, s, c, l)): SlotHolds(tys, strs, inj, run::Heap::kill(tys, h, b), s, c, l)
 {
     let h2 = run::Heap::kill(tys, h, b);
-    (match c.v as λ v => (value_live(tys, h, v) = True → (read_values(s.ids, l) = value_lower(tys, strs, inj, h, v)) ∧
+    ⟨(match c.v as λ v => (value_live(tys, h, v) = True → (read_values(s.ids, l) = value_lower(tys, strs, inj, h, v)) ∧
                 ((Value::get(tys, strs, h, v, Nil)).map(λ (d: Dyn(tys)) => d.code) = Some(s.code))) →
             (value_live(tys, h2, v) = True → (read_values(s.ids, l) = value_lower(tys, strs, inj, h2, v)) ∧
                 ((Value::get(tys, strs, h2, v, Nil)).map(λ (d: Dyn(tys)) => d.code) = Some(s.code))) {
@@ -1221,7 +1221,7 @@ theorem slot_kill(tys: Nat → Type, strs: Strs(tys), inj: Nat → Nat, h: level
                 ⟨trans(q.left, lower), trans(cong_fn(λ (x: Option<Dyn(tys)>) => x.map(λ (d: Dyn(tys)) => d.code), got), q.right)⟩
             },
         })(live2),
-    })(hs)
+    })(hs.left), hs.right⟩
 }
 
 // What a clearing leaves was there.
