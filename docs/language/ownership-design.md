@@ -3871,3 +3871,87 @@ ordinary write (`RFits`, or the code check and `Dyn::len_non_seq`),
 `Inv::back_like` at a write-back (where the licence's apartness lives), and
 `CallFits` at a call and a `Jump`, from the callee's safety. It is carried
 beside `Inv` in the body's induction, not inside it.
+
+### 23.14 The frame by place, `Ret` built, and the design for several pending views (2026-11-26, fifth session)
+
+**The frame is by place** (§18.3: "the heap is unchanged outside what was
+lent", one lens equation for a window). `Heap::Frame` by block was the
+coarse version, and not enough for a call. A caller with two written
+parameters that are two fields of one block lends one of them on
+(`lends_one`, checked). The callee's block frame said nothing of the other
+field, since the block was lent, so the caller's read after the call could
+not be re-established. Now, one statement: at every block that existed
+before, every selection path apart from every reference lent to change into
+that block (`Value::lent`) reads, and fits, as before (`Heap::at`: the
+object's value read there).
+- A block lent to nothing has nothing to be apart from, so its empty path
+  (its whole object) reads as before (`Heap::frame_whole`).
+- A block lent to change whole, a reference with no selections as a taken
+  object is, is excluded. Formally, `Sel::Apart(Nil, q)` is not refutable
+  over an abstract model (it holds where `q` fits nothing), so the statement
+  asks every lent reference into the block to have selections; semantically,
+  no path is apart from a whole block.
+- Holes are not read: the fragment has none, and the next round, which adds
+  them, will say what the frame says of them.
+
+`Inv` takes the lent references in place of the lent blocks: `owned`
+becomes "the root of an object that may change is a reference lent to change,
+or is in a block made here", and `frame` the same statement over `h0`. It
+is kept by `fresh` (another block), `kill` (a taken object's root has no
+selections, so it is excluded) and `store_rest` (a store at a lent root
+writes under it, apart from the path: `away`, a new premise, which
+`Inv::store` already had and the view write gets from `Sel::get_apart`
+after `Sel::write_append`). `Ret` holds against it unchanged (`inv.frame`).
+
+**`Ret`** (`Body::stage_ret`, its record `RetOk`) gives what `SafeAt` asks of
+a `Done` answer from `Inv`, `Like`, the argument cells as passed (composed
+`Stepped.kept`), and `|vs| = |ds| = na = |params|`:
+- `ReadAll`: `Sim::read_all`, `Value::read_of_get`.
+- `Written`: `Inv::ret_written`. The slot is the holder, which refers to the
+  argument as passed (`href`, `Inv::arg_root`). Its fit is `Like.held`, since
+  the holder is the parameter's own, to write (`Like.acc`).
+- The frame: `inv.frame`.
+- `Views`: `Inv::ret_one` per origin.
+  - Fresh: through `made`.
+  - A parameter: the argument where it refers, plain otherwise.
+  - A view: the argument's root narrowed at the call's words. The view
+    refers (`Inv::ent_refers`, up its chain); its region is the signature's
+    steps at the function's levels (`CSt::sig_sels`). An argument atom reads
+    its entry value (`Like.keep`) and a result atom the plain result
+    listed (`Inv::ret_words`).
+
+**`Like`** (§23.13) is defined with its start and its steps: a binding
+(`Like::push`), a level gone (`Like::gone`), and a write whose root stays
+like itself (`Like::write`, what is pending after it left to the stage).
+
+**Two more fixes**, each with a probe that fails against the old version: the
+checker's `returns` refuses an `OParam(i)` or `OView(i, _)` naming an object
+made in the function (`not_param_refused`); and `ViewIs` at `OView` is a copy
+where the read parameter was passed by value (`at_by_value`).
+
+**Several pending views (D2, decided: the proof side; not built).** A call
+with two written arguments leaves two slot views pending at once, and after
+the first slot's write-back its parent, if a view, is pending too. `Inv.pone`
+and `CSt::patched` assume one pending chain. The design, for the next
+session:
+- **Disjointness**, stated once. Two pending entries at different levels are
+  of different objects, or their regions are apart at the run's words. This
+  is `apart_args` at the call; a write-back keeps it, the parent's region
+  being a prefix of the child's. It replaces `pone`.
+- **The commuting lemma**, proved before any stage is restated. For two
+  disjoint pending entries, writing up one chain then the other is writing
+  them up in the other order: `up(up(e, c1), c2) = up(up(e, c2), c1)`. The
+  chains may share ancestors (two views of one view, each lent), and the
+  shared ancestor's write-up then carries both. The lemma is by induction on
+  the chains' levels, from `Sel::Apart`'s commuting and `Env::set` at distinct
+  variables.
+- **`patched`** writes up every pending chain, folded over the pending
+  entries in the views' order. By the commuting lemma, a write-back may take
+  its own chain first.
+- **The stages that change**: the three write-backs (`stage_back_ref_none`,
+  `stage_back_ref_pend`, `stage_back_copy`), and `Inv::set_cell` (whose
+  premises are on `patched`). Each now has other chains pending elsewhere,
+  untouched. So do the death of a view while another is pending
+  (`stage_death_view`), `Inv::rekin` and its flag-change lemmas, the walk
+  lemmas (`CSt::up_sim` and the `up_*` family), and every builder that reads
+  `pone`. The stages run with nothing pending are unchanged.
