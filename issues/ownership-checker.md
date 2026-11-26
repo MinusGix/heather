@@ -29,73 +29,76 @@ Items 1 and 2 are definitions and evaluation; item 3 waits for the coordinating 
 
 `CheckSound` has an inhabitant for the fragment, the experiments' programs are probes or theorems of the real modules, and the experiment modules are gone.
 
-## Handoff (2026-11-26, end of the fifth session: D2, then the call)
+## Handoff (2026-11-26, end of the sixth session: D2 done, then Like and the call)
 
 Continue on branch `claude/ownership-checker-sound`. Everything is in
-`lib/lang/ownership/sound.hthr`. Read design §23.13 and §23.14 first
-(this session), then §23.8 to §23.12. The coordinating session's order: D2
-(several pending views), then `Call` in the nine named parts below, then
-`SafeAt` for a body with no join and no `Jump` and report; then joins, `Jump`,
-the induction on fuel.
+`lib/lang/ownership/sound.hthr`. Read design §23.15 (this session) first,
+then §23.13 and §23.14. The coordinating session's order: item 2 (`Inv::back_like`
+and `Like`'s step per statement kind), item 3 (the call, P1 to P9 below),
+item 4 (`SafeAt` for a body with no join and no `Jump`), then report.
 
-**Done this session** (each with probes; `scripts/test --pr` in the log):
-- **Checker fixes.** A returned view's signature atom reads an argument
-  never written (`sig_atom`; plain writes recorded in `wrote`). A result
-  naming an object made here is refused (`returns`).
-- **The measure.** It is owed only by a measured function. `Checker` is told
-  which functions are measured, and `WMeasure` refuses a measured caller of
-  an unmeasured callee.
-- **Definitions.** `ViewIs` at `OParam`/`OView` is plain where the argument
-  was. `Written` says the slot is the argument. `Heap::Frame` is by place,
-  over `Value::lent` references.
-- **`Inv`** gained `args`, `href`, `made` and `nbase`; `lent` is now the list
-  of references lent to change; `owned` and `frame` were restated.
-- **`Stepped`** gained `kept`: the argument cells' references.
-- **`Like`**, with its start and the `push`, `gone` and `write` steps. The
-  per-statement steps are to be assembled in the body's induction:
-  - each binding is `Like::push` (no new written holder, except a take of
-    one, which carries it);
-  - a death is `Like::gone`;
-  - a write is `Like::write`. Its root is like itself by `RFits`, or by the
-    code check and `len_non_seq` at an ordinary write, by
-    `Inv::back_like` at a write-back (not yet written: equality through the
-    heap where the chain refers, `cfit` where it is copies), and by
-    `CallFits` at a call's slot. What is pending after it is `pend`'s, which
-    the stage proves.
-- **`Ret`**: `Body::stage_ret`.
+**Done this session** (D2, item 1 of the coordinator's list):
+- **The patch is a fold over levels** (`CSt::patched` = `CSt::pfold`, the
+  highest level first; `CSt::pend_in` marks a level on a pending chain whose
+  cells refer, through `anc_of`; `CSt::wstep` writes the level's entry to
+  write into its parent). With one chain it is the walk
+  (`CSt::pfold_walk`, over `Walkable`), so every lemma over `CSt::up`
+  stands. The designed disjointness was false (`nested_two_checked`), and a
+  fold of walks needed like-ness of every link; both are explained in §23.15.
+- **The commuting lemma** is `CSt::patched_back` (record `BackAt`, built by
+  `Stmt::back_at`): a write-back with other chains pending keeps the patch.
+  It uses `sib`, `uni`, `Walkable`, `words`, and `Stmt::back_nk` (a view
+  written back has no live child to write, from the write's read licence;
+  `nested_two_late_refused`).
+- **The write-back stages** are restated for several chains: `ref_pend` over
+  `patched_back`; `ref_none` unchanged (nothing pending); the copy write-back
+  over `CSt::patched_copy_set` and `CSt::patched_reback_copy`, with
+  `Inv::set_cell` now over the patched meaning (`px`, `pn2`). `Inv.pone` and
+  its lemmas are gone. Tools for the call's slots (P6): `CSt::pfold_set` (the
+  patch commutes with setting a variable on no referring chain),
+  `CSt::pfold_plain`, `CSt::pend_refers`, `CSt::pfold_agree` (the patch
+  keeps plain variables) and `Inv::at_sels`.
 
-**Next: D2**, designed in §23.14 (the disjointness statement, the commuting
-lemma, which stages change). Prove the commuting lemma first and report
-to the coordinating session before restating the stages. They asked to hear
-if it is not clean.
+**Next: item 2**, `Like`'s steps. `Like.pend` (a pending view is like its
+place in its parent) is what a write-back's like-ness needs where the child
+is pending; `Inv::back_like` is for the rest. With several chains now
+pending, check that `Like.pend` is kept by a write-back whose parent was
+already pending: the parent's new meaning has the child at its place, and
+its own place in its parent is unchanged.
 
-**Then `Call`**, in this order:
+**Then the call**, in this order:
 - **P1** `Inv::pass`: `pass_all` succeeds and `ReadAll` holds of the passed
   values; `Coded` from the code check; `pres` from `RPre`.
 - **P2** `Inv::lendable`, one lemma per clause. `apart` for one object comes
   through `apart_args` and the licence chain generalised from
   `Inv::lic_apart`.
-- **P3** `Call::callee`: the callee's `SafeAt` at the fuel below. A
-  primitive is `Call::prim`.
+- **P3** `Call::callee`: the callee's `SafeAt` at the fuel below. A primitive
+  is `Call::prim`.
 - **P4** `Inv::call_frame`: from the callee's place frame.
 - **P5** `Inv::bind_results`: fresh results in distinct blocks;
   `returns_all` refusing one object twice is already decided.
-- **P6** `Inv::bind_slots`: pending slots, D2.
+- **P6** `Inv::bind_slots`: several pending slots. Before the call nothing
+  is pending (the checker allows only write-backs while anything is), so the
+  patch after is the fold over the slots' chains alone. Each slot is a view
+  at `Nil` of its argument. A slot whose argument is a copy is on no
+  referring chain (`pfold_plain`). Where arguments meet under one view, the
+  places are apart by `apart_args`, which is `sib` for the slots' parents.
 - **P7**: the moved arguments.
 - **P8** `Like::call`.
 - **P9** `Stmt::stage_call`, split into run, invariant and `Like`.
 
 **Traps found this session:**
-- A `let` or parameter type that is a lambda with `=` in its body needs
-  parentheses: `Exists<Nat>(λ l => (b = Var(l)))`.
-- A recursive theorem must match on a declared parameter, not on a
-  `λ`-bound one.
-- `Lit(n)` is ambiguous with the statement `Lit(w, n)`; write
-  `Atom::ix(Lit(n), ws)`.
-- A Python `replace` over a pattern shared by two theorems silently edits
-  both. Anchor each edit on text unique to its theorem.
-- `scripts/fmt` is Heather's formatter, which `scripts/fmt --check` asks for
-  (it is not `cargo fmt`).
+- A recursive theorem's recursive call must be at the predecessor the match
+  bound (`j1`), not at an equal variable (`c` with `j1 = c`); rewrite the
+  other way.
+- `Nil` in a type position needs its argument: `Nil<Step>()`.
+- A `let` bound to a lambda whose binder is used in `Dyn::write` needs its
+  binder typed (`λ (d: Dyn(tys)) => …`).
+- Declarations must come before use: the write-back block now sits after
+  `CSt::patched_back`, and `ent_mem`, `ent_only`, `anc_not` and
+  `member_foldr_false` were moved up.
+- `scripts/test --pr` reads the working tree. Editing `lib/` while it runs
+  fails its fmt test spuriously.
 
 ## Log
 
@@ -118,3 +121,4 @@ if it is not clean.
 - 2026-11-26: the death and the take of a view (`62a8529`, `ea53353`); handoff rewritten at `Ret`. `scripts/test --pr` at `ea53353`: `== suite: 4140 passed, 0 failed, 3 ignored ==`.
 - 2026-11-26 (fifth session): the `sig_atom` and `returns` checker fixes; the measure for measured functions only (`WMeasure`); `ViewIs` plain where the argument was, `Written` the slot as the argument, `Heap::Frame` by place; `Inv` gains `args`, `href`, `made`, `nbase`; `Stepped.kept`; `Like` with its start and steps; the `Ret` stage (`Body::stage_ret`). Design §23.13, §23.14. Handoff rewritten at D2.
 - 2026-11-26: `scripts/test --pr` at `1dcfe82` (the last code commit of the fifth session; `906374b` after it is docs and this issue only): `== suite: 4140 passed, 0 failed, 3 ignored ==`.
+- 2026-11-26 (sixth session): D2, several pending chains. `patched` is a fold over levels (`106cfce`); `CSt::patched_back`, the write-back keeping the patch with other chains pending, and the probes `nested_two_checked` and `nested_two_late_refused` (`d40e77b`); the write-back stages restated, `Inv.pone` dropped, and `Stmt::back_nk` (`947121b`). Design §23.15. `scripts/test --pr` at `947121b`: `== suite: 4140 passed, 0 failed, 3 ignored ==`. Handoff rewritten at item 2.

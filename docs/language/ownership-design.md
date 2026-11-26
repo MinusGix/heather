@@ -4478,3 +4478,87 @@ session:
   (`stage_death_view`), `Inv::rekin` and its flag-change lemmas, the walk
   lemmas (`CSt::up_sim` and the `up_*` family), and every builder that reads
   `pone`. The stages run with nothing pending are unchanged.
+
+### 23.15 Several pending chains: the patch as a fold over levels (2026-11-26, sixth session)
+
+**The designed disjointness is false.** "Two pending entries at different
+levels are of different objects, or apart" fails in a checked program. Take
+two written arguments that are views `a`, `b` at two fields of one view `A`
+(`nested_two_checked`). After `b`'s slot is written back into `b`, and `b`
+into `A`, both `A` and `a`'s slot are pending, and `A`'s region is a prefix
+of the slot's. No order of write-backs avoids it: whichever chain reaches
+`A` first leaves the other pending under it.
+
+**A fold of walks needs a law the model does not have.** Writing up every
+pending chain by `CSt::up`, one after another, writes a shared ancestor
+twice at the same place. In the state above, `{slot_a, A}` writes `H` at
+`A`'s place twice. Then a write-back whose parent is already pending needs
+`walk(A) ∘ walk(A) = walk(A)`. The model's only law for two writes at one
+step is `over_over`, which holds where what is written is like what is there.
+So the walks' commuting needs every link on both chains to be like its
+parent's place in the meaning, pending or not. In `H ← G ← A`, `G` is backed
+and on the chain, and `Like.pend` covers only pending entries. Carrying that
+for every live view to write would put the licence's apartness into `Like`'s
+write step.
+
+**The patch as built** (`CSt::patched`) is a fold over levels, the highest
+first (`CSt::pfold`). A level on a pending chain whose cells refer
+(`CSt::pend_in`: a pending entry's own level, or one of its ancestors, by
+`anc_of`) takes one walk step (`CSt::wstep`). The step writes the level's
+value into the parent of its entry to write, at the entry's place. A parent
+therefore gets each child once, after the child is complete, and no place is
+written twice.
+- **One chain.** The fold is the walk (`CSt::pfold_walk`, over `Walkable`:
+  parents lower, entries views', an entry to write's parent a view with one
+  entry to write or a holder). `patched_pend`, `patched_unback`,
+  `patched_copy` and `patched_drop` are restated over it, so every stage
+  written over `CSt::up` (the view write, `up_sim`, the three write-backs)
+  stands unchanged.
+- **The commuting lemma** is `CSt::patched_back`. After a write-back of a
+  pending view `c` into `p`, with other chains pending anywhere, the patch at
+  the meaning after it is the patch before it. Above `c` the same levels are
+  on chains (`BackAt::above`). Each step there commutes with the write-back
+  (`BackAt::step_above`). The step either writes another parent, or writes
+  `p` at a sibling's place, and `sib` says the two places are apart
+  (`ApartAt.commute`, unconditional). At `c` the fold's step is the
+  write-back itself (`BackAt::step_here`). Below `c` the same levels are on
+  chains (`BackAt::below`): `c`'s contribution moves to `p`, now pending,
+  which `uni` says refers. The one exception is a holder `p`, whose step is
+  nothing.
+- **What it uses that the invariant did not say.** A view written back has
+  no live child to write (`BackAt.nk`). This is a checker fact, not an
+  invariant clause. The write-back reads the view, and a read meets every
+  view to write opened through it (`CSt::meets`), none apart from its
+  whole (`Steps::apart(R ++ a, R) = None`, by `Steps::apart_prefix`).
+  Writing `A` back while `a`'s slot is pending is refused
+  (`nested_two_late_refused`). So a view written back has no pending
+  descendant, and no place is overwritten.
+- **The step takes the level's entry to write**, not its first entry: a read
+  entry is on no chain, and a level with a pending entry need not be shown to
+  have one entry.
+
+No new invariant clause, and `pone` is gone. `BackAt` collects what a stage
+supplies (`Stmt::back_at`): `sib` at the meaning's words (`Inv::at_sels`:
+the patch keeps the plain variables, `CSt::pfold_agree`), `uni`, `wpar` and
+`chain` through `Walkable`, the levels a place reads plain (`words`), and
+`nk` from the write's read licence (`Stmt::back_nk`).
+
+**The stages restated.**
+- **The chain refers, the child pending** (`stage_back_ref_pend`). The
+  stage is now `patched_back` alone: the meaning after is the fold's step at
+  the child (`wstep_one`), and the heap is unchanged.
+- **The chain refers, nothing pending** (`stage_back_ref_none`). Unchanged.
+  With the child written back, the checker allows it only while nothing is
+  pending.
+- **The chain is copies** (`stage_back_copy`), with other chains pending
+  elsewhere. A level on a chain the patch writes up refers
+  (`CSt::pend_refers`, `uni` up `anc_of`), so the patch never writes a copy
+  (`CSt::pfold_plain`). Setting a copy's cell and meaning commutes with the
+  patch (`CSt::patched_copy_set`, over `pfold_set`). The two flags the
+  write-back changes are on copies, so they move no chain
+  (`CSt::patched_reback_copy`). `Inv::set_cell` now works over the patched
+  meaning: it takes the meaning at the variable as patched
+  (`Env::get(patched, x) = Env::get(e, x)`) and the patch after it as the
+  patch before, set there.
+- The view's death and `Inv::rekin` lost their `pone` premise. Nothing else
+  changed.
