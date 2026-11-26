@@ -254,3 +254,15 @@ The translation and its theorem pass the library gate; the comparison runs over 
     - One refused control: a four-byte store from a view the value is not held at.
   - **Then** re-run `scripts/bytes-level-compare` and `--gates`.
   - **An open question**, unverified: whether `Typed`'s word kinds should carry a width instead. The per-access statement looks sufficient, since a load binds every width and a store's view is a lookup at a kind. But calls' and answers' kinds were not checked against it.
+- 2026-11-26: **The stage-3 list, items 1–4, after [[bytes-level-access-view]]** (measured by `scripts/bytes-level-compare` over all seventeen rows and `--gates`).
+  1. **The access view: done.** Every export row now lowers:
+     - sha256_init is byte-identical (1236).
+     - sha256_compress 8172 → 8240, sha256_update 8949 → 9007, sha256_finish 9575 → 9647, scan_tokens 14564 → 14576. The difference is the loops alone; every non-loop routine has the same bytes.
+  2. **Bounded loops**, every loop of every row in the same shape:
+     - Bytes: +6 per loop, +10 where the counter or the flag needs REX (before: +8 / +12). The hash rows have 10, 9 and 10 loops; scan_tokens 2.
+     - Per continuing pass, the old runs 6 loop-control instructions: `TEST; JE`, `CMP; JNE`, `ADD`, `JMP`.
+     - The new runs 7: `CMP; JNE`, `ADD`, `MOV flag, 1`, `CMP counter, 0; JE`, `JMP`. That is the old count plus `MOV flag, 1`, with one taken jump per pass, as the old.
+  3. **The jump to a jump: done.** The tail is the moves, `JCC J` forward, `JMP H`. A backward `JCC` is not laid out by the assembler model ([[asm-landing-both-ways]]).
+  4. **The dead reference copy: done.** It was not dead by the function's reads, because a loop's pass reading its own parameter of the same id was counted; `Function::reads` is now the scope's (`scope_reads`).
+     - Dropped: sort_in_place 1; no export row has one.
+     - The old code does move it (one `MOV`), so sort's routine 2 is now 3 bytes smaller there than with the copy kept.

@@ -100,3 +100,35 @@ Beside it:
   - Verification:
     - `scripts/fmt --check` and `scripts/lib-closures` are clean, and `scripts/linked --check` is unchanged.
     - `HEATHER_PR_NATIVE=all scripts/test --pr`: `== suite: 4139 passed, 0 failed, 3 ignored ==`.
+- 2026-11-26: **Item 3, corrected.** The copy sort keeps (`Move(64, 5, 0)`, a span's reference) was not dropped. `Function::reads` gathered every loop pass's reads unmoved, and sort's pass names its own parameter 5.
+  - A pass reads only its parameters and what it binds, in a valuation of its own; `translate_region` adds them, moved, as `pass_reads`.
+  - So the scope's reads of a loop are its inputs and bound (`scope_reads`, c2d7b8c). The copy is now dropped.
+  - Count: sort_in_place 1, export rows 0.
+  - The handoff's "the old code has no instruction for it" was not quite right. The old code moves it in one `MOV r12, RDI`; the new code emits nothing for it.
+
+  **Item 4, the comparison** (export rows, then `--gates`), on the tree with items 1, 2 and 3.
+  - Same bytes: sha512_t1, _t2, _next; sha256_t1, _t2, _next; sha256_init (1236, refused before this round).
+  - Differ by loops alone (every non-loop routine the same; each loop the same shape):
+
+    | Row | Old → new bytes | Loops |
+    |---|---|---|
+    | sha256_compress | 8172 → 8240 | 10 |
+    | sha256_update | 8949 → 9007 | 9 |
+    | sha256_finish | 9575 → 9647 | 10 |
+    | count_newlines | 291 → 297 | 1 |
+    | raise_span, list_raise_letters | 317 → 323 | 1 |
+    | copy_span | 217 → 227 (REX) | 1 |
+    | copy_window | 313 → 323 (REX) | 1 |
+    | scan_token | 11557 → 11563 | 1 |
+    | scan_tokens | 14564 → 14576 | 2 |
+
+  - Gates:
+    - add_wide, signal, stats and nested_true are the same bytes.
+    - lower_bound 278 → 288 (REX).
+    - utf8_valid_up_to 1488 → 1494.
+    - sort_in_place 725 → 738: routine 0 is +6; routine 2 is +7, which is +10 for the loop less the dropped copy's `MOV`.
+    - rsum is refused by the translation (levels).
+  - Per loop: +6 bytes, or +10 where the counter or the flag needs REX. With the jumped layout (items 1 and 3 only) it was +8 / +12.
+  - Per continuing pass, the old code runs 6 loop-control instructions (`TEST; JE`, `CMP; JNE`, `ADD`, `JMP`) and the new 7 (`CMP; JNE`, `ADD`, `MOV flag, 1`, `CMP; JE`, `JMP`). That is the old count plus the translation's `MOV flag, 1`. Both take one jump per pass.
+  - Checked on every loop of every row and gate by the tail's instruction shape (`ADD; MOV; CMP; JE; JMP`), against the old `ADD; JMP`.
+  - `ownership-design.md` §17.8 and the translation issue's stage-3 list are updated with these numbers.

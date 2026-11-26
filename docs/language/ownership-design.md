@@ -2359,7 +2359,7 @@ and each native gate's program, was compiled both ways
 No export uses levels, `also`, a `Fixed` span, `TableRead`, or a wide access
 at any width but four.
 
-**The comparison.** The results:
+**The comparison.** First run (stage 2's test), results:
 - Same bytes: every routine without a bounded loop in every row that lowers,
   call displacements aside. That covers six export rows and four gate
   programs entirely, and every non-loop routine of the rest (scan_token's 38
@@ -2367,16 +2367,67 @@ at any width but four.
 - Bigger: each loop routine grows by 8 bytes, 12 with REX prefixes. Every
   loop has the same shape. Per pass that continues, the code runs one more
   instruction (`MOV flag, 1`, the translation's) and one more taken jump (a
-  jump to a jump, the lowering's `plain_jumped`). The head's `TEST; JE`
-  moves to the tail as `CMP; JNE`.
-- One further byte difference: a dead reference `Move`, which the old
-  placement gave no instruction, becomes `ADD r, 0` (sort).
+  jump to a jump, the lowering's). The head's `TEST; JE` moves to the tail
+  as `CMP; JNE`.
+- One further byte difference: a reference copy, which the old code moves
+  in one `MOV`, becomes `MOV` and `ADD r, 0` (sort).
 - Refused: five rows by the lowering. A four-byte access's result and value
-  are held as `Word`, not `Narrow(32)`, so the hash's buffer rows and
-  scan_tokens are refused. The levels gate is refused by the translation.
+  were held as `Word`, not `Narrow(32)`, so the hash's buffer rows and
+  scan_tokens were refused. The levels gate is refused by the translation.
 - Free in both: every byte store's reload is dead, and the old lowering
   emits the same `MOVZX` after each store. The clip at copy_window's lend is
   the old code's too.
+
+**The comparison again** (`issues/bytes-level-access-view.md`). This run
+follows three changes:
+- An access names its view (below).
+- The loop's tail jumps forward out and once back.
+- The translation drops a reference copy its scope never reads.
+
+Every one of the seventeen export rows now lowers:
+- Byte-identical: sha512_t1, _t2, _next; sha256_t1, _t2, _next; and
+  sha256_init (1236 bytes, refused before).
+- Larger by the loops alone, every non-loop routine the same:
+  - sha256_compress: 8172 → 8240 (10 loops);
+  - sha256_update: 8949 → 9007 (9 loops);
+  - sha256_finish: 9575 → 9647 (10 loops);
+  - count_newlines: 291 → 297;
+  - raise_span and list_raise_letters: 317 → 323;
+  - copy_span: 217 → 227;
+  - copy_window: 313 → 323;
+  - scan_token: 11557 → 11563;
+  - scan_tokens: 14564 → 14576 (2 loops).
+
+Gates:
+- add_wide, signal, stats and nested_true are the same bytes.
+- lower_bound: 278 → 288.
+- utf8_valid_up_to: 1488 → 1494.
+- sort_in_place: 725 → 738. Its reference copy is dropped (its one `MOV`
+  gone), so its second routine is +7: +10 for the loop, −3 for the copy.
+- rsum is refused by the translation (levels).
+
+The cost per loop, the same shape in every loop of every row:
+- Bytes: +6, or +10 where the counter or the flag needs a REX prefix (the
+  previous layout's +8 and +12).
+- Per continuing pass, the old code runs 6 loop-control instructions:
+  `TEST; JE` at the head (not taken), the pass's own exit test `CMP; JNE`,
+  `ADD counter, -1`, and `JMP` to the head.
+- The new code runs 7: the pass's `CMP; JNE`, `ADD`, `MOV flag, 1`,
+  `CMP counter, 0; JE` (not taken), then `JMP` to the head. That is the old
+  count plus the translation's `MOV flag, 1`, and one taken jump per pass,
+  as the old code.
+- Once per loop: `MOV flag, bound` at entry, in place of the head's first
+  `TEST; JE`. The exit arm sets the counter and the flag (`MOV`, `MOV`) where
+  the old sets the flag (`MOVABS`). After the loop, `CMP flag, 1; JNE`
+  replaces `MOVABS flag, 1; TEST; JE`.
+
+**A rule this run taught**: an emitter form is not landed until a program
+using it lowers by evaluation. That means `Program::lower` answers `Some`
+for it by `refl` in a probe, so every layout premise is met, and the
+comparison runs it. A first layout for the loop's tail jumped back with a
+`JCC`. Its proofs checked and the suite was green. But the assembler model
+lands a `JCC` only forward, so `laid_out()` refused every such program, and
+no probe had lowered one (`issues/asm-landing-both-ways.md`).
 
 **What the old optimizer emits that the bytes level refuses.** The
 translation normalises two things, each exact in meaning:
@@ -2392,15 +2443,25 @@ calls, which is the word-only rows. Bounded loops, lends, wide accesses,
 guarded loads, `also` and levels remain.
 
 **What stage 3 still needs**, from the comparison and the proof:
-1. **An access names the view it uses.** A store says which width's view it
-   stores from, and a load what kind its output is held at. This unblocks
-   the five refused rows.
+1. **An access names the view it uses**: done
+   (`issues/bytes-level-access-view.md`).
+   - `Store(bytes, view, place, value)` writes the low bytes of the value's
+     `view`-bit view.
+   - `Load(bytes, view, output, place)` is held at its view's kind (`Word`
+     at 64, `Narrow(32)` at 32).
+   - Validity refuses a view narrower than the access, and any view but 64
+     and 32.
+   - No narrow value crosses a call, a loop's state or an answer in either
+     pipeline, so `Typed` carries no width.
 2. **Bounded loops, a temporary cost** until loops are reflected directly:
-   the numbers above. The new design keeps fuel out of the code, so a
-   counted loop is not a need.
-3. The jump to a jump, the lowering's to remove.
-4. The dead reference move: dropped by the translation, or a reference move
-   in the language.
+   the numbers above, `MOV flag, 1` per pass and 6 or 10 bytes per loop. The
+   new design keeps fuel out of the code, so a counted loop is not a need.
+3. The jump to a jump: done. The tail jumps forward out and once back. A
+   `JCC` back to the head would save the second instruction, but the
+   assembler model lands a `JCC` only forward
+   (`issues/asm-landing-both-ways.md`), for after the switch.
+4. The dead reference copy: done, dropped by the translation where the scope
+   never reads it (sort's one).
 5. Levels and the out-of-room exit, designed separately.
 6. A refusal report from `Program::lower`.
 7. The theorem's remaining forms, and a decider for its premise.
@@ -2412,8 +2473,9 @@ native_cat and native_tools compile through the program compiler, not
 FunctionIR, so stage 3 does not move them.
 
 So the answer is: not yet in one move. The memory half translates exactly
-where proved, and its code is the same outside loops. The access view is
-the one change that blocks rows outright.
+where proved, and its code is the same outside loops. With the access view,
+no row is blocked outright; what remains is the loops' cost, the theorem's
+remaining forms, and the optimizer and the planner on the new layer.
 
 ## 18. The world, termination, and level 2 fixed (2026-11-25)
 
