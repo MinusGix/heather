@@ -302,7 +302,12 @@ fn Heap::Frame(tys: Nat → Type, strs: Strs(tys), before, after: Heap(tys), rs:
 // that existed is live after only if it was live before, and has no holes
 // after where it had none. The run only stores into a block (keeping its
 // holes), kills one, or adds one past the end; a caller re-reads its own
-// objects' blocks after a call, and lends them again, by this.
+// objects' blocks after a call, and lends them again, by this. **This
+// fragment's clause, not a law of level 2**: this round has no holes, so "no
+// holes before, none after" is the whole truth here. The round that adds
+// holes replaces it with the frame reading holes as well as values (a hole
+// apart from what was lent is kept, one under it is the callee's to change);
+// it is to be replaced, not generalised around.
 fn Heap::Stays(tys: Nat → Type, before, after: Heap(tys)) → Type {
     (b: Nat) → b < before.len() → (ob2: Obj(tys)) → Heap::obj(tys, after, b) = Some(ob2) → Exists<Obj(tys)>(λ ob => (Heap::obj(tys, before, b) = Some(ob)) ∧ (ob.holes = Nil → ob2.holes = Nil))
 }

@@ -4093,3 +4093,80 @@ it is a copy, `cfit` says so.
 The call's step is the call's own part (P8), since `CallFits` is what the
 callee's safety gives; a `Jump` is a leaf, and its like-ness belongs to the
 induction on fuel (item 4).
+
+### 23.17 The call's interface: `SafeAt` clause by clause (2026-11-26, seventh session)
+
+`SafeAt` is the whole of what a caller knows of a callee, and what the body
+induction will rest on. Most of its clauses were added or corrected by the
+proof; each is listed with the program that forced it.
+
+**What the callee may assume of its inputs** (premises):
+- The arguments read as the meaning's (`Value::ReadAll`, at the heap's
+  length as fill fuel).
+- They have the parameters' codes (`Dyn::Coded`). Forced by `get_x`
+  (§23.7): a field read of a word owes nothing and is stuck.
+- The callee's precondition holds of them (`p.pres`).
+- They are lendable (`Lendable`):
+  - `arity`: as many arguments as parameters (the checker's levels assume it).
+  - `live`: a referring argument's block is live with no holes, its
+    selections fitting.
+  - `plain`: plain data taken is passed by value.
+  - `apart`: an argument the callee may change is apart from every other,
+    `Sel::Apart` including that a write through one keeps the other's fit
+    (§23.10).
+  - `whole`: an object taken is a whole block no other argument reaches.
+    Forced by `f(a: Buf take, b: Buf read) { Death(a); Read(b) }` (§23.8).
+
+**What its run owes** (conclusions):
+- It is never stuck.
+- A measured function's run is done from its `need` on. The measure is owed
+  only by measured callers (§23.13: an unmeasured caller owed `0 < 0`).
+- Where an unmeasured run is going, its history is one the meaning reaches.
+- Where it is done (`Done(a)`):
+  - **Results and written values read the meaning's** (`ReadAll` of the
+    answer against `w(g, ds)`).
+  - **`Value::Written`, per written parameter:**
+    - A referring argument's slot is the argument itself (§23.13, so the
+      caller's view of what it lent stays its own reference).
+    - One passed by value comes back plain (this session;
+      `lend_plain_back_checked`: the caller's slot is a view to write of a
+      copy, and a reference coming back could not be placed by any
+      invariant).
+    - The meaning's value after fits its value before: the same code and
+      length. Forced by `f(p: Bytes write) { Call(g, [p], 1); Write(p, Loc 0); Ret([p]) }`
+      (§23.13): only the callee's safety says what its world answers fits.
+  - **`Heap::Frame`, at the blocks that existed.** First by block (too coarse:
+    `lends_one`, §23.14). Then "every path apart from every reference lent to
+    change reads as before" (§23.14). That is strictly weaker than the
+    design's sentence without an extensionality law the model must not have:
+    a record kind's fields need not cover its type. `lend_under_checked` is
+    the program: `x[0]` is lent, written back, and `Ret` reads the whole of
+    `x`. Now (being built) it is §18.3's lens equation: a block's value after
+    is its value before with each reference lent to change into it
+    overwritten by what that reference reads after. The reads at apart paths
+    follow from it as a lemma, and a block lent to nothing is equal before
+    and after. A block lent whole is unconstrained; what is known of it
+    comes from `ReadAll` and `Written`. Only references lent to change count
+    (`Value::lent`): a block lent only to read is unchanged (§23.8).
+  - **`Heap::Kept`:**
+    - The heap is no shorter (growth). Without it, a moved argument's block
+      past the new length breaks `inheap`, and the caller's next `Fresh` may
+      take that block.
+    - A block that existed is live after only where it was, with no holes
+      where it had none (`Heap::Stays`). Without it a caller cannot lend its
+      object a second time (`Lendable.live`).
+
+    **This fragment's clause**: the round with holes replaces the no-holes
+    part with the equation reading holes too (a hole apart from what was lent
+    is kept, one under it is the callee's).
+  - **`Value::Views`, per result by its origin:**
+    - `OFresh`: plain, or a block made by the call (past the heap's length,
+      no selections). Two fresh results are in different blocks (being
+      added: the caller's `own` needs each new owned root alone in its
+      block).
+    - `OParam`: the argument itself where it refers, plain where it was
+      passed by value (`keep_by_value`, §23.13).
+    - `OView`: the argument's reference narrowed by the signature's steps at
+      the call's words, the arguments' then the results' (`found_checked`,
+      §23.4); a copy where the argument was plain (`at_by_value`, §23.14).
+      The words are the arguments as passed (`at_moved_refused`, §23.13).
