@@ -33,6 +33,7 @@ import placement;
 import placement_seam;
 import placement_inject;
 import placement_laid;
+import placement_stages;
 import bytes_memory;
 import bytes_level;
 import bytes_level_routines;
@@ -456,7 +457,6 @@ fn cw_places() → List<function_ir_lower::Place> { [Into(Rdi), Into(Rsi), Into(
 fn cw_lowered() → Option<x86_64_asm::Prog> { placed(cw_fns()).and_then(λ (q: Program) => q.lower(cw_places())) }
 
 theorem cw_lowers(): cw_lowered().is_some() = True { refl }
-
 
 fn sum_places() → List<function_ir_lower::Place> { [CallSlots(1), Into(Rcx), Into(Rdx), Into(Rsi), Into(R8), Spilling(8), Into(Rdi), Into(Rax), Into(Rax)] }
 
