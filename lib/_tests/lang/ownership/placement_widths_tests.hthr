@@ -1,0 +1,128 @@
+// The element width varied (docs/language/ownership-design.md §25.10;
+// docs/testing-generated-terms.md): `placement_tests.hthr`'s sequences are
+// all of bytes, behind which `place`'s scaled index shifted by an id. Here
+// one function, `xs[i]`, over sequences of 64-, 32- and 16-bit words, read
+// at index 2: checked, placed, the level-2 run and the bytes level's
+// agreeing, and lowered (the 16-bit one refused by the emitter).
+import logic;
+import bool;
+import nat;
+import option;
+import list;
+import pair;
+import bitvec;
+import span_set;
+import store;
+import atom;
+import steps;
+import shape;
+import sequences;
+import body::{Place, Callees};
+import level2;
+import run;
+import verdict;
+import checker;
+import placement;
+import placement_seam;
+import bytes_memory;
+import bytes_level;
+import bytes_level_routines;
+import x86_64_memory_contract;
+import x86_64_call_contract;
+import function_ir;
+import function_ir_lower;
+import x86_64;
+import linux_world;
+import x86_64_asm;
+
+// Name 0 a sequence of 64-bit words, 1 of 32-bit, 2 of 16-bit.
+fn wtys() → Nat → Type { λ k => match k { Zero => List<u64>, Succ(k1) => match k1 { Zero => List<u32>, Succ(k2) => match k2 { Zero => List<u16>, Succ(_) => True } } } }
+
+fn wcode(k: Nat) → Shape { match k { Zero => SWord(WBits(64)), Succ(k1) => match k1 { Zero => SWord(WBits(32)), Succ(_) => SWord(WBits(16)) } } }
+
+fn wstrs() → Strs(wtys()) {
+    λ k => match k {
+        Zero => Struct(Object, None, Sequence(Seq::words(wtys(), SWord(WBits(64)), BitVec::ofNat(0), None))),
+        Succ(k1) => match k1 {
+            Zero => Struct(Object, None, Sequence(Seq::words(wtys(), SWord(WBits(32)), BitVec::ofNat(0), None))),
+            Succ(k2) => match k2 {
+                Zero => Struct(Object, None, Sequence(Seq::words(wtys(), SWord(WBits(16)), BitVec::ofNat(0), None))),
+                Succ(_) => Struct(Plain, None, Opaque),
+            },
+        },
+    }
+}
+
+fn wnofunc() → Func { Func(Sig(Nil, Nil), Ret(Nil)) }
+
+fn wsigs(fs: List<Func>) → Nat → Sig { λ g => (fs.nth(g).unwrap_or(wnofunc())).sig }
+
+fn wno_prim() → Nat → Bool { λ _ => False }
+
+// `xs[i]`, the sequence of name `k`.
+fn pick_r(k: Nat) → Func {
+    Func(Sig([Param(SNamed(k), ByRead), Param(SWord(WBits(64)), ByTake)], [Result(wcode(k), OFresh)]), seq([Stmt::Read(Place(Arg(0), [SElem(Var(1))]))], Ret([Loc(0)])))
+}
+
+fn wwhy(k: Nat) → Option<Why> { (pick_r(k)).refusal(wtys(), wstrs(), wsigs([pick_r(k)]), wno_prim(), λ _ => True, 0) }
+
+fn wplaced(k: Nat) → Option<Program> { place(wtys(), wstrs(), wno_prim(), [pick_r(k)]) }
+
+fn wio() → Io { Io::of(World::piped([])) }
+
+// The values 10, 20, 30, 40 at the name's code.
+fn wvals(k: Nat) → Dyn(wtys()) {
+    match k {
+        Zero => Dyn(SNamed(0), [BitVec::ofNat(10), BitVec::ofNat(20), BitVec::ofNat(30), BitVec::ofNat(40)]),
+        Succ(k1) => match k1 {
+            Zero => Dyn(SNamed(1), [BitVec::ofNat(10), BitVec::ofNat(20), BitVec::ofNat(30), BitVec::ofNat(40)]),
+            Succ(_) => Dyn(SNamed(2), [BitVec::ofNat(10), BitVec::ofNat(20), BitVec::ofNat(30), BitVec::ofNat(40)]),
+        },
+    }
+}
+
+fn wheap(k: Nat) → level2::Heap(wtys()) { [Live(Obj(wvals(k), Nil))] }
+
+fn wargs() → List<level2::Value(wtys())> { [Refer(level2::Ref(0, Nil)), Plain(Dyn(SWord(WBits(64)), BitVec::ofNat(2)))] }
+
+fn wbheap(k: Nat) → x86_64_memory_contract::Heap { x86_64_memory_contract::Heap([(Dyn::encode(wtys(), wstrs(), wvals(k))).unwrap_or(Nil)], Nil, Nil) }
+
+fn wid() → Nat → Nat { λ b => b }
+
+// Level 2's answer, lowered.
+fn wlevel2(k: Nat) → Option<List<x86_64_call_contract::Value>> {
+    match Run::of(wtys(), wstrs(), funcs_at([pick_r(k)]), λ _ _ => Nil, wno_prim(), 2, 0, wargs(), wheap(k), wio()) {
+        Done(a) => values_lower(wtys(), wstrs(), wid(), a.heap, a.results),
+        Exited(_, _) => None, Going(_) => None, Stuck => None,
+    }
+}
+
+// The bytes level's answer.
+fn wbytes(k: Nat) → Option<List<x86_64_call_contract::Value>> {
+    match bytes_level::run(wplaced(k).unwrap_or(Program(Nil)), Blocks(λ _ => False), 3, 0,
+            values_lower(wtys(), wstrs(), wid(), wheap(k), wargs()).unwrap_or(Nil), wbheap(k), wio()) {
+        Done(a) => Some(a.words),
+        Exited(_, _) => None, Going(_) => None, Stuck(_) => None,
+    }
+}
+
+fn thirty() → Option<List<x86_64_call_contract::Value>> { Some([x86_64_call_contract::Word(BitVec::ofNat(30))]) }
+
+theorem picks_checked(): Pair(wwhy(0), Pair(wwhy(1), wwhy(2))) = Pair(None, Pair(None, None)) { refl }
+
+theorem picks_placed(): Pair(wplaced(0).is_some(), Pair(wplaced(1).is_some(), wplaced(2).is_some())) = Pair(True, Pair(True, True)) { refl }
+
+theorem picks_level2(): Pair(wlevel2(0), Pair(wlevel2(1), wlevel2(2))) = Pair(thirty(), Pair(thirty(), thirty())) { refl }
+
+theorem picks_bytes(): Pair(wbytes(0), Pair(wbytes(1), wbytes(2))) = Pair(thirty(), Pair(thirty(), thirty())) { refl }
+
+// Lowered, at a placement of the body's outputs in order (the scaled
+// index, the element's reference, the loaded word, the result in `Rax`).
+fn wplaces() → List<function_ir_lower::Place> { [Into(Rcx), Into(R8), Into(R9), Into(Rax)] }
+
+fn wlowers(k: Nat) → Bool { (wplaced(k).and_then(λ (q: Program) => q.lower(wplaces()))).is_some() }
+
+// The 16-bit one is refused by the emitter: a two-byte load waits for the
+// machine's `MOVZX r, word` (bytes_level_lower's `emit_load`;
+// issues/bytes-level-copy-and-halfwords.md).
+theorem picks_lower(): Pair(wlowers(0), Pair(wlowers(1), wlowers(2))) = Pair(True, Pair(True, False)) { refl }
