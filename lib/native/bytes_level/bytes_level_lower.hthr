@@ -2785,7 +2785,6 @@ fn Body::emit_by(self body: Body, g: CallGuards, saves, slots: Nat, short: List<
     }
 }
 
-
 // The emission with no guard: every program with no cycle, and every
 // lemma about a region that calls no routine of its own cycle.
 fn Body::emit(self body: Body, saves, slots: Nat, short: List<Nat>, bound, spare: Nat, prog: Prog, file: File, placement: List<Place>, names: Nat) →
