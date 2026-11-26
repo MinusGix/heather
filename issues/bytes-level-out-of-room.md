@@ -49,6 +49,7 @@ A routine that calls itself lowers with a guard and a theorem whose premise does
 - 2026-11-26: Step 3 item 2 at 4a04831: the guard's stage lemma Site::guard_claims (bytes_level_lower), with Stack::offset_small, Stack::room_word, guard_immediate, guard_taken. Item 3 foundations at 44ea99a: Kernel::escaping and its conversions (x86_64_stack_runs), HistoryExtends of the meaning (bytes_level_scope, bytes_level_routines). The coordinating session accepted item 1 as built (RunsAsMeaning as LinuxRuns) and the kernel-step encoding with conditions (below).
 
 - 2026-11-26: Verified at 37021c5 (items 1–2 and item 3's foundations): HEATHER_PR_NATIVE=all scripts/test --pr '== suite: 4140 passed, 0 failed, 3 ignored =='. The ceiling count at K_E (Site::escaping_ceiling) after it, checked by heather check on the contract and its importers. Handoff (third session) below.
+- 2026-11-26: Step 3 item 3, FunctionIR's frame lemmas at 1c6333a (coordinating session's ruling, alternative 1): function_runs_claim_kept and function_enters_claim_kept give the body Kept(callee_kept(), s0, x1); the old names are instances with unchanged statements. HEATHER_PR_NATIVE=all scripts/test --pr '== suite: 4140 passed, 0 failed, 3 ignored =='; scripts/linked --check unchanged; scripts/lib-closures clean; scripts/fmt --check clean.
 ## Handoff (2026-11-26, third session, after step 3 items 1–2 and item 3's foundations)
 
 **Done.**
