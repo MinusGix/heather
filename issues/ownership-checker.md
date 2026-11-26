@@ -29,96 +29,94 @@ Items 1 and 2 are definitions and evaluation; item 3 waits for the coordinating 
 
 `CheckSound` has an inhabitant for the fragment, the experiments' programs are probes or theorems of the real modules, and the experiment modules are gone.
 
-## Handoff (2026-11-26, end of the third session: the writes but the write-back)
+## Handoff (2026-11-26, end of the fourth session: Ret, then the call)
 
 Continue on branch `claude/ownership-checker-sound`. Everything is in
-`lib/lang/ownership/sound.hthr`; design §23.11 says what was built this
-session and why (read it, then §23.8–§23.10).
+`lib/lang/ownership/sound.hthr`; design §23.12 says what was built this
+session and why (read it, then §23.8–§23.11). The coordinating session's list
+for this session was: 1 `cfit`; 2 the write-back; 3 `Death`/`Take` of a view's
+root, `Ret`; 4 `Call` (plan it as named parts first and send the parts to the
+coordinating session); 5 `SafeAt` for a body without joins or `Jump`, then
+report; 6 joins, `Jump`, the induction. Items 1 and 2 are done, and so is the
+`Death`/`Take` half of item 3.
 
-**Done**: the stages `Lit`, `Op`, `Read`, `Fresh`, `Take` (part, plain,
-holder), `Death` (part, plain, holder), `View` (all four), `Write` to a plain
-root, through a holder (`stage_write_hold`) and through a view
-(`stage_write_view`, split in three), both cells each. Each concludes
-`Stepped` from `none`. The decider law `Steps::apart_prefix` (a common prefix
-decides nothing) is in `steps.hthr` with probes.
+**Done this session**:
+- **`cfit` and `sib`**, carried through every builder. `cfit`: a copy's place
+  fits its parent's copy, and the copy is *like* what is read there, i.e.
+  the same code and length; fit alone is not kept by the child's own
+  write-back at a place of several steps. `sib`: two siblings, one to write,
+  are apart at their *places*. `excl` only says so of whole regions, and
+  apartness under a shared prefix does not cancel at the `Sel` level; the
+  decider cancels it (`Steps::apart_prefix`). The licence's soundness chain
+  now takes a common prefix (`against_sound`, `license_sound`,
+  `Inv::lic_suffix`; `Inv::lic_apart` is its Nil-prefix instance;
+  `Inv::sib_lic`).
+- **The write-back**: `Stmt::stage_back` dispatches to three stages:
+  - `stage_back_ref_none`: the chain refers, nothing pending; the run stores
+    what is there (`Heap::store_val`), and the meaning is unchanged
+    (`Env::set_fix`).
+  - `stage_back_ref_pend`: the chain refers, the child pending; the meaning
+    is the walk's first step (`up_step`), the patch afterwards its rest.
+  - `stage_back_copy`: a chain of copies, through `Inv::set_cell`.
 
-**The invariant now** (`Inv`): `sim` against `s.patched(e, m)` (a pending
-view's value written up its chain only where its cell refers; level-count
-fuel); clauses added this session: `wpar` (a view to write whose parent is a
-view: that parent has one entry, to write), `uni` (an entry's cell and its
-parent's both refer or are both copies), `pone` (pending entries are at one
-level). `Inv::rekin` carries every clause but `sim` and `pone` across any map
-of the entries that keeps all fields but `back` (`Kin`), into
-`s.rekin(f, tl, wl)`; `Inv::unback` is its instance for a write.
+  The parent is a holder or a view in each: `CSt::back_patched_hold` and
+  `_view`. The state after is one `rekin` (`CSt::back_state`,
+  `VEnt::reback`), finished by `Inv::back_finish`. `Inv::set_cell` takes
+  `s.patched(e, m) = e`, before and after, instead of `none`.
+- **`Stmt::stage_death_view`** (`Inv::drop_view`, `CSt::drop`): also valid
+  while another view is pending (`CSt::patched_drop`, `up_drop`, `anc_drop`).
+  **`Stmt::stage_take_view`** (`Inv::take_view`, `CSt::moved`, `VEnt::rn`, the
+  `Alike` record; ancestry through `anc_moved`, `anc_par_eq`, `anc_not`).
 
-**Lemmas ready for the write-back**: `Sel::put_back_path` (writing back what a
-path reads changes nothing), `CSt::up_step`/`up_stop`/`up_nil` (one step of the
-walk), `CSt::up_rekin` (the walk reads no written-back flag), `CSt::up_more`
-(fuel past the level changes nothing), `CSt::up_sim` (the walk agrees with the
-run, from `UpAt`), `Inv::store_rest`, `Value::get_store`.
+**Next: `Ret`**, the open question first. `CSt::ret` passes when nothing is
+pending, the results are as their origins say (`returns_all`), and each
+written parameter's object is held and synced (`gives_back`).
+`SafeAt` then wants four things:
+- `ReadAll` of the cells against the meaning: Sim with bare blocks
+  (`Value::get` to `Value::read`).
+- `Frame`: `inv.frame`, since `lent` is `Value::lends` at the start.
+- `Views`: from `returns_all` and `refs`.
+- `Written`: the argument's block reads the final meaning, and
+  `Dyn::Fits(ds_i, o)`.
 
-**Next, in order**:
+Two of these need facts about the start that `Inv` does not keep:
+- **an argument's reference is its object's root**. This one is cheap: a
+  clause over `m.env` alone, since a referring cell is never set
+  (`set_cell` is for plain cells only), and every builder keeps it.
+- **a written parameter's meaning keeps the code and length of the argument
+  as passed** (`Fits`). The original `ds` is not a parameter of `Inv`.
 
-1. **`cfit`** (decided by the coordinating session: option (a)): a live entry
-   whose parent's cell is a copy `Plain(d)` has its place fitting `d` at the
-   run's words. Add it to `Inv` and to every builder (as `uni` was: push
-   builders shift variables with `CSt::push_lvl`; `Inv::rekin` carries it;
-   `set_cell` must show it for the written cell, from the licence's apartness
-   of the write's path from each child's place: for a view parent the
-   licence speaks of `parent.reg ++ xs` against `child.reg = parent.reg ++
-   child.at`, so take the decider's verdict on the suffixes by
-   `Steps::apart_prefix` and use `SelApart.fit2`). Opened by `Sim::place` in
-   `Inv::push_view` (a copy view's parent is a copy, `uni`).
-2. **The write-back stage** (`is_back(l, xs, lv)`: `ents(lv) = [ce]`,
-   `ce.par = l`, `Steps::same(ce.at, xs)` so `unsteps(xs) = p.steps`; no
-   licence residuals; the checker allows it while pending only if
-   `ce.back = False`, `writes_back`). The state after is
-   `s.backed(lv).wrote_to(l)`. It is a write through the parent at the
-   child's place of what the child holds. Four cases, split from the start
-   (an undivided stage hits the memory rail):
-   - **referring, nothing pending**: the run stores `B` back (`put_back_path`:
-     the child's reference reads the block at the parent's reference ++ its
-     place), so every reference reads as before (`Value::get_store` with
-     equal values); the meaning's parent becomes `write(at, e(child),
-     e(parent))`, which is `e(parent)` by `put_back_path` again (the child's
-     and parent's runs read the same block). Parent a holder: the state is
-     `s` up to `touched`/`wrote` (`backed` is the identity on a written-back
-     entry; `Inv::touch`). Parent a view: its entry becomes pending; walk from
-     it with `up_sim` at `s` (the child is not an ancestor of the parent, so
-     `UpAt.hv` holds) and finish with `Inv::rekin`.
-   - **referring, pending** (`ce` is the pending entry: `pone` and
-     `writes_back`): before, the patch is `up(s, e, lv)` (`patched`'s `find`
-     gives an entry at `lv`, which is `ce`), which is `up(s, e3, l)` after
-     one `up_step`, `e3` being the meaning's write-back. Parent a holder:
-     that is `e3`, nothing is pending after. Parent a view: the patch after is
-     `up(s3, e3, l, F)`, equal by `up_rekin` and `up_more`. The state after is
-     a `rekin` of `s` (`backed(lv)` then `unback(l)`; fuse the two maps).
-   - **plain chain, either**: the parent's cell is set (`Sel::put` fits by
-     `cfit`); generalise `Inv::set_cell` from `none` to `s.patched(e, m) = e`
-     (a copy's pending patch is the meaning itself), then `Inv::rekin`.
-3. `Death` and `Take` of a view's root, then `Ret`, then the brief's item 3
-   (`Call`, with its two decisions).
+  For a referring argument it is what the root read in `h0`, so it can be a
+  clause over `h0`. For a plain argument nothing in `Inv` holds the original
+  value. Every write keeps the root's code and length (`write_keeps`, and
+  `WriteVal` for a write of the whole), so it is a fact of the meaning
+  alone, and could be carried by the body's induction instead.
+
+This is a design decision: put it to the coordinating session before
+building `Ret`.
+
+**Then** the brief's item 4 (`Call`): plan it as named parts and send the
+parts to the coordinating session before writing any of it.
 
 **Costs and traps found this session**:
-
-- One undivided stage (`stage_write_view`) exhausted the 8 GiB rail though
-  every lemma it cited was cheap (the next stages, the call especially, will
-  be larger: split them from the start, statements spelling their objects
-  out, no `let` in a statement); the `--timings` `<stem>.open.tsv` named it.
-- A run killed at the rail prints no `error:` line: read the last line
-  (`ok`) or the `.open.tsv`, never only grep for errors.
-- `heather check --cache` replayed a stale image here and reported
-  "0 declarations kernel-checked … ok" after edits; check without `--cache`
-  (about 50 s for `sound.hthr`).
-- A `let` whose type holds a lambda with `=` in its body needs the equation
-  parenthesised (`λ y => (a = b)`).
-- Lambdas inside `Inv`'s clauses bind `w`, `t`, `k`: a lemma's own parameters
-  named so clash when its body is built by substitution.
-- `scripts/fmt` (the Heather formatter, whitespace only) is what
-  `scripts/fmt --check` gates; never `cargo fmt`.
-- Do not edit `lib/` while `scripts/test` runs: the library gate reads it.
-  This clone has no merge base with `origin/master`, so `--pr` runs every test
-  file (about an hour).
+- No declaration written this session is dear: each takes under 0.3 s. The
+  dearest in `sound.hthr` are still `CSt::write_inv` and `CSt::up_next`. The
+  file checks in about 60 s without `--cache`.
+- A `let` whose type is not stated cannot hold a `match`. The elaborator
+  needs the motive: state the `let`'s type.
+- `λ (a, b: T)` is not a lambda binder; write `(a: T) (b: T)`. In a Π-type
+  `(a, b: T) →` is fine.
+- A local named like a method (`rn` beside `VEnt::rn`) is refused as
+  ambiguous at `en.rn(…)`.
+- `match e: p(h)` is in the standard library, but stating the equation
+  through `j` (as `List::filter_keep` does) needs no goal refinement.
+- Record eta holds by conversion (`Mach(m.heap, m.env, m.io) = m`, and the
+  same for `VEnt`), so a stage may answer `Stepped(m, …)` where the run
+  answers `Mach(…)`.
+- `scripts/test --pr` runs every test file here (no merge base) in about
+  37 minutes. Run it from a second worktree
+  (`git worktree add ../heather-wt <rev>`) so `lib/` can be edited
+  meanwhile.
 
 ## Log
 
@@ -136,3 +134,6 @@ run, from `UpAt`), `Inv::store_rest`, `Value::get_store`.
 - 2026-11-26: `187e2f5` (apartness keeps fits, the plain write): `scripts/test --pr`: `== suite: 4140 passed, 0 failed, 3 ignored ==`. Handoff rewritten.
 - 2026-11-26 (third session): the writes through a holder and through a view (`131aef7`…`fcf1a1c`, split stage `stage_write_view`); proof-side invariant changes: `patched` only along a referring chain, `wpar`, `uni` (design §23.11). `scripts/test --pr` at the whitespace commit after them: `== suite: 4140 passed, 0 failed, 3 ignored ==`.
 - 2026-11-26 (third session, end): `Steps::apart_prefix` and probes, `Inv.pone`, `Inv::rekin` (the flag-change lemmas generalised), `Sel::put_back_path`, `CSt::up_rekin`/`up_more`/`up_stop`; handoff rewritten at the write-back. `scripts/test --pr` at the commit before the handoff: `== suite: 4140 passed, 0 failed, 3 ignored ==`.
+- 2026-11-26 (fourth session): `cfit` (with like-ness) and `sib` through every builder; the licence's soundness after a common prefix (`6f6c923`). `scripts/test --pr` at `6f6c923`: `== suite: 4140 passed, 0 failed, 3 ignored ==`.
+- 2026-11-26: the write-back stage in its four cases; `Inv::set_cell` over a patch that is the meaning (`b52c3a6`). `scripts/test --pr` at `b52c3a6`: `== suite: 4140 passed, 0 failed, 3 ignored ==`.
+- 2026-11-26: the death and the take of a view (`62a8529`, `ea53353`); handoff rewritten at `Ret`. `scripts/test --pr` at `ea53353`: `== suite: 4140 passed, 0 failed, 3 ignored ==`.
