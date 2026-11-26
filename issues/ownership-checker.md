@@ -31,6 +31,8 @@ Items 1 and 2 are definitions and evaluation; item 3 waits for the coordinating 
 
 ## Handoff (2026-11-26, end of the thirteenth session: the restatement as definitions, evaluated; `CSt::Wf`'s first transitions)
 
+**Paused (the repository owner's request).** Work stopped at `fae4254`, with nothing in progress outside the tree (no wip patch). The verification run at `fae4254` (`HEATHER_PR_BASE=4bf882b scripts/test --pr`) was stopped at the pause, at 27 of 46 test files, with every file that finished passing. **No complete suite run covers this session's commits**, so run one before anything builds on them. The coordinating session's base for runs from here is `HEATHER_PR_BASE=6dfb1a2`.
+
 Continue on branch `claude/ownership-checker-sound`. The plan is §26 of the design note (on the coordinating branch `origin/claude/focused-darwin-it31c1`, read with `git show`, do not merge). This branch's copy carries §26.6 at the end of the file: what was defined, every departure from §26.2, and the coordinating session's rulings on them. **Do not prove a stage over the restated invariant yet**: a search session (on its own branch, from `2c170ed`) is evaluating `InvLocal::holds_b` after every statement of every small checked program. Its findings come through the coordinating session. The present `Inv`, its builders and stages stay until the new ones cover them (§26.4).
 
 **Done this session:**
