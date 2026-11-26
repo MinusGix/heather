@@ -396,13 +396,6 @@ theorem Answer::same_trans(self a: Answer, b, c: Answer, ab: a.Same(b), bc: b.Sa
     ⟨trans(bc.left, ab.left), ⟨a.heap.same_trans(b.heap, c.heap, ab.right.left, bc.right.left), trans(bc.right.right, ab.right.right)⟩⟩
 }
 
-theorem extends_refl(h: List<Exchange>): Extends(h, h) { Exists(Nil, refl) }
-
-theorem extends_trans(a, b, c: List<Exchange>, ab: Extends(a, b), bc: Extends(b, c)): Extends(a, c) {
-    Exists(ab.witness ++ bc.witness, trans(ab.proof, trans(cong_fn<List<Exchange>, List<Exchange>>(λ l => ab.witness ++ l, bc.proof),
-        sym(ab.witness.append_assoc(bc.witness, c)))))
-}
-
 // Two prefixes of one history: one is a prefix of the other.
 theorem suffixes_comparable(e1: List<Exchange>): (e2, o, h: List<Exchange>) → e1 ++ o = e2 ++ h → Extends(h, o) ∨ Extends(o, h) {
     match e1 {

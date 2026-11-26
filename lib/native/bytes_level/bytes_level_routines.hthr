@@ -2008,3 +2008,17 @@ theorem lower_program_meets_exited<M>(p: Program, placement: List<Place>, progra
         lower_program_tracks<M>(p, placement, program, lowered, fetch, data, last, origin, stack, top, spans, blocks, depth_rooms(p.routines),
             depth_rooms_lawful(p.routines)))
 }
+
+// The contract, all three clauses (`Site::tracks_meets`), at the table by
+// depth.
+theorem lower_program_meets<M>(p: Program, placement: List<Place>, program: Prog, lowered: p.lower(placement) = Some(program), fetch: FetchAccess<M>,
+    data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64), stack: Stack<M>(fetch, data), top: Nat, spans: Spans, blocks: Blocks):
+    Site<M>(fetch, data, program, last, origin).Meets(stack, spans, top, blocks.Lent(spans), depth_rooms(p.routines),
+        λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run_peak(p, blocks, n, f, args, heap, io), p.routines.len(),
+        λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run(p, blocks, n, f, args, heap, io)) {
+    Site<M>(fetch, data, program, last, origin).tracks_meets(stack, spans, top, blocks.Lent(spans), depth_rooms(p.routines),
+        λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run_peak(p, blocks, n, f, args, heap, io), p.routines.len(),
+        λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run(p, blocks, n, f, args, heap, io),
+        lower_program_tracks<M>(p, placement, program, lowered, fetch, data, last, origin, stack, top, spans, blocks, depth_rooms(p.routines),
+            depth_rooms_lawful(p.routines)))
+}

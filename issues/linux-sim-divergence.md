@@ -5,7 +5,7 @@ labels: [native,semantics,proofs]
 area: heather-in-heather
 milestone: [hih-pl-spec]
 created: 2026-11-06
-updated: 2026-11-06
+updated: 2026-11-26
 ---
 
 `sim_run_of` (`lib/std/os/linux/linux_x86_64_sim.hthr`, from
@@ -72,3 +72,8 @@ Which route, and whether `Sim` changes for its producers, is Minus's call.
   simulates `spin`). Probes in
   `lib/_tests/std/os/linux/linux_x86_64_sim_co_tests.hthr`. The compiler
   proving `LinuxSimCo` went to [[native-compile-co-sim]].
+- 2026-11-26: From [[call-contract-tracks]] D: `Site::Tracks` (`x86_64_call_contract`) is stronger than `Sim` on exactly the divergence this issue describes.
+
+  `Sim` lets a tree be cut after a prefix, so a loop that goes round silently is simulated by every machine, including one that exits. `Tracks` does not: where the meaning is still going at fuel `n`, the code performs at least `n - 1` machine steps in the meaning's world without returning. So a machine that exits, stops or returns early cannot track a meaning that runs on silently. The only cut it allows is where the meaning itself gets stuck.
+
+  `Site::tracks_meets` turns this into the going clause, proved once: every world the code reaches before it returns is a prefix of a history the meaning reaches, or the meaning gets stuck. Determinism between system calls is used up to the state's defined components (`step_respects_defined`, `syscall_excludes_step`, `asks_meet`, `linux_answered_respects`).

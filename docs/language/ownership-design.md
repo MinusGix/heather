@@ -2178,6 +2178,28 @@ inductions on fuel:
 - *Exited* is vacuous, since nothing is lowered that exits.
 - *Stuck* is trivial.
 
+**The going clause from `Tracks`, once.** `Site::MeetsGoing` is restated
+with the stuck alternative. Every world the code reaches in `j` steps
+before it returns, where its room is there at fuel `j + 1`, is a prefix of
+a history the meaning reaches at some fuel, or the meaning gets stuck at
+some fuel. `Site::tracks_meets` proves `Tracks → Meets`. A path of the code
+and `Tracks`' claim at fuel `j + 1` lie on one branch of resumptions, which
+gives three cases:
+
+- *Going there:* the claim's steps number at least `j`, so the path ends
+  at or before the claim's goal and its world is a prefix of the goal's.
+- *Done:* the returned state is not before the return.
+- *Exited:* no step leaves an exit.
+
+Determinism is needed only up to the state's defined components:
+`step_respects_defined` and `syscall_excludes_step` between system calls,
+`asks_meet` at one, `linux_answered_respects` for each resumption. These
+are facts of the Linux instance, used in two lemmas (`performs_reaches`,
+`performs_meet`). The lowering's `Site::Meets` is one line
+(`lower_program_meets`); the recursive probe has it (`down_meets`). Why
+this is stronger than `Sim`, and how it gives `RunsAs`:
+`issues/linux-sim-divergence.md`, `issues/call-contract-whole-program.md`.
+
 **Cost.** Stated as shapes: the claim lemmas are linear in their proof
 terms. The region theorems' claim forms cost what their `Moves` forms did,
 plus the counted step. The going induction mirrors the done induction
