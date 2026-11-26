@@ -7070,10 +7070,15 @@ theorem function_runs_saved_claim<M, S, W>(slots, saves: Nat, few: slots <= 8, s
         }, calls, least, Running(x1, w), ran)
 }
 
-theorem function_runs_claim<M, S, W>(slots, saves: Nat, slotted: slots <= 8, site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data), top: Nat,
+// The same, the body told the frame state's callee-saved registers are the
+// entry's (docs/language/ownership-design.md §17.10: a routine-level
+// invariant held in a callee-saved register, as the out-of-room floor in
+// RBP is, reaches the body through it). The lemma below is its instance.
+theorem function_runs_claim_kept<M, S, W>(slots, saves: Nat, slotted: slots <= 8, site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data), top: Nat,
     spans: Spans, Mem: S → M → Type, World: S → W → Type, kernel: Kernel<M, W>, calls, least: Nat, loan: Loan<M>(site.fetch, site.data, stack, top, spans), stable: stack.ClauseStable(top, Mem), k: Nat,
     prog: Prog, file: File, parameters: List<Nat>, result: Nat, also: List<Nat>, body: Emitted, facts: Type, values: Valuation(), d: Nat, before, after: S,
-    body_emits: (x1: MachineState<M>) → read_gpr(Rsp, x1.gprs) = stack.at(d) →
+    s0: MachineState<M>,
+    body_emits: (x1: MachineState<M>) → read_gpr(Rsp, x1.gprs) = stack.at(d) → Kept(callee_kept(), s0.gprs, x1.gprs) →
         EmitsClaim<M, S, W>(saves, site, stack, spans, Mem, World, kernel, calls, least, values, d + 8 * slots, x1, function_opened(prog, k, parameters.drop(6).len(), slots, saves), file,
             facts, before, after, body),
     moves: Lowered, keeps: Keeps<M>(values, body.file, True, moves),
@@ -7082,7 +7087,7 @@ theorem function_runs_claim<M, S, W>(slots, saves: Nat, slotted: slots <= 8, sit
     entered: (g: Gprs) → PortsAt(values, word_ports(parameters), parameter_registers(), g) → file.Represents(values, g),
     few: parameters.drop(6).len() <= 2,
     within: function_closed(body.prog, moves.code, slots, saves).Within(site.program),
-    s0: MachineState<M>, rsp: read_gpr(Rsp, s0.gprs) = stack.at(d + frame_size(slots, saves)),
+    rsp: read_gpr(Rsp, s0.gprs) = stack.at(d + frame_size(slots, saves)),
     fits: d + frame_size(slots, saves) <= stack.size, under: (d + frame_size(slots, saves)) + 8 <= top,
     in_memory: Mem(before, s0.memory),
     passed: stack.Passes(words_of(values, parameters), argument_registers(), (d + frame_size(slots, saves)) + 8, s0.gprs, s0.memory),
@@ -7112,9 +7117,12 @@ theorem function_runs_claim<M, S, W>(slots, saves: Nat, slotted: slots <= 8, sit
         trans(load_words_misses(Rsp, stack_registers(), ws.drop(6), s0.gprs, trivial), rsp);
     let rsp_g1: (read_gpr(Rsp, g1) = stack.at(d)) =
         moved_rsp_reads(frame_size(slots, saves), stack.at(d), stack.at(d + frame_size(slots, saves)), g_loaded, rsp_s1, λ (z: frame_size(slots, saves) = 0) => { let e: (d + frame_size(slots, saves) = d) = { omega }; cong_fn<Nat, BitVec(64)>(λ n => stack.at(n), e) });
+    let kept01: Kept(callee_kept(), s0.gprs, g_loaded) = kept_loads(callee_kept(), stack_registers(), ws.drop(6), s0.gprs, trivial);
+    let kept1: Kept(callee_kept(), s0.gprs, g1) = kept_trans(callee_kept(), s0.gprs, g_loaded, g1, kept01,
+        moved_rsp_kept(frame_size(slots, saves), stack.at(d), g_loaded));
     // The entry lies in the program because the body does, which the
     // body's emission says at any state: at the opened one here.
-    let opened_in = Prog::within_trans(body_emits(stack.opened(d, frame_size(slots, saves), s1), rsp_g1).left, body_in);
+    let opened_in = Prog::within_trans(body_emits(stack.opened(d, frame_size(slots, saves), s1), rsp_g1, kept1).left, body_in);
     let loaded_in = Prog::within_trans(loaded_opened(prog, k, loads, slots, saves), opened_in);
     // The parameters: six in their registers, the rest loaded.
     let counted: (ws.drop(6).len() = loads) =
@@ -7136,7 +7144,6 @@ theorem function_runs_claim<M, S, W>(slots, saves: Nat, slotted: slots <= 8, sit
                 λ (t: MachineState<M>) => (t.gprs = g_loaded) ∧ (t.memory = s0.memory)),
         site.moves_loads(stack, site.program.laid_out_fits(laid), d + frame_size(slots, saves), s0.gprs, s0.memory, stack_registers(), ws.drop(6), label, 1,
             s0.gprs, small, trivial, rsp, stacked))(loaded_in);
-    let kept01: Kept(callee_kept(), s0.gprs, g_loaded) = kept_loads(callee_kept(), stack_registers(), ws.drop(6), s0.gprs, trivial);
     λ r here resident held => {
         let a = first(r.state, here, resident, held.left);
         let s = a.witness;
@@ -7146,7 +7153,8 @@ theorem function_runs_claim<M, S, W>(slots, saves: Nat, slotted: slots <= 8, sit
         let at1 = entering.proof.right.right.right;
         let rsp_x1: (read_gpr(Rsp, x1.gprs) = stack.at(d)) = trans(cong_fn<Gprs, BitVec(64)>(λ g => read_gpr(Rsp, g), at1.left), rsp_g1);
         let ran = function_runs_saved_claim<M, S, W>(slots, saves, slotted, site, laid, stack, top, spans, Mem, World, kernel, calls, least, loan, opened,
-            file, result, also, body, facts, values, d, before, after, x1, body_emits(x1, rsp_x1), moves, keeps, placed, leaves, within, s1, rsp_s1, fits,
+            file, result, also, body, facts, values, d, before, after, x1,
+            body_emits(x1, rsp_x1, j(sym(at1.left), λ g _ => Kept(callee_kept(), s0.gprs, g), kept1)), moves, keeps, placed, leaves, within, s1, rsp_s1, fits,
             under, ready, holds, entering.proof.right.left, entering.proof.right.right.left, at1, r.io, held.right);
         site.performs_after(stack.writes, kernel, site.Arrived(prog_len(closed), λ (t: Running<M, W>) =>
                 stack.ClosedBy(spans, Mem, d + frame_size(slots, saves), s0, after, answer, words_of(values, also), t.state) ∧ World(after, t.io)),
@@ -7163,20 +7171,48 @@ theorem function_runs_claim<M, S, W>(slots, saves: Nat, slotted: slots <= 8, sit
     }
 }
 
+theorem function_runs_claim<M, S, W>(slots, saves: Nat, slotted: slots <= 8, site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data), top: Nat,
+    spans: Spans, Mem: S → M → Type, World: S → W → Type, kernel: Kernel<M, W>, calls, least: Nat, loan: Loan<M>(site.fetch, site.data, stack, top, spans), stable: stack.ClauseStable(top, Mem), k: Nat,
+    prog: Prog, file: File, parameters: List<Nat>, result: Nat, also: List<Nat>, body: Emitted, facts: Type, values: Valuation(), d: Nat, before, after: S,
+    body_emits: (x1: MachineState<M>) → read_gpr(Rsp, x1.gprs) = stack.at(d) →
+        EmitsClaim<M, S, W>(saves, site, stack, spans, Mem, World, kernel, calls, least, values, d + 8 * slots, x1, function_opened(prog, k, parameters.drop(6).len(), slots, saves), file,
+            facts, before, after, body),
+    moves: Lowered, keeps: Keeps<M>(values, body.file, True, moves),
+    placed: moves.file.outputs_check(Cons(Port(id := result, width := 64), word_ports(also)), result_registers()).IsTrue(),
+    leaves: leaves_all(moves.code, body_kept(saves)).IsTrue(),
+    entered: (g: Gprs) → PortsAt(values, word_ports(parameters), parameter_registers(), g) → file.Represents(values, g),
+    few: parameters.drop(6).len() <= 2,
+    within: function_closed(body.prog, moves.code, slots, saves).Within(site.program),
+    s0: MachineState<M>, rsp: read_gpr(Rsp, s0.gprs) = stack.at(d + frame_size(slots, saves)),
+    fits: d + frame_size(slots, saves) <= stack.size, under: (d + frame_size(slots, saves)) + 8 <= top,
+    in_memory: Mem(before, s0.memory),
+    passed: stack.Passes(words_of(values, parameters), argument_registers(), (d + frame_size(slots, saves)) + 8, s0.gprs, s0.memory),
+    holds: facts):
+    site.Claims(stack.writes, kernel, calls, least, prog_len(prog),
+        λ (x: Running<M, W>) => ((x.state.gprs = s0.gprs) ∧ (x.state.memory = s0.memory)) ∧ World(before, x.io),
+        site.Arrived(prog_len(function_closed(body.prog, moves.code, slots, saves)), λ (t: Running<M, W>) =>
+            stack.ClosedBy(spans, Mem, d + frame_size(slots, saves), s0, after, values(64, result), words_of(values, also), t.state) ∧ World(after, t.io))) {
+    function_runs_claim_kept<M, S, W>(slots, saves, slotted, site, laid, stack, top, spans, Mem, World, kernel, calls, least, loan, stable, k, prog, file,
+        parameters, result, also, body, facts, values, d, before, after, s0, λ x1 rsp_x1 _ => body_emits(x1, rsp_x1), moves, keeps, placed, leaves, entered,
+        few, within, rsp, fits, under, in_memory, passed, holds)
+}
+
 // The entry's loads and the frame opened, then whatever the body's code
 // claims from there (`body_claims`, at any state the frame opens to): what
-// a routine's code does while its body has not finished.
-theorem function_enters_claim<M, S, W>(slots, saves: Nat, slotted: slots <= 8, site: Site<M>, laid: site.program.laid_out().IsTrue(),
+// a routine's code does while its body has not finished. The body is told
+// the frame state's callee-saved registers are the entry's (§17.10); the
+// lemma below is its instance without that.
+theorem function_enters_claim_kept<M, S, W>(slots, saves: Nat, slotted: slots <= 8, site: Site<M>, laid: site.program.laid_out().IsTrue(),
     stack: Stack<M>(site.fetch, site.data), top: Nat, spans: Spans, Mem: S → M → Type, World: S → W → Type, kernel: Kernel<M, W>, calls, least: Nat,
     stable: stack.ClauseStable(top, Mem), k: Nat, prog: Prog, file: File, parameters: List<Nat>, facts: Type, values: Valuation(), d: Nat, before: S,
-    goal: Running<M, W> → Type,
-    body_claims: (x1: MachineState<M>) → read_gpr(Rsp, x1.gprs) = stack.at(d) →
+    goal: Running<M, W> → Type, s0: MachineState<M>,
+    body_claims: (x1: MachineState<M>) → read_gpr(Rsp, x1.gprs) = stack.at(d) → Kept(callee_kept(), s0.gprs, x1.gprs) →
         site.Claims(stack.writes, kernel, calls, least, prog_len(function_opened(prog, k, parameters.drop(6).len(), slots, saves)),
             λ (r: Running<M, W>) => ((file.Represents(values, r.state.gprs) ∧ facts) ∧ stack.TrailedBy(saves, spans, Mem, d + 8 * slots, x1, before, r.state)) ∧
                 World(before, r.io), goal),
     opened_in: function_opened(prog, k, parameters.drop(6).len(), slots, saves).Within(site.program),
     entered: (g: Gprs) → PortsAt(values, word_ports(parameters), parameter_registers(), g) → file.Represents(values, g),
-    few: parameters.drop(6).len() <= 2, s0: MachineState<M>, rsp: read_gpr(Rsp, s0.gprs) = stack.at(d + frame_size(slots, saves)),
+    few: parameters.drop(6).len() <= 2, rsp: read_gpr(Rsp, s0.gprs) = stack.at(d + frame_size(slots, saves)),
     fits: d + frame_size(slots, saves) <= stack.size, under: d + frame_size(slots, saves) <= top, in_memory: Mem(before, s0.memory),
     passed: stack.Passes(words_of(values, parameters), argument_registers(), (d + frame_size(slots, saves)) + 8, s0.gprs, s0.memory),
     holds: facts):
@@ -7216,6 +7252,9 @@ theorem function_enters_claim<M, S, W>(slots, saves: Nat, slotted: slots <= 8, s
                 λ (t: MachineState<M>) => (t.gprs = g_loaded) ∧ (t.memory = s0.memory)),
         site.moves_loads(stack, site.program.laid_out_fits(laid), d + frame_size(slots, saves), s0.gprs, s0.memory, stack_registers(), ws.drop(6), label, 1,
             s0.gprs, small, trivial, rsp, stacked))(loaded_in);
+    let kept01: Kept(callee_kept(), s0.gprs, g_loaded) = kept_loads(callee_kept(), stack_registers(), ws.drop(6), s0.gprs, trivial);
+    let kept1: Kept(callee_kept(), s0.gprs, g1) = kept_trans(callee_kept(), s0.gprs, g_loaded, g1, kept01,
+        moved_rsp_kept(frame_size(slots, saves), stack.at(d), g_loaded));
     λ r here resident held => {
         let a = first(r.state, here, resident, held.left);
         let s = a.witness;
@@ -7228,9 +7267,30 @@ theorem function_enters_claim<M, S, W>(slots, saves: Nat, slotted: slots <= 8, s
             ⟨kept_refl(body_kept(saves), x1.gprs), ⟨stack.wrote_in_refl(d + 8 * slots, spans, x1.memory), at1.right.left.right⟩⟩;
         site.performs_after(stack.writes, kernel, goal, calls, least, r, x1,
             machine_steps_trans(site.fetch, site.data, stack.writes, r.state, s, x1, a.proof.left, entering.proof.left),
-            body_claims(x1, rsp_x1)(Running(x1, r.io), entering.proof.right.left, entering.proof.right.right.left,
+            body_claims(x1, rsp_x1, j(sym(at1.left), λ g _ => Kept(callee_kept(), s0.gprs, g), kept1))(Running(x1, r.io), entering.proof.right.left, entering.proof.right.right.left,
                 ⟨⟨⟨j(sym(at1.left), λ g _ => file.Represents(values, g), ready), holds⟩, start⟩, held.right⟩))
     }
+}
+
+theorem function_enters_claim<M, S, W>(slots, saves: Nat, slotted: slots <= 8, site: Site<M>, laid: site.program.laid_out().IsTrue(),
+    stack: Stack<M>(site.fetch, site.data), top: Nat, spans: Spans, Mem: S → M → Type, World: S → W → Type, kernel: Kernel<M, W>, calls, least: Nat,
+    stable: stack.ClauseStable(top, Mem), k: Nat, prog: Prog, file: File, parameters: List<Nat>, facts: Type, values: Valuation(), d: Nat, before: S,
+    goal: Running<M, W> → Type,
+    body_claims: (x1: MachineState<M>) → read_gpr(Rsp, x1.gprs) = stack.at(d) →
+        site.Claims(stack.writes, kernel, calls, least, prog_len(function_opened(prog, k, parameters.drop(6).len(), slots, saves)),
+            λ (r: Running<M, W>) => ((file.Represents(values, r.state.gprs) ∧ facts) ∧ stack.TrailedBy(saves, spans, Mem, d + 8 * slots, x1, before, r.state)) ∧
+                World(before, r.io), goal),
+    opened_in: function_opened(prog, k, parameters.drop(6).len(), slots, saves).Within(site.program),
+    entered: (g: Gprs) → PortsAt(values, word_ports(parameters), parameter_registers(), g) → file.Represents(values, g),
+    few: parameters.drop(6).len() <= 2, s0: MachineState<M>, rsp: read_gpr(Rsp, s0.gprs) = stack.at(d + frame_size(slots, saves)),
+    fits: d + frame_size(slots, saves) <= stack.size, under: d + frame_size(slots, saves) <= top, in_memory: Mem(before, s0.memory),
+    passed: stack.Passes(words_of(values, parameters), argument_registers(), (d + frame_size(slots, saves)) + 8, s0.gprs, s0.memory),
+    holds: facts):
+    site.Claims(stack.writes, kernel, calls, least, prog_len(prog),
+        λ (x: Running<M, W>) => ((x.state.gprs = s0.gprs) ∧ (x.state.memory = s0.memory)) ∧ World(before, x.io), goal) {
+    function_enters_claim_kept<M, S, W>(slots, saves, slotted, site, laid, stack, top, spans, Mem, World, kernel, calls, least, stable, k, prog, file,
+        parameters, facts, values, d, before, goal, s0, λ x1 rsp_x1 _ => body_claims(x1, rsp_x1), opened_in, entered, few, rsp, fits, under, in_memory,
+        passed, holds)
 }
 
 // The entry's loads, then the frame and the body, whatever its emission is

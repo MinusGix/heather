@@ -2975,6 +2975,21 @@ floor reads as `d`) and `guard_immediate` (the sign-extended immediate is
 `need` at most `guard_most()`); `guard_taken` puts them together: the JB is
 taken exactly where `d < need`.
 
+**Step 3, part 3, item 3: the frame state's kept registers** (the one
+place the out-of-room work edits FunctionIR's file, as the coordinating
+session ruled). FunctionIR's frame lemmas prove a routine's body at any
+frame state they name only by its stack pointer (`body_emits: (x1) →
+read_gpr(Rsp, x1.gprs) = stack.at(d) → …`), so a guard in the body could
+not know RBP is the floor. `function_runs_claim_kept` and
+`function_enters_claim_kept` tell the body that the frame state's
+callee-saved registers are the entry's (`Kept(callee_kept(), s0.gprs,
+x1.gprs)`, which the lemmas already proved inside: the loads and the
+frame's RSP move keep them). `function_runs_claim` and
+`function_enters_claim` are their instances, their statements unchanged;
+nothing else in `lib/native/function_ir/` moved. The kept registers, not
+the floor, are the fact exposed: any routine-level invariant held in a
+callee-saved register needs the same.
+
 ## 18. The world, termination, and level 2 fixed (2026-11-25)
 
 Round six of the design review. Where this section and §15.4, §15.5 or §17
