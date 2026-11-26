@@ -5267,3 +5267,283 @@ Three rules of working follow from what went wrong in practice:
 
 Every branch is merged into the coordinating branch only through the gated
 verification, as before.
+
+## 25. The seam between level 2 and the bytes level, stated (2026-11-26, the slice)
+
+`issues/ownership-end-to-end-slice.md`. Statement and evaluation only:
+nothing is proved over `place`. Three modules:
+
+| Module | Holds |
+|---|---|
+| `lib/lang/ownership/placement.hthr` | `place`: a checked body as a bytes-level routine, layouts read from codes through `Strs` |
+| `lib/lang/ownership/placement_seam.hthr` | the injection (`HeapInjects`, `value_lower`), `PlacementSound`, and the composed `EndToEnd`/`EndToEndAll` |
+| `lib/_tests/lang/ownership/placement_tests.hthr` | `count_newlines`, `copy_window`, `sum` through every layer |
+
+### 25.1 What `place` does
+
+- **Layout from the code.** A word of 8, 16, 32 or 64 bits is its size; a
+  sequence instance whose element is a word is its elements one after
+  another (`LSeq`); a record of words is its fields packed in order
+  (`LRecord`). `WNat` has no layout and is refused.
+- **A variable is slots.** A word is one word id; a sequence held by
+  reference is two, the reference and its length as a word. A place is
+  code: an element `Offset`s by the index scaled, a window by its start
+  scaled and takes its length word, a field by its offset; a read of a word
+  place is a `Load` of the element's size, a write a `Store`.
+- **Narrow words are held zero-extended** (a load leaves them so): a test on
+  narrow words is the 64-bit unsigned comparison, a narrow literal a 64-bit
+  constant; narrow arithmetic is refused (it would need a `Resize`).
+- **Write-back is nothing.** A view remembers where it was opened (root by
+  level, steps with atoms by level); its write-back onto that place is a
+  store of what level 2 reads there back where it read it, and has no code.
+  Any other write of a sequence would be a typed copy, which is not
+  lowered: refused.
+- **A written sequence is not returned.** A call binds it to the argument's
+  own slots, and `place` checks, in the callee, that every `Ret` answers the
+  parameter's own slot there and every `Jump` passes it on as itself.
+- **A store goes only through a slot reaching a parameter lent to write or
+  given** (`PSlot.w`); otherwise refused.
+- **A join copies what follows it into each arm** that reaches its `Yield`
+  (the surface's reading of an early return), so every path ends at a `Ret`
+  or a `Jump`.
+- **A `Jump` makes the routine one plain loop.** The state is the
+  parameters' slots, then a results part unless every `Ret` answers
+  parameters at fixed positions (both loops here), in which case the
+  routine answers those outputs. A `Jump` sets the next state to its
+  arguments and a flag word to 0, a `Ret` keeps the parameters and sets the
+  flag to 1; the pass ends comparing the flag with 1, which is the exit bit.
+- **No `Fresh`, no primitive, no multiply**: the allocator is later, a
+  primitive has no code to place, and the bytes level has no multiply node.
+
+### 25.2 The statement
+
+- **`HeapInjects(strs, inj, h, hb)`**: each live level-2 block (no holes) is
+  at `hb`'s block `inj(b)` as its value's bytes through its layout
+  (`Dyn::encode`), all defined, no reference there; live blocks go to
+  distinct images. A dead block constrains nothing.
+- **`value_lower`**: a plain word is its word; a reference is
+  `Ref(Loc(inj(b), offset))`, the offset its selections reach
+  (`Sel::locate`), with the length of the value there beside it for a
+  sequence: exactly `place`'s slots.
+- **`PlacementSound(strs, fs, w, prim, placed)`**: at every fuel `n`,
+  function, related arguments and heap, and `Blocks` allowing every block a
+  parameter lent to change reaches (`WritesLent`), `ran_lowers` of level 2's
+  `Run::of(n)` and the bytes level's `run(n + 1)`: done is done with an
+  answer whose heap injects level 2's under an injection agreeing on the old
+  live blocks, whose words lower the returned values (results, then written
+  words: `Sig::returned`) and whose world is the same; exited is exited;
+  going is a bytes-level history extending level 2's.
+  `PlacementSoundAll` is it of every program `place` answers. It has no
+  hypothesis about the program: it is a translation theorem, true of every
+  placed program, checked or not.
+- **`EndToEnd`** is `Site::Entering` of the code `Program::lower` gives for
+  the placed program at the room table by depth, with the clause
+  `EndClause`: at bytes fuel `n + 1`, for every level-2 input related to the
+  entry's arguments and heap that meets `SafeAt`'s premises (`ReadAll`,
+  `Coded`, `pres`, `Lendable`) with the function's measure at most `n`, the
+  code returns (`Site::Tracked` at `Done`) an answer whose words lower values
+  that read as `p.w(g, ds)` (the pinned meaning) and whose heap injects
+  level 2's after. **`EndToEndAll`** states it from `PlacementSoundAll` and
+  `CheckSound(check)` for every pinned program whose primitives answer coded
+  (`Prog::Coded`, §23.21) and whose functions are all checked `place` answers and
+  `Program::lower` lowers. It typechecks: every premise `SafeAt` needs is a
+  premise the machine side can be given, and `Tracks` supplies the rest.
+  Its proof is the composition (strong induction on fuel from `Safety` to
+  `SafeAt`, then `PlacementSound`, then `lower_program_tracks`), not
+  written before the ruling.
+
+### 25.3 The three programs (all by `refl`)
+
+| | verdict | pin (closed args) | `place` | runs agree | `Program::lower` |
+|---|---|---|---|---|---|
+| `count_newlines` (loop reading bytes, and its caller) | `why = None` | yes | `Some` | at fuel 7 vs 8; both going at 6 vs 7 | `Some` |
+| `copy_window` (lends a window to write to `copy_span`) | `why = None` | yes | `Some` | at fuel 5 vs 6 | `Some` |
+| `sum` (recursion) | `why = None` | yes | `Some` | at fuel 4 vs 5; both going at 3 vs 4 | `Some` |
+
+Each program's signatures are `Sig::ok` (§23.21), by `refl`. The
+placement is the probes' own (`*_places`), written by a per-path
+linear scan; the bytes level has no planner yet. What the lowering asks of
+a placement, learned on the way: one place per node, none per call but an
+optional `Spilling(mask)` (what the call saves), `CallSlots(k)` at the head
+of a routine that calls; a two-address node's destination is not its right
+operand's register, a comparison's is neither operand's; an id bound in
+both arms of a branch sits in one register in both; a loop's state
+registers are best where its inputs already are.
+
+**Bytes, against today's export rows** (`scripts/bytes-level-compare`'s
+certificates, the old code against the slice's, routine by routine):
+
+| Row | Routine | Old | Slice |
+|---|---|---|---|
+| `count_newlines` | the loop | 273 | 219 |
+| | the caller | 18 | 15 |
+| `copy_window` | `copy_span` | 217 | 123 |
+| | `copy_window` | 96 | 39 |
+
+Smaller because: no bounded-loop counter (the old loops count down a bound
+and carry an exhausted flag); no guarded load (the old source reads a byte
+under the span's length word with a pad, so its code compares the index
+with the length before each load; here the bound is a residual the source
+proves, not a test); and `copy_window` has no run-time tests of its window
+against the two lengths, which are its precondition here (25.4, item 12).
+Larger in three places: a reference copied to itself on every path
+(`mov r, 0; add rdi, r`: a reference's copy is an `Offset` by zero), the
+flag's comparison per pass (`mov; cmp; sete; cmp; jne` where the old code
+tests its flag once), and what follows the newline test copied into three
+arms.
+
+### 25.4 Findings: what had to be read differently
+
+1. **`CheckSound` is a hypothesis of the composed theorem**, beside
+   `PlacementSoundAll`: `check_sound` for `checker.hthr` is not proved yet
+   (its own branch). With it, the composition typechecks with no change to
+   `SafeAt`, the run, the body or the bytes level.
+2. **`SafeAt` speaks only at a function's boundary.** A level-2 run's
+   internal calls carry no stated property: that each is made with lendable
+   inputs is inside `check_sound`'s proof. So `PlacementSound` cannot lean on
+   `Value::Written` ("a referring written slot is the argument itself") for
+   the calls a run makes, which a calling convention that does not return
+   the written sequence needs. Chosen: `place` checks it of every callee
+   syntactically (25.1), so the seam needs nothing of the checker. The
+   alternative is a run-level statement (every call a checked run makes is
+   lendable and answers so), which `check_sound` could export.
+3. **Writability is per run on the bytes level, absent on level 2.** A store
+   into a block the run may not write is stuck. `Heap::Frame` says a block
+   lent to read has its value unchanged, not that nothing stored to it, so it
+   does not give the bytes level's `Blocks`. Chosen: `place` refuses a store
+   through a slot that does not reach a write-lent or given parameter, and
+   `WritesLent` lets the bytes level write every block such a parameter
+   reaches; a read-only buffer then needs no writable span
+   (`count_newlines` runs with no block writable).
+4. **Fuel is a bound, not a function.** Level 2 spends nothing to enter a
+   function, one per call and one per `Jump`; the bytes level one to enter a
+   routine, one per call and one per turn back. With no call inside a loop
+   pass the bytes level at `n + 1` is level 2 at `n` exactly (`nl_going`,
+   `sum_going`). Inside a pass they part: the bytes level answers a pass's
+   calls at the routine body's fuel for every pass, level 2 at one less per
+   `Jump`. The bytes level is never behind, so done maps to done at `n + 1`
+   and going to an extended history. A `Jump` placed as a self-call would
+   make the fuels exact and cost stack by depth.
+5. **`Jump` against `Loop`.** The loop has one `next` list for going on and
+   leaving and its outputs are the whole state, so a `Ret`'s results live in
+   the state unless every `Ret` answers parameters at fixed positions; and
+   the lowering tests an exit bit only where a comparison made it, so the
+   paths set a flag word and the pass ends comparing it (the old
+   translation's `MOV flag, 1` shape).
+6. **Where a block's bytes come from.** A level-2 object is a coded value in
+   a block; its bytes are its value read through its code's layout at
+   64-bit indices (`Dyn::encode`). A span a caller lends is a whole
+   bytes-level block, so a level-2 block lent from outside is a bytes block
+   of exactly its encoding; `Lendable.live` (no holes, selections fit) is what
+   makes the encoding and the offsets defined, and the contract's `Loan` with
+   `Blocks.Lent(spans)` is what `WritesLent` meets at the entry.
+7. **A view's reference (a block and selections) is a `Loc` and a length.**
+   Its offset is computed through the layout from the selections and its
+   length read from the value there: level 2 keeps no length, the bytes
+   level carries it as a word beside the reference.
+8. **A written parameter's write-back against a store through a lent span.**
+   On level 2 a write-back is a store of the same value; on the bytes level
+   the callee already stored through the span, so the write-back has no
+   code. Recognising it needs the view's provenance (25.1); any other
+   sequence write is a typed copy the lowering refuses.
+9. **Narrow words.** The lowering holds a loaded byte as a 64-bit word, so a
+   comparison at 8 bits is not lowerable; narrow words are held
+   zero-extended and compared at 64.
+10. **Index kinds and windows of bytes.** `List<A>` takes a number as its
+    index (no layout) and `Bytes(n)` has no windows (a window's code is one
+    fixed name, and `Bytes(n)`'s length is in its type), so a window of bytes
+    cannot be lent with the library's instances. The probes define a
+    `List<u8>` instance indexed by words with windows; it belongs in
+    `sequences.hthr` with its laws.
+11. **Which `SafeAt` clauses the composed statement uses**: `ReadAll` of the
+    results (the words are the meaning's), the measure clause (done past the
+    measure), and through 2 the referring part of `Value::Written` (the
+    written buffer's bytes after are the heap injection's). Not used:
+    `Heap::Frame`, `Heap::Kept`, `Value::Views`, `OwnedApart`, the results' codes (the machine
+    side states its own frame as `Site::Returned`'s `WroteIn`). Not there and
+    needed: only the run-level form of item 2, here replaced by a syntactic
+    check.
+12. **Lengths and primitives.** The body has no length operation and a
+    primitive is an opaque world entry (`Run::prim`) with no code, so the
+    export's run-time tests against the two lengths are preconditions here.
+    Placing a primitive needs a table of bytes-level routines each proved to
+    compute its world entry.
+13. **Unmeasured functions**: `EndClause` covers measured functions (done
+    past the measure); the going clause of `PlacementSound` gives the prefix
+    property an unmeasured function's statement would use.
+
+### 25.5 After the ruling: the instance, the proof, the refusals
+
+The coordinating session's ruling on 25.4 (2026-11-26): items 2, 3 and 8 are
+fixed in the run, not in `place` (the run is the machine's reading; `place`
+must not carry a second copy of an ownership rule), and `place`'s three
+tests go when those changes land; item 4 stands; item 5 is the bytes
+level's `Loop` form, filed as `bytes-level-loop-exits`; item 10 goes into
+`sequences.hthr`; item 12 goes to the soundness thread as a statement kind.
+`place`'s two places that go with item 5 are the `TLoop` leaves' flag and
+the pass's closing comparison (`Func::place`'s `test`).
+
+- **The instance** (`sequences.hthr`, additive): `Seq::words` and
+  `Seq::words_win`, a list of words indexed by the index's number
+  (`Ix::num`, as `[A; n]` reads), with windows of itself; their laws
+  (`Seq::words_laws`, `Seq::words_win_laws`) are `Seq::list`'s at the
+  number, by conversion, with nothing new needed of the interface. The
+  probes use it, and their structures are lawful (`strs_lawful`).
+- **`end_to_end` proved** (`placement_seam.hthr`, no axioms), from
+  `PlacementSoundAll`, `CheckSound(check)` and `prog_checked`:
+  `safe_below` gives every function's `SafeAt` at every fuel from each
+  one's `Safety` by strong induction on the fuel; `place_len` that `place`
+  answers one routine per function; then `SafeAt`'s measure and done parts,
+  `PlacementSound` at one fuel more, and `lower_program_tracks`, with the
+  fuel rewritten through the clause's `m = n + 1`. Two choices it forced:
+  the program's functions are the list's by definition (`prog_of_list`),
+  since without function extensionality a pointwise premise cannot move
+  `Run::of`; and `prog_checked` asks every index checked and none a
+  primitive, since `Safety` is relative to every function's `SafeAt` and a
+  primitive's comes from nowhere (`place` places none). `Prog::Coded` is
+  among its premises.
+- **`place`'s refusals, sorted.** The fragment's limits: a code with no
+  layout (`WNat`, an opaque type, a record or sequence not of words); a
+  `Fresh`; a primitive call; a multiply; arithmetic below 64 bits; a copy
+  of a sequence (a read of a whole sequence, a read or take of a sequence
+  part as a value, a write of a sequence that is not a write-back); a call
+  taking an object, or answering one made or given back; `SKey` and
+  `SVariant` steps. The three tests the run's changes delete: a `Ret`
+  answering a written sequence by its own slot and a `Jump` passing it on
+  (2); a store only through a write-lent slot (3); the write-back's
+  provenance (8). The rest, sought by probes (`refusals_sorted`): a narrow
+  index and a taken word answered back were refused and now are placed; a
+  view of a word is refused by the checker's codes, so it is not a
+  finding; **a word variable written** (`n := 1`, `word_write_r`) is
+  checked, in the fragment and refused. It is placed once item 8 lands (the
+  variable's slot rebinds; the provenance it would confuse goes), and until
+  then `PlaceComplete` is false by it. `Func::fragment` states the limits
+  as a test of the text and codes, apart from ownership, and
+  `PlaceComplete` the completeness (`check = Some` and in the fragment for
+  every function, then `place = Some`), not proved.
+
+### 25.6 The stages of `placement_sound` (types)
+
+`StageRel(strs, inj, blocks, e, m, c)` relates level 2's machine to a
+bytes-level configuration at an environment of slots: the heap injected,
+each variable's slots reading its value lowered (`SlotsHold`, the
+arguments then the locals oldest first), the same world, and a store only
+where the bytes level may write (`SlotsWritable`, which item 3's run change
+turns from `place`'s test into a consequence). A statement's level-2 step
+is `Stmt::Steps` (the run hands every continuation one machine), so a stage
+does not mention what follows it. Each stage concludes in the bytes
+level's own claim for the form `place` emits:
+
+| Stage | Form | Conclusion |
+|---|---|---|
+| `StageOp`, `StageLit`, `StageRead`, `StageWrite`, `StageView`, `StageTake`, `StageDeath` (all `LeafStage`) | a leaf | `run_instrs` to a related configuration |
+| `StageCall` | `Body::Call` | `CallRan`, under `CallsLower` (the fuel induction's hypothesis), the injection extended |
+| `StageTest` | the test's leaf, then `Branch` | `run_instrs`, the bit equal to level 2's test (swapped where `<=` swapped the arms) |
+| `StageRet` | a `Ret`'s leaf | the leave's ids reading the returned values lowered, or the loop's next state with the flag one |
+| `StageJump` | a `Jump`'s leaf | the next state the arguments lowered, the flag zero |
+| `StageRoutine` | a routine | `RoutineRan` and `AnswerLowers`, from related entries |
+
+`PlacementSound` is these joined by an induction on the body (a join's
+copied `rest` is the stage of the arm's `Yield` frame) inside one on fuel
+(`CallsLower` at the fuel below). Not proved until the run's three changes
+land and are read.

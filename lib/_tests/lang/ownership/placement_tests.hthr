@@ -1,0 +1,479 @@
+// Three programs through every layer by evaluation (lib/lang/ownership/
+// placement.hthr, placement_seam.hthr; docs/language/ownership-design.md §25;
+// issues/ownership-end-to-end-slice.md): a loop over a byte buffer that only
+// reads (`count_newlines`), a function that lends a window to write
+// (`copy_window`), and a recursion (`sum`), each written by hand in the
+// reflected body. For each: the checker's verdict by `refl`; the pin of its
+// meaning to a pure source function at closed arguments by `refl`; `place`'s
+// routine; the level-2 run and the bytes level's run of the routine agreeing
+// at closed arguments; and `Program::lower` answering `Some`.
+//
+// The environment has one named type, a byte buffer (`List<u8>`) indexed by
+// a word, with windows: `sequences.hthr`'s `Seq::words` (§25.4 item 10).
+import logic;
+import bool;
+import nat;
+import option;
+import list;
+import list_window;
+import pair;
+import bitvec;
+import span_set;
+import store;
+import atom;
+import steps;
+import shape;
+import sequences;
+import body::{Place, Callees};
+import level2;
+import run;
+import verdict;
+import checker;
+import placement;
+import placement_seam;
+import bytes_memory;
+import bytes_level;
+import bytes_level_routines;
+import x86_64_memory_contract;
+import x86_64_call_contract;
+import function_ir;
+import function_ir_lower;
+import x86_64;
+import linux_world;
+import x86_64_asm;
+
+// ---------------------------------------------------------------------------
+// The environment: a byte buffer, indexed by a word, with windows
+
+fn bytes_t() → Type { List<u8> }
+
+fn tys() → Nat → Type { λ k => match k { Zero => List<u8>, Succ(_) => True } }
+
+fn buf_s() → Shape { SNamed(0) }
+
+fn u64_s() → Shape { SWord(WBits(64)) }
+
+fn u8_s() → Shape { SWord(WBits(8)) }
+
+fn bwin(xs: List<u8>, lo, n: Ix) → List<u8> { xs.drop(lo.toNat()).take(n.toNat()) }
+
+fn bput_win(xs: List<u8>, lo, n: Ix, ys: List<u8>) → List<u8> {
+    match (lo.toNat() + n.toNat()).leb(xs.len()) && ys.len().same(n.toNat()) { True => xs.put_window(lo.toNat(), ys), False => xs }
+}
+
+// The byte buffer: `sequences.hthr`'s list of words indexed by a machine
+// word, with windows of itself.
+fn bytes_seq() → shape::Seq(tys(), List<u8>) {
+    Seq::words(tys(), u8_s(), BitVec::ofNat(0), Some(Seq::words_win(tys(), u8_s(), buf_s(), λ (l: List<u8>) => l, λ (l: List<u8>) => l)))
+}
+
+fn strs() → Strs(tys()) { λ k => match k { Zero => Struct(Object, None, Sequence(bytes_seq())), Succ(_) => Struct(Plain, None, Opaque) } }
+
+// The structures are lawful: the instance's laws, its windows', and a
+// window's length read as the environment reads it.
+theorem strs_lawful(): StrsLaws(tys(), strs()) {
+    λ k => match k {
+        Zero => ⟨Seq::words_laws(tys(), u8_s(), BitVec::ofNat(0), Some(Seq::words_win(tys(), u8_s(), buf_s(), λ (l: List<u8>) => l, λ (l: List<u8>) => l))),
+            ⟨Seq::words_win_laws(tys(), u8_s(), BitVec::ofNat(0), buf_s(), λ (l: List<u8>) => l, λ (l: List<u8>) => l, λ l => refl, λ y => refl,
+                Some(Seq::words_win(tys(), u8_s(), buf_s(), λ (l: List<u8>) => l, λ (l: List<u8>) => l))), λ y => refl⟩⟩,
+        Succ(_) => trivial,
+    }
+}
+
+fn buf(xs: List<u8>) → Dyn(tys()) { Dyn(buf_s(), xs) }
+
+fn w64(x: u64) → Dyn(tys()) { Dyn(u64_s(), x) }
+
+fn as_buf(d: Dyn(tys())) → List<u8> { Dyn::get(tys(), buf_s(), d).unwrap_or(Nil) }
+
+fn as_w64(d: Dyn(tys())) → u64 { Dyn::get(tys(), u64_s(), d).unwrap_or(BitVec::ofNat(0)) }
+
+fn arg(ds: List<Dyn(tys())>, i: Nat) → Dyn(tys()) { ds.nth(i).unwrap_or(Dyn::none(tys())) }
+
+fn nofunc() → Func { Func(Sig(Nil, Nil), Ret(Nil)) }
+
+fn sigs_of(fs: List<Func>) → Nat → Sig { λ g => (fs.nth(g).unwrap_or(nofunc())).sig }
+
+fn no_prim() → Nat → Bool { λ _ => False }
+
+// Every function is measured, so each call and `Jump` owes its measure.
+fn verdict(fs: List<Func>, g: Nat) → Option<Owes> { check(tys(), strs(), sigs_of(fs), no_prim(), λ _ => True, g, fs.nth(g).unwrap_or(nofunc())) }
+
+fn why(fs: List<Func>, g: Nat) → Option<Why> { (fs.nth(g).unwrap_or(nofunc())).refusal(tys(), strs(), sigs_of(fs), no_prim(), λ _ => True, g) }
+
+fn means(fs: List<Func>, w: Callees(tys()), g: Nat, ds: List<Dyn(tys())>) → List<Dyn(tys())> { (fs.nth(g).unwrap_or(nofunc())).denote(tys(), strs(), w, g, ds) }
+
+fn placed(fs: List<Func>) → Option<Program> { place(tys(), strs(), no_prim(), fs) }
+
+fn rd(n: Nat) → Param { Param(buf_s(), ByRead) }
+
+fn word_p() → Param { Param(u64_s(), ByTake) }
+
+fn word_r() → Result { Result(u64_s(), OFresh) }
+
+fn el(r: Var, i: Atom) → Place { Place(r, [SElem(i)]) }
+
+fn win(r: Var, lo, n: Atom) → Place { Place(r, [SWindow(lo, n)]) }
+
+fn whole(r: Var) → Place { Place(r, Nil) }
+
+fn ten() → u8 { BitVec::ofNat(10) }
+
+// ---------------------------------------------------------------------------
+// 1. count_newlines: a loop over a byte buffer that only reads
+//
+//    fn newlines_from(text: &[u8], n, i, acc: u64) → u64 decreases n - i {
+//        if i < n { newlines_from(text, n, i + 1, if text[i] == 10 { acc + 1 } else { acc }) } else { acc }
+//    }
+//    fn count_newlines(text: &[u8], n: u64) → u64 requires n <= text.len() { newlines_from(text, n, 0, 0) }
+
+fn nl_go(xs: List<u8>, k: Nat, n, i, acc: u64) → u64 {
+    match k {
+        Zero => acc,
+        Succ(k1) => match i.unsigned_lt_bit(n) {
+            False => acc,
+            True => nl_go(xs, k1, n, i.add(BitVec::ofNat(1)), match xs.nth(i.toNat()).unwrap_or(BitVec::ofNat(0)).eq_bit(ten()) { True => acc.add(BitVec::ofNat(1)), False => acc }),
+        },
+    }
+}
+
+fn newlines_from(xs: List<u8>, n, i, acc: u64) → u64 { nl_go(xs, n.sub(i).toNat(), n, i, acc) }
+
+fn count_newlines(xs: List<u8>, n: u64) → u64 { newlines_from(xs, n, BitVec::ofNat(0), BitVec::ofNat(0)) }
+
+// The loop at `(text, n, i, acc)`: the test, a byte read, the newline's
+// test as two comparisons (the body has `<` and `<=` only), then round again.
+// Locals newest first beside each statement.
+fn nl_loop_r() → Func {
+    Func(Sig([rd(0), word_p(), word_p(), word_p()], [word_r()]),
+        Join(TLt(Arg(2), Arg(1)),
+            seq([Stmt::Read(el(Arg(0), Var(2))),           // [b]
+                 Stmt::Lit(WBits(8), 10)],                  // [ten, b]
+                Join(TLt(Loc(1), Loc(0)),
+                    Yield([Arg(3)]),
+                    Join(TLt(Loc(0), Loc(1)),
+                        Yield([Arg(3)]),
+                        seq([Stmt::Lit(WBits(64), 1), Op(PAdd, Arg(3), Loc(0))], Yield([Loc(0)])),
+                        Yield([Loc(0)])),
+                    // [acc', ten, b]
+                    seq([Stmt::Lit(WBits(64), 1), Op(PAdd, Arg(2), Loc(0))],   // [i', one, acc', ten, b]
+                        Jump([Arg(0), Arg(1), Loc(0), Loc(2)])))),
+            Ret([Arg(3)]),
+            Ret([Arg(3)])))
+}
+
+fn count_newlines_r() → Func {
+    Func(Sig([rd(0), word_p()], [word_r()]),
+        seq([Stmt::Lit(WBits(64), 0), Stmt::Call(0, [Arg(0), Arg(1), Loc(0), Loc(0)], 1)], Ret([Loc(0)])))
+}
+
+fn nl_fns() → List<Func> { [nl_loop_r(), count_newlines_r()] }
+
+fn nl_world() → Callees(tys()) {
+    λ g ds => match g {
+        Zero => [w64(newlines_from(as_buf(arg(ds, 0)), as_w64(arg(ds, 1)), as_w64(arg(ds, 2)), as_w64(arg(ds, 3))))],
+        Succ(g1) => match g1 { Zero => [w64(count_newlines(as_buf(arg(ds, 0)), as_w64(arg(ds, 1))))], Succ(_) => Nil },
+    }
+}
+
+fn text() → List<u8> { [BitVec::ofNat(97), BitVec::ofNat(10), BitVec::ofNat(98), BitVec::ofNat(10), BitVec::ofNat(10), BitVec::ofNat(99)] }
+
+theorem nl_loop_checked(): why(nl_fns(), 0) = None { refl }
+
+theorem count_newlines_checked(): why(nl_fns(), 1) = None { refl }
+
+// The pins, at closed arguments: the world's entry is the body's meaning.
+theorem nl_loop_pin(): nl_world()(0, [buf(text()), w64(BitVec::ofNat(5)), w64(BitVec::ofNat(1)), w64(BitVec::ofNat(0))])
+    = means(nl_fns(), nl_world(), 0, [buf(text()), w64(BitVec::ofNat(5)), w64(BitVec::ofNat(1)), w64(BitVec::ofNat(0))]) { refl }
+
+theorem count_newlines_pin(): nl_world()(1, [buf(text()), w64(BitVec::ofNat(6))]) = means(nl_fns(), nl_world(), 1, [buf(text()), w64(BitVec::ofNat(6))]) { refl }
+
+theorem count_newlines_value(): count_newlines(text(), BitVec::ofNat(6)) = BitVec::ofNat(3) { refl }
+
+// Each signature is well formed (`Sig::ok`, §23.21).
+theorem nl_sigs_ok(): nl_fns().all_bit(λ (f: Func) => Sig::ok(tys(), strs(), f.sig)) = True { refl }
+
+theorem nl_placed(): (placed(nl_fns())).is_some() = True { refl }
+
+// ---------------------------------------------------------------------------
+// Runs on both levels, observed alike: level 2's answer's returned values
+// lowered and its blocks' bytes (`Dyn::encode`), at the identity injection;
+// the bytes level's words and blocks.
+
+fn io0() → Io { Io::of(World::piped([])) }
+
+fn ident() → Nat → Nat { λ b => b }
+
+fn blocks_of(h: level2::Heap(tys())) → List<Option<List<u8>>> {
+    h.map(λ (bl: Block(tys())) => match bl { Live(o) => Dyn::encode(tys(), strs(), o.val), Dead => None })
+}
+
+fn bheap(h: level2::Heap(tys())) → x86_64_memory_contract::Heap { x86_64_memory_contract::Heap(blocks_of(h).map(λ (o: Option<List<u8>>) => o.unwrap_or(Nil)), Nil, Nil) }
+
+record Seen { words: Option<List<x86_64_call_contract::Value>>, blocks: List<Option<List<u8>>> }
+
+fn l2_seen(fs: List<Func>, g: Nat, r: level2::Ran(tys())) → Option<Seen> {
+    match r {
+        Done(a) => Some(Seen(values_lower(tys(), strs(), ident(), a.heap, (funcs_at(fs)(g)).sig.returned(tys(), a.results)), blocks_of(a.heap))),
+        Exited(_, _) => None,
+        Going(_) => None,
+        Stuck => None,
+    }
+}
+
+fn b_seen(r: x86_64_call_contract::Ran<x86_64_call_contract::Answer>) → Option<Seen> {
+    match r {
+        Done(a) => Some(Seen(Some(a.words), a.heap.blocks.map(λ (bs: List<u8>) => Some(bs)))),
+        Exited(_, _) => None,
+        Going(_) => None,
+        Stuck(_) => None,
+    }
+}
+
+fn run2(fs: List<Func>, w: Callees(tys()), fuel, g: Nat, vs: List<level2::Value(tys())>, h: level2::Heap(tys())) → level2::Ran(tys()) {
+    Run::of(tys(), strs(), funcs_at(fs), w, no_prim(), fuel, g, vs, h, io0())
+}
+
+// The bytes level's run of the placed program at one fuel more, from the
+// arguments and heap lowered, every block writable where `wr` says.
+fn runb(fs: List<Func>, wr: Nat → Bool, fuel, g: Nat, vs: List<level2::Value(tys())>, h: level2::Heap(tys())) → x86_64_call_contract::Ran<x86_64_call_contract::Answer> {
+    bytes_level::run(placed(fs).unwrap_or(Program(Nil)), Blocks(wr), fuel + 1, g, values_lower(tys(), strs(), ident(), h, vs).unwrap_or(Nil), bheap(h), io0())
+}
+
+fn none_written() → Nat → Bool { λ _ => False }
+
+fn heap1(xs: List<u8>) → level2::Heap(tys()) { [Live(Obj(buf(xs), Nil))] }
+
+fn obj(b: Nat) → level2::Value(tys()) { Refer(level2::Ref(b, Nil)) }
+
+fn word(n: Nat) → level2::Value(tys()) { Plain(w64(BitVec::ofNat(n))) }
+
+// count_newlines over six bytes, three newlines: level 2 at fuel 7 (six
+// passes after the first), the bytes level at 8; read-only, no block
+// writable.
+theorem nl_args_lowered(): values_lower(tys(), strs(), ident(), heap1(text()), [obj(0), word(6)])
+    = Some([x86_64_call_contract::Ref(Loc(0, 0)), x86_64_call_contract::Word(BitVec::ofNat(6)), x86_64_call_contract::Word(BitVec::ofNat(6))]) { refl }
+
+theorem nl_level2(): l2_seen(nl_fns(), 1, run2(nl_fns(), nl_world(), 7, 1, [obj(0), word(6)], heap1(text())))
+    = Some(Seen(Some([x86_64_call_contract::Word(BitVec::ofNat(3))]), [Some(text())])) { refl }
+
+theorem nl_agree(): b_seen(runb(nl_fns(), none_written(), 7, 1, [obj(0), word(6)], heap1(text())))
+    = l2_seen(nl_fns(), 1, run2(nl_fns(), nl_world(), 7, 1, [obj(0), word(6)], heap1(text()))) { refl }
+
+fn going2(r: level2::Ran(tys())) → Bool { match r { Going(_) => True, Done(_) => False, Exited(_, _) => False, Stuck => False } }
+
+fn goingb(r: x86_64_call_contract::Ran<x86_64_call_contract::Answer>) → Bool { match r { Going(_) => True, Done(_) => False, Exited(_, _) => False, Stuck(_) => False } }
+
+// One fuel short of the loop's last turn, both are going: the fuels meet
+// exactly here, since the loop calls nothing (§25 on fuel).
+theorem nl_going(): Pair(going2(run2(nl_fns(), nl_world(), 6, 1, [obj(0), word(6)], heap1(text()))), goingb(runb(nl_fns(), none_written(), 6, 1, [obj(0), word(6)], heap1(text()))))
+    = Pair(True, True) { refl }
+
+// ---------------------------------------------------------------------------
+// 2. copy_window: a function that lends a window to write
+//
+//    fn copy_span(out: &mut [u8], text: &[u8], n, i: u64) → u64 decreases n - i {
+//        if i < n { out[i] := text[i]; copy_span(out, text, n, i + 1) } else { i }
+//    }
+//    fn copy_window(out: &mut [u8], text: &[u8], from, end: u64) → u64
+//        requires from <= end, end <= out.len(), end <= text.len()
+//    { let k = end - from; copy_span(&mut out[from..from+k], &text[from..from+k], k, 0) }
+
+fn cs_go(out, txt: List<u8>, k: Nat, n, i: u64) → Pair<List<u8>, u64> {
+    match k {
+        Zero => Pair(out, i),
+        Succ(k1) => match i.unsigned_lt_bit(n) {
+            False => Pair(out, i),
+            True => cs_go(out.update(i.toNat(), λ _ => txt.nth(i.toNat()).unwrap_or(BitVec::ofNat(0))), txt, k1, n, i.add(BitVec::ofNat(1))),
+        },
+    }
+}
+
+fn copy_span(out, txt: List<u8>, n, i: u64) → Pair<List<u8>, u64> { cs_go(out, txt, n.sub(i).toNat(), n, i) }
+
+fn copy_window(out, txt: List<u8>, from, end: u64) → Pair<List<u8>, u64> {
+    let k = end.sub(from);
+    let r = copy_span(bwin(out, IWord(64, from), IWord(64, k)), bwin(txt, IWord(64, from), IWord(64, k)), k, BitVec::ofNat(0));
+    Pair(bput_win(out, IWord(64, from), IWord(64, k), r.fst), r.snd)
+}
+
+fn wr(n: Nat) → Param { Param(buf_s(), ByWrite) }
+
+// The loop: a byte of `text` stored into `out` at `i`, round again; it
+// answers `i`, then `out` (its `Ret` convention).
+fn copy_span_r() → Func {
+    Func(Sig([wr(0), rd(0), word_p(), word_p()], [word_r()]),
+        Join(TLt(Arg(3), Arg(2)),
+            seq([Stmt::Read(el(Arg(1), Var(3))),                // [b]
+                 Stmt::Write(el(Arg(0), Var(3)), Loc(0)),
+                 Stmt::Lit(WBits(64), 1),                        // [one, b]
+                 Op(PAdd, Arg(3), Loc(0))],                      // [i', one, b]
+                Jump([Arg(0), Arg(1), Arg(2), Loc(0)])),
+            Ret([Arg(3), Arg(0)]),
+            Ret([Arg(3), Arg(0)])))
+}
+
+// The windows opened, lent, written back (the call's written window to the
+// view, the view to its place), each dead once written back, and the count
+// answered.
+fn copy_window_r() → Func {
+    Func(Sig([wr(0), rd(0), word_p(), word_p()], [word_r()]),
+        seq([Op(PSub, Arg(3), Arg(2)),                                   // [k]
+             View(win(Arg(0), Var(2), Var(4)), Writing),                 // [w, k]
+             View(win(Arg(1), Var(2), Var(5)), Reading),                 // [t, w, k]
+             Stmt::Lit(WBits(64), 0),                                    // [z, t, w, k]
+             Stmt::Call(0, [Loc(2), Loc(1), Loc(3), Loc(0)], 2),         // [w', r, z, t, w, k]
+             Stmt::Write(whole(Loc(4)), Loc(0)),
+             Death(whole(Loc(0))),
+             Stmt::Write(win(Arg(0), Var(2), Var(9)), Loc(4)),
+             Death(whole(Loc(4))),
+             Death(whole(Loc(3)))],
+            Ret([Loc(1), Arg(0)])))
+}
+
+fn cw_fns() → List<Func> { [copy_span_r(), copy_window_r()] }
+
+fn cw_world() → Callees(tys()) {
+    λ g ds => match g {
+        Zero => {
+            let r = copy_span(as_buf(arg(ds, 0)), as_buf(arg(ds, 1)), as_w64(arg(ds, 2)), as_w64(arg(ds, 3)));
+            [w64(r.snd), buf(r.fst)]
+        },
+        Succ(g1) => match g1 {
+            Zero => {
+                let r = copy_window(as_buf(arg(ds, 0)), as_buf(arg(ds, 1)), as_w64(arg(ds, 2)), as_w64(arg(ds, 3)));
+                [w64(r.snd), buf(r.fst)]
+            },
+            Succ(_) => Nil,
+        },
+    }
+}
+
+fn outb() → List<u8> { List::replicate(BitVec::ofNat(0), 6) }
+
+theorem copy_span_checked(): why(cw_fns(), 0) = None { refl }
+
+theorem copy_window_checked(): why(cw_fns(), 1) = None { refl }
+
+theorem copy_span_pin(): cw_world()(0, [buf(outb()), buf(text()), w64(BitVec::ofNat(4)), w64(BitVec::ofNat(1))])
+    = means(cw_fns(), cw_world(), 0, [buf(outb()), buf(text()), w64(BitVec::ofNat(4)), w64(BitVec::ofNat(1))]) { refl }
+
+theorem copy_window_pin(): cw_world()(1, [buf(outb()), buf(text()), w64(BitVec::ofNat(1)), w64(BitVec::ofNat(4))])
+    = means(cw_fns(), cw_world(), 1, [buf(outb()), buf(text()), w64(BitVec::ofNat(1)), w64(BitVec::ofNat(4))]) { refl }
+
+theorem copy_window_value(): copy_window(outb(), text(), BitVec::ofNat(1), BitVec::ofNat(4))
+    = Pair([BitVec::ofNat(0), BitVec::ofNat(10), BitVec::ofNat(98), BitVec::ofNat(10), BitVec::ofNat(0), BitVec::ofNat(0)], BitVec::ofNat(3)) { refl }
+
+theorem cw_sigs_ok(): cw_fns().all_bit(λ (f: Func) => Sig::ok(tys(), strs(), f.sig)) = True { refl }
+
+theorem cw_placed(): (placed(cw_fns())).is_some() = True { refl }
+
+// `out` is block 0, lent to write; `text` block 1.
+fn heap2() → level2::Heap(tys()) { [Live(Obj(buf(outb()), Nil)), Live(Obj(buf(text()), Nil))] }
+
+fn first_written() → Nat → Bool { λ b => b.same(0) }
+
+theorem cw_level2(): l2_seen(cw_fns(), 1, run2(cw_fns(), cw_world(), 5, 1, [obj(0), obj(1), word(1), word(4)], heap2()))
+    = Some(Seen(Some([x86_64_call_contract::Word(BitVec::ofNat(3))]),
+        [Some([BitVec::ofNat(0), BitVec::ofNat(10), BitVec::ofNat(98), BitVec::ofNat(10), BitVec::ofNat(0), BitVec::ofNat(0)]), Some(text())])) { refl }
+
+theorem cw_agree(): b_seen(runb(cw_fns(), first_written(), 5, 1, [obj(0), obj(1), word(1), word(4)], heap2()))
+    = l2_seen(cw_fns(), 1, run2(cw_fns(), cw_world(), 5, 1, [obj(0), obj(1), word(1), word(4)], heap2())) { refl }
+
+// ---------------------------------------------------------------------------
+// 3. sum: a recursion
+//
+//    fn sum(n: u64) → u64 decreases n { if 0 < n { n + sum(n - 1) } else { 0 } }
+
+fn sum_go(k: Nat, n: u64) → u64 {
+    match k { Zero => BitVec::ofNat(0), Succ(k1) => match BitVec::ofNat(0).unsigned_lt_bit(n) { True => n.add(sum_go(k1, n.sub(BitVec::ofNat(1)))), False => BitVec::ofNat(0) } }
+}
+
+fn sum(n: u64) → u64 { sum_go(n.toNat(), n) }
+
+fn sum_r() → Func {
+    Func(Sig([word_p()], [word_r()]),
+        seq([Stmt::Lit(WBits(64), 0)],                                   // [z]
+            Join(TLt(Loc(0), Arg(0)),
+                seq([Stmt::Lit(WBits(64), 1),                             // [one, z]
+                     Op(PSub, Arg(0), Loc(0)),                            // [m, one, z]
+                     Stmt::Call(0, [Loc(0)], 1),                          // [s, m, one, z]
+                     Op(PAdd, Arg(0), Loc(0))],                           // [r, s, m, one, z]
+                    Ret([Loc(0)])),
+                Ret([Loc(0)]),
+                Ret([Loc(0)]))))
+}
+
+fn sum_fns() → List<Func> { [sum_r()] }
+
+fn sum_world() → Callees(tys()) { λ g ds => match g { Zero => [w64(sum(as_w64(arg(ds, 0))))], Succ(_) => Nil } }
+
+theorem sum_checked(): why(sum_fns(), 0) = None { refl }
+
+theorem sum_pin(): sum_world()(0, [w64(BitVec::ofNat(4))]) = means(sum_fns(), sum_world(), 0, [w64(BitVec::ofNat(4))]) { refl }
+
+theorem sum_sigs_ok(): sum_fns().all_bit(λ (f: Func) => Sig::ok(tys(), strs(), f.sig)) = True { refl }
+
+theorem sum_placed(): (placed(sum_fns())).is_some() = True { refl }
+
+theorem sum_level2(): l2_seen(sum_fns(), 0, run2(sum_fns(), sum_world(), 4, 0, [word(4)], Nil)) = Some(Seen(Some([x86_64_call_contract::Word(BitVec::ofNat(10))]), Nil)) { refl }
+
+theorem sum_agree(): b_seen(runb(sum_fns(), none_written(), 4, 0, [word(4)], Nil)) = l2_seen(sum_fns(), 0, run2(sum_fns(), sum_world(), 4, 0, [word(4)], Nil)) { refl }
+
+// One fuel short, both going: a call costs one on each side.
+theorem sum_going(): Pair(going2(run2(sum_fns(), sum_world(), 3, 0, [word(4)], Nil)), goingb(runb(sum_fns(), none_written(), 3, 0, [word(4)], Nil))) = Pair(True, True) { refl }
+
+// ---------------------------------------------------------------------------
+// Lowered: `Program::lower` answers `Some` for each placed program, at a
+// placement written by a linear scan over each path (the planner is not yet
+// on the bytes level: §25), so every layout premise is met.
+
+fn nl_places() → List<function_ir_lower::Place> { [Into(Rdi), Into(Rsi), Into(Rdx), Into(Rcx), Into(R8), Into(R9), Into(R10), Into(R11), Into(Rax), Into(R9), Into(Rax), Into(Rcx), Into(R9), Into(Rdi), Into(Rsi), Into(Rdx), Into(Rcx), Into(R8), Into(Rax), Into(R9), Into(Rax), Into(Rcx), Into(R9), Into(Rdi), Into(Rsi), Into(Rdx), Into(Rcx), Into(R8), Into(Rax), Into(Rax), Into(R8), Into(Rax), Into(Rcx), Into(R9), Into(Rdi), Into(Rsi), Into(Rdx), Into(Rcx), Into(R8), Into(Rax), Into(R9), Into(Rdi), Into(Rsi), Into(Rdx), Into(Rcx), Into(R8), Into(Rax), Into(R9), Into(R10), CallSlots(0), Into(Rcx), Spilling(0), Into(Rax)] }
+
+fn nl_lowered() → Option<x86_64_asm::Prog> { placed(nl_fns()).and_then(λ (q: Program) => q.lower(nl_places())) }
+
+theorem nl_lowers(): nl_lowered().is_some() = True { refl }
+
+fn cw_places() → List<function_ir_lower::Place> { [Into(Rdi), Into(Rsi), Into(Rdx), Into(Rcx), Into(R8), Into(R9), Into(R10), Into(R11), Into(Rax), Into(R10), Into(Rax), Into(Rax), Into(R9), Into(R10), Into(Rdi), Into(Rsi), Into(Rdx), Into(Rcx), Into(R8), Into(R9), Into(Rax), Into(R10), Into(Rdi), Into(Rsi), Into(Rdx), Into(Rcx), Into(R8), Into(R9), Into(Rax), Into(R10), Into(R11), CallSlots(0), Into(Rcx), Into(Rsi), Into(Rdx), Into(Rdi), Spilling(0), Into(Rax)] }
+
+fn cw_lowered() → Option<x86_64_asm::Prog> { placed(cw_fns()).and_then(λ (q: Program) => q.lower(cw_places())) }
+
+theorem cw_lowers(): cw_lowered().is_some() = True { refl }
+
+fn sum_places() → List<function_ir_lower::Place> { [CallSlots(1), Into(Rcx), Into(Rdx), Into(Rsi), Into(R8), Spilling(8), Into(Rdi), Into(Rax), Into(Rax)] }
+
+fn sum_lowered() → Option<x86_64_asm::Prog> { placed(sum_fns()).and_then(λ (q: Program) => q.lower(sum_places())) }
+
+theorem sum_lowers(): sum_lowered().is_some() = True { refl }
+
+// ---------------------------------------------------------------------------
+// Checked, in the fragment, and refused by `place` (§25.5): what `place`
+// does not yet place beyond the fragment's limits and the three tests the
+// run's changes remove.
+
+// A view of a word element, read through: `let v = &text[i]; *v`.
+fn word_view_r() → Func { Func(Sig([rd(0), word_p()], [word_r()]), seq([View(el(Arg(0), Var(1)), Reading), Stmt::Read(whole(Loc(0)))], Ret([Loc(0)]))) }
+
+// A word variable written: `n := 1; n`.
+fn word_write_r() → Func { Func(Sig([word_p()], [word_r()]), seq([Stmt::Lit(WBits(64), 1), Stmt::Write(whole(Arg(0)), Loc(0))], Ret([Arg(0)]))) }
+
+// A taken word answered back (`OParam`), placed since §25.5.
+fn word_back_r() → Func { Func(Sig([word_p()], [Result(u64_s(), OParam(0))]), Ret([Arg(0)])) }
+
+// A narrow index, placed since §25.5: `text[i as u32]`.
+fn narrow_index_r() → Func {
+    Func(Sig([rd(0), Param(SWord(WBits(32)), ByTake)], [Result(u8_s(), OFresh)]), seq([Stmt::Read(el(Arg(0), Var(1)))], Ret([Loc(0)])))
+}
+
+// The checker's verdict and whether `place` answers: a view of a word is
+// refused by its codes (not a finding); a word variable written is checked
+// and not placed (the finding); a taken word answered back is refused by
+// `Sig::ok`'s modes; a narrow index is checked and placed.
+theorem refusals_sorted(): [word_view_r(), word_write_r(), word_back_r(), narrow_index_r()].map(λ (f: Func) => Pair(why([f], 0), placed([f]).is_some()))
+    = [Pair(Some(WCodes), False), Pair(None, False), Pair(Some(WOwn), True), Pair(None, True)] { refl }
+
+fn in_fragment(fs: List<Func>) → List<Bool> { fs.map(λ (f: Func) => f.fragment(tys(), strs(), sigs_of(fs), no_prim())) }
+
+// The three programs are in the fragment; so is the written word variable,
+// which `place` refuses today: `PlaceComplete` does not hold yet, by it.
+theorem fragments(): in_fragment(nl_fns()) ++ in_fragment(cw_fns()) ++ in_fragment(sum_fns()) ++ in_fragment([word_write_r()]) = [True, True, True, True, True, True] { refl }
