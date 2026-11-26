@@ -11850,3 +11850,44 @@ theorem CSt::lend_all_lvls(tys: Nat → Type, strs: Strs(tys), xs: List<Var>): (
         },
     }
 }
+
+theorem List::app_nil_r<A>(self xs: List<A>, ys: List<A>): xs ++ ys = Nil → ys = Nil {
+    match xs { Nil => λ e => e, Cons(_, _) => λ no => absurd(no) }
+}
+
+// P2's tool: two paths apart, neither empty, are apart under a common prefix
+// (each keeps what a shared step reads like itself: the model's `keeps`).
+theorem Sel::apart_pre(tys: Nat → Type, strs: Strs(tys), sl: StrsLaws(tys, strs), xs, ys: List<Sel>, nx: ¬(xs = Nil), ny: ¬(ys = Nil), h: Sel::Apart(tys, strs, xs, ys), p: List<Sel>):
+    Sel::Apart(tys, strs, p ++ xs, p ++ ys)
+{
+    let md = Dyn::model(tys, strs);
+    let ml = Dyn::model_laws(tys, strs, sl);
+    // A modification along a non-empty path keeps what any step reads like itself.
+    let kp = λ (zs: List<Sel>) (nz: ¬(zs = Nil)) (a: Sel) (x: Dyn(tys)) (s0: Dyn(tys)) (lk: md.like(a, x, s0) = True) (g: Dyn(tys) → Dyn(tys)) =>
+        (match zs as λ q => ¬(q = Nil) → md.like(a, x, Sel::write_at(tys, strs, q, g, s0)) = True {
+            Nil => λ no => false_elim(no(refl)),
+            Cons(b, rest) => λ _ => ml.keeps(a, b, x, s0, lk, λ y => Sel::write_at(tys, strs, rest, g, y)),
+        })(nz);
+    match p {
+        Nil => h,
+        Cons(a, pr) => {
+            let ih = Sel::apart_pre(tys, strs, sl, xs, ys, nx, ny, h, pr);
+            let k1 = λ (x: Dyn(tys)) (s0: Dyn(tys)) (lk: md.like(a, x, s0) = True) (g: Dyn(tys) → Dyn(tys)) => kp(pr ++ xs, λ eq => nx(pr.app_nil_r(xs, eq)), a, x, s0, lk, g);
+            let k2 = λ (x: Dyn(tys)) (s0: Dyn(tys)) (lk: md.like(a, x, s0) = True) (g: Dyn(tys) → Dyn(tys)) => kp(pr ++ ys, λ eq => ny(pr.app_nil_r(ys, eq)), a, x, s0, lk, g);
+            let rd = ApartAt::under(md, ml, a, ih.reads, k1, k2);
+            let fu = λ (zs: List<Sel>) (ws: List<Sel>) (inner: (g: Dyn(tys) → Dyn(tys)) → (d: Dyn(tys)) → Sel::fit(tys, strs, zs, Sel::write_at(tys, strs, ws, g, d)) = Sel::fit(tys, strs, zs, d))
+                    (kw: (x: Dyn(tys)) → (s0: Dyn(tys)) → md.like(a, x, s0) = True → (g: Dyn(tys) → Dyn(tys)) → md.like(a, x, Sel::write_at(tys, strs, ws, g, s0)) = True)
+                    (g: Dyn(tys) → Dyn(tys)) (d: Dyn(tys)) =>
+                (match md.fits(a, d) as λ c => md.fits(a, d) = c → Sel::fit(tys, strs, Cons(a, zs), md.over(a, λ x => Sel::write_at(tys, strs, ws, g, x), d)) = Sel::fit(tys, strs, Cons(a, zs), d) {
+                    True => λ on => {
+                        let ov = ml.over_at(a, λ x => Sel::write_at(tys, strs, ws, g, x), d, on, kw(md.at(a, d), md.at(a, d), ml.like_refl(a, md.at(a, d)), g));
+                        let e1 = ml.fits_over(a, a, λ x => Sel::write_at(tys, strs, ws, g, x), d);
+                        trans(cong_fn(λ (q: Bool) => q && Sel::fit(tys, strs, zs, md.at(a, md.over(a, λ x => Sel::write_at(tys, strs, ws, g, x), d))), e1),
+                            cong_fn(λ (t: Bool) => md.fits(a, d) && t, trans(cong_fn(λ (t: Dyn(tys)) => Sel::fit(tys, strs, zs, t), ov), inner(g, md.at(a, d)))))
+                    },
+                    False => λ off => cong_fn(λ (t: Dyn(tys)) => Sel::fit(tys, strs, Cons(a, zs), t), ml.still(a, λ x => Sel::write_at(tys, strs, ws, g, x), d, off)),
+                })(refl);
+            SelApart(rd, λ g d => fu(pr ++ xs, pr ++ ys, ih.fit1, k2, g, d), λ g d => fu(pr ++ ys, pr ++ xs, ih.fit2, k1, g, d))
+        },
+    }
+}
