@@ -36,6 +36,12 @@ fn X86Profile::linux(self x: X86Profile) → LinuxIo<X86Memory(x)> {
     LinuxIo(x.fetch(), x.data(), x.writes().writable, x.writes().store)
 }
 
+// Linux writes a profile's memory as the profile does, so a store of no
+// bytes there needs no room and changes nothing.
+theorem X86Profile::linux_empty(self x: X86Profile): linux_writes(x.linux()).EmptyRange() {
+    linux_writes_empty(x.fetch(), x.data(), x.writes(), x.writes_empty())
+}
+
 // ---------------------------------------------------------------------------
 // A buffer in a region
 

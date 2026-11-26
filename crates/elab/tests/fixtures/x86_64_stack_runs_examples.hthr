@@ -129,7 +129,11 @@ fn toy_fetch() → FetchAccess<Toy> {
         λ (m: Toy) (a: BitVec(64)) => m.code(a.toNat()) && (Nat::leb(4096, a.toNat()) && Succ(a.toNat()).leb(Nat::pow(2, 47))))
 }
 fn toy_data() → ByteReadAccess<Toy> { ByteReadAccess(λ (m: Toy) (a: BitVec(64)) => Some(m.bytes(a.toNat()))) }
-fn toy_store(m: Toy, a: BitVec(64), bytes: List<BitVec(8)>) → Toy { Toy(m.code, λ (n: Nat) => store_at(m.bytes, a.toNat(), bytes, n)) }
+// A store of no bytes is the memory itself (`ByteWrites::EmptyRange`):
+// without funext, `store_at` of an empty list is the cells only pointwise.
+fn toy_store(m: Toy, a: BitVec(64), bytes: List<BitVec(8)>) → Toy {
+    match bytes { Nil => m, Cons(_, _) => Toy(m.code, λ (n: Nat) => store_at(m.bytes, a.toNat(), bytes, n)) }
+}
 fn toy_writes() → ByteWrites<Toy> { ByteWrites(λ (m: Toy) (a: BitVec(64)) (n: Nat) => True, toy_store) }
 
 theorem zero_at(i: Nat, small: i < Nat::pow(2, 64)): next_rip(BitVec::zero(), i).toNat() = i {
@@ -290,6 +294,7 @@ fn toy_stack() → Stack<Toy>(toy_fetch(), toy_data()) {
     Stack(toy_writes(), BitVec::zero(), 4096,
         λ i fits => toy_canonical(i, fits),
         λ m i fits => trivial,
+        λ m a => ⟨trivial, refl⟩,
         λ m i fits w => toy_stored(m, i, fits, w),
         λ m i k fits k_fits apart w => toy_apart(m, i, k, fits, k_fits, apart, w),
         λ m i fits w bytes at resident => toy_code(m, i, fits, w, bytes, at, resident),

@@ -1,0 +1,576 @@
+// Probes of the bytes level's routines lowered (lib/native/bytes_level/
+// bytes_level_routines.hthr; issues/bytes-level-lowering-routines.md,
+// issues/call-contract-tracks.md): the language's call probes
+// (bytes_level_tests' `lend` and `both`) compiled, each tracking its meaning
+// (`Site::Tracks`) for every routine at every fuel; a routine that calls
+// itself compiled and tracked at the room table by depth, with the control
+// that no table constant in the depth holds it; the language's `exits`, and
+// an exit inside a callee, compiled and tracked, their exited reading not
+// vacuous; the language's world probes compiled, meeting the whole
+// contract and read where each applies, a pass that writes forever going
+// with its history growing; and the controls: one that binds an id twice,
+// an exit whose status is unbound, refused, and a stuck run read as
+// nothing.
+import bytes_level::{run};
+import bytes_memory;
+import bytes_level_lower;
+import bytes_level_scope;
+import bytes_level_routines;
+import bytes_level_whole;
+import x86_64_memory_contract;
+import x86_64_call_contract;
+import function_ir;
+import function_ir_eval;
+import function_ir_state;
+import function_ir_lower;
+import function_ir_lower_structured;
+import function_ir_lower_reads;
+import function_ir_lower_calls;
+import x86_64;
+import x86_64_fetch;
+import x86_64_data_read;
+import x86_64_stack;
+import x86_64_asm;
+import x86_64_asm_runs;
+import x86_64_stack_runs;
+import linux_world;
+import bitvec;
+import bool;
+import list;
+import logic;
+import nat;
+import option;
+
+fn into(registers: List<Gpr>) → List<Place> { registers.map(λ (r: Gpr) => Into(r)) }
+
+fn lowers(p: Program, placement: List<Place>) → Bool { p.lower(placement).is_some() }
+
+// ---------------------------------------------------------------------------
+// A window passed as a reference and a length to a callee that writes it
+
+// Routine 0: 42 at the window's first byte and at its last; it answers
+// nothing, so its code answers zero in RAX.
+fn fill() → Routine {
+    Routine([ref_id(0), word_id(1)],
+        Leaf([Compute(Const(64, 2, 42)), Store(1, 64, 0, 2), Compute(Const(64, 3, 1)), Compute(Sub(64, 4, 1, 3)), Offset(5, 0, 4), Store(1, 64, 5, 2)]),
+        [])
+}
+
+// Routine 1: the window of `length` bytes from byte 4 of its block lent to
+// `fill`, then bytes 4, 5 and 6 read back.
+fn lend(length: Nat) → Routine {
+    Routine([ref_id(0)],
+        Seq(Leaf([Compute(Const(64, 1, 4)), Offset(2, 0, 1), Compute(Const(64, 3, length))]),
+            Seq(Call(0, [ref_id(2), word_id(3)], []),
+                Leaf([Load(1, 64, 4, 2), Compute(Const(64, 5, 1)), Offset(6, 2, 5), Load(1, 64, 7, 6), Compute(Const(64, 8, 2)), Offset(9, 2, 8),
+                    Load(1, 64, 10, 9)]))),
+        [word_id(4), word_id(7), word_id(10)])
+}
+
+fn lend_program(length: Nat) → Program { Program([fill(), lend(length)]) }
+
+// `fill`'s nodes, its two stores' places skipped, its zero answer in RAX;
+// then `lend`'s.
+fn lend_places() → List<Place> {
+    into([Rax, Rax, Rcx, Rdx, R8, R8, Rax]) ++ into([Rax, Rcx, Rdx, Rsi, Rax, Rax, R8, Rax, Rax, R9])
+}
+
+theorem lend_lowers(): lowers(lend_program(3), lend_places()) = True { refl }
+
+theorem lend_tracks<M>(program: Prog, lowered: lend_program(3).lower(lend_places()) = Some(program), fetch: FetchAccess<M>,
+    data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64), stack: Stack<M>(fetch, data), top: Nat, spans: Spans, blocks: Blocks):
+    Site<M>(fetch, data, program, last, origin).Tracks(stack, spans, top, blocks.Lent(spans), depth_rooms(lend_program(3).routines),
+        λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run_peak(lend_program(3), blocks, n, f, args, heap, io), 2,
+        λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run(lend_program(3), blocks, n, f, args, heap, io)) {
+    lower_program_tracks<M>(lend_program(3), lend_places(), program, lowered, fetch, data, last, origin, stack, top, spans, blocks, depth_rooms(lend_program(3).routines),
+        depth_rooms_lawful(lend_program(3).routines))
+}
+
+// The table by depth at a program whose calls do not cycle stops changing
+// past the call graph's height: `lend` calls `fill`, so from depth one on
+// each routine's room is one number (the lemma for every such program is
+// owed: issues/bytes-level-lowering-recursion.md).
+theorem lend_rooms_settle(): (depth_rooms(lend_program(3).routines)(1, 1) = depth_rooms(lend_program(3).routines)(1, 5)) ∧
+    (depth_rooms(lend_program(3).routines)(0, 0) = depth_rooms(lend_program(3).routines)(0, 5)) { ⟨refl, refl⟩ }
+
+// Below its height the table is smaller: at depth zero `lend` enters no
+// call, and asks only its frame and a call's 24 bytes.
+theorem lend_rooms_grow(): depth_rooms(lend_program(3).routines)(1, 0) < depth_rooms(lend_program(3).routines)(1, 1) { trivial }
+
+// ---------------------------------------------------------------------------
+// Two windows of one block written by one callee
+
+fn two() → Routine {
+    Routine([ref_id(0), ref_id(1)], Leaf([Compute(Const(64, 2, 1)), Store(1, 64, 0, 2), Compute(Const(64, 3, 2)), Store(1, 64, 1, 3)]), [])
+}
+
+fn both(apart: Nat) → Routine {
+    Routine([ref_id(0)],
+        Seq(Leaf([Compute(Const(64, 1, apart)), Offset(2, 0, 1)]), Seq(Call(0, [ref_id(0), ref_id(2)], []), Leaf([Load(1, 64, 3, 0), Load(1, 64, 4, 2)]))),
+        [word_id(3), word_id(4)])
+}
+
+fn both_program(apart: Nat) → Program { Program([two(), both(apart)]) }
+
+fn both_places() → List<Place> { into([Rax, Rax, Rcx, Rcx, Rax]) ++ into([Rax, Rcx, Rax, Rdx]) }
+
+theorem both_lowers(): lowers(both_program(8), both_places()) = True { refl }
+
+theorem both_tracks<M>(program: Prog, lowered: both_program(8).lower(both_places()) = Some(program), fetch: FetchAccess<M>,
+    data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64), stack: Stack<M>(fetch, data), top: Nat, spans: Spans, blocks: Blocks):
+    Site<M>(fetch, data, program, last, origin).Tracks(stack, spans, top, blocks.Lent(spans), depth_rooms(both_program(8).routines),
+        λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run_peak(both_program(8), blocks, n, f, args, heap, io), 2,
+        λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run(both_program(8), blocks, n, f, args, heap, io)) {
+    lower_program_tracks<M>(both_program(8), both_places(), program, lowered, fetch, data, last, origin, stack, top, spans, blocks, depth_rooms(both_program(8).routines),
+        depth_rooms_lawful(both_program(8).routines))
+}
+
+// ---------------------------------------------------------------------------
+// Controls
+
+// An id bound twice in one scope has no one valuation, and is refused.
+fn twice() → Routine { Routine([], Leaf([Compute(Const(64, 0, 1)), Compute(Const(64, 0, 2))]), [word_id(0)]) }
+
+theorem twice_valid(): Program([twice()]).valid() = True { refl }
+
+theorem twice_refused(): lowers(Program([twice()]), into([Rax, Rax])) = False { refl }
+
+// Both arms of a branch may bind one id; what follows may not bind it again.
+theorem arms_fresh(): Branch(0, Leaf([Compute(Const(64, 1, 1))]), Leaf([Compute(Const(64, 1, 2))])).fresh([0]) = Some([1, 0, 1, 0]) { refl }
+
+theorem after_arms_refused(): Seq(Branch(0, Leaf([Compute(Const(64, 1, 1))]), Leaf([Compute(Const(64, 1, 2))])), Leaf([Compute(Const(64, 1, 3))])).fresh([0]) =
+    None { refl }
+
+// ---------------------------------------------------------------------------
+// A plain loop, by the run's fuel (bytes_level_tests' `countdown`)
+
+fn countdown() → Routine {
+    Routine([word_id(0)],
+        Loop([word_id(0)], [word_id(1)],
+            Leaf([Compute(Const(64, 2, 1)), Compute(Sub(64, 3, 1, 2)), Compute(Const(64, 4, 0)), Compute(Equal(64, 5, 3, 4))]), 5, [word_id(3)],
+            [word_id(6)]),
+        [word_id(6)])
+}
+
+fn countdown_program() → Program { Program([countdown()]) }
+
+// The state in RCX, then the pass's nodes.
+fn countdown_places() → List<Place> { into([Rcx, Rax, Rdx, Rax, Rsi]) }
+
+theorem countdown_lowers(): lowers(countdown_program(), countdown_places()) = True { refl }
+
+// The done clause, `Tracks` read where the meaning is done.
+theorem countdown_meets_done<M>(program: Prog, lowered: countdown_program().lower(countdown_places()) = Some(program), fetch: FetchAccess<M>,
+    data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64), stack: Stack<M>(fetch, data), top: Nat, spans: Spans, blocks: Blocks):
+    Site<M>(fetch, data, program, last, origin).MeetsDone(stack, spans, top, blocks.Lent(spans), depth_rooms(countdown_program().routines),
+        λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run_peak(countdown_program(), blocks, n, f, args, heap, io), 1,
+        λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run(countdown_program(), blocks, n, f, args, heap, io)) {
+    lower_program_meets_done<M>(countdown_program(), countdown_places(), program, lowered, fetch, data, last, origin, stack, top, spans, blocks)
+}
+
+// The same loop with the next state placed in the state's register, so the
+// pass's end moves nothing (every export's loop): the exit bit's test and a
+// jump forward out where it is set, else the one jump back to the head.
+fn countdown_straight_places() → List<Place> { into([Rcx, Rax, Rcx, Rax, Rsi]) }
+
+theorem countdown_straight_lowers(): lowers(countdown_program(), countdown_straight_places()) = True { refl }
+
+theorem countdown_straight_meets_done<M>(program: Prog, lowered: countdown_program().lower(countdown_straight_places()) = Some(program),
+    fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64), stack: Stack<M>(fetch, data), top: Nat, spans: Spans,
+    blocks: Blocks):
+    Site<M>(fetch, data, program, last, origin).MeetsDone(stack, spans, top, blocks.Lent(spans), depth_rooms(countdown_program().routines),
+        λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run_peak(countdown_program(), blocks, n, f, args, heap, io), 1,
+        λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run(countdown_program(), blocks, n, f, args, heap, io)) {
+    lower_program_meets_done<M>(countdown_program(), countdown_straight_places(), program, lowered, fetch, data, last, origin, stack, top, spans,
+        blocks)
+}
+
+// Control: an id a pass bound, bound again after the loop, is refused: the
+// pass's ids are counted bound in the routine's scope.
+fn countdown_reusing() → Routine {
+    Routine([word_id(0)],
+        Loop([word_id(0)], [word_id(1)],
+            Leaf([Compute(Const(64, 2, 1)), Compute(Sub(64, 3, 1, 2)), Compute(Const(64, 4, 0)), Compute(Equal(64, 5, 3, 4))]), 5, [word_id(3)],
+            [word_id(3)]),
+        [word_id(3)])
+}
+
+theorem countdown_reusing_valid(): Program([countdown_reusing()]).valid() = True { refl }
+
+theorem countdown_reusing_refused(): lowers(Program([countdown_reusing()]), countdown_places()) = False { refl }
+
+// The exited clause, read off `Tracks` at the table by depth.
+theorem countdown_meets_exited<M>(program: Prog, lowered: countdown_program().lower(countdown_places()) = Some(program), fetch: FetchAccess<M>,
+    data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64), stack: Stack<M>(fetch, data), top: Nat, spans: Spans, blocks: Blocks):
+    Site<M>(fetch, data, program, last, origin).MeetsExited(stack, spans, top, blocks.Lent(spans), depth_rooms(countdown_program().routines),
+        λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run_peak(countdown_program(), blocks, n, f, args, heap, io), 1,
+        λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run(countdown_program(), blocks, n, f, args, heap, io)) {
+    lower_program_meets_exited<M>(countdown_program(), countdown_places(), program, lowered, fetch, data, last, origin, stack, top, spans, blocks)
+}
+
+// ---------------------------------------------------------------------------
+// An exit (issues/bytes-level-lowering-world.md item 1)
+
+// The language's `exits` (bytes_level_tests): 3, then exit with it.
+fn exits_program() → Program { Program([Routine([], Seq(Leaf([Compute(Const(64, 0, 3))]), Exit(0)), [])]) }
+
+fn exits_places() → List<Place> { into([Rax, Rax]) }
+
+theorem exits_lowers(): lowers(exits_program(), exits_places()) = True { refl }
+
+fn exited_status(o: Ran<Answer>) → Option<Nat> {
+    match o { Done(_) => None, Exited(status, _) => Some(status.toNat()), Going(_) => None, Stuck(_) => None }
+}
+
+fn exited_world(o: Ran<Answer>) → Option<Io> {
+    match o { Done(_) => None, Exited(_, io) => Some(io), Going(_) => None, Stuck(_) => None }
+}
+
+// At every fuel that enters it, in every world and over every heap, its
+// run exits with 3, the world as it was: the exited reading is not
+// vacuous.
+theorem exits_at(blocks: Blocks, n: Nat, heap: Heap, io: Io): exited_status(run(exits_program(), blocks, Succ(n), 0, [], heap, io)) = Some(3) { refl }
+
+theorem exits_keeps_world(blocks: Blocks, n: Nat, heap: Heap, io: Io): exited_world(run(exits_program(), blocks, Succ(n), 0, [], heap, io)) = Some(io) {
+    refl
+}
+
+// Its code tracks the meaning: where it exits, the code performs the exit
+// call with that status in RDI and sixty in RAX, in the meaning's world.
+theorem exits_tracks<M>(program: Prog, lowered: exits_program().lower(exits_places()) = Some(program), fetch: FetchAccess<M>, data: ByteReadAccess<M>,
+    last: List<BitVec(8)>, origin: BitVec(64), stack: Stack<M>(fetch, data), top: Nat, spans: Spans, blocks: Blocks):
+    Site<M>(fetch, data, program, last, origin).Tracks(stack, spans, top, blocks.Lent(spans), depth_rooms(exits_program().routines),
+        λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run_peak(exits_program(), blocks, n, f, args, heap, io), 1,
+        λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run(exits_program(), blocks, n, f, args, heap, io)) {
+    lower_program_tracks<M>(exits_program(), exits_places(), program, lowered, fetch, data, last, origin, stack, top, spans, blocks,
+        depth_rooms(exits_program().routines), depth_rooms_lawful(exits_program().routines))
+}
+
+theorem exits_meets_exited<M>(program: Prog, lowered: exits_program().lower(exits_places()) = Some(program), fetch: FetchAccess<M>,
+    data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64), stack: Stack<M>(fetch, data), top: Nat, spans: Spans, blocks: Blocks):
+    Site<M>(fetch, data, program, last, origin).MeetsExited(stack, spans, top, blocks.Lent(spans), depth_rooms(exits_program().routines),
+        λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run_peak(exits_program(), blocks, n, f, args, heap, io), 1,
+        λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run(exits_program(), blocks, n, f, args, heap, io)) {
+    lower_program_meets_exited<M>(exits_program(), exits_places(), program, lowered, fetch, data, last, origin, stack, top, spans, blocks)
+}
+
+// An exit inside a callee: routine 1 calls routine 0, which exits; the
+// caller's run exits with the callee's status.
+fn exits_nested() → Program {
+    Program([Routine([word_id(0)], Exit(0), []), Routine([], Seq(Leaf([Compute(Const(64, 0, 7))]), Call(0, [word_id(0)], [])), [])])
+}
+
+fn nested_places() → List<Place> { into([Rax, Rax, Rax]) }
+
+theorem exits_nested_lowers(): lowers(exits_nested(), nested_places()) = True { refl }
+
+theorem exits_nested_at(blocks: Blocks, n: Nat, heap: Heap, io: Io): exited_status(run(exits_nested(), blocks, Succ(Succ(n)), 1, [], heap, io)) = Some(7) {
+    refl
+}
+
+theorem exits_nested_tracks<M>(program: Prog, lowered: exits_nested().lower(nested_places()) = Some(program), fetch: FetchAccess<M>,
+    data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64), stack: Stack<M>(fetch, data), top: Nat, spans: Spans, blocks: Blocks):
+    Site<M>(fetch, data, program, last, origin).Tracks(stack, spans, top, blocks.Lent(spans), depth_rooms(exits_nested().routines),
+        λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run_peak(exits_nested(), blocks, n, f, args, heap, io), 2,
+        λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run(exits_nested(), blocks, n, f, args, heap, io)) {
+    lower_program_tracks<M>(exits_nested(), nested_places(), program, lowered, fetch, data, last, origin, stack, top, spans, blocks,
+        depth_rooms(exits_nested().routines), depth_rooms_lawful(exits_nested().routines))
+}
+
+// Control: an exit whose status no id holds is refused (validity: the
+// status is a word bound before it).
+theorem exit_unbound_refused(): lowers(Program([Routine([], Exit(0), [])]), into([Rax])) = False { refl }
+
+// ---------------------------------------------------------------------------
+// A routine that calls itself (docs/language/ownership-design.md §17.7)
+
+// `down(x)`: zero where `x` is zero, else `down(x - 1)`. The meaning ties it
+// by fuel; its code's room is by the depth of the chain of calls its run
+// enters (`run_peak`), at the table by depth.
+fn down() → Routine {
+    Routine([word_id(0)],
+        Seq(Leaf([Compute(Const(64, 1, 0)), Compute(Equal(64, 2, 0, 1))]),
+            Branch(2, Leaf([Compute(Const(64, 3, 0))]), Seq(Leaf([Compute(Const(64, 4, 1)), Compute(Sub(64, 5, 0, 4))]), Call(0, [word_id(5)], [word_id(3)])))),
+        [word_id(3)])
+}
+
+fn down_program() → Program { Program([down()]) }
+
+fn down_places() → List<Place> { into([Rax, Rcx, Rax, Rdx, Rsi, Rax]) }
+
+theorem down_lowers(): lowers(down_program(), down_places()) = True { refl }
+
+fn down_heap() → Heap { Heap([], [], []) }
+
+fn down_io() → Io { Io::of(World::piped([])) }
+
+fn down_run(n, from: Nat) → Ran<Answer> { run(down_program(), Blocks(λ (b: Nat) => False), n, 0, [Word(BitVec::ofNat(from))], down_heap(), down_io()) }
+
+fn down_answer(o: Ran<Answer>) → Option<Nat> {
+    match o { Done(a) => match a.words { Cons(v, _) => match v { Word(w) => Some(w.toNat()), Ref(_) => None }, Nil => None }, Exited(_, _) => None,
+        Going(_) => None, Stuck(_) => None }
+}
+
+fn down_going(o: Ran<Answer>) → Bool { match o { Done(_) => False, Exited(_, _) => False, Going(_) => True, Stuck(_) => False } }
+
+// From two: done with zero at fuel three, its chain two calls deep; still
+// going at fuel two.
+theorem down_done(): down_answer(down_run(3, 2)) = Some(0) { refl }
+
+theorem down_still_going(): down_going(down_run(2, 2)) = True { refl }
+
+theorem down_depth(): run_peak(down_program(), Blocks(λ (b: Nat) => False), 3, 0, [Word(BitVec::ofNat(2))], down_heap(), down_io()) = 2 { refl }
+
+theorem down_tracks<M>(program: Prog, lowered: down_program().lower(down_places()) = Some(program), fetch: FetchAccess<M>, data: ByteReadAccess<M>,
+    last: List<BitVec(8)>, origin: BitVec(64), stack: Stack<M>(fetch, data), top: Nat, spans: Spans, blocks: Blocks):
+    Site<M>(fetch, data, program, last, origin).Tracks(stack, spans, top, blocks.Lent(spans), depth_rooms(down_program().routines),
+        λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run_peak(down_program(), blocks, n, f, args, heap, io), 1,
+        λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run(down_program(), blocks, n, f, args, heap, io)) {
+    lower_program_tracks<M>(down_program(), down_places(), program, lowered, fetch, data, last, origin, stack, top, spans, blocks,
+        depth_rooms(down_program().routines), depth_rooms_lawful(down_program().routines))
+}
+
+// Control: no table constant in the depth is lawful for it. At depth one
+// its call needs its own room and the call's 24 bytes below its frame.
+theorem down_no_constant_room(c: Nat): ¬RoomLaw(down_program().routines, λ (f: Nat) (p: Nat) => c) {
+    λ law => {
+        let roomy = law(0, down(), refl, 1);
+        let frame = down().frame(8, 6);
+        let fit: (c + 24 <= c - frame) = roomy.right.right.right.right.right({ omega });
+        let never: False = { omega };
+        never
+    }
+}
+
+// The whole contract of the recursive routine's code, going clause included
+// (`lower_program_meets`, from `Tracks` by `Site::tracks_meets`).
+theorem down_meets<M>(program: Prog, lowered: down_program().lower(down_places()) = Some(program), fetch: FetchAccess<M>, data: ByteReadAccess<M>,
+    last: List<BitVec(8)>, origin: BitVec(64), stack: Stack<M>(fetch, data), top: Nat, spans: Spans, blocks: Blocks):
+    Site<M>(fetch, data, program, last, origin).Meets(stack, spans, top, blocks.Lent(spans), depth_rooms(down_program().routines),
+        λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run_peak(down_program(), blocks, n, f, args, heap, io), 1,
+        λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run(down_program(), blocks, n, f, args, heap, io)) {
+    lower_program_meets<M>(down_program(), down_places(), program, lowered, fetch, data, last, origin, stack, top, spans, blocks)
+}
+
+// ---------------------------------------------------------------------------
+// The world (docs/language/ownership-design.md §17.7)
+//
+// The language's world probes compiled, their code meeting the whole
+// contract (`lower_program_meets`: done, exited and going), each read where
+// it applies: bytes_level_tests' `echo` done in a piped world and going at
+// fuel zero, its control (a third byte written that the read did not
+// define) stuck, which the contract reads as nothing; `read_then_load`
+// stuck where the world fails the read and done where it answers; and a
+// pass that writes one byte forever, going at every fuel with as many
+// exchanges as the fuel. (`exits` is above.)
+
+// bytes_level_tests' heap, lending and worlds.
+fn world_zeros() → List<BitVec(8)> { List::replicate(BitVec::zero(), 16) }
+
+fn world_heap() → Heap {
+    Heap([world_zeros(), [BitVec::ofNat(7), BitVec::ofNat(8), BitVec::ofNat(9), BitVec::ofNat(10)], world_zeros()], [], [[], [], List::replicate(True, 16)])
+}
+
+fn world_blocks() → Blocks { Blocks(λ (b: Nat) => b.same(0) || b.same(2)) }
+
+fn piped() → Io { Io::of(World::piped([[BitVec::ofNat(104), BitVec::ofNat(105)]])) }
+
+fn failing() → World() {
+    λ past c => match c {
+        ReadCmd(_, _) => ReadFailed(5),
+        WriteCmd(_, _) => WriteFailed(5),
+        OpenCmd(_) => OpenFailed(5),
+        CloseCmd(_) => CloseFailed(5),
+        StatCmd(_) => StatFailed(5),
+    }
+}
+
+fn done_words(o: Ran<Answer>) → Option<List<Nat>> {
+    match o {
+        Done(a) => Some(a.words.map(λ (v: Value) => match v { Word(w) => w.toNat(), Ref(_) => 0 })),
+        Exited(_, _) => None,
+        Going(_) => None,
+        Stuck(_) => None,
+    }
+}
+
+fn done_sent(o: Ran<Answer>, fd: Nat) → Option<List<BitVec(8)>> {
+    match o { Done(a) => Some(a.io.sent(BitVec::ofNat(fd))), Exited(_, _) => None, Going(_) => None, Stuck(_) => None }
+}
+
+fn going_world(o: Ran<Answer>) → Option<Io> { match o { Done(_) => None, Exited(_, _) => None, Going(io) => Some(io), Stuck(_) => None } }
+
+fn going_history(o: Ran<Answer>) → Option<Nat> { match o { Done(_) => None, Exited(_, _) => None, Going(io) => Some(io.past.len()), Stuck(_) => None } }
+
+fn is_stuck(o: Ran<Answer>) → Bool { match o { Done(_) => False, Exited(_, _) => False, Going(_) => False, Stuck(_) => True } }
+
+// Stuck reads nothing: the contract claims no state of the code there.
+theorem stuck_reads_nothing<M>(site: Site<M>, stack: Stack<M>(site.fetch, site.data), spans: Spans, s: MachineState<M>, i: Nat, ret: BitVec(64), o: Io,
+    r: Running<M, Io>): site.Reached(stack, spans, s, i, ret, Stuck(o))(r) {
+    trivial
+}
+
+// bytes_level_tests' `echo`: read up to `asked` bytes from fd 0 into the
+// window, write `back` of them to fd 1, answer the count and the first byte.
+fn echo(asked, back: Nat) → Routine {
+    Routine([ref_id(0)],
+        Seq(Leaf([Compute(Const(64, 1, 0)), Compute(Const(64, 2, asked))]),
+            Seq(Sys(Read(1, 0, 2, 3)),
+                Seq(Leaf([Compute(Const(64, 4, 1)), Compute(Const(64, 5, back))]), Seq(Sys(Write(4, 0, 5, 6)), Leaf([Load(1, 64, 7, 0)]))))),
+        [word_id(3), word_id(7)])
+}
+
+fn echo_program(back: Nat) → Program { Program([echo(4, back)]) }
+
+// The count lives in RAX across the write: the write's call first moves it
+// to a free spare (`sys_kept`).
+fn echo_places() → List<Place> { into([Rcx, Rdx, Rcx, Rdx, Rax, Rax, Rax, Rax]) }
+
+fn echo_run(back, fuel: Nat) → Ran<Answer> { run(echo_program(back), world_blocks(), fuel, 0, [Ref(Loc(2, 0))], world_heap(), piped()) }
+
+theorem echo_lowers(): lowers(echo_program(2), echo_places()) = True { refl }
+
+// Done: the pipe's two bytes land and are written back.
+theorem echo_done(): done_words(echo_run(2, 16)) = Some([2, 104]) { refl }
+
+theorem echo_sent(): done_sent(echo_run(2, 16), 1) = Some([BitVec::ofNat(104), BitVec::ofNat(105)]) { refl }
+
+// Going at fuel zero, in the world it was entered in.
+theorem echo_going(): going_world(echo_run(2, 0)) = Some(piped()) { refl }
+
+// The stuck control: its code is compiled as well, and its run is stuck.
+theorem echo_past_read_lowers(): lowers(echo_program(3), echo_places()) = True { refl }
+
+theorem echo_past_read_stuck(): is_stuck(echo_run(3, 16)) = True { refl }
+
+theorem echo_meets<M>(back: Nat, program: Prog, lowered: echo_program(back).lower(echo_places()) = Some(program), fetch: FetchAccess<M>,
+    data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64), stack: Stack<M>(fetch, data), top: Nat, spans: Spans,
+    blocks: Blocks):
+    Site<M>(fetch, data, program, last, origin).Meets(stack, spans, top, blocks.Lent(spans), depth_rooms(echo_program(back).routines),
+        λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run_peak(echo_program(back), blocks, n, f, args, heap, io), 1,
+        λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run(echo_program(back), blocks, n, f, args, heap, io)) {
+    lower_program_meets<M>(echo_program(back), echo_places(), program, lowered, fetch, data, last, origin, stack, top, spans, blocks)
+}
+
+// bytes_level_tests' `read_then_load`: read into block 0, load its first
+// byte.
+fn read_then_load() → Routine {
+    Routine([ref_id(0)], Seq(Leaf([Compute(Const(64, 1, 0)), Compute(Const(64, 2, 4))]), Seq(Sys(Read(1, 0, 2, 3)), Leaf([Load(1, 64, 4, 0)]))),
+        [word_id(3), word_id(4)])
+}
+
+fn rtl_program() → Program { Program([read_then_load()]) }
+
+fn rtl_places() → List<Place> { into([Rcx, Rdx, Rcx, Rdx, Rax, Rax]) }
+
+theorem rtl_lowers(): lowers(rtl_program(), rtl_places()) = True { refl }
+
+// A failed read leaves its window undefined: the load after it is stuck,
+theorem failed_read_undefines(): is_stuck(run(rtl_program(), world_blocks(), 16, 0, [Ref(Loc(0, 0))], world_heap(), Io::of(failing()))) = True { refl }
+
+// and the same read answered lands its bytes, done.
+theorem answered_read_defines(): done_words(run(rtl_program(), world_blocks(), 16, 0, [Ref(Loc(0, 0))], world_heap(), piped())) = Some([2, 104]) {
+    refl
+}
+
+theorem rtl_meets<M>(program: Prog, lowered: rtl_program().lower(rtl_places()) = Some(program), fetch: FetchAccess<M>,
+    data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64), stack: Stack<M>(fetch, data), top: Nat, spans: Spans,
+    blocks: Blocks):
+    Site<M>(fetch, data, program, last, origin).Meets(stack, spans, top, blocks.Lent(spans), depth_rooms(rtl_program().routines),
+        λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run_peak(rtl_program(), blocks, n, f, args, heap, io), 1,
+        λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run(rtl_program(), blocks, n, f, args, heap, io)) {
+    lower_program_meets<M>(rtl_program(), rtl_places(), program, lowered, fetch, data, last, origin, stack, top, spans, blocks)
+}
+
+// A pass that writes the window's first byte to fd 1 and never sets its
+// exit bit: the run goes on at every fuel, its history as long as the fuel.
+fn writer() → Routine {
+    Routine([ref_id(0)],
+        Loop([ref_id(0)], [ref_id(10)],
+            Seq(Leaf([Compute(Const(64, 11, 1)), Compute(Const(64, 12, 1))]),
+                Seq(Sys(Write(11, 10, 12, 13)), Leaf([Compute(Const(64, 14, 0)), Compute(Const(64, 15, 1)), Compute(Equal(64, 16, 14, 15))]))),
+            16, [ref_id(10)], [ref_id(20)]),
+        [])
+}
+
+fn writer_program() → Program { Program([writer()]) }
+
+// The state in R9, then the pass's nodes.
+fn writer_places() → List<Place> { into([R9, Rcx, Rdx, Rax, Rdx, Rax, Rax, Rax]) }
+
+fn writer_run(fuel: Nat) → Ran<Answer> { run(writer_program(), world_blocks(), fuel, 0, [Ref(Loc(0, 0))], world_heap(), piped()) }
+
+theorem writer_lowers(): lowers(writer_program(), writer_places()) = True { refl }
+
+theorem writer_going_3(): going_history(writer_run(3)) = Some(3) { refl }
+
+theorem writer_going_6(): going_history(writer_run(6)) = Some(6) { refl }
+
+theorem writer_meets<M>(program: Prog, lowered: writer_program().lower(writer_places()) = Some(program), fetch: FetchAccess<M>,
+    data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64), stack: Stack<M>(fetch, data), top: Nat, spans: Spans,
+    blocks: Blocks):
+    Site<M>(fetch, data, program, last, origin).Meets(stack, spans, top, blocks.Lent(spans), depth_rooms(writer_program().routines),
+        λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run_peak(writer_program(), blocks, n, f, args, heap, io), 1,
+        λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run(writer_program(), blocks, n, f, args, heap, io)) {
+    lower_program_meets<M>(writer_program(), writer_places(), program, lowered, fetch, data, last, origin, stack, top, spans, blocks)
+}
+
+// The whole program (bytes_level_whole): `echo`'s code runs, as the Linux
+// model reads a process, as the trace of its meaning at every fuel; in the
+// piped world, done, that is the read answered with the pipe's two bytes
+// and the write of them.
+theorem echo_runs_as<M>(program: Prog, lowered: echo_program(2).lower(echo_places()) = Some(program), fetch: FetchAccess<M>,
+    data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64), stack: Stack<M>(fetch, data), top: Nat, spans: Spans,
+    blocks: Blocks):
+    Site<M>(fetch, data, program, last, origin).RunsAsMeaning(stack, spans, top, blocks.Lent(spans), depth_rooms(echo_program(2).routines),
+        λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run_peak(echo_program(2), blocks, n, f, args, heap, io), 1,
+        λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run(echo_program(2), blocks, n, f, args, heap, io)) {
+    Site<M>(fetch, data, program, last, origin).tracks_runs_as(stack, spans, top, blocks.Lent(spans), depth_rooms(echo_program(2).routines),
+        λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run_peak(echo_program(2), blocks, n, f, args, heap, io), 1,
+        λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run(echo_program(2), blocks, n, f, args, heap, io),
+        lower_program_tracks<M>(echo_program(2), echo_places(), program, lowered, fetch, data, last, origin, stack, top, spans, blocks,
+            depth_rooms(echo_program(2).routines), depth_rooms_lawful(echo_program(2).routines)))
+}
+
+// The smallest program that needs the empty-range law
+// (issues/byte-writes-empty-range.md): a read of no bytes into a written
+// block of none, its window at the block's end. It is done with a count of
+// zero, and its code meets the contract with no premise: Linux's empty
+// store there is the stack's writes' own law (`stack.empty`).
+fn empty_read() → Routine {
+    Routine([ref_id(0)], Seq(Leaf([Compute(Const(64, 1, 0)), Compute(Const(64, 2, 0))]), Sys(Read(1, 0, 2, 3))), [word_id(3)])
+}
+
+fn empty_program() → Program { Program([empty_read()]) }
+
+fn empty_places() → List<Place> { into([Rcx, Rdx, Rax]) }
+
+theorem empty_read_lowers(): lowers(empty_program(), empty_places()) = True { refl }
+
+theorem empty_read_done(): done_words(run(empty_program(), Blocks(λ (b: Nat) => b.same(0)), 4, 0, [Ref(Loc(0, 0))], Heap([[]], [], [[]]),
+    Io::of(World::piped([])))) = Some([0]) { refl }
+
+theorem empty_read_meets<M>(program: Prog, lowered: empty_program().lower(empty_places()) = Some(program), fetch: FetchAccess<M>,
+    data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64), stack: Stack<M>(fetch, data), top: Nat, spans: Spans, blocks: Blocks):
+    Site<M>(fetch, data, program, last, origin).Meets(stack, spans, top, blocks.Lent(spans), depth_rooms(empty_program().routines),
+        λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run_peak(empty_program(), blocks, n, f, args, heap, io), 1,
+        λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run(empty_program(), blocks, n, f, args, heap, io)) {
+    lower_program_meets<M>(empty_program(), empty_places(), program, lowered, fetch, data, last, origin, stack, top, spans, blocks)
+}
+
+// ---------------------------------------------------------------------------
+// Every memory node lowered by evaluation through `Program::lower` (each
+// layout premise met): a reference stored and loaded back, a word stored and
+// loaded at eight bytes and a doubleword at four, both from and at the
+// 64-bit view, and a doubleword loaded at the 32-bit view, byte-swapped and
+// stored from that view (issues/bytes-level-access-view.md).
+fn accesses() → Routine {
+    Routine([ref_id(0), ref_id(1), word_id(2)],
+        Leaf([StoreRef(0, 1), LoadRef(3, 0), Store(8, 64, 1, 2), Load(8, 64, 4, 1), Store(4, 64, 1, 4), Load(4, 64, 5, 1), Load(1, 64, 6, 1),
+            Load(4, 32, 7, 1), Compute(ByteSwap(32, 8, 7)), Store(4, 32, 1, 8)]),
+        [word_id(5)])
+}
+
+fn accesses_places() → List<Place> { into([Rax, Rax, Rax, Rax, Rax, Rax, Rcx, Rcx, Rdx, Rax, Rax]) }
+
+theorem accesses_lowers(): lowers(Program([accesses()]), accesses_places()) = True { refl }

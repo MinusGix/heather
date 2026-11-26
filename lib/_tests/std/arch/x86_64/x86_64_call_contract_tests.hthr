@@ -33,15 +33,16 @@ import option;
 
 theorem calls_lent_meets_done<M>(site: Site<M>, stack: Stack<M>(site.fetch, site.data), effects: Effects(), rooms: Nat → Nat, bound: Nat,
     counts: List<Nat>, needs: Nat → Nat → Bool, top: Nat, lending: Lending, counted: lending.counts = counts,
-    loan: Loan<M>(site.fetch, site.data, stack, top, lending.spans()), lent: site.CallsLent(stack, effects, rooms, bound, counts, needs, top),
+    calls_lent: site.CallsLent(stack, effects, rooms, bound, counts, needs, top),
     allowed: (f: Nat) → (b: Nat) → needs(f, b).IsTrue() → lending.written(b) = True, meaning: Nat → Calls(),
     answers: (n, f: Nat) → (args: List<Value>) → (heap: Heap) → (io: Io) → (a: Answer) → meaning(n, f, args, heap, io) = Done(a) →
         Exists<Buffers()>(λ before => Exists<Buffers()>(λ after => Exists<BitVec(64)>(λ result => Exists<List<BitVec(64)>>(λ rest =>
             ((heap = Heap::of(before)) ∧ ((a.heap = Heap::of(after)) ∧ ((lower_values(lending.spans(), a.words) = Cons(result, rest)) ∧ (a.io = io)))) ∧
             (effects(before, f, lower_values(lending.spans(), args), result, rest, after) ∧
                 ArgsLent(lent_count(lending.counts, f), 0, lower_values(lending.spans(), args), lending.addresses, lending.buffers))))))):
-    site.MeetsDone(stack, lending.spans(), top, rooms, bound, meaning) {
-    λ f below args heap io answerable s at resident i rsp room passed low high inj ret saved n a ran => {
+    site.MeetsDone(stack, lending.spans(), top, True, λ (f: Nat) (_: Nat) => rooms(f),
+        λ (_: Nat) (_: Nat) (_: List<Value>) (_: Heap) (_: Io) => 0, bound, meaning) {
+    λ loan _ f below args heap io s at resident i rsp room passed high inj ret saved n low answerable a ran => {
         let found = answers(n, f, args, heap, io, a, ran);
         let before = found.witness;
         let after = found.proof.witness;
@@ -50,7 +51,7 @@ theorem calls_lent_meets_done<M>(site: Site<M>, stack: Stack<M>(site.fetch, site
         let facts = found.proof.proof.proof.proof;
         let spans = lending.spans();
         let arguments = lower_values(spans, args);
-        let returns = lent(lending, counted, loan, f, below, λ b need => allowed(f, b, need), arguments, result, rest, before, after);
+        let returns = calls_lent(lending, counted, loan, f, below, λ b need => allowed(f, b, need), arguments, result, rest, before, after);
         let held_in: Injected<M>(site.data, spans, Heap::of(before), s.memory) =
             j(facts.left.left, λ h _ => Injected<M>(site.data, spans, h, s.memory), inj);
         let ran2 = returns(s, at, resident, i, rsp, room,
@@ -62,8 +63,9 @@ theorem calls_lent_meets_done<M>(site: Site<M>, stack: Stack<M>(site.fetch, site
         let heaped: Injected<M>(site.data, spans, a.heap, t.memory) =
             j(sym(facts.left.right.left), λ h _ => Injected<M>(site.data, spans, h, t.memory),
                 in_memory_injected(stack, lending, after, t.memory, done.left.right.right.right));
-        Exists(0, Exists(t, ⟨ran2.proof.left, ⟨⟨ran2.proof.right.left, ⟨ran2.proof.right.right.left, ran2.proof.right.right.right.left⟩⟩,
-            ⟨⟨words, done.left.right.left⟩, ⟨⟨done.left.right.right.left, heaped⟩, sym(facts.left.right.right.right)⟩⟩⟩⟩))
+        Exists(0, site.performs_steps(stack.writes, site.linux_kernel(stack), λ r => site.Returned(stack, spans, s, i, ret, a, r), Running(s, io), t,
+            ran2.proof.left, ⟨⟨ran2.proof.right.left, ⟨ran2.proof.right.right.left, ran2.proof.right.right.right.left⟩⟩,
+                ⟨⟨words, done.left.right.left⟩, ⟨⟨done.left.right.right.left, heaped⟩, sym(facts.left.right.right.right)⟩⟩⟩))
     }
 }
 
@@ -82,3 +84,21 @@ theorem stuck_where(io: Io): stuck_after(Stuck<Answer>(io)) = Some(io.past) { re
 
 // Control: a run that is going is not stuck.
 theorem going_not_stuck(io: Io): stuck_after(Going<Answer>(io)) = None { refl }
+
+// ---------------------------------------------------------------------------
+// Claims at Linux (§17.7): the bind of two claims at the contract's kernel,
+// their calls and bounds added,
+theorem linux_bind<M>(site: Site<M>, stack: Stack<M>(site.fetch, site.data), goal, after: Running<M, Io> → Type, calls, least, calls2, least2: Nat,
+    from: Running<M, Io>, first: site.LinuxPerforms(stack, goal, calls, least, from),
+    then: (r: Running<M, Io>) → goal(r) → site.LinuxPerforms(stack, after, calls2, least2, r)):
+    site.LinuxPerforms(stack, after, calls2 + calls, least + least2, from) {
+    site.performs_bind(stack.writes, site.linux_kernel(stack), goal, after, calls2, least2, then, calls, least, from, first)
+}
+
+// and its control: steps proved without counting have bound zero, not one.
+// expect-error(mismatch)
+theorem steps_not_counted<M>(site: Site<M>, stack: Stack<M>(site.fetch, site.data), goal: Running<M, Io> → Type, from: Running<M, Io>, t: MachineState<M>,
+    steps: MachineSteps(site.fetch, site.data, stack.writes, from.state, t), reached: goal(Running(t, from.io))):
+    site.LinuxPerforms(stack, goal, 0, 1, from) {
+    site.performs_steps(stack.writes, site.linux_kernel(stack), goal, from, t, steps, reached)
+}

@@ -2064,12 +2064,588 @@ the routine's frame, the done clause and the world are filed (below).
   `lower_nodes`. Two-byte accesses (no `MOVZX r, word` in the model) and the
   typed copy are refused.
 
+**The fourth part: routines, calls and the done clause** (2026-11-25,
+`issues/bytes-level-lowering-routines.md`; `bytes_level_scope`,
+`bytes_level_routines`).
+
+- *One valuation per scope, by a check.* The lowering refuses a routine
+  whose scope binds an id twice along any path (`Body::fresh`: both arms of
+  a branch may bind one id, nothing after the branch may bind it again).
+  A checked run then changes only the ids it binds (`Frames`), and its
+  final locals lowered (`Locals::lower`: a reference its address) are a
+  valuation agreeing with the locals at every node (`Locals::Shows`,
+  `agrees_of`); `Body::holds_of` turns the run into the facts
+  `Body::emit_emits` takes. The invariant carried is that a word id holds
+  no reference and a reference id one (`Scoped`).
+- *A call* is FunctionIR's call code (`File::emit_call`, no buffers lent),
+  proved by `File::emit_call_steps_by` and `call_step_by` at the heap's
+  clause, cited as stated: the callee's contract is its routine's return
+  (`RoutinePre`, `RoutinePost`), the answer at the fuel the run gave the
+  call (`run_answers`). Its facts are `CallLands`: the arguments lowered
+  are the valuation's words, the answer's words land at the results.
+- *A routine with no results answers zero in RAX* (a `Const` into an id
+  its scope never binds, `ids_past`), because FunctionIR's call and
+  function theorems have a word in RAX: the contract's `Site::Returned`
+  says nothing of RAX then, so this is a choice of the lowering's own
+  callee contract, not of the language's meaning.
+- *A routine* is `function_runs_by` at the heap's clause around
+  `Body::emit_emits` (`routine_runs`), FunctionIR's frame arithmetic and
+  `Site::returns_by` around that (`routine_body`, `routine_returns`).
+- *The done clause* (`lower_program_meets_done`): `Site::MeetsDone` for
+  every routine of every program `Program::lower` returns, at every fuel,
+  by one induction on the fuel (`program_returns`): at `n + 1` a routine's
+  calls are answered at `n`, so the callees' code meets them by the
+  hypothesis. A run done without a system call leaves the world alone
+  (`program_quiet`), so the code performs the answer at no system call.
+- *Recursion is refused.* The meaning ties routines by fuel, so a routine
+  may call itself; but `Site::Entering` fixes the room below the return
+  address (`rooms(f)`) for every fuel, and a routine that calls itself
+  needs room growing with the depth the fuel allows. So a routine calls
+  only those below it, as FunctionIR's functions without levels do, and
+  the room table (`routine_rooms`) is each routine's largest frame over its
+  callees' rooms.
+- *The plain loop* (`issues/bytes-level-lowering-loops.md`): its facts are
+  its passes at some fuel (`PassesHold`), each at a valuation of its own,
+  since a pass is a scope of its own from its parameters. Its code is the
+  inputs moved into the state's registers, a head H, the pass, the exit
+  bit's test (to C where clear), the next words moved in and a jump to J,
+  at C the same moves and a jump to H, then J (`plain_done`). The passes
+  are `Site::loop_iterates` on the run's fuel with `Stack::LoopAt` at the
+  head, a pass `loop_body_runs_by` and the turn `loop_turns`, cited as
+  stated; leaving is the loop's own (`plain_leaves`, the bounded loop's
+  `loop_leaves` without its flag). The ids a pass binds are counted bound
+  in the scope around the loop, so the routine's spare id is none of a
+  pass's and nothing after the loop rebinds one.
+- *The exited clause* holds of every program the lowering returns, and
+  vacuously: it lowers no exit and no system call, so its meaning never
+  exits (`program_no_exit`, `lower_program_meets_exited`). What remains of
+  the world (`issues/bytes-level-lowering-world.md`): the system call, which
+  needs the frame, call, loop and function theorems in the claim form
+  `Site::Performs` (all are over `Site::Moves`), and the going clause, a
+  statement about every state the code reaches, which none of the
+  existential theorems gives.
+
 **What follows.** The rest of the lowering under `Site::Meets`
 (`issues/bytes-level-lowering-routines.md`, `bytes-level-lowering-loops.md`,
 `bytes-level-lowering-world.md`), the translation of FunctionIR programs
 and the comparison over `crates/linked`'s exports
 (`issues/bytes-level-translation.md`), and the passes
 (`issues/bytes-level-passes.md`).
+
+### 17.7 The contract tracked on fuel (2026-11-26)
+
+§17.6 left three things wrong with `Site::Meets`. Its going clause
+quantified over every state the code reaches, which no region theorem
+proves. The region theorems were over `Site::Moves`, so a region with a
+system call could not cite them. And the room below a return address was
+one number for every fuel, so recursion could not be stated. Round
+`issues/call-contract-tracks.md` fixes all three. Its pieces, in the order
+they landed:
+
+**Fuel where the machine steps.** The fuel is spent where the code takes a
+step it can count. A loop's first pass runs at the loop's own fuel, and
+each turn back costs one (`loop_run` = `loop_pass` at the fuel, then
+`loop_later`, whose `Succ` case is the turn). A call costs one, as before.
+These are the two places where a fuel step is a machine step: a turn's JMP
+back to the head, and a call's CALL.
+
+**The claim, with a lower bound.** `Site::Performs` (in
+`x86_64_stack_runs`) is generic over a world type `W` and a `Kernel<M, W>`,
+which says what a system call resumes to (`resumes`, monotone). Beside the
+count of system calls it carries `least`, a lower bound on the machine
+steps taken. Under bind, the counts and the bounds add (`performs_bind`).
+Linux is one kernel (`Site::linux_kernel`), and `Site::LinuxPerforms` is
+the claim at it. The quiet kernel `Kernel::none` resumes nothing.
+*Differs from the design:* `Performs` lives with the stack runs, not the
+contract. The generic theorems' modules cannot import the Linux world
+(hand-listed module sets in `crates/elab/tests`), nor the contract (its
+`Answer` and `Value` collide with FunctionIR's).
+
+**The generic theorems in claim form.** Each is stated once over
+`Site::Claims`: a kernel, a world clause `World: S → W → Type`, at most
+`calls` system calls, at least `least` steps. Those are `EmitsClaim`,
+`may_emit_claim_seq`, `branch_emits_claim`, `call_step_claim`,
+`File::emit_call_steps_claim`, `function_runs_claim`,
+`Site::loop_iterates_claim` and `ReturnsClaim`. Their former statements
+(`EmitsBy`, `may_emit_by_seq`, `branch_emits_by`, `call_step_by`,
+`File::emit_call_steps_by`, `function_runs_by`, `Site::loop_iterates`,
+`Site::returns_by`) are one-line instances at the quiet kernel, the world
+`True`, no system call and bound zero, so every certificate is unchanged.
+Only two lemmas add a counted step: `claims_jump_item` (a JMP) and
+`claims_call` (a CALL). The two kernel-write facts the claims need come
+from the Loan, in the contract module (`Site::window_keeps_code`,
+`Site::resumes_resident`). No `ClauseStable` law for kernel writes was
+added, since one instance needs it.
+
+**One clause.** `Site::Tracks` says that at every fuel `n`, from the entry,
+the code performs the state read off the meaning there (`Site::Reached`):
+
+- *Done* is returned (`Site::Returned`), at least 0 steps.
+- *Exited* is at the exit call with its status, in the exit's world, at
+  least 0 steps.
+- *Going(o)* is any state in world `o`, at least `n - 1` steps
+  (`going_least`).
+- *Stuck* is nothing.
+
+The clause asks `io.Answerable()`, and it is the only clause that uses it.
+`Site::MeetsDone` and `Site::MeetsExited` are its readings
+(`Site::tracks_done`, `Site::tracks_exited`).
+*Differs from the design:* the going bound is `n - 1`, not `n`. The first
+CALL of the chain is the caller's instruction, executed before
+`Site::Entering`'s state.
+
+**Entering.** `Site::Entering` takes the Loan and the meaning's own law of
+what it may write (`lent: Type`; the bytes level's is
+`blocks.Lent(spans)`) as hypotheses of the clause, for one lending over the
+whole run. Its room premise is `room(f, peak(n, f, args, heap, io)) <= i`,
+a table by routine and call depth.
+
+**Room by call depth.** `Body::peak` is the deepest chain of calls a run
+enters, defined by the run's own recursion beside it in `bytes_level.hthr`
+(`program_peaks`, `run_peak`; `run` is unchanged). A call node entered
+counts one plus its callee's chain at the fuel the call gives it.
+Sequences, branches and passes take the deepest of what they run, each
+part from where `run` leaves the one before.
+
+The lowering no longer checks room. Its theorem holds under every table
+satisfying `RoomLaw`: at every depth `p`, each routine's largest frame fits,
+a call's 24 bytes fit below it, and its callees' rooms at `p - 1`
+(`rooms_below`) fit in what is left. `depth_rooms` is lawful for every
+program (`depth_rooms_lawful`). A call may go to any of the program's
+routines, itself included (emission's `bound` is the routine count).
+*Differs from the design:* the old `routine_rooms` is deleted, not kept as
+an instance. For an acyclic program the depth table is constant past the
+program's height, but I have not proved it equal to `routine_rooms` there.
+Probes: `down` (`bytes_level_routines_tests`), a routine that calls itself,
+is done at fuel 3 from 2 with `run_peak` 2 and is tracked. The control
+`down_no_constant_room` shows that no table constant in the depth is
+lawful for it. The run-time out-of-room outcome (the old compiler's exit
+139) has no meaning here: `issues/bytes-level-lowering-recursion.md`;
+§17.9 designs it.
+
+**The lowering, re-proved to `Tracks`** (`lower_program_tracks`), by two
+inductions on fuel:
+
+- *Done* is `program_returns`, as before. Its callees are answered at the
+  caller's depth less one (`peak_answers`), so their room is the table's
+  there.
+- *Going* is `program_goes`. A routine still going at fuel `n + 1` makes at
+  least `n` steps from its entry: the entry's loads and frame
+  (`function_enters_claim`), then its body's code going
+  (`Body::emit_goes`). The latter is by induction on the region: the
+  CALL's step and the callee's run going on (`call_heap_goes`, with a
+  hand-off kernel `into_callee` that turns the call sequence's claim into
+  one of reaching the CALL); the arm the bit picks (`branch_heap_goes`); a
+  loop's passes, each turn's JMP counted (`plain_passes_goes`). The going
+  facts are read off a run going at a valuation of the locals where it went
+  on (`Body::goes_of`). A run still going leaves the world alone
+  (`program_going_quiet`), so the world is the entry's.
+- *Exited* is vacuous, since nothing is lowered that exits.
+- *Stuck* is trivial.
+
+**The going clause from `Tracks`, once.** `Site::MeetsGoing` is restated
+with the stuck alternative. Every world the code reaches in `j` steps
+before it returns, where its room is there at fuel `j + 1`, is a prefix of
+a history the meaning reaches at some fuel, or the meaning gets stuck at
+some fuel. `Site::tracks_meets` proves `Tracks → Meets`. A path of the code
+and `Tracks`' claim at fuel `j + 1` lie on one branch of resumptions, which
+gives three cases:
+
+- *Going there:* the claim's steps number at least `j`, so the path ends
+  at or before the claim's goal and its world is a prefix of the goal's.
+- *Done:* the returned state is not before the return.
+- *Exited:* no step leaves an exit.
+
+Determinism is needed only up to the state's defined components:
+`step_respects_defined` and `syscall_excludes_step` between system calls,
+`asks_meet` at one, `linux_answered_respects` for each resumption. These
+are facts of the Linux instance, used in two lemmas (`performs_reaches`,
+`performs_meet`). The lowering's `Site::Meets` is one line
+(`lower_program_meets`); the recursive probe has it (`down_meets`). Why
+this is stronger than `Sim`, and how it gives `RunsAs`:
+`issues/linux-sim-divergence.md`, `issues/call-contract-whole-program.md`.
+
+**Cost.** Stated as shapes: the claim lemmas are linear in their proof
+terms. The region theorems' claim forms cost what their `Moves` forms did,
+plus the counted step. The going induction mirrors the done induction
+region by region.
+
+**The exit lowered (round `issues/bytes-level-lowering-world.md`, item 1).**
+`Exit(status)` is emitted as the status moved from the register the file
+says holds it into RDI, sixty into RAX, and `SYSCALL` (`emit_exit`); the
+code after it is never reached. `Body::fresh` accepts it (it binds
+nothing). Its claim is not a third induction beside the done and the
+going ones: the going development is generalised over how a run stops
+short (`Stop`: `StopGoing(o)` or `StopExited(status, o)`, read off a run by
+`Ran::stopped`), and going and exited are its two instances.
+
+- The facts (`Body::Stops`, was `Body::Goes`) carry the stop: a loop out
+  of fuel is `x.Zero()` (going: true; exited: false), an exit node with the
+  word at its status is `x.Exits(w)` (going: false; exited: `w` is the
+  status). Read off the run by `Body::stops_of` (was `goes_of`), whose
+  only new case is the exit node.
+- The code theorems (`StopsHeap`, `Body::emit_stops`, the loop, branch and
+  call lemmas) claim the stop's state (`Stop::Reached`: going, any; exited,
+  `LinuxSyscallAt` and `LinuxExits` with the status) with at least
+  `x.least(fuel)` steps (going, the fuel; exited, none). The counting is
+  three lemmas on `Stop::least` (`least_le`, `least_succ`, `least_mono`,
+  and `least_pred` at the routine). The exit node's claim is `exit_stops`:
+  the block, then the `SYSCALL` item fetched (`Site::item_fetched`).
+- The routine and program inductions are `routine_stops`/`program_stops`
+  at a stop `x`; `program_tracks` reads `Tracks` at `StopGoing(o)` for
+  going and at `StopExited(status, o)` for exited. The world is the
+  entry's (`program_stop_quiet`, generalising `program_going_quiet`), as
+  no system call is lowered yet. `program_no_exit` and its lemmas are
+  deleted.
+
+The exited reading is no longer vacuous: the language's `exits` and an exit
+inside a callee are compiled and tracked (`bytes_level_routines_tests`:
+`exits_tracks`, `exits_meets_exited`, `exits_nested_tracks`, with their runs
+exiting at every fuel that enters them); the control is an exit whose status
+no id holds, refused.
+
+**The world beside the heap (same round, item 2).** A region's code is
+proved at the state `Now`: the heap, injected into memory as before
+(`now_in`), and the world, which the machine's must equal (`NowWorld`).
+Every region claim is at Linux (`Site::linux_kernel`), and so are the
+callee contracts (`CalleesReturn` is a `ReturnsClaim` at Linux). A claim
+counts the system calls it makes as the exchanges its world gained
+(`calls_between(before, after)`), so the counts are read off the worlds and
+never carried by hand:
+
+- `Site::linux_performs_exact` (call contract): a Linux claim whose goal
+  pins the world makes exactly as many calls as that world has exchanges
+  past the start, since each resumption records one. `Site::claims_exact`,
+  `emits_now_exact` and `claims_stop_exact` apply it. It is needed because
+  a sequence's two counts are fixed across its middle state, but a loop's
+  count (`loop_iterates_claim`) is existential.
+- A sequence's facts say its middle history lies between the two ends
+  (`Between`), and `emits_now_up` raises a part's count to the whole's.
+  `holds_of` proves `Between` from `HistoryGrows`: a run's history only
+  grows (`Body::run_grows`; a program's, `program_grows`).
+- The done side (`Body::emit_emits`, `routine_body`, `routine_runs`,
+  `program_returns`) is `EmitsClaim` at `Site::linux_kernel`. The quiet
+  lemmas (`program_quiet`, `program_stop_quiet`) are deleted: the
+  inductions carry the world in their facts, and `program_tracks` reads the
+  done side by `performs_weaken` of the routine's `ReturnsClaim`.
+
+**System calls lowered (same round, item 3).** `Sys(call)` is emitted as a
+call's arguments are, then Linux's call: its three words move into RDI, RSI
+and RDX (`File::call_moves`, judged by `outputs_check`), the call's number
+goes into RAX, and `SYSCALL` follows (`emit_sys`). The file after holds the
+result in RAX and forgets RCX and R11 (`sys_after`), which Linux may
+clobber. `Body::fresh` accepts it, binding its result word.
+
+- The facts (`SysCall::Lands`) are the reference's location, the window
+  open (read) or the bytes read (write), the world's answer landed
+  (`ReadLands`: the bytes put, or the window undefined; `WriteLands`), and
+  the exchange recorded. `holds_of` reads them off the run
+  (`SysCall::ran`, `lands_of`).
+- The step is one claim through the kernel (`Site::claims_resumes`, a new
+  generic lemma in `x86_64_stack_runs`). It holds for every answer the world
+  gives and every resumption `LinuxResumes` allows (`sys_write_resumes`,
+  `sys_read_resumes`). The language's words are Linux's (`count_word_linux`,
+  `errno_word_linux`).
+- The read's memory clause is re-established from the loan's window laws.
+  - Inside a written span the code stays resident (`Site::resumes_resident`).
+  - The bytes a read returns are the heap's put (`read_bytes_kept`, by
+    `Loan::store_injected`).
+  - For a failed read (`read_failed_kept`), the window is first stored
+    zero, the heap's own bytes, then called undefined
+    (`injected_undefining`). Whatever junk Linux left is then read instead
+    by `Injected::undefined_change`. No law was added to `ClauseStable`.
+- A read of no bytes at its block's end is allowed by the language, but no
+  loan law reaches that address (every one asks `k < size`). It was a named
+  hypothesis for a while. Now the stack's writes' own law covers it
+  (`stack.empty`, `ByteWrites::EmptyRange`: a store of no bytes changes
+  nothing and needs no room, `issues/byte-writes-empty-range.md`), and
+  `injected_placed_nothing` keeps the clause there. The probe is
+  `empty_read_meets`.
+- `io.Answerable()` travels in the world relation: `NowWorld` is now the
+  machine's world being the state's, every answer one Linux may give. The
+  same holds for the routine's pre and post (`RoutinePreNow`,
+  `RoutinePostNow`). Every region keeps the world's function, so each claim
+  re-establishes it for free. `Tracks` supplies it at the entry. No fact,
+  `holds_of` or loop-pass lemma carries it.
+
+**Tracks with the world, and `RunsAs` (same round, items 4 and 5).**
+`lower_program_tracks` and `lower_program_meets` cover every program the
+lowering returns, system calls included, with no premise.
+
+The probes found one completeness gap in the emission: the call's
+`MOV RAX, n` and Linux's clobbers lost a value the file still held in RAX,
+RCX or R11, so `echo`'s read count, which is live across its write, made it
+unlowerable. Such values now move to a free R8 to R10 first (`sys_kept`),
+judged by the same `outputs_check`.
+The limit: there are three spares, and a spare counts as free only if
+the file holds nothing in it. When fewer are free than there are values to
+keep, the keep and argument moves no longer pair with their registers.
+`outputs_check` then fails, `emit_sys` answers `None`, and the program is
+refused (`Program::lower` returns nothing; there is no refusal message for
+it yet). A value of a narrow or low kind is not kept either. Any later use
+of it then fails to find a register, and the program is refused the same
+way. Soundness never depends on the keep: only the moves the checks pass
+are emitted.
+
+The language's `echo`, `read_then_load` and `exits`, and a pass that writes
+forever, are compiled and meet the whole contract. Each is read where it
+applies: done, stuck, and going with the history as long as the fuel
+(`bytes_level_routines_tests`).
+
+`bytes_level_whole` reads `Tracks` as the Linux model reads a process.
+- A Linux claim whose goal pins the world is `RunsAs` of the trace of the
+  world's new exchanges (`Site::linux_runs_as`). Silent steps are the
+  claim's machine runs, and each resumption is a `LinuxAnswered` call.
+- So `Tracks` gives `RunsAs` of the meaning's outcome at every fuel
+  (`Site::tracks_runs_as`).
+
+What stands between this and `Sim` for a whole image is in
+`issues/call-contract-whole-program.md`: the image's `_start`, the meaning
+as an itree, and `LinuxValid`.
+
+### 17.8 Stage 2's test (2026-11-26)
+
+The question: can the bytes level replace FunctionIR's memory half in one
+move? To test it, every FunctionIR program was translated
+(`bytes_level_from_function_ir`), and each row of `crates/linked`'s exports,
+and each native gate's program, was compiled both ways
+(`scripts/bytes-level-compare`). The log is
+`issues/bytes-level-translation.md`.
+
+**The survey.** The forms each row's lowered program uses:
+
+| Rows | Forms |
+|---|---|
+| sha512 and sha256 rounds | word nodes, calls (no buffers) |
+| sha256_compress, _init, _update, _finish | byte and four-byte loads and stores, byte swaps, lent calls, bounded loops |
+| count_newlines, raise_span, list_raise_letters, copy_span, copy_window | byte loads and stores, one bounded loop; copy_window the exports' only `Lend` |
+| scan_token, scan_tokens | byte loads, hundreds of conditionals, lent calls, loops; scan_tokens a four-byte store |
+| gates | `also` (two_words, enum_fields), a `Fixed` span (three_words), levels (recursion), loops (binary_search, sort, utf8) |
+
+No export uses levels, `also`, a `Fixed` span, `TableRead`, or a wide access
+at any width but four.
+
+**The comparison.** First run (stage 2's test), results:
+- Same bytes: every routine without a bounded loop in every row that lowers,
+  call displacements aside. That covers six export rows and four gate
+  programs entirely, and every non-loop routine of the rest (scan_token's 38
+  of 39, for one).
+- Bigger: each loop routine grows by 8 bytes, 12 with REX prefixes. Every
+  loop has the same shape. Per pass that continues, the code runs one more
+  instruction (`MOV flag, 1`, the translation's) and one more taken jump (a
+  jump to a jump, the lowering's). The head's `TEST; JE` moves to the tail
+  as `CMP; JNE`.
+- One further byte difference: a reference copy, which the old code moves
+  in one `MOV`, becomes `MOV` and `ADD r, 0` (sort).
+- Refused: five rows by the lowering. A four-byte access's result and value
+  were held as `Word`, not `Narrow(32)`, so the hash's buffer rows and
+  scan_tokens were refused. The levels gate is refused by the translation.
+- Free in both: every byte store's reload is dead, and the old lowering
+  emits the same `MOVZX` after each store. The clip at copy_window's lend is
+  the old code's too.
+
+**The comparison again** (`issues/bytes-level-access-view.md`). This run
+follows three changes:
+- An access names its view (below).
+- The loop's tail jumps forward out and once back.
+- The translation drops a reference copy its scope never reads.
+
+Every one of the seventeen export rows now lowers:
+- Byte-identical: sha512_t1, _t2, _next; sha256_t1, _t2, _next; and
+  sha256_init (1236 bytes, refused before).
+- Larger by the loops alone, every non-loop routine the same:
+  - sha256_compress: 8172 → 8240 (10 loops);
+  - sha256_update: 8949 → 9007 (9 loops);
+  - sha256_finish: 9575 → 9647 (10 loops);
+  - count_newlines: 291 → 297;
+  - raise_span and list_raise_letters: 317 → 323;
+  - copy_span: 217 → 227;
+  - copy_window: 313 → 323;
+  - scan_token: 11557 → 11563;
+  - scan_tokens: 14564 → 14576 (2 loops).
+
+Gates:
+- add_wide, signal, stats and nested_true are the same bytes.
+- lower_bound: 278 → 288.
+- utf8_valid_up_to: 1488 → 1494.
+- sort_in_place: 725 → 738. Its reference copy is dropped (its one `MOV`
+  gone), so its second routine is +7: +10 for the loop, −3 for the copy.
+- rsum is refused by the translation (levels).
+
+The cost per loop, the same shape in every loop of every row:
+- Bytes: +6, or +10 where the counter or the flag needs a REX prefix (the
+  previous layout's +8 and +12).
+- Per continuing pass, the old code runs 6 loop-control instructions:
+  `TEST; JE` at the head (not taken), the pass's own exit test `CMP; JNE`,
+  `ADD counter, -1`, and `JMP` to the head.
+- The new code runs 7: the pass's `CMP; JNE`, `ADD`, `MOV flag, 1`,
+  `CMP counter, 0; JE` (not taken), then `JMP` to the head. That is the old
+  count plus the translation's `MOV flag, 1`, and one taken jump per pass,
+  as the old code.
+- Once per loop: `MOV flag, bound` at entry, in place of the head's first
+  `TEST; JE`. The exit arm sets the counter and the flag (`MOV`, `MOV`) where
+  the old sets the flag (`MOVABS`). After the loop, `CMP flag, 1; JNE`
+  replaces `MOVABS flag, 1; TEST; JE`.
+
+**A rule this run taught**: an emitter form is not landed until a program
+using it lowers by evaluation. That means `Program::lower` answers `Some`
+for it by `refl` in a probe, so every layout premise is met, and the
+comparison runs it. A first layout for the loop's tail jumped back with a
+`JCC`. Its proofs checked and the suite was green. But the assembler model
+lands a `JCC` only forward, so `laid_out()` refused every such program, and
+no probe had lowered one (`issues/asm-landing-both-ways.md`).
+
+**What the old optimizer emits that the bytes level refuses.** The
+translation normalises two things, each exact in meaning:
+- a pure node rebound in its leaf before it is read is dropped: 60–65 times
+  in the sha256 buffer rows, 3 in sha256_init and scan_tokens, 2 in sort;
+- every loop's pass is read at an id offset of its own, because the
+  optimizer's copies reuse a pass's ids after the loop.
+
+**The theorem** (`translated_runs_as_old`). Over programs, every `Done` of
+the translation at any fuel is the old run, with the buffers read back from
+the heap. It is proved for leaves, sequences, conditionals and one-result
+calls, which is the word-only rows. Bounded loops, lends, wide accesses,
+guarded loads, `also` and levels remain.
+
+**What stage 3 still needs**, from the comparison and the proof:
+1. **An access names the view it uses**: done
+   (`issues/bytes-level-access-view.md`).
+   - `Store(bytes, view, place, value)` writes the low bytes of the value's
+     `view`-bit view.
+   - `Load(bytes, view, output, place)` is held at its view's kind (`Word`
+     at 64, `Narrow(32)` at 32).
+   - Validity refuses a view narrower than the access, and any view but 64
+     and 32.
+   - No narrow value crosses a call, a loop's state or an answer in either
+     pipeline, so `Typed` carries no width.
+2. **Bounded loops, a temporary cost** until loops are reflected directly:
+   the numbers above, `MOV flag, 1` per pass and 6 or 10 bytes per loop. The
+   new design keeps fuel out of the code, so a counted loop is not a need.
+3. The jump to a jump: done. The tail jumps forward out and once back. A
+   `JCC` back to the head would save the second instruction, but the
+   assembler model lands a `JCC` only forward
+   (`issues/asm-landing-both-ways.md`), for after the switch.
+4. The dead reference copy: done, dropped by the translation where the scope
+   never reads it (sort's one).
+5. Levels and the out-of-room exit: designed in §17.9
+   (`issues/bytes-level-out-of-room.md`), not built.
+6. A refusal report from `Program::lower`.
+7. The theorem's remaining forms, and a decider for its premise.
+8. The optimizer and the planner on the new layer.
+9. Read-only views: the old lend drops a callee's store into an unwritten
+   view, and the bytes level keeps it.
+
+native_cat and native_tools compile through the program compiler, not
+FunctionIR, so stage 3 does not move them.
+
+So the answer is: not yet in one move. The memory half translates exactly
+where proved, and its code is the same outside loops. With the access view,
+no row is blocked outright; what remains is the loops' cost, the theorem's
+remaining forms, and the optimizer and the planner on the new layer.
+
+### 17.9 Out of room: one resource stop (2026-11-26, the coordinating session)
+
+§17.7 left the out-of-room outcome without a meaning, and §17.8 lists it as
+"designed separately". This is that design. It is not built.
+
+**What stands.** `Site::Entering` asks `room(f, peak(n, f, args, heap, io)) <= i`:
+the room below the return address covers the deepest chain of calls this run
+enters. Under it the code tracks the meaning. Without it nothing is said, and
+the code is unguarded, so a recursion deeper than its stack writes below the
+stack the model gave it. FunctionIR's answer was `levels`: a depth counted in
+the code and a meaning truncated at that depth. The bytes level has no
+levels, and its meaning is not truncated.
+
+**What Minus settled** (§15.7): room is a premise of the machine theorem, the
+stop is a defined one, and the room a function needs is something a theorem
+can bound.
+
+**The meaning does not learn of room.** `Ran` gains no outcome and `run` no
+parameter. Room is the machine's, as ownership is: a licence for the run,
+never the meaning. A meaning that could answer "out of room" would put frame
+sizes into every theorem about a source function.
+
+**The contract gains one alternative.** A *resource stop* (`Spent`): the
+code exits with one reserved status, at a world whose past is a prefix of a
+history the meaning reaches at some fuel (or the meaning is stuck at some
+fuel). That is `MeetsGoing`'s conclusion, word for word: a run that ran out
+of room, like a run that ran out of fuel, did a prefix of what the meaning
+does and nothing else. The tracking clause becomes
+
+    Tracked(…, n, meaning(n, …))  ∨  (¬(room(f, peak(n, …)) <= i) ∧ Spent(…))
+
+under a premise that no longer mentions the run: `rooms(f) <= i`, a table by
+routine alone. Where today's premise holds, the second alternative is
+closed and the clause is today's `Tracks`. So today's theorem is the
+corollary, not a second contract.
+
+**Where the guards go.** Take the call graph's strongly connected
+components. A call whose callee can reach the caller (the two share a
+component; a self call is the least case) is *guarded*; every other call
+goes to a strictly lower component and is not. The table is then constant:
+
+    rooms(f) = f's largest frame + the largest, over f's unguarded calls,
+               of 24 + rooms(g)
+
+which is well founded on the components' order. A guarded call to `g`
+tests, before the CALL, that `24 + rooms(g)` fits in the room left, and
+otherwise jumps to the stop. So:
+
+- A program with no cycle has no guard, and its table is the old
+  `routine_rooms`. The lemma §17.7 owes (that `depth_rooms` settles past the
+  call graph's height) is not needed: the table is constant by definition.
+- A program with a cycle pays at its calls into the cycle and nowhere else:
+  a compare against the stack's floor and a forward branch.
+- `RoomLaw` at depth is kept as the proof that the guards do not fire where
+  `room(f, peak) <= i`: `depth_rooms` is the sum the guards check one round
+  at a time.
+
+**The floor.** The guard compares the stack pointer against the lowest
+address the stack may reach. `Stack<M>` already says what the process owns
+(`stack.at(0)` to `stack.size`), so the floor is no new premise. The entry
+(`_start`, or an export's prologue) computes it from the stack pointer it
+is given and the budget it was compiled with, and keeps it where the guard
+reads it. A data word is the first choice; a reserved register is a
+planner's decision later. The budget is a compile option, as it is today.
+
+**What the entry asks.** One number, static: `rooms(entry) <= budget`. For
+`_start` the compile checks it and refuses otherwise (the gate's "64 bytes
+refused"). The process theorem's premise about the system is that the stack
+it starts on has the budget's bytes, which says nothing of the program or
+its input.
+
+**Bounding it.** The stop is excluded where `room(f, peak(n, …)) <= i`.
+`peak` is defined by the run's own recursion, so a bound on it is a theorem
+beside the source function, proved once by its own induction
+(`sum::depth: peak(sum, [k]) <= k + 1`). With it an export's contract reads:
+given `c·k + d` bytes of stack, `sum(k)` returns its meaning's answer. No
+bound, no promise beyond the stop. This is §15.9's statement for the stack:
+the heap's is the same alternative. An owned `new` that finds no room is
+`Spent`, and `Cost2` is to the arena what `peak` is to the stack.
+
+**The status.** One reserved exit status (the old compiler's 139). A source
+`Exit` with the same status is indistinguishable to whoever reads the
+status. The alternative is to die by a signal, which a parent can tell from
+any exit; the machine model has no faults, so that is a change to the
+kernel model and waits for a need.
+
+**Rejected.**
+- *Room as an outcome of the meaning*: above.
+- *Room by fuel*: fuel also meters a loop's passes
+  (`issues/bytes-level-lowering-recursion.md`).
+- *An unguarded recursive lowering beside the guarded one*: two lowerings of
+  one call. Dropping a guard under a proved depth bound is a pass over the
+  lowered program with its own proof, not a second contract.
+- *The guard page*: not a defined stop in the model.
+
+**Test, before it is built on.** `down` (which calls itself) lowers with a
+guard by evaluation; at a budget its peak fits, the theorem's first
+alternative holds by the corollary; at a budget one frame short, the
+machine's run by evaluation exits with the reserved status after the writes
+the meaning makes before that depth. A two-routine cycle whose frames
+differ shows the guard checks the callee's room, not the caller's. A
+program with no cycle lowers to the bytes it lowers to today.
 
 ## 18. The world, termination, and level 2 fixed (2026-11-25)
 
@@ -2652,6 +3228,11 @@ generated proof through an encoding and §18.4 item 1's result is restated.
 
 ## 21. The interfaces (2026-11-25)
 
+**§22 is this section as built, and holds where the two differ** (a
+reference holds selections, not closed steps; a pin is stated through the
+continuation that reads the answer back; written parameters are results;
+the environment's form).
+
 §20.6's step 2, written after the sixth experiment
 (`issues/ownership-coded-values.md`, §18.4 item 4) held, and revised
 against an adversarial review of its first draft (thirteen defects, each
@@ -2665,9 +3246,10 @@ comes back to this section, it is not adjusted in the module.
 to.** `docs/language/sequencing-surface-design.md` §5, §14, §19 and §22 are
 built: straight-line code as aliases, a statement `if` as one convoy over
 the packed locals its arms assign, a branch that ends a block, a
-continuation needed in more than one place bound once as a join point, a
-`while` as a generated sibling function over its state as separate
-parameters, a `for` as a fold of a named step. The reflector reflects that
+`while` as the library's loop combinator run on a named step
+(`docs/language/loop-combinator-design.md`), a `for` as a fold of a named
+step. (Its join point for a continuation needed in more than one place is
+designed and not built: §21.2.) The reflector reflects that
 lowered form one construct for one, so a pin is a conversion by
 construction and not by the luck of two designs agreeing. Where this
 section and that document differ about a form, that document holds and this
@@ -2697,26 +3279,56 @@ section is corrected.
 
   A `Struct` is what a derived instance supplies, found the way §19's
   representations are found. Variants and stores are added the same way,
-  each with its probe; neither is in the first build's fragment. No
-  inhabitant is asked of a type: see the totals below.
+  each with its probe; neither is in the first build's fragment.
+- **The pad** (amended the same day, from the build's first report). A
+  sequence's total read is its type's own total accessor, and what it
+  answers past the end is that accessor's: `[u64; n]` and `Bytes(n)` need
+  nothing. No total read of a `List<A>` exists at every `A`
+  (`read(False, Nil, 0)`), so `List<A>` and `[A; n]` are sequences at an
+  element structure that has a pad: zero for a word, a record's derived
+  default where every field has one, and for a type parameter a field of
+  its opaque structure, quantified in the pin's statement, so the function
+  takes no `T`. A source reading through that accessor pins by `refl`; one
+  reading through a proof-consuming accessor pins by one library lemma per
+  site, which is confined to generic library code. The meaning does not
+  take proofs as input: its type would depend on the states it computes.
 - **Words** (proposed beyond `Nat`). A word shape decodes to the source's
-  word type at that width; an atom that indexes is read through the type's
-  `toNat`, which is how the sources state their bounds
+  word type at that width. A selection's index is the word itself, a
+  number or a word at a width, and an instance reads it at its own
+  accessor's type (`Bytes::at` takes the `u64`; a number round-tripped
+  through `toNat` does not spell it); the decider and the obligations read
+  an index through `toNat`, which is how the sources state their bounds
   (`∥i.toNat() < count.toNat()∥`).
 - **The single sort** is `Dyn(tys)`, a code and a value of its decoding.
   A word is a `Dyn`, so the body has one kind of variable (§15.1) and one
-  environment (proposed: the experiment kept words apart; the build measures
-  one environment against two before fixing it). A variable's code is
-  static: the body records it at each binder, so no later dispatch waits on
-  a value.
+  environment. A newest-first list makes any long-lived variable dearer
+  with every binding after it (the build measured it on three axes:
+  parameters under locals, an object under words, a local under either).
+  Two indexed environments were measured against it, the library's trie
+  and a skew-binary list: both linear on every axis and two to three and a
+  half times dearer on the common ones, a level of numeral arithmetic
+  costing about sixty kernel steps where a list cell costs a few. So the
+  environment is arguments by position and locals newest first, a
+  variable `Arg(i)` or `Loc(j)`; its blind spot is a local that outlives
+  hundreds of bindings in straight-line code, since a loop's state is its
+  parameters (`issues/ownership-long-lived-local.md`). Theorems reach it
+  only through `push`, `get` and their two laws, so the representation can
+  change without a statement changing. A variable's code is
+  static, a function of the body alone and never of a value, so no later
+  dispatch waits on one.
 - **Steps are total, and stated once** (proposed). The step model is a
   total read `at: Sel → S → S`, a total modification
   `over: Sel → (S → S) → S → S` and a Boolean "this step fits this owner";
   the laws hold where the step fits and are relative to what was read
   there (the sixth experiment's relative fit: the same code, for a window
-  the same length). A step that does not fit reads its owner's own value
-  back and modifies nothing, so no inhabitant is needed and none is read.
-  This replaces `steps.hthr`'s `StepModelLaws`, `PathLawsOn` and `KeepsFit`
+  the same length; a fourth component of the model, "what is written is
+  like what was read"). A step that does not fit modifies nothing, and
+  reads a value that does not depend on its owner: the word zero for an
+  absent field, its accessor's pad for a sequence. That is what lets the
+  decider's verdict hold at every value, fitting or not (reading the owner
+  back, as the first text here had it, is unsound for the decider, an
+  absent field against a write of a present one, and would make the read's
+  code the bound's decision, stuck at an open index). This replaces `steps.hthr`'s `StepModelLaws`, `PathLawsOn` and `KeepsFit`
   in place, and `Steps::apart_sound` is re-proved over it: the experiment
   showed the relative laws at the `Option`-valued paths and pinned through
   the total forms, and the agreement of the two was not built. One
@@ -2737,7 +3349,7 @@ Stmt  = a word primitive | a read of a place | a write of a place
 Body  = Ret(results)                       // the function's result
       | Yield(outputs)                     // to the enclosing join
       | Do(stmt, rest)
-      | Join(test, yes, no, outs, rest)    // outs: the joined variables and their codes
+      | Join(test, yes, no, rest)          // rest sees the arms' yielded outputs as new variables
       | Jump(args)                         // the function's own call, last (a loop's back edge)
 Func  = signature (§15.8), body
 ```
@@ -2747,20 +3359,33 @@ Func  = signature (§15.8), body
   arms is a `Yield`, the join's meaning is the surface's:
   `j = convoy(test, pack(yes), pack(no))`, `pack` the nested `Mutated` of
   the outputs' native values in first-assignment order (one output: the
-  value itself), and output `k` is the `Dyn` of its recorded code and the
-  `k`th projection of `j`. Every variable an arm writes is an output.
+  value itself), and output `k` is the `Dyn` of its code and the `k`th
+  projection of `j`. Every variable an arm writes is an output.
   Where an arm has a leaf that is not a `Yield` (an early return on an
-  inner path), the meaning is the surface's join point: `rest` is bound
-  once as a function of the outputs and each `Yield` calls it. A branch
+  inner path), `rest` is bound once as a function of the outputs and each
+  `Yield` calls it. The surface's own join point is designed and not built
+  (it copies what follows into each arm that falls through), and the bound
+  form converts to the copied one, so the pin holds and the meaning stays
+  linear in the body; the doubling is the source's own term's. A join's
+  codes are its yes arm's yielded ones, the no arm's values cast to them
+  with the yes arm's as the fallback; an ill-coded call binds the word
+  zero. So an ill-coded body has a junk meaning and never a missing one:
+  nothing in the meaning is optional and no pin has a `Some`. The check
+  refuses a join whose arms' codes differ and a call whose arguments'
+  codes are not its signature's, from the codes alone. A branch
   that ends the body is the join none of whose leaves is a `Yield`; it is
   not a second node. In every case what follows a join is read once.
 - **A view as an output.** A read view chosen by a join is an output like
-  any other, its region the union (§15.3). A write view is an output only
-  where both arms view one root, its slot the convoy of the arms' steps;
-  otherwise it is dead at the join.
+  any other, its region the union (§15.3). A view to write survives a join
+  only where both arms hold it at one parent and one place; otherwise it is
+  written back before the join. (An earlier text here allowed one root with
+  the slot a convoy of the arms' steps; a write-back's place is static, so
+  there is nothing to write back to. §23.)
 - **A loop is a function**, which is what the surface makes it: `while`
-  is the generated sibling over the state as separate parameters, calling
-  itself last; `for` is the fold of its step, pinned by the library's fold
+  is the library's loop combinator run on a named step over the state
+  (`docs/language/loop-combinator-design.md`; an earlier text here described
+  the generated sibling that design replaced), the step's round ending in
+  the loop's own call; `for` is the fold of its step, pinned by the library's fold
   lemma once. There is no loop node and no loop flag: a loop is a function
   whose body has a `Jump`. Its parameters are **the places live at its
   head, each with its state**: a word by value; a place by its mode; the
@@ -2810,7 +3435,9 @@ Func  = signature (§15.8), body
 - **The run** (proposed: level 2 as §18.3 fixed it, over `Dyn`). A heap is
   a list of blocks, each dead or live with an object. A variable holds a
   plain value or a reference, a block and steps. An object is a `Dyn` and
-  its **holes**: steps, closed in the run, at which the value is not here
+  its **holes**: selections (what was selected, an index being the
+  variable's own value; steps with their atoms are the body's syntax) at
+  which the value is not here
   but *owned* (in a block it owns), *viewed* (a block and steps it does not
   own: a stored view, §15.2) or *taken*. A nested part whose sharing class
   is "object" is always an owned hole. **A reference is canonical**: it is
@@ -2901,8 +3528,9 @@ moved.
 - Sequences were one built-in shape decoding to `List`; the cited sources
   read `[u64; 16]` and `Bytes(n)`. A sequence is now a name with a
   structure, and a bound is its accessor's precondition.
-- Reads through a default needed an inhabitant per type; a step that does
-  not fit now reads its owner back, and a fresh object takes its value.
+- Reads through a default asked an inhabitant of every type; the pad is
+  now the accessor's own, asked only of a sequence's element where its
+  accessor has none, and a fresh object takes its value.
 - The step was spelled twice (total in the meaning, `Option`-valued in the
   laws); it is stated once, total.
 - The meaning was total for every function and safety silent at `Going`,
@@ -4562,3 +5190,67 @@ substituted steps name, in the binding state (the arguments' levels, and the
 earlier results', which the telescope puts there). One rule for an atom,
 wherever a region is formed. `at_by_view0_refused` passes a view of a word as
 `at`'s index; `at_by_copy0_checked` copies the word into a plain local first.
+
+## 24. How the build is organised (2026-11-26, the coordinating session)
+
+Written after Minus asked that the work be organised to get it right rather
+than arrive there by slow iteration. Read against §16: its packages were to
+run beside each other after the interfaces, and since the interfaces landed
+the build has run in one line, the soundness proof, with the back half
+polished beside it. Three things were wrong with that, and each has a rule.
+
+**Defects are found by search before they are met by proof.** The proof of
+`check_sound` has found about twenty defects in the checker and its
+interface, each where the proof happened to arrive, each costing a stage
+its footing. The checker, the run and the meaning are functions, so
+`SafeAt` can be evaluated at closed instances, and a checked program that
+breaks a clause can be searched for among all small programs, joins and
+`Jump` included, before a stage is proved over them
+(`issues/ownership-soundness-oracle.md`). The search is calibrated by
+putting each known defect back as a mutant. The proof stays the only thing
+that establishes the theorem; it stops being the way the statement is
+debugged.
+
+**The layers meet early.** The checker and its run, the bytes level and the
+lowering have each been built against their own interface, and no program
+has passed through all of them. The seam between level 2 and the bytes
+level (§16's package 6) has no statement, and it is the one that says
+whether `SafeAt` concludes what the back half needs. So its statement is
+written now, the composed end-to-end theorem is stated with that seam as
+its one hypothesis, and three programs are carried through every layer by
+evaluation (`issues/ownership-end-to-end-slice.md`). A mismatch found there
+costs a statement; found after the proofs it costs the proofs.
+
+**A piece starts with its statement and a test of it by evaluation, reported
+before anything is proved over it.** §17.9's design was corrected four
+times in its first two hours by exactly this (§17.10), and §17.8's rule
+(an emitter form is not landed until a program using it lowers by
+evaluation) is the same rule for code. It holds for every new piece.
+
+Three rules of working follow from what went wrong in practice:
+
+- *A defect of the kind "two things that must be one" is fixed on the side
+  at fault*, which is asked before fixing the side the proof was standing
+  on (the function that answers one owned object twice, not its caller).
+- *A static rule about a signature is one predicate* (`Sig::ok`), tested
+  where the signature is written and where it is called, since `Safety` is
+  relative to an arbitrary table of signatures; a caller's stage reads it
+  from its own verdict or from the callee's `SafeAt`, never from a third
+  test.
+- *One session at a time on a branch, and a question is answered before a
+  handoff is written.* A ruling that arrives after a session stops is lost
+  to its successor.
+
+**The threads, and what each waits on.**
+
+| Thread | Branch | Waits on |
+|---|---|---|
+| `check_sound`: the call, the consolidation, the body induction, joins, `Jump`, fuel | `claude/ownership-checker-sound` | nothing; takes the search's findings as they come |
+| The search over small programs | `claude/ownership-oracle` | nothing |
+| The seam's statement and three programs end to end | `claude/ownership-slice` | nothing; its findings are ruled on before any proof |
+| The out-of-room stop | `claude/bytes-level-out-of-room` | nothing |
+| The surface and the reflector (§16's packages 9 and 10) | not started | the slice's report, and Minus on the surface's words |
+| Objects with holes | not started | `check_sound` for this fragment, and the search extended to holes first |
+
+Every branch is merged into the coordinating branch only through the gated
+verification, as before.

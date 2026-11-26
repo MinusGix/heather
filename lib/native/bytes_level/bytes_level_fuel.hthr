@@ -6,10 +6,11 @@
 // it, and a terminating routine's theorem is `Done` at one computed fuel.
 //
 // Fuel is spent by a call (its body runs at one less, as do the calls in
-// it) and by a loop's pass; everything else runs at the fuel it is given.
+// it) and by a loop's turn back for another pass (the first pass runs at
+// the loop's own fuel); everything else runs at the fuel it is given.
 // The proof follows the meaning: each step is a `then`, and one lemma
 // carries "below" across one (`below_then`).
-import bytes_level::{run};
+import bytes_level::{run, loop_run};
 import bytes_memory;
 import x86_64_memory_contract;
 import x86_64_call_contract;
@@ -50,19 +51,37 @@ fn CallsBelow(calls, calls2: Calls()) → Type {
     (f: Nat) → (args: List<Value>) → (heap: Heap) → (io: Io) → calls(f, args, heap, io).Below(calls2(f, args, heap, io))
 }
 
+// One pass with more fuel, what follows it with more.
+theorem loop_pass_below(step, step2: Nat → Config → Ran<Config>, steps: (n: Nat) → (c: Config) → step(n, c).Below(step2(n + 1, c)),
+    parameters: List<Typed>, exit: Nat, next: List<Typed>, fuel: Nat, later, later2: List<Value> → Heap → Io → Ran<Ended>,
+    each: (state: List<Value>) → (m: Heap) → (io: Io) → later(state, m, io).Below(later2(state, m, io))):
+    (state: List<Value>) → (m: Heap) → (io: Io) →
+    loop_pass(step, parameters, exit, next, fuel, later, state, m, io).Below(loop_pass(step2, parameters, exit, next, fuel + 1, later2, state, m, io)) {
+    λ state m io => below_of_then(pass_locals(parameters, state), io, λ l =>
+        below_then(steps(fuel, Config(l, m, io)), λ after => below_of_then(read_values(next, after.locals), after.io, λ more =>
+            match after.locals.words(1, exit).head_bit() {
+                False => each(more, after.memory, after.io),
+                True => refl,
+            })))
+}
+
+theorem loop_later_below(step, step2: Nat → Config → Ran<Config>, steps: (n: Nat) → (c: Config) → step(n, c).Below(step2(n + 1, c)),
+    parameters: List<Typed>, exit: Nat, next: List<Typed>, fuel: Nat):
+    (state: List<Value>) → (m: Heap) → (io: Io) →
+    loop_later(step, parameters, exit, next, fuel, state, m, io).Below(loop_later(step2, parameters, exit, next, fuel + 1, state, m, io)) {
+    match fuel {
+        Zero => λ state m io => trivial,
+        Succ(rest) => loop_pass_below(step, step2, steps, parameters, exit, next, rest, loop_later(step, parameters, exit, next, rest),
+            loop_later(step2, parameters, exit, next, rest + 1), loop_later_below(step, step2, steps, parameters, exit, next, rest)),
+    }
+}
+
 theorem loop_run_below(step, step2: Nat → Config → Ran<Config>, steps: (n: Nat) → (c: Config) → step(n, c).Below(step2(n + 1, c)),
     parameters: List<Typed>, exit: Nat, next: List<Typed>, fuel: Nat):
     (state: List<Value>) → (m: Heap) → (io: Io) →
     loop_run(step, parameters, exit, next, fuel, state, m, io).Below(loop_run(step2, parameters, exit, next, fuel + 1, state, m, io)) {
-    match fuel {
-        Zero => λ state m io => trivial,
-        Succ(rest) => λ state m io => below_of_then(pass_locals(parameters, state), io, λ l =>
-            below_then(steps(rest, Config(l, m, io)), λ after => below_of_then(read_values(next, after.locals), after.io, λ later =>
-                match after.locals.words(1, exit).head_bit() {
-                    False => loop_run_below(step, step2, steps, parameters, exit, next, rest, later, after.memory, after.io),
-                    True => refl,
-                }))),
-    }
+    loop_pass_below(step, step2, steps, parameters, exit, next, fuel, loop_later(step, parameters, exit, next, fuel),
+        loop_later(step2, parameters, exit, next, fuel + 1), loop_later_below(step, step2, steps, parameters, exit, next, fuel))
 }
 
 // A region with more fuel, its calls answered with more.

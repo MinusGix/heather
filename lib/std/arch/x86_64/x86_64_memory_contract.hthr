@@ -10,7 +10,9 @@
 //   store obeys over them, relative to a stack offset `top` the call's own
 //   words lie below. The instance for spans inside a data region is
 //   `DataRegion::loan` (x86_64_byte_memory); a lending of no bytes is
-//   `Stack::loan_none`.
+//   `Stack::loan_none`. The laws ask for a byte inside a span; a store of
+//   no bytes, at any address, is the stack's own law (`Stack.empty`), and
+//   `Loan::empty_*` give it at each law's conclusion.
 // - `Stack::WroteIn(i, spans, before, after)`: what a call entered at `i`
 //   may have done to memory, stores of words in its own room
 //   (`Stack::Own`, x86_64_stack) and of bytes into the spans it may write
@@ -153,6 +155,48 @@ theorem Stack::loan_none<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, 
         keeps := λ memory b k written inside bytes fits j below => absurd(trans(sym(written), none(b))),
         keeps_code := λ memory b k written inside bytes fits code at resident => absurd(trans(sym(written), none(b))),
     )
+}
+
+// ---------------------------------------------------------------------------
+// Empty ranges (issues/byte-writes-empty-range.md)
+
+// The laws above ask for a byte inside a span (`k < spans.size(b)`). A
+// store of no bytes asks for none: the stack's writes need no room for it
+// and it is the memory (`Stack.empty`, `ByteWrites::EmptyRange`), at every
+// address, a span's end included. So whatever held of the memory holds
+// after it; these are that fact at each law's conclusion.
+
+theorem Loan::empty_writable<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, {stack: Stack<M>(fetch, data)}, {top: Nat}, {spans: Spans},
+    self loan: Loan<M>(fetch, data, stack, top, spans), memory: M, a: BitVec(64)):
+    stack.writes.writable(memory, a, 0) {
+    stack.empty(memory, a).left
+}
+
+theorem Loan::empty_store<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, {stack: Stack<M>(fetch, data)}, {top: Nat}, {spans: Spans},
+    self loan: Loan<M>(fetch, data, stack, top, spans), memory: M, a: BitVec(64)):
+    stack.writes.store(memory, a, []) = memory {
+    stack.empty(memory, a).right
+}
+
+// Every byte reads as it did, inside a span or not.
+theorem Loan::empty_reads<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, {stack: Stack<M>(fetch, data)}, {top: Nat}, {spans: Spans},
+    self loan: Loan<M>(fetch, data, stack, top, spans), memory: M, a, x: BitVec(64)):
+    data.read(stack.writes.store(memory, a, []), x) = data.read(memory, x) {
+    cong_fn<M, Option<BitVec(8)>>(λ m => data.read(m, x), loan.empty_store(memory, a))
+}
+
+// Every stack word reads as it did, below `top` or not.
+theorem Loan::empty_keeps<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, {stack: Stack<M>(fetch, data)}, {top: Nat}, {spans: Spans},
+    self loan: Loan<M>(fetch, data, stack, top, spans), memory: M, a: BitVec(64), j: Nat):
+    read_word(data, stack.writes.store(memory, a, []), next_rip(stack.low, j)) = read_word(data, memory, next_rip(stack.low, j)) {
+    cong_fn<M, Option<BitVec(64)>>(λ m => read_word(data, m, next_rip(stack.low, j)), loan.empty_store(memory, a))
+}
+
+theorem Loan::empty_keeps_code<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, {stack: Stack<M>(fetch, data)}, {top: Nat}, {spans: Spans},
+    self loan: Loan<M>(fetch, data, stack, top, spans), memory: M, a: BitVec(64), code: List<BitVec(8)>, at: BitVec(64),
+    resident: CodeResident(fetch, memory, code, at)):
+    CodeResident(fetch, stack.writes.store(memory, a, []), code, at) {
+    j(sym(loan.empty_store(memory, a)), λ m _ => CodeResident(fetch, m, code, at), resident)
 }
 
 // ---------------------------------------------------------------------------
@@ -1888,6 +1932,14 @@ theorem Loan::stable_injected<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<
     self loan: Loan<M>(fetch, data, stack, top, spans), i: Nat, low: i <= top, heap: Heap):
     stack.Stable(i, λ (m: M) => Injected<M>(data, spans, heap, m)) {
     λ memory k below word held => loan.injected_own(heap, memory, held, k, omega(below, low), word)
+}
+
+// A heap injected into a memory is injected into it after a store of no
+// bytes, wherever: the store is the memory.
+theorem Loan::empty_injected<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, {stack: Stack<M>(fetch, data)}, {top: Nat}, {spans: Spans},
+    self loan: Loan<M>(fetch, data, stack, top, spans), heap: Heap, memory: M, a: BitVec(64), inj: Injected<M>(data, spans, heap, memory)):
+    Injected<M>(data, spans, heap, stack.writes.store(memory, a, [])) {
+    j(sym(loan.empty_store(memory, a)), λ m _ => Injected<M>(data, spans, heap, m), inj)
 }
 
 // A pointer covers its own eight bytes.
