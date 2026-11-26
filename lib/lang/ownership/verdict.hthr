@@ -24,10 +24,11 @@
 //   narrowed by the steps its signature names at the call's words
 //   (`Value::Views`, `Ref::narrow`); where an unmeasured run is going, its history is a
 //   prefix of one the meaning reaches.
-// - **The check's refusals** (`Func::coded`, `CheckRefusesIllCoded`): from
-//   codes alone, a word primitive or test at a non-word, a join whose arms
-//   yield different codes, a call whose arguments' codes are not its
-//   signature's, and the like; the meaning of what it refuses is junk.
+// - **The check's refusals from codes alone** are the checker's own
+//   (`checker.hthr`, one pass): a word primitive or test at a non-word, a
+//   join whose arms yield different codes, a call whose arguments' codes are
+//   not its signature's, and the like; the meaning of what it refuses is
+//   junk.
 // - **`check_sound`** (`CheckSound`): a checker's verdict, and its residuals
 //   holding along the meaning, give the function's safety.
 import logic;
@@ -201,14 +202,18 @@ fn Ref::Apart(tys: Nat → Type, strs: Strs(tys), r, q: Ref) → Type { (r.b = q
 // What a function may assume of its inputs (§15.8: a function requires only
 // that what it may change is not aliased), named once: one argument per
 // parameter; each referring argument's block is live and has no holes, and its selections fit there;
-// an argument taken at a plain code is a plain value; and an argument the
-// callee may change is apart from every other argument.
+// an argument taken at a plain code is a plain value; an argument the
+// callee may change is apart from every other argument; and an object taken
+// is a whole block no other argument refers to, since the callee owns it and
+// its death frees the block.
 record Lendable(tys: Nat → Type, strs: Strs(tys), ps: List<Param>, h: Heap(tys), vs: List<Value(tys)>) {
     arity: vs.len() = ps.len(),
     live: (i: Nat) → (r: Ref) → vs.nth(i) = Some(Refer(r)) → Exists<Dyn(tys)>(λ d => (Heap::obj(tys, h, r.b) = Some(Obj(d, Nil))) ∧ (Sel::fit(tys, strs, r.sels, d) = True)),
     plain: (i: Nat) → (p: Param) → ps.nth(i) = Some(p) → p.mode = ByTake → Shape::plain(tys, strs, p.code) = True → (r: Ref) → ¬(vs.nth(i) = Some(Refer(r))),
     apart: (i, k: Nat) → ¬(i = k) → (p: Param) → ps.nth(i) = Some(p) → p.mode.changes() = True → (r, q: Ref) → vs.nth(i) = Some(Refer(r)) → vs.nth(k) = Some(Refer(q)) →
         Ref::Apart(tys, strs, r, q),
+    whole: (i: Nat) → (p: Param) → ps.nth(i) = Some(p) → p.mode = ByTake → Shape::plain(tys, strs, p.code) = False → (r: Ref) → vs.nth(i) = Some(Refer(r)) →
+        (r.sels = Nil) ∧ ((k: Nat) → ¬(k = i) → (q: Ref) → vs.nth(k) = Some(Refer(q)) → ¬(q.b = r.b)),
 }
 
 // The meaning's arguments have the parameters' codes: what makes a junk
@@ -266,9 +271,16 @@ fn Value::Views(tys: Nat → Type, strs: Strs(tys), n: Nat, vs: List<Value(tys)>
 // that nothing was lent; a block made by the call is not the frame's.
 fn Heap::Frame(tys: Nat → Type, before, after: Heap(tys), lent: Nat → Bool) → Type { (b: Nat) → b < before.len() → lent(b) = False → after.nth(b) = before.nth(b) }
 
-// The blocks the arguments refer to.
-fn Value::lends(tys: Nat → Type, vs: List<Value(tys)>, b: Nat) → Bool {
-    match vs { Nil => False, Cons(v, rest) => (match v { Refer(r) => r.b.same(b), Plain(_) => False }) || Value::lends(tys, rest, b) }
+// The blocks lent to a parameter that may change them: what a call may
+// write or kill. A block lent only to read is the frame's, unchanged.
+fn Value::lends(tys: Nat → Type, ps: List<Param>, vs: List<Value(tys)>, b: Nat) → Bool {
+    match vs {
+        Nil => False,
+        Cons(v, rest) => match ps {
+            Nil => False,
+            Cons(p, pr) => (p.mode.changes() && match v { Refer(r) => r.b.same(b), Plain(_) => False }) || Value::lends(tys, pr, rest, b),
+        },
+    }
 }
 
 // A function's safety at one fuel: what its run owes at every input that
@@ -283,110 +295,13 @@ fn SafeAt(tys: Nat → Type, p: Prog(tys), g: Nat, fuel: Nat) → Type {
         (((a: Answer(tys)) → p.run(tys, fuel, g, vs, h, io) = Done(a) →
             Value::ReadAll(tys, p.strs, a.heap, a.heap.len(), a.results, p.w(g, ds)) ∧
             Value::Written(tys, p.strs, a.heap, a.heap.len(), vs, ds, (p.fns(g)).sig.written(), (p.w(g, ds)).drop((p.fns(g)).sig.results.len())) ∧
-            Heap::Frame(tys, h, a.heap, λ b => Value::lends(tys, vs, b)) ∧
+            Heap::Frame(tys, h, a.heap, λ b => Value::lends(tys, (p.fns(g)).sig.params, vs, b)) ∧
             Value::Views(tys, p.strs, h.len(), vs, Dyn::ixs(tys, ds ++ p.w(g, ds)), (p.fns(g)).sig.results, a.results)) ∧
         (match p.need(g) as λ _ => Type { Some(_) => True, None => (io2: Io) → p.run(tys, fuel, g, vs, h, io) = Going(io2) → p.reaches(g, ds, io2.past) })))
 }
 
 // Safety relative to the callees' at less fuel.
 fn Safety(tys: Nat → Type, p: Prog(tys), g: Nat) → Type { (fuel: Nat) → ((g2, k: Nat) → k < fuel → SafeAt(tys, p, g2, k)) → SafeAt(tys, p, g, fuel) }
-
-// ---------------------------------------------------------------------------
-// The check's refusals from codes alone
-//
-// The meaning of an ill-coded body is junk, never missing; what makes that
-// sound is that the check refuses it, statically: a word primitive or a
-// test at a non-word or at two widths, a join whose arms yield different
-// codes, a call whose arguments' codes are not its signature's, a `Ret`
-// whose codes are not the signature's results and written parameters', a fresh
-// object of a non-sequence or of another element, a write of another code.
-// The codes the body does not compute are recorded at a call's results (the
-// callee's signature) and a fresh object's code; every other variable's
-// code is static because every arm of every join yields closed codes.
-
-record CEnv { args: List<Shape>, locs: List<Shape> }
-
-fn CEnv::get(self ce: CEnv, v: Var) → Shape { match v { Arg(i) => ce.args.nth(i).unwrap_or(SWord(WNat)), Loc(j) => ce.locs.nth(j).unwrap_or(SWord(WNat)) } }
-
-fn CEnv::push(self ce: CEnv, c: Shape) → CEnv { CEnv(ce.args, Cons(c, ce.locs)) }
-
-fn CEnv::push_all(self ce: CEnv, cs: List<Shape>) → CEnv { match cs { Nil => ce, Cons(c, rest) => ce.push(c).push_all(rest) } }
-
-// The code a step reaches from an owner's code: its part's, or the word's
-// where it has none (as the meaning reads).
-fn Shape::step(tys: Nat → Type, strs: Strs(tys), a: Step, c: Shape) → Shape { match Dyn::part(tys, strs, a.sel(Nil), c) { Some(pt) => pt.t, None => SWord(WNat) } }
-
-fn Shape::steps(tys: Nat → Type, strs: Strs(tys), xs: List<Step>, c: Shape) → Shape { match xs { Nil => c, Cons(a, rest) => Shape::steps(tys, strs, rest, Shape::step(tys, strs, a, c)) } }
-
-fn CEnv::place(self ce: CEnv, tys: Nat → Type, strs: Strs(tys), p: Place) → Shape { Shape::steps(tys, strs, p.steps, ce.get(p.root)) }
-
-fn Shape::same_list(xs, ys: List<Shape>) → Bool {
-    match xs { Nil => match ys { Nil => True, Cons(_, _) => False }, Cons(x, xr) => match ys { Nil => False, Cons(y, yr) => x.same(y) && Shape::same_list(xr, yr) } }
-}
-
-fn Shape::all_same(first: List<Shape>, rest: List<List<Shape>>) → Bool { match rest { Nil => True, Cons(r, rr) => Shape::same_list(first, r) && Shape::all_same(first, rr) } }
-
-fn Shape::is_word(self c: Shape) → Bool { match c { SWord(_) => True, SNamed(_) => False } }
-
-fn Sig::param_codes(self s: Sig) → List<Shape> { s.params.map(λ p => p.code) }
-
-fn Sig::result_codes(self s: Sig) → List<Shape> { s.results.map(λ r => r.code) }
-
-fn Stmt::code_step(self s: Stmt, tys: Nat → Type, strs: Strs(tys), sigs: Nat → Sig, ce: CEnv) → Option<CEnv> {
-    match s {
-        Op(_, a, b) => match ce.get(a).is_word() && ce.get(b).same(ce.get(a)) { True => Some(ce.push(ce.get(a))), False => None },
-        Lit(w, _) => Some(ce.push(SWord(w))),
-        Read(p) => Some(ce.push(ce.place(tys, strs, p))),
-        Write(p, v) => match ce.get(v).same(ce.place(tys, strs, p)) { True => Some(ce), False => None },
-        View(p, _) => Some(ce.push(ce.place(tys, strs, p))),
-        Take(p) => Some(ce.push(ce.place(tys, strs, p))),
-        Fresh(c, n, v) => match c {
-            SWord(_) => None,
-            SNamed(k) => match strs(k).kind {
-                Sequence(q) => match ce.get(n).is_word() && ce.get(v).same(q.elem) { True => Some(ce.push(c)), False => None },
-                Opaque => None,
-                Record(_) => None,
-            },
-        },
-        Call(g, args, n) => match Shape::same_list(args.map(λ x => ce.get(x)), sigs(g).param_codes()) && n.same(sigs(g).ret_codes().len()) {
-            True => Some(ce.push_all(sigs(g).ret_codes())),
-            False => None,
-        },
-        Death(_) => Some(ce),
-    }
-}
-
-fn Test::code_ok(self t: Test, ce: CEnv) → Bool {
-    match t { TLt(a, b) => ce.get(a).is_word() && ce.get(b).same(ce.get(a)), TLe(a, b) => ce.get(a).is_word() && ce.get(b).same(ce.get(a)) }
-}
-
-// A body's codes: refused (`None`), or the codes its `Yield`s give its
-// enclosing join, each one list per leaf.
-fn Body::code_walk(self b: Body, tys: Nat → Type, strs: Strs(tys), sigs: Nat → Sig, me: Nat, ce: CEnv) → Option<List<List<Shape>>> {
-    match b {
-        Ret(rs) => match Shape::same_list(rs.map(λ x => ce.get(x)), sigs(me).ret_codes()) { True => Some(Nil), False => None },
-        Yield(os) => Some([os.map(λ x => ce.get(x))]),
-        Jump(args) => match Shape::same_list(args.map(λ x => ce.get(x)), sigs(me).param_codes()) { True => Some(Nil), False => None },
-        Do(s, rest) => match s.code_step(tys, strs, sigs, ce) { Some(ce2) => rest.code_walk(tys, strs, sigs, me, ce2), None => None },
-        Join(t, yes, no, rest) => match t.code_ok(ce) {
-            False => None,
-            True => match yes.code_walk(tys, strs, sigs, me, ce) {
-                None => None,
-                Some(ya) => match no.code_walk(tys, strs, sigs, me, ce) {
-                    None => None,
-                    Some(na) => match ya ++ na {
-                        Nil => rest.code_walk(tys, strs, sigs, me, ce),
-                        Cons(first, others) => match Shape::all_same(first, others) { True => rest.code_walk(tys, strs, sigs, me, ce.push_all(first)), False => None },
-                    },
-                },
-            },
-        },
-    }
-}
-
-fn Func::coded(self f: Func, tys: Nat → Type, strs: Strs(tys), sigs: Nat → Sig, me: Nat) → Bool {
-    match f.body.code_walk(tys, strs, sigs, me, CEnv(f.sig.param_codes(), Nil)) { Some(_) => True, None => False }
-}
 
 // ---------------------------------------------------------------------------
 // The checker, and what is stated of it
@@ -402,12 +317,6 @@ fn Sig::reads_only(tys: Nat → Type, strs: Strs(tys), sg: Sig) → Bool {
 // which callees are primitives and a function's index, its verdict, or a
 // refusal.
 fn Checker(tys: Nat → Type) → Type<1> { Strs(tys) → (Nat → Sig) → (Nat → Bool) → Nat → Func → Option<Owes> }
-
-// The check refuses an ill-coded function: part of `check`, not a second
-// pass. (A primitive has no body to code.)
-fn CheckRefusesIllCoded(tys: Nat → Type, check: Checker(tys)) → Type<1> {
-    (strs: Strs(tys)) → (sigs: Nat → Sig) → (prim: Nat → Bool) → (g: Nat) → (f: Func) → prim(g) = False → f.coded(tys, strs, sigs, g) = False → check(strs, sigs, prim, g, f) = None
-}
 
 // Each function's pin: its meaning in the world is its body's, pointwise.
 fn Prog::Pinned(tys: Nat → Type, p: Prog(tys)) → Type {

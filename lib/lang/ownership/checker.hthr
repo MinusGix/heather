@@ -44,8 +44,13 @@
 //   by the join keeps every arm's entries (its region the union), a view to
 //   write only where both arms hold it on one parent and place; any other
 //   view is dead, and a view to write dies only written back.
-// - **The code check is folded in**: `check` refuses what `Func::coded`
-//   refuses before its pass.
+// - **A death** of a holder or of a taken object needs no live view of the
+//   object, a view's no child and its write-back done, and a plain
+//   variable's that no live region reads it (a region's words stay plain).
+// - **The code check is in the pass**: each statement, test, leaf and join
+//   is refused first if its codes are wrong (`Stmt::code_ok`), from the codes
+//   the state records; a refusal says whether it was the codes or ownership
+//   (`Why`, `Func::refusal`).
 import logic;
 import bool;
 import nat;
@@ -269,6 +274,59 @@ fn Place::accesses(self p: Place) → List<Residual> { Steps::access_from(p.root
 fn Shape::moves(tys: Nat → Type, strs: Strs(tys), c: Shape) → Bool { !Shape::plain(tys, strs, c) }
 
 // ---------------------------------------------------------------------------
+// Codes: the check's refusals from codes alone, in the pass
+//
+// The meaning of an ill-coded body is junk, never missing; what makes that
+// sound is that the check refuses it, from the codes the state records: a
+// word primitive or a test at a non-word or at two widths, a place with no
+// part at its code, a write of another code, a fresh object of a
+// non-sequence or of another element, a call whose arguments' codes are not
+// its signature's, a join whose arms yield different codes, a `Ret` whose
+// codes are not the signature's results and written parameters'. The codes
+// the body does not compute are recorded at a call's results (the callee's
+// signature) and a fresh object's code; every other variable's code is
+// static because every arm of every join yields closed codes. A refusal
+// says which kind it is (`Why`), so a probe can show an ownership refusal
+// is not a code one.
+
+fn Shape::same_list(xs, ys: List<Shape>) → Bool {
+    match xs { Nil => match ys { Nil => True, Cons(_, _) => False }, Cons(x, xr) => match ys { Nil => False, Cons(y, yr) => x.same(y) && Shape::same_list(xr, yr) } }
+}
+
+fn Shape::is_word(self c: Shape) → Bool { match c { SWord(_) => True, SNamed(_) => False } }
+
+fn Sig::param_codes(self s: Sig) → List<Shape> { s.params.map(λ p => p.code) }
+
+// A variable's code, as the state records it.
+fn CSt::code(self s: CSt, x: Var) → Shape { match s.lvl(x) { Some(l) => (s.var(l)).code, None => SWord(WNat) } }
+
+fn CSt::codes(self s: CSt, xs: List<Var>) → List<Shape> { xs.map(λ x => s.code(x)) }
+
+// A place has a part at every step.
+fn CSt::place_ok(self s: CSt, tys: Nat → Type, strs: Strs(tys), p: Place) → Bool { match Shape::steps_ok(tys, strs, p.steps, s.code(p.root)) { Some(_) => True, None => False } }
+
+fn Stmt::code_ok(self st: Stmt, tys: Nat → Type, strs: Strs(tys), sigs: Nat → Sig, s: CSt) → Bool {
+    match st {
+        Op(_, a, b) => s.code(a).is_word() && s.code(b).same(s.code(a)),
+        Lit(_, _) => True,
+        Read(p) => s.place_ok(tys, strs, p),
+        Write(p, v) => match Shape::steps_ok(tys, strs, p.steps, s.code(p.root)) { Some(c) => s.code(v).same(c), None => False },
+        View(p, _) => s.place_ok(tys, strs, p),
+        Take(p) => s.place_ok(tys, strs, p),
+        Fresh(c, n, v) => match c {
+            SWord(_) => False,
+            SNamed(k) => match strs(k).kind { Sequence(q) => s.code(n).is_word() && s.code(v).same(q.elem), Opaque => False, Record(_) => False },
+        },
+        Call(g, xs, n) => Shape::same_list(s.codes(xs), sigs(g).param_codes()) && n.same(sigs(g).ret_codes().len()),
+        Death(_) => True,
+    }
+}
+
+fn Test::code_ok(self t: Test, s: CSt) → Bool {
+    match t { TLt(a, b) => s.code(a).is_word() && s.code(b).same(s.code(a)), TLe(a, b) => s.code(a).is_word() && s.code(b).same(s.code(a)) }
+}
+
+// ---------------------------------------------------------------------------
 // The licence
 
 record Pl { obj: Nat, at: List<Step> }
@@ -438,7 +496,7 @@ fn CSt::death(self s: CSt, p: Place) → Option<Next> {
         Cons(_, _) => Some(Next(s, Nil)),
         Nil => s.lvl(p.root).and_then(λ l => match s.role(l) {
             KGone => None,
-            KPlain => Some(Next(s.set(l, KGone), Nil)),
+            KPlain => (!s.in_regions(l)).then(Some(Next(s.set(l, KGone), Nil))),
             KHold(o, _) => (!s.has_obj_views(o)).then(Some(Next(s.set(l, KGone), Nil))),
             KView => (!s.has_children(l) && (s.ents(l)).all_bit(λ e => !e.mode.writes() || e.back)).then(
                 Some(Next(s.with_views(s.views.filter(λ e => !e.lvl.same(l))).set(l, KGone), Nil))),
@@ -874,22 +932,60 @@ fn CSt::joined(s0: CSt, oy, on: Option<Yd>) → Option<CSt> {
 // ---------------------------------------------------------------------------
 // Bodies, and the checker
 
-fn Body::verdict(self b: Body, tys: Nat → Type, strs: Strs(tys), sigs: Nat → Sig, prim: Nat → Bool, me: Nat, s: CSt) → Option<CRes> {
+// Why the pass refused: from codes alone, or ownership.
+inductive Why { WCodes, WOwn }
+
+// A body's verdict, or why it was refused (the first fault, in order).
+inductive Vd { VOk(r: CRes), VNo(w: Why) }
+
+fn Vd::then(self v: Vd, f: CRes → Vd) → Vd { match v { VOk(r) => f(r), VNo(w) => VNo(w) } }
+
+fn Vd::own(o: Option<CRes>) → Vd { match o { Some(r) => VOk(r), None => VNo(WOwn) } }
+
+fn Yd::codes(self y: Yd) → List<Shape> { y.st.codes(y.outs) }
+
+// The two arms yield one list of codes, where both yield.
+fn Yd::alike(oy, on: Option<Yd>) → Bool {
+    match oy { Some(y) => match on { Some(n) => Shape::same_list(y.codes(), n.codes()), None => True }, None => True }
+}
+
+fn Body::verdict(self b: Body, tys: Nat → Type, strs: Strs(tys), sigs: Nat → Sig, prim: Nat → Bool, me: Nat, s: CSt) → Vd {
     match b {
-        Ret(xs) => s.ret(tys, strs, sigs(me), xs).then(Some(CRes(OEnd, None))),
-        Yield(xs) => (!s.pending()).then(Some(CRes(OEnd, Some(Yd(s, xs))))),
-        Jump(xs) => (!s.pending()).then(s.jump(tys, strs, sigs(me), me, xs).map(λ rs => CRes(OJump(rs), None))),
-        Do(st, rest) => (!s.pending() || s.writes_back(st)).then(st.verdict(tys, strs, sigs, prim, s)).and_then(λ nx => rest.verdict(tys, strs, sigs, prim, me, nx.st).map(λ cr => CRes(ODo(nx.rs, cr.owes), cr.yld))),
-        Join(t, yes, no, rest) => {
-            let tv = match t as λ _ => List<Var> { TLt(a, c) => [a, c], TLe(a, c) => [a, c] };
-            match s.read_vars(tys, strs, tv) {
-                Some(trs) => match trs {
-                    Nil => yes.verdict(tys, strs, sigs, prim, me, s.arm()).and_then(λ cy => no.verdict(tys, strs, sigs, prim, me, s.arm()).and_then(λ cn =>
-                        CSt::joined(s, cy.yld, cn.yld).and_then(λ s1 => rest.verdict(tys, strs, sigs, prim, me, s1).map(λ cr => CRes(OJoin(cy.owes, cn.owes, cr.owes), cr.yld))))),
-                    Cons(_, _) => None,
-                },
-                None => None,
-            }
+        Ret(xs) => match Shape::same_list(s.codes(xs), sigs(me).ret_codes()) {
+            False => VNo(WCodes),
+            True => Vd::own(s.ret(tys, strs, sigs(me), xs).then(Some(CRes(OEnd, None)))),
+        },
+        Yield(xs) => Vd::own((!s.pending()).then(Some(CRes(OEnd, Some(Yd(s, xs)))))),
+        Jump(xs) => match Shape::same_list(s.codes(xs), sigs(me).param_codes()) {
+            False => VNo(WCodes),
+            True => Vd::own((!s.pending()).then(s.jump(tys, strs, sigs(me), me, xs).map(λ rs => CRes(OJump(rs), None)))),
+        },
+        Do(st, rest) => match st.code_ok(tys, strs, sigs, s) {
+            False => VNo(WCodes),
+            True => match (!s.pending() || s.writes_back(st)).then(st.verdict(tys, strs, sigs, prim, s)) {
+                None => VNo(WOwn),
+                Some(nx) => rest.verdict(tys, strs, sigs, prim, me, nx.st).then(λ cr => VOk(CRes(ODo(nx.rs, cr.owes), cr.yld))),
+            },
+        },
+        Join(t, yes, no, rest) => match t.code_ok(s) {
+            False => VNo(WCodes),
+            True => {
+                let tv = match t as λ _ => List<Var> { TLt(a, c) => [a, c], TLe(a, c) => [a, c] };
+                match s.read_vars(tys, strs, tv) {
+                    Some(trs) => match trs {
+                        Nil => yes.verdict(tys, strs, sigs, prim, me, s.arm()).then(λ cy => no.verdict(tys, strs, sigs, prim, me, s.arm()).then(λ cn =>
+                            match Yd::alike(cy.yld, cn.yld) {
+                                False => VNo(WCodes),
+                                True => match CSt::joined(s, cy.yld, cn.yld) {
+                                    None => VNo(WOwn),
+                                    Some(s1) => rest.verdict(tys, strs, sigs, prim, me, s1).then(λ cr => VOk(CRes(OJoin(cy.owes, cn.owes, cr.owes), cr.yld))),
+                                },
+                            })),
+                        Cons(_, _) => VNo(WOwn),
+                    },
+                    None => VNo(WOwn),
+                }
+            },
         },
     }
 }
@@ -906,15 +1002,18 @@ fn CSt::params(tys: Nat → Type, strs: Strs(tys), ps: List<Param>, i: Nat) → 
 
 fn CSt::start(tys: Nat → Type, strs: Strs(tys), sig: Sig) → CSt { CSt(CSt::params(tys, strs, sig.params, 0), Nil, sig.params.len(), 0, Nil, sig.params.len(), Nil, Nil) }
 
-fn Func::verdict(self f: Func, tys: Nat → Type, strs: Strs(tys), sigs: Nat → Sig, prim: Nat → Bool, me: Nat) → Option<Owes> {
-    f.body.verdict(tys, strs, sigs, prim, me, CSt::start(tys, strs, f.sig)).map(λ cr => cr.owes)
+fn Func::verdict(self f: Func, tys: Nat → Type, strs: Strs(tys), sigs: Nat → Sig, prim: Nat → Bool, me: Nat) → Vd { f.body.verdict(tys, strs, sigs, prim, me, CSt::start(tys, strs, f.sig)) }
+
+// Why a function is refused, if it is.
+fn Func::refusal(self f: Func, tys: Nat → Type, strs: Strs(tys), sigs: Nat → Sig, prim: Nat → Bool, me: Nat) → Option<Why> {
+    match f.verdict(tys, strs, sigs, prim, me) { VOk(_) => None, VNo(w) => Some(w) }
 }
 
 // The checker: a primitive has no body and owes nothing if it only reads;
-// any other function, the code check, then the pass.
+// any other function, the pass (its code conditions included).
 fn check(tys: Nat → Type) → Checker(tys) {
     λ strs sigs prim g f => match prim(g) {
         True => Sig::reads_only(tys, strs, f.sig).then(Some(OEnd)),
-        False => match f.coded(tys, strs, sigs, g) { True => f.verdict(tys, strs, sigs, prim, g), False => None },
+        False => match f.verdict(tys, strs, sigs, prim, g) { VOk(cr) => Some(cr.owes), VNo(_) => None },
     }
 }

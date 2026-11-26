@@ -3490,3 +3490,52 @@ through a view, a write-back), `Death`, `Call` (each argument's lending,
 `Lendable` at the callee from the licence, the callee's `SafeAt` at less
 fuel, results and written slots) and `Ret` (`ReadAll`, `Written`, `Frame`,
 `Views`); then `SafeAt` for a body with no join and no `Jump`.
+
+### 23.8 `check_sound` continued: the interfaces tightened (2026-11-26)
+
+Decided by the coordinating session after the first half of item 3, and
+found while designing the invariant for every stage.
+
+- **A block lent only to read is unchanged by the call.** `Heap::Frame` in
+  `SafeAt` exempts only the blocks lent to a parameter that may change them
+  (`Value::lends` takes the parameters). The caller's invariant after a call
+  of a reader needs it: its other variables' reads of a read-lent block stand
+  on the frame, not on the callee's word.
+- **An object taken is a whole block no other argument refers to**
+  (`Lendable.whole`). The callee owns it and its death frees the block, so a
+  taken argument sharing a block with another one made `CheckSound` false:
+  `f(a: Buf take, b: Buf read) { Death(a); Read(b) }` is checked, and at two
+  apart fields of one block the run kills the block and the read is stuck.
+  The caller's side is its own invariant (`own`, below).
+- **The code conditions are in the checker's pass.** `Func::coded`, its
+  `CEnv` walk and `CheckRefusesIllCoded` are gone from `verdict.hthr`; each
+  statement, test, leaf and join is refused first if its codes are wrong
+  (`Stmt::code_ok`, `Test::code_ok`, the leaves' and arms' code lists), from
+  the codes the checker's state records, so a stage reads its codes off the
+  verdict's inversion. A refusal says whether it was the codes or ownership
+  (`Why`, `Func::refusal`): the code-refusal probes answer `Some(WCodes)`
+  (`interfaces_tests`), and the experiments' refused programs `Some(WOwn)`
+  (`refusals_owned`, which replaces `refusals_coded`).
+- **A plain variable a live region reads does not die** (a checker
+  refusal): the invariant needs every word a region reads to stay a plain
+  variable.
+
+**The invariant's shape** (`Inv`; the reasons are beside its definition):
+`root: Nat → Option<Ref>` (an object held by value has no root); the
+cross-object clauses are per object over roots, so a binding touches none of
+them: roots of objects one of which may change are apart (`apart`), every root
+is in the heap (`inheap`, so a fresh block is past it), an object something
+may change through has its root in a block lent to change or made here
+(`owned`, which with `frame` gives the tightened `Frame` at `Ret`); a cell its
+frame owns is its object's whole block, which no other object's root is in
+(`own`); an object has one holder (`one`); every level a live region reads is
+plain (`words`). A view's reference is one of its entries' object's root
+narrowed (`RefOk`), since after a join a read view's entries may be of several
+objects. `Inv::start` proves every clause at entry.
+
+Found for the call stage (item 4), reported and not yet built: a written
+parameter's slot in the answer must be the argument where it refers, and two
+fresh results of one call must be distinct blocks; and three checker defects,
+each a refusal to add (a join over a read-lent holder binding an owned
+output; an arm yielding one holder twice; a returned view's region reading a
+non-plain level in the caller).

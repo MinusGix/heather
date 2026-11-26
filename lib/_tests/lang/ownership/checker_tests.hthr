@@ -74,6 +74,9 @@ fn verdict_in(fs: List<Func>, prim: Nat → Bool, g: Nat) → Option<Owes> { che
 // A program none of whose callees is a primitive.
 fn verdict(fs: List<Func>, g: Nat) → Option<Owes> { verdict_in(fs, λ _ => False, g) }
 
+// Why the pass refused a function, if it did.
+fn refusal_in(fs: List<Func>, g: Nat) → Option<Why> { (fs.nth(g).unwrap_or(Func(Sig(Nil, Nil), Ret(Nil)))).refusal(tys(), strs(), sigs_of(fs), λ _ => False, g) }
+
 // The words a function takes by value, after its object.
 fn words(n: Nat) → List<Param> { List::replicate(Param(nat_s(), ByTake), n) }
 
@@ -883,7 +886,7 @@ fn two_roots() → Func {
 
 theorem two_roots_refused(): verdict([two_roots()], 0) = None { refl }
 
-theorem two_roots_coded(): two_roots().coded(tys(), strs(), sigs_of([two_roots()]), 0) = True { refl }
+theorem two_roots_owned(): refusal_in([two_roots()], 0) = Some(WOwn) { refl }
 
 // One root, two windows: refused as well (no write-back place names the
 // window the test chose).
@@ -896,7 +899,7 @@ fn two_windows() → Func {
 
 theorem two_windows_refused(): verdict([two_windows()], 0) = None { refl }
 
-theorem two_windows_coded(): two_windows().coded(tys(), strs(), sigs_of([two_windows()]), 0) = True { refl }
+theorem two_windows_owned(): refusal_in([two_windows()], 0) = Some(WOwn) { refl }
 
 // One root, one window: the view to write survives the join, written
 // through and back after it.
@@ -911,19 +914,18 @@ theorem one_window_checked(): verdict([one_window()], 0) = Some(
     OJoin(ODo([acc_win(Arg(0), Lit(0), Lit(1))], OEnd), ODo([acc_win(Arg(0), Lit(0), Lit(1))], OEnd), ODo(Nil, ODo([acc_el(Loc(1), Lit(0))], ODo(Nil, ODo(Nil, OEnd))))))
 { refl }
 
-// Each refusal above is the pass's, not the code check's: the code check
-// accepts every one of them but the ill-coded `uneven`.
-fn coded_in(fs: List<Func>, g: Nat) → Bool { (fs.nth(g).unwrap_or(Func(Sig(Nil, Nil), Ret(Nil)))).coded(tys(), strs(), sigs_of(fs), g) }
-
-theorem refusals_coded():
-    List::append<Bool>([coded_in([fill(), unbacked()], 1), coded_in([fill(), unreturned()], 1), coded_in([first_wrong()], 0), coded_in([first(), early()], 1), coded_in([liar()], 0),
-        coded_in([peek()], 0), coded_in([clobber()], 0), coded_in([stale()], 0), coded_in([lend_read()], 0), coded_in([unsynced()], 0), coded_in([after_join()], 0),
-        coded_in([unyielded()], 0), coded_in([coarse_held()], 0), coded_in([found_self()], 0), coded_in([stale_name()], 0), coded_in([take_frozen()], 0),
-        coded_in([inside()], 0), coded_in([versions_bad()], 0), coded_in([zero_loop(), zero_whole()], 1), coded_in([copy_swapped()], 0), coded_in([outlived()], 0)], Nil)
-    = [True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True]
+// Each refusal above is the licence's, not the codes': the pass says why it
+// refused (`Func::refusal`), and every one of them is refused for ownership
+// but the ill-coded `uneven`.
+theorem refusals_owned():
+    List::append<Option<Why>>([refusal_in([fill(), unbacked()], 1), refusal_in([fill(), unreturned()], 1), refusal_in([first_wrong()], 0), refusal_in([first(), early()], 1), refusal_in([liar()], 0),
+        refusal_in([peek()], 0), refusal_in([clobber()], 0), refusal_in([stale()], 0), refusal_in([lend_read()], 0), refusal_in([unsynced()], 0), refusal_in([after_join()], 0),
+        refusal_in([unyielded()], 0), refusal_in([coarse_held()], 0), refusal_in([found_self()], 0), refusal_in([stale_name()], 0), refusal_in([take_frozen()], 0),
+        refusal_in([inside()], 0), refusal_in([versions_bad()], 0), refusal_in([zero_loop(), zero_whole()], 1), refusal_in([copy_swapped()], 0), refusal_in([outlived()], 0)], Nil)
+    = List::replicate(Some(WOwn), 21)
 { refl }
 
-theorem uneven_ill_coded(): coded_in([uneven()], 0) = False { refl }
+theorem uneven_ill_coded(): refusal_in([uneven()], 0) = Some(WCodes) { refl }
 
 // ---------------------------------------------------------------------------
 // 14. The pinned functions of `body_tests.hthr`, with their signatures:

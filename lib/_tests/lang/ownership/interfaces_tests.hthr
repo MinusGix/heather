@@ -19,6 +19,7 @@ import sequences;
 import body;
 import level2;
 import verdict;
+import checker;
 import linux_world;
 
 fn tys() → Nat → Type { λ k => match k { Zero => List<Nat>, Succ(_) => True } }
@@ -107,8 +108,6 @@ fn pick_safety(pre: List<Dyn(tys())> → Type) → Type { Safety(tys(), pick_pro
 
 fn pick_check_sound(check: Checker(tys())) → Type<1> { CheckSound(tys(), check) }
 
-fn pick_check_refuses(check: Checker(tys())) → Type<1> { CheckRefusesIllCoded(tys(), check) }
-
 // The program's run is the defined one, reading the list by value here.
 theorem pick_runs(io: Io): (pick_prog(pick_pre)).run(tys(), 1, 0, [Plain(nats([4, 5])), Plain(nat(1))], Nil, io) = Done(Answer([Plain(nat(5))], Nil, io)) { refl }
 
@@ -127,7 +126,8 @@ theorem empty_no_refer(i: Nat, r: Ref): ¬(empty_in().nth(i) = Some(Refer(r))) {
 }
 
 theorem empty_lendable(): Lendable(tys(), strs(), pick_r().sig.params, Nil, empty_in()) {
-    Lendable(refl, λ i r e => false_elim(empty_no_refer(i, r, e)), λ i p _ _ _ r => empty_no_refer(i, r), λ i k _ p _ _ r q e _ => false_elim(empty_no_refer(i, r, e)))
+    Lendable(refl, λ i r e => false_elim(empty_no_refer(i, r, e)), λ i p _ _ _ r => empty_no_refer(i, r), λ i k _ p _ _ r q e _ => false_elim(empty_no_refer(i, r, e)),
+        λ i p _ _ _ r e => false_elim(empty_no_refer(i, r, e)))
 }
 
 theorem empty_stuck(io: Io): (pick_prog(λ _ => True)).run(tys(), 0, 0, empty_in(), Nil, io) = Stuck { refl }
@@ -148,35 +148,38 @@ theorem pick_args_coded(xs: List<Nat>, i: Nat): Dyn::Coded(tys(), [nats(xs), nat
 theorem words_not_coded(): ¬Dyn::Coded(tys(), [nat(5), nat(1)], pick_r().sig.params) { λ no => absurd(no) }
 
 // ---------------------------------------------------------------------------
-// The check's refusals, from codes alone: the meaning of each is junk
+// The check's refusals, from codes alone (the checker's pass says so,
+// `Func::refusal`): the meaning of each is junk
 
 fn sigs() → Nat → Sig { λ g => match g { Zero => Sig([Param(SNamed(0), ByRead), Param(SWord(WNat), ByTake)], [Result(SWord(WNat), OFresh)]), Succ(_) => Sig(Nil, Nil) } }
 
-theorem pick_coded(): pick_r().coded(tys(), strs(), sigs(), 0) = True { refl }
+fn refused(f: Func, sg: Nat → Sig) → Option<Why> { f.refusal(tys(), strs(), sg, λ _ => False, 0) }
+
+theorem pick_coded(): refused(pick_r(), sigs()) = None { refl }
 
 // A join whose arms yield a number and a list.
 fn ill_join_r() → Func { Func(pick_r().sig, Join(TLt(Arg(1), Arg(1)), Yield([Arg(1)]), Yield([Arg(0)]), Ret([Loc(0)]))) }
 
-theorem ill_join_refused(): ill_join_r().coded(tys(), strs(), sigs(), 0) = False { refl }
+theorem ill_join_refused(): refused(ill_join_r(), sigs()) = Some(WCodes) { refl }
 
 // The same join yielding one code is accepted.
 fn good_join_r() → Func { Func(pick_r().sig, Join(TLt(Arg(1), Arg(1)), Yield([Arg(1)]), seq([Lit(WNat, 0)], Yield([Loc(0)])), Ret([Loc(0)]))) }
 
-theorem good_join_coded(): good_join_r().coded(tys(), strs(), sigs(), 0) = True { refl }
+theorem good_join_coded(): refused(good_join_r(), sigs()) = None { refl }
 
 // A call of `pick` (callee 0) with its arguments swapped.
 fn ill_call_r() → Func { Func(pick_r().sig, seq([Call(0, [Arg(1), Arg(0)], 1)], Ret([Loc(0)]))) }
 
-theorem ill_call_refused(): ill_call_r().coded(tys(), strs(), sigs(), 0) = False { refl }
+theorem ill_call_refused(): refused(ill_call_r(), sigs()) = Some(WCodes) { refl }
 
 fn good_call_r() → Func { Func(pick_r().sig, seq([Call(0, [Arg(0), Arg(1)], 1)], Ret([Loc(0)]))) }
 
-theorem good_call_coded(): good_call_r().coded(tys(), strs(), sigs(), 0) = True { refl }
+theorem good_call_coded(): refused(good_call_r(), sigs()) = None { refl }
 
 // A word primitive on a list.
 fn ill_word_r() → Func { Func(pick_r().sig, seq([Op(PAdd, Arg(0), Arg(1))], Ret([Loc(0)]))) }
 
-theorem ill_word_refused(): ill_word_r().coded(tys(), strs(), sigs(), 0) = False { refl }
+theorem ill_word_refused(): refused(ill_word_r(), sigs()) = Some(WCodes) { refl }
 
 // Its junk meaning: a list is not a word, so the sum is `0 + i`.
 theorem ill_word_junk(xs: List<Nat>, i: Nat): ill_word_r().then(Nat, tys(), strs(), λ _ _ => Nil, 0, [nats(xs), nat(i)], as_nat) = 0 + i { refl }
@@ -194,10 +197,10 @@ fn bump_sigs() → Nat → Sig { λ _ => bump_sig() }
 
 theorem bump_written(): bump_sig().written() = [0] { refl }
 
-theorem bump_coded(): bump_r().coded(tys(), strs(), bump_sigs(), 0) = True { refl }
+theorem bump_coded(): refused(bump_r(), bump_sigs()) = None { refl }
 
 // The control: a `Ret` that leaves out the written parameter is refused.
-theorem bump_unreturned_refused(): Func(bump_sig(), Ret(Nil)).coded(tys(), strs(), bump_sigs(), 0) = False { refl }
+theorem bump_unreturned_refused(): refused(Func(bump_sig(), Ret(Nil)), bump_sigs()) = Some(WCodes) { refl }
 
 fn bump(x: &mut Nat) → True {
     x := x + 1;
