@@ -95,3 +95,10 @@ A to D landed with `scripts/linked --check` unchanged and `HEATHER_PR_NATIVE=all
   Cost: `Site::performs_meet` is the dearest declaration of the round by an order of magnitude over the rest of the contract. It is a case split over the claim's branch and the path's steps, and its cost is the elaboration of the nested motives.
 
   Verified: `scripts/linked --check` exit 0, every export unchanged. `HEATHER_PR_NATIVE=all scripts/test --pr`: `== suite: 4139 passed, 0 failed, 3 ignored ==`.
+- 2026-11-26: **E not started; what remains, exactly.** A to D are green, but E does not fit this round. It needs the done side of the lowering re-proved in claim form at the Linux kernel, and today that side is only cited at its quiet instances. What it takes:
+
+  1. **Emission.** `Body::fresh` and `Body::emit` accept `Sys` and `Exit`. `Sys` becomes the request's words moved into RAX/RDI/RSI/RDX and `SYSCALL`, with the answer moved back. `Exit` becomes RAX = 60, RDI = status, `SYSCALL`.
+  2. **Facts with worlds.** `Body::Holds` and `Body::Goes` carry the world (`Io`) beside the heap, and `Sys(call)` holds where the meaning's `SysCall::run` steps the world.
+  3. **The region theorems at `Site::linux_kernel`, at world `Io`.** `Body::emit_emits` as an `EmitsClaim` at the Linux kernel, counting system calls. Its parts are the generic claim forms B built (`may_emit_claim_seq`, `branch_emits_claim`, `call_step_claim`, `Site::loop_iterates_claim`, `function_runs_claim`), plus one new step: `Sys`'s `SYSCALL` as a claim (`kernel.resumes`). The same goes for `Body::emit_goes`.
+  4. **The routine and program inductions at the Linux kernel.** `program_returns` and `program_goes` lose `program_quiet` and `program_going_quiet`; the world is tracked instead. The exited reading is no longer vacuous: an `Exit` node's claim reaches `Site::Reached`'s exited state.
+  5. **Probes.** The language's `write` and `exit` programs (`bytes_level_tests`) lowered and tracked, with a control that one asking a request Linux refuses is stuck.
