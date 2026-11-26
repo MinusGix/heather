@@ -507,15 +507,35 @@ fn Bool::guard<B>(b: Bool, x: Option<B>) → Option<B> { match b { True => x, Fa
 // A word code's width.
 fn Shape::word_of(self c: Shape) → Option<Width> { match c { SWord(w) => Some(w), SNamed(_) => None } }
 
-// A word operation at 64 bits: the first operand's width, its node.
+// A word operation at 64 bits: the first operand's width, its node. Each
+// step's continuation is a named step (callees first), so that a proof
+// inverting it (`Option::bind_some`) meets one small equation per step:
+// an inferred chain's types re-spell what came before at every step.
+//
+// Narrow arithmetic would leave a word not zero above its width: refused
+// here.
+fn PEnv::op_sized(self e: PEnv, w: Width, nd: Node, next: Nat) → Option<SOut> {
+    w.size().and_then(λ size => Bool::guard(size.same(8), Some(SOut(leaf([Compute(nd)]), e.push(PSlot(SWord(w), [word_id(next)])), next + 1))))
+}
+
+fn PEnv::op_node(self e: PEnv, op: Prim, w: Width, ta, tb: Typed, next: Nat) → Option<SOut> {
+    op.node(w.bits(), next, ta.id, tb.id).and_then(λ nd => e.op_sized(w, nd, next))
+}
+
+// Interim (§25.8, F4): the guard goes when the run is stuck at a code
+// mismatch. Level 2 reads the second at the first's code.
+fn PEnv::op_ta(self e: PEnv, op: Prim, sa, sb: PSlot, w: Width, ta: Typed, next: Nat) → Option<SOut> {
+    sb.word().and_then(λ tb => Bool::guard(sb.code.same(sa.code), e.op_node(op, w, ta, tb, next)))
+}
+
+fn PEnv::op_w(self e: PEnv, op: Prim, sa, sb: PSlot, w: Width, next: Nat) → Option<SOut> { sa.word().and_then(λ ta => e.op_ta(op, sa, sb, w, ta, next)) }
+
+fn PEnv::op_b(self e: PEnv, op: Prim, sa, sb: PSlot, next: Nat) → Option<SOut> { sa.code.word_of().and_then(λ w => e.op_w(op, sa, sb, w, next)) }
+
+fn PEnv::op_a(self e: PEnv, op: Prim, sa: PSlot, b: Var, next: Nat) → Option<SOut> { e.get(b).and_then(λ sb => e.op_b(op, sa, sb, next)) }
+
 fn PEnv::place_op(tys: Nat → Type, strs: Strs(tys), self e: PEnv, op: Prim, a, b: Var, next: Nat) → Option<SOut> {
-    e.get(a).and_then(λ sa => e.get(b).and_then(λ sb => sa.code.word_of().and_then(λ w => sa.word().and_then(λ ta => sb.word().and_then(λ tb =>
-        // Interim (§25.8, F4): goes when the run is stuck at a code mismatch.
-        // Level 2 reads the second at the first's code.
-        Bool::guard(sb.code.same(sa.code), op.node(w.bits(), next, ta.id, tb.id).and_then(λ nd => w.size().and_then(λ size =>
-            // Narrow arithmetic would leave a word not zero above its
-            // width: refused here.
-            Bool::guard(size.same(8), Some(SOut(leaf([Compute(nd)]), e.push(PSlot(SWord(w), [word_id(next)])), next + 1)))))))))))
+    e.get(a).and_then(λ sa => e.op_a(op, sa, b, next))
 }
 
 // A word written at a place: a word variable whole, its slot rebound to the

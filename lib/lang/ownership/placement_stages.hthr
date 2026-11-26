@@ -508,3 +508,206 @@ theorem word_slot(tys: Nat → Type, strs: Strs(tys), inj: Nat → Nat, h: level
         })(p),
     })(hs)
 }
+
+// ---------------------------------------------------------------------------
+// `Op`: a word operation at 64 bits
+
+theorem Shape::eq_of_same(a, b: Shape, h: a.same(b) = True): a = b {
+    (match Shape::dec(a, b) as λ o => (match o { Inl(_) => True, Inr(_) => False }) = True → a = b {
+        Inl(e) => λ _ => e,
+        Inr(_) => λ no => absurd(no),
+    })(h)
+}
+
+theorem Shape::word_of_is(c: Shape, w: Width): c.word_of() = Some(w) → c = SWord(w) {
+    match c {
+        SWord(w0) => λ e => cong_fn(λ (x: Width) => SWord(x), Option::some_inj(w0, w, e)),
+        SNamed(_) => λ no => absurd(no),
+    }
+}
+
+// One arm of a test on a bit, by which way it went.
+theorem bool_arm(b: Bool, x, y: Option<Nat>, z: Nat, e: (match b { True => x, False => y }) = Some(z)): ((b = True) ∧ (x = Some(z))) ∨ ((b = False) ∧ (y = Some(z))) {
+    (match b as λ b2 => (match b2 { True => x, False => y }) = Some(z) → ((b2 = True) ∧ (x = Some(z))) ∨ ((b2 = False) ∧ (y = Some(z))) {
+        True => λ e2 => Inl(⟨refl, e2⟩),
+        False => λ e2 => Inr(⟨refl, e2⟩),
+    })(e)
+}
+
+// A word of eight bytes is a 64-bit word.
+fn size_from64(n: Nat) → Option<Nat> { match n.same(64) { True => Some(8), False => None } }
+fn size_from32(n: Nat) → Option<Nat> { match n.same(32) { True => Some(4), False => size_from64(n) } }
+fn size_from16(n: Nat) → Option<Nat> { match n.same(16) { True => Some(2), False => size_from32(n) } }
+
+theorem Width::is_64(w: Width): w.size() = Some(8) → w = WBits(64) {
+    match w {
+        WNat => λ no => absurd(no),
+        WBits(n) => λ e8 => match bool_arm(n.same(8), Some(1), size_from16(n), 8, e8) {
+            Inl(p) => { let q = Option::some_inj(1, 8, p.right); false_elim(omega(q)) },
+            Inr(p) => match bool_arm(n.same(16), Some(2), size_from32(n), 8, p.right) {
+                Inl(p2) => { let q = Option::some_inj(2, 8, p2.right); false_elim(omega(q)) },
+                Inr(p2) => match bool_arm(n.same(32), Some(4), size_from64(n), 8, p2.right) {
+                    Inl(p3) => { let q = Option::some_inj(4, 8, p3.right); false_elim(omega(q)) },
+                    Inr(p3) => match bool_arm(n.same(64), Some(8), None, 8, p3.right) {
+                        Inl(p4) => cong_fn(λ (k: Nat) => WBits(k), Nat::same_sound(n, 64, p4.left)),
+                        Inr(p4) => absurd(p4.right),
+                    },
+                },
+            },
+        },
+    }
+}
+
+// The run of an operation, as `Stmt::run` spells it.
+fn op_go(tys: Nat → Type, m: Mach(tys), k: Mach(tys) → level2::Ran(tys), op: Prim, ox, oy: Option<Dyn(tys)>) → level2::Ran(tys) {
+    match ox {
+        Some(x) => match oy {
+            Some(y) => k(Mach::push(tys, m, Cell::plain(tys, Dyn::words<Dyn(tys)>(tys, x, y, λ wd p q => Dyn(SWord(wd), Width::op(wd, op, p, q)))))),
+            None => level2::Stuck,
+        },
+        None => level2::Stuck,
+    }
+}
+
+// The operation on 64-bit words, as `Width::op` reads it at a width.
+fn bv_op(op: Prim, n: Nat, x, y: BitVec(n)) → BitVec(n) { match op { PAdd => x + y, PSub => x - y, PMul => x * y } }
+
+// The operation's node, run.
+theorem node_runs(blocks: Blocks, op: Prim, out, ia, ib: Nat, nd: Node, c: Config): op.node(64, out, ia, ib) = Some(nd) →
+    run_instrs(blocks, [Compute(nd)], c) = Some(Config(Locals(Valuation::set(c.locals.words, out, λ (wd: Nat) => bv_op(op, wd, c.locals.words(wd, ia), c.locals.words(wd, ib))),
+        c.locals.refs), c.memory, c.io))
+{
+    match op {
+        PAdd => λ en => j(Option::some_inj(Add(64, out, ia, ib), nd, en), λ n2 _ => run_instrs(blocks, [Compute(n2)], c) =
+            Some(Config(Locals(Valuation::set(c.locals.words, out, λ (wd: Nat) => bv_op(PAdd, wd, c.locals.words(wd, ia), c.locals.words(wd, ib))), c.locals.refs), c.memory, c.io)), refl),
+        PSub => λ en => j(Option::some_inj(Sub(64, out, ia, ib), nd, en), λ n2 _ => run_instrs(blocks, [Compute(n2)], c) =
+            Some(Config(Locals(Valuation::set(c.locals.words, out, λ (wd: Nat) => bv_op(PSub, wd, c.locals.words(wd, ia), c.locals.words(wd, ib))), c.locals.refs), c.memory, c.io)), refl),
+        PMul => λ no => absurd(no),
+    }
+}
+
+// A value of the 64-bit word code is the word `Dyn::back` reads it at, and
+// a slot's word reading it is that word.
+theorem word64_back(tys: Nat → Type, d: Dyn(tys), cd: d.code = SWord(WBits(64))): Dyn(SWord(WBits(64)), Dyn::back(tys, SWord(WBits(64)), d, BitVec::ofNat(0))) = d {
+    Dyn::back_like(tys, SWord(WBits(64)), d, BitVec::ofNat(0), j(sym(cd), λ c2 _ => c2.same(SWord(WBits(64))) = True, Shape::same_self(SWord(WBits(64)))))
+}
+
+theorem word64_is(tys: Nat → Type, d: Dyn(tys), cd: d.code = SWord(WBits(64)), w: BitVec(64), wd: w = BitVec::ofNat(Dyn::index(tys, d))):
+    w = Dyn::back(tys, SWord(WBits(64)), d, BitVec::ofNat(0))
+{
+    let x = Dyn::back(tys, SWord(WBits(64)), d, BitVec::ofNat(0));
+    trans(trans(wd, cong_fn(λ (d2: Dyn(tys)) => BitVec::ofNat(Dyn::index(tys, d2), n := 64), sym(word64_back(tys, d, cd)))), BitVec::ofNat_toNat(64, x))
+}
+
+// A slot's variable read: its value, where it is the plain one the slot
+// reads.
+theorem val_plain(tys: Nat → Type, strs: Strs(tys), m: Mach(tys), x: Var, d: Dyn(tys), e: (REnv::get(tys, m.env, x)).v = Plain(d)): Mach::val(tys, strs, m, x) = Some(d) {
+    cong_fn(λ (v: level2::Value(tys)) => Value::get(tys, strs, m.heap, v, Nil), e)
+}
+
+theorem op_goal(tys: Nat → Type, strs: Strs(tys), fns: Nat → Func, call: Caller(tys), blocks: Blocks, op: Prim, a, b: Var, e: PEnv, next: Nat,
+    sa, sb: PSlot, ta, tb: Typed, nd: Node, ega: e.get(a) = Some(sa), egb: e.get(b) = Some(sb), ca: sa.code = SWord(WBits(64)), cb: sb.code = sa.code,
+    wa: sa.word() = Some(ta), wb: sb.word() = Some(tb), en: op.node(64, next, ta.id, tb.id) = Some(nd)):
+    LeafGoal(tys, strs, fns, call, blocks, Op(op, a, b), e, next, SOut(leaf([Compute(nd)]), e.push(PSlot(SWord(WBits(64)), [word_id(next)])), next + 1))
+{
+    λ act inj m c rel => {
+        let sla = slot_of(tys, strs, inj, blocks, act, e, m, c, next, rel, a, sa, ega);
+        let slb = slot_of(tys, strs, inj, blocks, act, e, m, c, next, rel, b, sb, egb);
+        match word_slot(tys, strs, inj, m.heap, sa, REnv::get(tys, m.env, a), c.locals, sla.left, ta, wa) {
+            Inl(none_a) => Inl(λ k => cong_fn(λ (ox: Option<Dyn(tys)>) => op_go(tys, m, k, op, ox, Mach::val(tys, strs, m, b)), none_a)),
+            Inr(da) => {
+                let x = da.witness;
+                let va = val_plain(tys, strs, m, a, x, da.proof.left);
+                match word_slot(tys, strs, inj, m.heap, sb, REnv::get(tys, m.env, b), c.locals, slb.left, tb, wb) {
+                    Inl(none_b) => Inl(λ k => eq2(λ (ox: Option<Dyn(tys)>) (oy: Option<Dyn(tys)>) => op_go(tys, m, k, op, ox, oy), va, none_b)),
+                    Inr(db) => {
+                        let y = db.witness;
+                        let vb = val_plain(tys, strs, m, b, y, db.proof.left);
+                        let cx: (x.code = SWord(WBits(64))) = trans(da.proof.right.left, ca);
+                        let cy: (y.code = SWord(WBits(64))) = trans(db.proof.right.left, trans(cb, ca));
+                        let u = Dyn::back(tys, SWord(WBits(64)), x, BitVec::ofNat(0));
+                        let v = Dyn::back(tys, SWord(WBits(64)), y, BitVec::ofNat(0));
+                        let wu: (c.locals.words(64, ta.id) = u) = word64_is(tys, x, cx, c.locals.word(ta.id), da.proof.right.right);
+                        let wv: (c.locals.words(64, tb.id) = v) = word64_is(tys, y, cy, c.locals.word(tb.id), db.proof.right.right);
+                        let value = λ (wd: Nat) => bv_op(op, wd, c.locals.words(wd, ta.id), c.locals.words(wd, tb.id));
+                        let l2 = Locals(Valuation::set(c.locals.words, next, value), c.locals.refs);
+                        let s = PSlot(SWord(WBits(64)), [word_id(next)]);
+                        let rd: (read_values([word_id(next)], l2) = Some([x86_64_call_contract::Word(bv_op(op, 64, c.locals.words(64, ta.id), c.locals.words(64, tb.id)))])) =
+                            cong_fn(λ (z: BitVec(64)) => Some([x86_64_call_contract::Word(z)]), Valuation::set_here(c.locals.words, next, value, 64));
+                        let ww: (bv_op(op, 64, c.locals.words(64, ta.id), c.locals.words(64, tb.id)) = BitVec::ofNat((bv_op(op, 64, u, v)).toNat())) =
+                            trans(eq2(λ (p: BitVec(64)) (q: BitVec(64)) => bv_op(op, 64, p, q), wu, wv), sym(BitVec::ofNat_toNat(64, bv_op(op, 64, u, v))));
+                        let sh0: SlotHolds(tys, strs, inj, m.heap, s, Cell::plain(tys, Dyn::words<Dyn(tys)>(tys, Dyn(SWord(WBits(64)), u), y, λ wd p q => Dyn(SWord(wd), Width::op(wd, op, p, q)))), l2) =
+                            λ _ => ⟨trans(rd, cong_fn(λ (z: BitVec(64)) => Some([x86_64_call_contract::Word(z)]), ww)), refl⟩;
+                        let sh: SlotHolds(tys, strs, inj, m.heap, s, Cell::plain(tys, Dyn::words<Dyn(tys)>(tys, x, y, λ wd p q => Dyn(SWord(wd), Width::op(wd, op, p, q)))), l2) =
+                            j(word64_back(tys, x, cx), λ x2 _ => SlotHolds(tys, strs, inj, m.heap, s, Cell::plain(tys, Dyn::words<Dyn(tys)>(tys, x2, y, λ wd p q => Dyn(SWord(wd), Width::op(wd, op, p, q)))), l2), sh0);
+                        let cell = Cell::plain(tys, Dyn::words<Dyn(tys)>(tys, x, y, λ wd p q => Dyn(SWord(wd), Width::op(wd, op, p, q))));
+                        Inr(Exists(Mach::push(tys, m, cell), ⟨λ k => eq2(λ (ox: Option<Dyn(tys)>) (oy: Option<Dyn(tys)>) => op_go(tys, m, k, op, ox, oy), va, vb),
+                            Exists(Config(l2, c.memory, c.io), ⟨node_runs(blocks, op, next, ta.id, tb.id, nd, c, en),
+                                rel_push(tys, strs, inj, blocks, act, e, m, c, next, rel, l2, Locals::agree_set(c.locals, next, value, next, { omega }),
+                                    s, cell, next + 1, { omega }, one_below(next), sh)⟩)⟩))
+                    },
+                }
+            },
+        }
+    }
+}
+
+// `place` of an operation is `PEnv::place_op`.
+theorem place_is_op(tys: Nat → Type, strs: Strs(tys), sigs: Nat → Sig, prim: Nat → Bool, op: Prim, a, b: Var, e: PEnv, next: Nat):
+    (Op(op, a, b)).place(tys, PCx(strs, sigs, prim), e, next) = PEnv::place_op(tys, strs, e, op, a, b, next) { refl }
+
+// The inversion, one named step of `PEnv::place_op` per lemma: each a
+// single match on what `Option::bind_some` found, so the kernel types each
+// step's equation once (nested, it re-types every one before it at each).
+theorem op_sized_goal(tys: Nat → Type, strs: Strs(tys), fns: Nat → Func, call: Caller(tys), blocks: Blocks, op: Prim, a, b: Var, e: PEnv, next: Nat, o: SOut, sa, sb: PSlot, ta, tb: Typed, w: Width, nd: Node, ega: e.get(a) = Some(sa), egb: e.get(b) = Some(sb),
+    cw: sa.code = SWord(w), cb: sb.code = sa.code, wa: sa.word() = Some(ta), wb: sb.word() = Some(tb), en0: op.node(w.bits(), next, ta.id, tb.id) = Some(nd),
+    h: e.op_sized(w, nd, next) = Some(o)): LeafGoal(tys, strs, fns, call, blocks, Op(op, a, b), e, next, o)
+{
+    match Option::bind_some(h) as λ _ => LeafGoal(tys, strs, fns, call, blocks, Op(op, a, b), e, next, o) { Exists(size, p) => {
+        let g = Bool::guard_some(p.right);
+        let w64: (w = WBits(64)) = Width::is_64(w, j(Nat::same_sound(size, 8, g.left), λ z _ => w.size() = Some(z), p.left));
+        let en: (op.node(64, next, ta.id, tb.id) = Some(nd)) = j(w64, λ w2 _ => op.node(w2.bits(), next, ta.id, tb.id) = Some(nd), en0);
+        let eo = Option::some_inj(SOut(leaf([Compute(nd)]), e.push(PSlot(SWord(WBits(64)), [word_id(next)])), next + 1), o,
+            j(w64, λ w2 _ => Some(SOut(leaf([Compute(nd)]), e.push(PSlot(SWord(w2), [word_id(next)])), next + 1)) = Some(o), g.right));
+        j(eo, λ o2 _ => LeafGoal(tys, strs, fns, call, blocks, Op(op, a, b), e, next, o2),
+            op_goal(tys, strs, fns, call, blocks, op, a, b, e, next, sa, sb, ta, tb, nd, ega, egb, trans(cw, cong_fn(λ (x: Width) => SWord(x), w64)), cb, wa, wb, en))
+    } }
+}
+
+theorem op_node_goal(tys: Nat → Type, strs: Strs(tys), fns: Nat → Func, call: Caller(tys), blocks: Blocks, op: Prim, a, b: Var, e: PEnv, next: Nat, o: SOut, sa, sb: PSlot, ta, tb: Typed, w: Width, ega: e.get(a) = Some(sa), egb: e.get(b) = Some(sb),
+    cw: sa.code = SWord(w), cb: sb.code = sa.code, wa: sa.word() = Some(ta), wb: sb.word() = Some(tb), h: e.op_node(op, w, ta, tb, next) = Some(o)): LeafGoal(tys, strs, fns, call, blocks, Op(op, a, b), e, next, o)
+{
+    match Option::bind_some(h) as λ _ => LeafGoal(tys, strs, fns, call, blocks, Op(op, a, b), e, next, o) { Exists(nd, p) => op_sized_goal(tys, strs, fns, call, blocks, op, a, b, e, next, o, sa, sb, ta, tb, w, nd, ega, egb, cw, cb, wa, wb, p.left, p.right) }
+}
+
+theorem op_ta_goal(tys: Nat → Type, strs: Strs(tys), fns: Nat → Func, call: Caller(tys), blocks: Blocks, op: Prim, a, b: Var, e: PEnv, next: Nat, o: SOut, sa, sb: PSlot, ta: Typed, w: Width, ega: e.get(a) = Some(sa), egb: e.get(b) = Some(sb),
+    cw: sa.code = SWord(w), wa: sa.word() = Some(ta), h: e.op_ta(op, sa, sb, w, ta, next) = Some(o)): LeafGoal(tys, strs, fns, call, blocks, Op(op, a, b), e, next, o)
+{
+    match Option::bind_some(h) as λ _ => LeafGoal(tys, strs, fns, call, blocks, Op(op, a, b), e, next, o) { Exists(tb, p) => {
+        let g = Bool::guard_some(p.right);
+        op_node_goal(tys, strs, fns, call, blocks, op, a, b, e, next, o, sa, sb, ta, tb, w, ega, egb, cw, Shape::eq_of_same(sb.code, sa.code, g.left), wa, p.left, g.right)
+    } }
+}
+
+theorem op_w_goal(tys: Nat → Type, strs: Strs(tys), fns: Nat → Func, call: Caller(tys), blocks: Blocks, op: Prim, a, b: Var, e: PEnv, next: Nat, o: SOut, sa, sb: PSlot, w: Width, ega: e.get(a) = Some(sa), egb: e.get(b) = Some(sb), cw: sa.code = SWord(w), h: e.op_w(op, sa, sb, w, next) = Some(o)): LeafGoal(tys, strs, fns, call, blocks, Op(op, a, b), e, next, o)
+{
+    match Option::bind_some(h) as λ _ => LeafGoal(tys, strs, fns, call, blocks, Op(op, a, b), e, next, o) { Exists(ta, p) => op_ta_goal(tys, strs, fns, call, blocks, op, a, b, e, next, o, sa, sb, ta, w, ega, egb, cw, p.left, p.right) }
+}
+
+theorem op_b_goal(tys: Nat → Type, strs: Strs(tys), fns: Nat → Func, call: Caller(tys), blocks: Blocks, op: Prim, a, b: Var, e: PEnv, next: Nat, o: SOut, sa, sb: PSlot, ega: e.get(a) = Some(sa), egb: e.get(b) = Some(sb), h: e.op_b(op, sa, sb, next) = Some(o)): LeafGoal(tys, strs, fns, call, blocks, Op(op, a, b), e, next, o)
+{
+    match Option::bind_some(h) as λ _ => LeafGoal(tys, strs, fns, call, blocks, Op(op, a, b), e, next, o) { Exists(w, p) => op_w_goal(tys, strs, fns, call, blocks, op, a, b, e, next, o, sa, sb, w, ega, egb, Shape::word_of_is(sa.code, w, p.left), p.right) }
+}
+
+theorem op_a_goal(tys: Nat → Type, strs: Strs(tys), fns: Nat → Func, call: Caller(tys), blocks: Blocks, op: Prim, a, b: Var, e: PEnv, next: Nat, o: SOut, sa: PSlot, ega: e.get(a) = Some(sa), h: e.op_a(op, sa, b, next) = Some(o)): LeafGoal(tys, strs, fns, call, blocks, Op(op, a, b), e, next, o)
+{
+    match Option::bind_some(h) as λ _ => LeafGoal(tys, strs, fns, call, blocks, Op(op, a, b), e, next, o) { Exists(sb, p) => op_b_goal(tys, strs, fns, call, blocks, op, a, b, e, next, o, sa, sb, ega, p.left, p.right) }
+}
+
+theorem stage_op(tys: Nat → Type, strs: Strs(tys), sigs: Nat → Sig, prim: Nat → Bool, fns: Nat → Func, call: Caller(tys), blocks: Blocks):
+    StageOp(tys, strs, sigs, prim, fns, call, blocks)
+{
+    λ op a b e next o hp => match Option::bind_some(trans(sym(place_is_op(tys, strs, sigs, prim, op, a, b, e, next)), hp)) as λ _ => LeafGoal(tys, strs, fns, call, blocks, Op(op, a, b), e, next, o) {
+        Exists(sa, p) => op_a_goal(tys, strs, fns, call, blocks, op, a, b, e, next, o, sa, p.left, p.right),
+    }
+}
