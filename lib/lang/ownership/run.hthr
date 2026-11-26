@@ -1,0 +1,371 @@
+// The run: level 2's reading of a body (docs/language/ownership-design.md
+// §18.3, §21.3 third bullet, §23; issues/ownership-checker.md).
+//
+// One text, two readings (§20.1): `body.hthr`'s meaning reads a body over
+// values; this reads the same body over a heap of blocks, where an object is
+// in a block and a view is a reference into it, so a write through a view is
+// a store in place and nothing is copied back. The theorem relating the two
+// is `check_sound` (`verdict.hthr`), and ownership is what licenses the run
+// to share: the run itself checks nothing the checker decides.
+//
+// - **A variable** holds a run-time value (`Value`: a plain value, or a
+//   reference into a block) and whether its frame owns the block it refers
+//   to (`Cell`). The environment mirrors the meaning's: the arguments by
+//   position, the locals newest first (`REnv`), so a body's `Var` reads the
+//   same slot in both, and an atom reads the same word.
+// - **Statements.** A word primitive, a literal, a read, and a take out of a
+//   part bind a plain value: a copy. A view of a variable that refers binds
+//   the reference narrowed by the place's selections; of a plain variable, a
+//   copy. A take of a whole variable passes its value and ownership on.
+//   `fresh` makes a block, the next index. A write stores where the place is:
+//   in the block a referring root refers to, or in a plain root's own value.
+//   A death of an owner kills its block; any other death is nothing. A call
+//   runs the callee's body at one less fuel, handing a taken argument over
+//   where the caller owns it and a copy where it does not.
+// - **Joins** run the arm the test picks; its `Yield` continues after the
+//   join with the outputs pushed on the environment from before the join
+//   (an arm's own bindings end with it), whatever the arms' leaves are. A
+//   `Jump` is a call of the function itself, last, and spends one fuel.
+// - **What is undefined is stuck**: a read of a variable that refers to a
+//   dead block or one past the heap, and any selection that does not fit
+//   the value it selects in (an element past a sequence's end, a field a
+//   record does not have), which is where the accessors' preconditions
+//   (`RAccess`) bite at this level, since the meaning's reads are total.
+// - **Fuel.** The run of a function at a fuel runs its body with its calls
+//   at one less (`Run::calls`): out of fuel, a call is `Going` with the world
+//   so far.
+import logic;
+import bool;
+import nat;
+import option;
+import list;
+import bitvec;
+import span_set;
+import store;
+import atom;
+import steps;
+import shape;
+import body;
+import level2;
+import linux_world;
+
+// ---------------------------------------------------------------------------
+// Variables, the environment, the machine
+
+// A variable at run time: its value, and whether its frame owns the block
+// it refers to.
+record Cell(tys: Nat → Type) { v: Value(tys), own: Bool }
+
+fn Cell::none(tys: Nat → Type) → Cell(tys) { Cell(Plain(Dyn::none(tys)), False) }
+
+fn Cell::plain(tys: Nat → Type, d: Dyn(tys)) → Cell(tys) { Cell(Plain(d), False) }
+
+// The arguments by position, the locals newest first: the meaning's shape.
+record REnv(tys: Nat → Type) { args: List<Cell(tys)>, locs: List<Cell(tys)> }
+
+fn REnv::push(tys: Nat → Type, e: REnv(tys), c: Cell(tys)) → REnv(tys) { REnv(e.args, Cons(c, e.locs)) }
+
+fn REnv::push_all(tys: Nat → Type, e: REnv(tys), cs: List<Cell(tys)>) → REnv(tys) { match cs { Nil => e, Cons(c, rest) => REnv::push_all(tys, REnv::push(tys, e, c), rest) } }
+
+fn REnv::get(tys: Nat → Type, e: REnv(tys), x: Var) → Cell(tys) {
+    match x { Arg(i) => e.args.nth(i).unwrap_or(Cell::none(tys)), Loc(j) => e.locs.nth(j).unwrap_or(Cell::none(tys)) }
+}
+
+fn REnv::set(tys: Nat → Type, e: REnv(tys), x: Var, c: Cell(tys)) → REnv(tys) {
+    match x { Arg(i) => REnv(e.args.update(i, λ _ => c), e.locs), Loc(j) => REnv(e.args, e.locs.update(j, λ _ => c)) }
+}
+
+record Mach(tys: Nat → Type) { heap: Heap(tys), env: REnv(tys), io: Io }
+
+// ---------------------------------------------------------------------------
+// Selections that fit
+
+// Every selection fits what it selects in, read down the path.
+fn Sel::fit(tys: Nat → Type, strs: Strs(tys), ss: List<Sel>, d: Dyn(tys)) → Bool {
+    match ss { Nil => True, Cons(a, rest) => Dyn::fits(tys, strs, a, d) && Sel::fit(tys, strs, rest, Dyn::at(tys, strs, a, d)) }
+}
+
+// A read at selections that fit; stuck (`None`) where one does not.
+fn Sel::get(tys: Nat → Type, strs: Strs(tys), ss: List<Sel>, d: Dyn(tys)) → Option<Dyn(tys)> {
+    match Sel::fit(tys, strs, ss, d) { True => Some(Sel::read_at(tys, strs, ss, d)), False => None }
+}
+
+// A write at selections that fit.
+fn Sel::put(tys: Nat → Type, strs: Strs(tys), ss: List<Sel>, x: Dyn(tys), d: Dyn(tys)) → Option<Dyn(tys)> {
+    match Sel::fit(tys, strs, ss, d) { True => Some(Sel::write_at(tys, strs, ss, λ _ => x, d)), False => None }
+}
+
+// ---------------------------------------------------------------------------
+// Reading and writing through the heap
+
+// A block's object, where the block is live.
+fn Heap::live(tys: Nat → Type, h: Heap(tys), b: Nat) → Option<Obj(tys)> { Heap::obj(tys, h, b) }
+
+// A block's value: its object read as a value (no holes in this fragment,
+// so nothing to fill), the block count as fuel.
+fn Heap::val(tys: Nat → Type, strs: Strs(tys), h: Heap(tys), b: Nat) → Option<Dyn(tys)> {
+    match Heap::obj(tys, h, b) { Some(o) => Obj::read(tys, strs, h, h.len(), o), None => None }
+}
+
+// What a value reads, at further selections.
+fn Value::get(tys: Nat → Type, strs: Strs(tys), h: Heap(tys), v: Value(tys), ss: List<Sel>) → Option<Dyn(tys)> {
+    match v {
+        Plain(d) => Sel::get(tys, strs, ss, d),
+        Refer(r) => match Heap::val(tys, strs, h, r.b) { Some(d) => Sel::get(tys, strs, r.sels ++ ss, d), None => None },
+    }
+}
+
+// The block `b` holding `d` in place of its value, its holes kept.
+fn Heap::store(tys: Nat → Type, h: Heap(tys), b: Nat, d: Dyn(tys)) → Heap(tys) {
+    h.update(b, λ bl => match bl { Live(o) => Live(Obj(d, o.holes)), Dead => Dead })
+}
+
+fn Heap::kill(tys: Nat → Type, h: Heap(tys), b: Nat) → Heap(tys) { h.update(b, λ _ => Dead) }
+
+// The words an atom reads: every variable's value read through the heap,
+// the word zero where it reads nothing.
+fn REnv::ixs(tys: Nat → Type, strs: Strs(tys), h: Heap(tys), e: REnv(tys)) → List<Ix> {
+    (e.args ++ e.locs).map(λ (c: Cell(tys)) => Dyn::ix(tys, Value::get(tys, strs, h, c.v, Nil).unwrap_or(Dyn::none(tys))))
+}
+
+fn Mach::ixs(tys: Nat → Type, strs: Strs(tys), m: Mach(tys)) → List<Ix> { REnv::ixs(tys, strs, m.heap, m.env) }
+
+// A variable's value.
+fn Mach::val(tys: Nat → Type, strs: Strs(tys), m: Mach(tys), x: Var) → Option<Dyn(tys)> { Value::get(tys, strs, m.heap, (REnv::get(tys, m.env, x)).v, Nil) }
+
+// A place's value.
+fn Mach::place(tys: Nat → Type, strs: Strs(tys), m: Mach(tys), p: Place) → Option<Dyn(tys)> {
+    Value::get(tys, strs, m.heap, (REnv::get(tys, m.env, p.root)).v, Steps::sels(p.steps, Mach::ixs(tys, strs, m)))
+}
+
+// Every value read; stuck where one is not.
+fn Value::get_all(tys: Nat → Type, strs: Strs(tys), h: Heap(tys), vs: List<Value(tys)>) → Option<List<Dyn(tys)>> {
+    match vs { Nil => Some(Nil), Cons(v, rest) => match Value::get(tys, strs, h, v, Nil) { Some(d) => Value::get_all(tys, strs, h, rest).map(λ ds => Cons(d, ds)), None => None } }
+}
+
+fn Mach::push(tys: Nat → Type, m: Mach(tys), c: Cell(tys)) → Mach(tys) { Mach(m.heap, REnv::push(tys, m.env, c), m.io) }
+
+// ---------------------------------------------------------------------------
+// Calls
+
+// The run of a program's functions at one fuel, as a callee sees it.
+fn Caller(tys: Nat → Type) → Type { Nat → List<Value(tys)> → Heap(tys) → Io → Ran(tys) }
+
+// A code whose values are plain data (§15.1's sharing class): a word, or a
+// name the structures call plain.
+fn Shape::plain(tys: Nat → Type, strs: Strs(tys), c: Shape) → Bool {
+    match c { SWord(_) => True, SNamed(k) => match strs(k).sharing { Plain => True, Object => False, Linear => False } }
+}
+
+// What a caller hands over: a taken argument it owns is passed on, unless
+// it is plain data; plain data and one it does not own are copied; any
+// other is passed as it is.
+fn Cell::pass(tys: Nat → Type, strs: Strs(tys), h: Heap(tys), p: Param, c: Cell(tys)) → Option<Value(tys)> {
+    match p.mode {
+        ByTake => match c.own && !Shape::plain(tys, strs, p.code) { True => Some(c.v), False => Value::get(tys, strs, h, c.v, Nil).map(λ d => Plain(d)) },
+        ByRead => Some(c.v),
+        ByWrite => Some(c.v),
+    }
+}
+
+fn Cell::pass_all(tys: Nat → Type, strs: Strs(tys), h: Heap(tys), ps: List<Param>, cs: List<Cell(tys)>) → Option<List<Value(tys)>> {
+    match cs {
+        Nil => Some(Nil),
+        Cons(c, rest) => match Cell::pass(tys, strs, h, ps.nth(0).unwrap_or(Param(SWord(WNat), ByRead)), c) {
+            Some(v) => Cell::pass_all(tys, strs, h, ps.drop(1), rest).map(λ vs => Cons(v, vs)),
+            None => None,
+        },
+    }
+}
+
+fn Value::refers(tys: Nat → Type, v: Value(tys)) → Bool { match v { Plain(_) => False, Refer(_) => True } }
+
+// Whether the caller owns a result: a reference to a fresh object, or to a
+// parameter it took; a view and a written parameter are not owned.
+fn Origin::owns(self o: Origin, ps: List<Param>) → Bool {
+    match o {
+        OFresh => True,
+        OParam(i) => match (ps.nth(i).unwrap_or(Param(SWord(WNat), ByRead))).mode { ByTake => True, ByRead => False, ByWrite => False },
+        OView(_, _) => False,
+    }
+}
+
+// The `n` values a call binds: the callee's results, then its written
+// parameters' values; a plain word zero past their end.
+fn Cell::results(tys: Nat → Type, sig: Sig, rs: List<Result>, vs: List<Value(tys)>, n: Nat) → List<Cell(tys)> {
+    match n {
+        Zero => Nil,
+        Succ(k) => match vs {
+            Nil => Cons(Cell::none(tys), Cell::results(tys, sig, rs.drop(1), Nil, k)),
+            Cons(v, rest) => {
+                let own = match rs.nth(0) { Some(r) => r.origin.owns(sig.params), None => False };
+                Cons(Cell(v, own && Value::refers(tys, v)), Cell::results(tys, sig, rs.drop(1), rest, k))
+            },
+        },
+    }
+}
+
+// A function's arguments as its frame holds them: it owns a referring
+// argument it takes.
+fn Cell::args(tys: Nat → Type, ps: List<Param>, vs: List<Value(tys)>) → List<Cell(tys)> {
+    match vs {
+        Nil => Nil,
+        Cons(v, rest) => {
+            let take = match (ps.nth(0).unwrap_or(Param(SWord(WNat), ByRead))).mode { ByTake => True, ByRead => False, ByWrite => False };
+            Cons(Cell(v, take && Value::refers(tys, v)), Cell::args(tys, ps.drop(1), rest))
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Statements
+
+fn Stmt::run(self s: Stmt, tys: Nat → Type, strs: Strs(tys), fns: Nat → Func, call: Caller(tys), m: Mach(tys), k: Mach(tys) → Ran(tys)) → Ran(tys) {
+    match s {
+        Op(op, a, b) => match Mach::val(tys, strs, m, a) {
+            Some(x) => match Mach::val(tys, strs, m, b) {
+                Some(y) => k(Mach::push(tys, m, Cell::plain(tys, Dyn::words<Dyn(tys)>(tys, x, y, λ wd u w => Dyn(SWord(wd), Width::op(wd, op, u, w)))))),
+                None => Stuck,
+            },
+            None => Stuck,
+        },
+        Lit(wd, n) => k(Mach::push(tys, m, Cell::plain(tys, Dyn(SWord(wd), Width::of_nat(wd, n))))),
+        Read(p) => match Mach::place(tys, strs, m, p) { Some(d) => k(Mach::push(tys, m, Cell::plain(tys, d))), None => Stuck },
+        Write(p, x) => match Mach::val(tys, strs, m, x) {
+            None => Stuck,
+            Some(d) => {
+                let ss = Steps::sels(p.steps, Mach::ixs(tys, strs, m));
+                let c = REnv::get(tys, m.env, p.root);
+                match c.v {
+                    Plain(old) => match Sel::put(tys, strs, ss, d, old) {
+                        Some(nw) => k(Mach(m.heap, REnv::set(tys, m.env, p.root, Cell(Plain(nw), c.own)), m.io)),
+                        None => Stuck,
+                    },
+                    Refer(r) => match Heap::val(tys, strs, m.heap, r.b) {
+                        Some(old) => match Sel::put(tys, strs, r.sels ++ ss, d, old) {
+                            Some(nw) => k(Mach(Heap::store(tys, m.heap, r.b, nw), m.env, m.io)),
+                            None => Stuck,
+                        },
+                        None => Stuck,
+                    },
+                }
+            },
+        },
+        View(p, _) => {
+            let c = REnv::get(tys, m.env, p.root);
+            match Mach::place(tys, strs, m, p) {
+                None => Stuck,
+                Some(d) => match c.v {
+                    Plain(_) => k(Mach::push(tys, m, Cell::plain(tys, d))),
+                    Refer(r) => k(Mach::push(tys, m, Cell(Refer(r.narrow(Mach::ixs(tys, strs, m), p.steps)), False))),
+                },
+            }
+        },
+        Take(p) => match p.steps {
+            Nil => match Mach::val(tys, strs, m, p.root) { Some(_) => k(Mach::push(tys, m, REnv::get(tys, m.env, p.root))), None => Stuck },
+            Cons(_, _) => match Mach::place(tys, strs, m, p) { Some(d) => k(Mach::push(tys, m, Cell::plain(tys, d))), None => Stuck },
+        },
+        Fresh(c, n, x) => match Mach::val(tys, strs, m, n) {
+            Some(nd) => match Mach::val(tys, strs, m, x) {
+                Some(xd) => k(Mach(m.heap ++ [Live(Obj(Dyn::fresh(tys, strs, c, nd, xd), Nil))], REnv::push(tys, m.env, Cell(Refer(Ref(m.heap.len(), Nil)), True)), m.io)),
+                None => Stuck,
+            },
+            None => Stuck,
+        },
+        Call(g, args, n) => match Cell::pass_all(tys, strs, m.heap, (fns(g)).sig.params, args.map(λ x => REnv::get(tys, m.env, x))) {
+            None => Stuck,
+            Some(vs) => match call(g, vs, m.heap, m.io) {
+                Done(a) => k(Mach(a.heap, REnv::push_all(tys, m.env, Cell::results(tys, (fns(g)).sig, (fns(g)).sig.results, a.results, n)), a.io)),
+                Exited(st, io2) => Exited(st, io2),
+                Going(io2) => Going(io2),
+                Stuck => Stuck,
+            },
+        },
+        Death(p) => {
+            let c = REnv::get(tys, m.env, p.root);
+            match p.steps {
+                Cons(_, _) => k(m),
+                Nil => match c.own {
+                    False => k(m),
+                    True => match c.v {
+                        Plain(_) => k(m),
+                        Refer(r) => match Heap::obj(tys, m.heap, r.b) { Some(_) => k(Mach(Heap::kill(tys, m.heap, r.b), m.env, m.io)), None => Stuck },
+                    },
+                },
+            }
+        },
+    }
+}
+
+// A join's test, on the values the run reads.
+fn Test::run(self t: Test, tys: Nat → Type, strs: Strs(tys), m: Mach(tys)) → Option<Bool> {
+    match t {
+        TLt(a, b) => match Mach::val(tys, strs, m, a) { Some(x) => Mach::val(tys, strs, m, b).map(λ y => Dyn::words(tys, x, y, Width::lt)), None => None },
+        TLe(a, b) => match Mach::val(tys, strs, m, a) { Some(x) => Mach::val(tys, strs, m, b).map(λ y => Dyn::words(tys, x, y, Width::le)), None => None },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Bodies
+
+// The run of a body: its results to `ret` with the machine there, an arm's
+// outputs to `yld`. `me` is the function's own index, which a `Jump` calls.
+fn Body::run(self b: Body, tys: Nat → Type, strs: Strs(tys), fns: Nat → Func, call: Caller(tys), me: Nat, m: Mach(tys),
+    ret: List<Value(tys)> → Mach(tys) → Ran(tys), yld: List<Cell(tys)> → Mach(tys) → Ran(tys)) → Ran(tys)
+{
+    match b {
+        Ret(rs) => ret(rs.map(λ x => (REnv::get(tys, m.env, x)).v), m),
+        Yield(os) => yld(os.map(λ x => REnv::get(tys, m.env, x)), m),
+        Do(s, rest) => s.run(tys, strs, fns, call, m, λ m2 => rest.run(tys, strs, fns, call, me, m2, ret, yld)),
+        Jump(args) => match Cell::pass_all(tys, strs, m.heap, (fns(me)).sig.params, args.map(λ x => REnv::get(tys, m.env, x))) {
+            None => Stuck,
+            Some(vs) => match call(me, vs, m.heap, m.io) {
+                Done(a) => ret(a.results, Mach(a.heap, m.env, a.io)),
+                Exited(st, io2) => Exited(st, io2),
+                Going(io2) => Going(io2),
+                Stuck => Stuck,
+            },
+        },
+        Join(t, yes, no, rest) => match t.run(tys, strs, m) {
+            None => Stuck,
+            Some(c) => {
+                let after = λ (outs: List<Cell(tys)>) (m2: Mach(tys)) => rest.run(tys, strs, fns, call, me, Mach(m2.heap, REnv::push_all(tys, m.env, outs), m2.io), ret, yld);
+                match c { True => yes.run(tys, strs, fns, call, me, m, ret, after), False => no.run(tys, strs, fns, call, me, m, ret, after) }
+            },
+        },
+    }
+}
+
+// A function's run with its calls through `call`: from its arguments, the
+// heap and the world, its answer.
+fn Func::run(self f: Func, tys: Nat → Type, strs: Strs(tys), fns: Nat → Func, call: Caller(tys), me: Nat, vs: List<Value(tys)>, h: Heap(tys), io: Io) → Ran(tys) {
+    f.body.run(tys, strs, fns, call, me, Mach(h, REnv(Cell::args(tys, f.sig.params, vs), Nil), io),
+        λ rs m => Done(Answer(rs, m.heap, m.io)), λ _ m => Done(Answer(Nil, m.heap, m.io)))
+}
+
+// A primitive's run: its arguments read through the heap, its results the
+// world's, plain; the heap and the world unchanged. A primitive is a
+// callee the program gives no body: its meaning is the world's (a length,
+// say), and it reads its arguments only.
+fn Run::prim(tys: Nat → Type, strs: Strs(tys), w: Callees(tys), g: Nat, vs: List<Value(tys)>, h: Heap(tys), io: Io) → Ran(tys) {
+    match Value::get_all(tys, strs, h, vs) { Some(ds) => Done(Answer((w(g, ds)).map(λ d => Plain(d)), h, io)), None => Stuck }
+}
+
+// The calls of a run at a fuel: each runs its callee with its own calls at
+// one less, or a primitive natively; out of fuel, a call is going with the
+// world so far.
+fn Run::calls(tys: Nat → Type, strs: Strs(tys), fns: Nat → Func, w: Callees(tys), prim: Nat → Bool, fuel: Nat) → Caller(tys) {
+    match fuel {
+        Zero => λ _ _ _ io => Going(io),
+        Succ(f) => λ g vs h io => match prim(g) {
+            True => Run::prim(tys, strs, w, g, vs, h, io),
+            False => (fns(g)).run(tys, strs, fns, Run::calls(tys, strs, fns, w, prim, f), g, vs, h, io),
+        },
+    }
+}
+
+// The run of a program's functions: at a fuel, the function's body with its
+// calls at one less.
+fn Run::of(tys: Nat → Type, strs: Strs(tys), fns: Nat → Func, w: Callees(tys), prim: Nat → Bool) → Run(tys) {
+    λ fuel g vs h io => (fns(g)).run(tys, strs, fns, Run::calls(tys, strs, fns, w, prim, fuel), g, vs, h, io)
+}

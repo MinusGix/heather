@@ -1,0 +1,170 @@
+// Probes of the values module (lib/lang/ownership/shape.hthr,
+// issues/ownership-interfaces.md): records written by hand as a derived
+// instance would be, reads and writes through them by conversion, a word
+// type that is not `Nat`, and the decider's verdicts at `Dyn`.
+import logic;
+import bool;
+import nat;
+import option;
+import list;
+import bitvec;
+import span_set;
+import atom;
+import steps;
+import shape;
+
+// ---------------------------------------------------------------------------
+// Two user records and their instances
+
+record Point { x: Nat, y: Nat }
+
+// A record holding a word that is not `Nat`, and a record of records.
+record Tagged { tag: u64, at: Point }
+
+fn nat_s() → Shape { SWord(WNat) }
+
+fn u64_s() → Shape { SWord(WBits(64)) }
+
+fn tys() → Nat → Type { λ k => match k { Zero => Point, Succ(k1) => match k1 { Zero => Tagged, Succ(_) => True } } }
+
+fn Point::fx() → Field(tys(), Point) { Field(nat_s(), λ (p: Point) => p.x, λ (p: Point) => λ (v: Nat) => Point(v, p.y)) }
+
+fn Point::fy() → Field(tys(), Point) { Field(nat_s(), λ (p: Point) => p.y, λ (p: Point) => λ (v: Nat) => Point(p.x, v)) }
+
+fn Tagged::ftag() → Field(tys(), Tagged) { Field(u64_s(), λ (t: Tagged) => t.tag, λ (t: Tagged) => λ (v: u64) => Tagged(v, t.at)) }
+
+fn Tagged::fat() → Field(tys(), Tagged) { Field(SNamed(0), λ (t: Tagged) => t.at, λ (t: Tagged) => λ (p: Point) => Tagged(t.tag, p)) }
+
+fn strs() → Strs(tys()) {
+    λ k => match k {
+        Zero => Struct(Plain, None, Record([Point::fx(), Point::fy()])),
+        Succ(k1) => match k1 { Zero => Struct(Plain, None, Record([Tagged::ftag(), Tagged::fat()])), Succ(_) => Struct(Plain, None, Opaque) },
+    }
+}
+
+fn pt(p: Point) → Dyn(tys()) { Dyn(SNamed(0), p) }
+
+fn tg(t: Tagged) → Dyn(tys()) { Dyn(SNamed(1), t) }
+
+// ---------------------------------------------------------------------------
+// Reads and writes, each the source's term by conversion
+
+theorem read_x(p: Point): Dyn::read(tys(), strs(), Nil, [SField(0)], pt(p)) = Dyn(nat_s(), p.x) { refl }
+
+// The control: the place is `.x`, not `.y`.
+// expect-error(kernel)
+theorem read_x_not_y(p: Point): Dyn::read(tys(), strs(), Nil, [SField(0)], pt(p)) = Dyn(nat_s(), p.y) { refl }
+
+// A word of 64 bits, read as the source's `u64`.
+theorem read_tag(t: Tagged): Dyn::read(tys(), strs(), Nil, [SField(0)], tg(t)) = Dyn(u64_s(), t.tag) { refl }
+
+// Nested fields: `t.at.y`.
+theorem read_at_y(t: Tagged): Dyn::read(tys(), strs(), Nil, [SField(1), SField(1)], tg(t)) = Dyn(nat_s(), t.at.y) { refl }
+
+// `t.at.y := v`, against the source's functional update.
+theorem write_at_y(t: Tagged, v: Nat): Dyn::write(tys(), strs(), Nil, [SField(1), SField(1)], λ _ => Dyn(nat_s(), v), tg(t)) = tg(Tagged(t.tag, Point(t.at.x, v))) { refl }
+
+// expect-error(kernel)
+theorem write_at_y_not_x(t: Tagged, v: Nat): Dyn::write(tys(), strs(), Nil, [SField(1), SField(1)], λ _ => Dyn(nat_s(), v), tg(t)) = tg(Tagged(t.tag, Point(v, t.at.y))) { refl }
+
+// `t.tag := t.tag + 1`, a modification read where it writes.
+theorem bump_tag(t: Tagged): Dyn::write(tys(), strs(), Nil, [SField(0)], λ d => Dyn(u64_s(), Dyn::back(tys(), u64_s(), d, t.tag) + 1), tg(t)) = tg(Tagged(t.tag + 1, t.at)) { refl }
+
+// A write of another code writes nothing: a `Nat` into the `u64` field.
+theorem write_wrong_code(t: Tagged, v: Nat): Dyn::write(tys(), strs(), Nil, [SField(0)], λ _ => Dyn(nat_s(), v), tg(t)) = tg(t) { refl }
+
+// A word read as an index: `u64` through its `toNat`.
+theorem index_u64(w: u64): Dyn::index(tys(), Dyn(u64_s(), w)) = w.toNat() { refl }
+
+// ---------------------------------------------------------------------------
+// The records' laws, by hand: what a derived instance proves
+
+theorem Point::fx_laws(): FieldLaws(tys(), Point, Point::fx()) { FieldLaws(λ v x => refl, λ v x y => refl, λ v => refl) }
+
+theorem Point::fy_laws(): FieldLaws(tys(), Point, Point::fy()) { FieldLaws(λ v x => refl, λ v x y => refl, λ v => refl) }
+
+theorem Point::fx_fy(): FieldsApart(tys(), Point, Point::fx(), Point::fy()) { FieldsApart(λ v y => refl, λ v x => refl, λ v x y => refl) }
+
+theorem Tagged::ftag_laws(): FieldLaws(tys(), Tagged, Tagged::ftag()) { FieldLaws(λ v x => refl, λ v x y => refl, λ v => refl) }
+
+theorem Tagged::fat_laws(): FieldLaws(tys(), Tagged, Tagged::fat()) { FieldLaws(λ v x => refl, λ v x y => refl, λ v => refl) }
+
+theorem Tagged::ftag_fat(): FieldsApart(tys(), Tagged, Tagged::ftag(), Tagged::fat()) { FieldsApart(λ v y => refl, λ v x => refl, λ v x y => refl) }
+
+// Two fields of a record of two: each lawful, and the two apart both ways.
+theorem two_fields_laws(T: Type, f, g: Field(tys(), T), fl: FieldLaws(tys(), T, f), gl: FieldLaws(tys(), T, g), ap: FieldsApart(tys(), T, f, g)): RecordLaws(tys(), T, [f, g]) {
+    RecordLaws(
+        λ i => match i {
+            Zero => λ h e => j(Option::some_inj(f, h, e), λ k _ => FieldLaws(tys(), T, k), fl),
+            Succ(i1) => match i1 {
+                Zero => λ h e => j(Option::some_inj(g, h, e), λ k _ => FieldLaws(tys(), T, k), gl),
+                Succ(_) => λ h no => absurd(no),
+            },
+        },
+        λ i l => match i {
+            Zero => match l {
+                Zero => λ a b _ _ ne => false_elim(ne(refl)),
+                Succ(l1) => match l1 {
+                    Zero => λ a b ea eb _ => j(Option::some_inj(f, a, ea), λ a2 _ => FieldsApart(tys(), T, a2, b),
+                        j(Option::some_inj(g, b, eb), λ b2 _ => FieldsApart(tys(), T, f, b2), ap)),
+                    Succ(_) => λ a b _ no _ => absurd(no),
+                },
+            },
+            Succ(i1) => match i1 {
+                Zero => match l {
+                    Zero => λ a b ea eb _ => j(Option::some_inj(g, a, ea), λ a2 _ => FieldsApart(tys(), T, a2, b),
+                        j(Option::some_inj(f, b, eb), λ b2 _ => FieldsApart(tys(), T, g, b2),
+                            FieldsApart(ap.right_after_left, ap.left_after_right, λ v y x => sym(ap.commute(v, x, y))))),
+                    Succ(l1) => match l1 { Zero => λ a b _ _ ne => false_elim(ne(refl)), Succ(_) => λ a b _ no _ => absurd(no) },
+                },
+                Succ(_) => λ a b no _ _ => absurd(no),
+            },
+        },
+    )
+}
+
+theorem strs_laws(): StrsLaws(tys(), strs()) {
+    λ k => match k {
+        Zero => two_fields_laws(Point, Point::fx(), Point::fy(), Point::fx_laws(), Point::fy_laws(), Point::fx_fy()),
+        Succ(k1) => match k1 {
+            Zero => two_fields_laws(Tagged, Tagged::ftag(), Tagged::fat(), Tagged::ftag_laws(), Tagged::fat_laws(), Tagged::ftag_fat()),
+            Succ(_) => trivial,
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The decider's verdicts at `Dyn`
+
+fn apart_at(ws: List<Ix>, xs, ys: List<Step>) → Type { Steps::Apart(Dyn::model(tys(), strs()), ws, xs, ys) }
+
+// Two fields of one record, owing nothing.
+theorem two_fields(): apart_at(Nil, [SField(0)], [SField(1)]) { Dyn::apart(tys(), strs(), strs_laws(), Nil, [SField(0)], [SField(1)], Nil, refl, trivial) }
+
+// Nested fields under a common field: `t.at.x` and `t.at.y`.
+theorem nested_fields(): apart_at(Nil, [SField(1), SField(0)], [SField(1), SField(1)]) {
+    Dyn::apart(tys(), strs(), strs_laws(), Nil, [SField(1), SField(0)], [SField(1), SField(1)], Nil, refl, trivial)
+}
+
+// A field the owner does not have, beside one it has: apart, since a step
+// with no part reads a value that does not depend on the owner.
+theorem absent_field(): apart_at(Nil, [SField(2)], [SField(0)]) { Dyn::apart(tys(), strs(), strs_laws(), Nil, [SField(2)], [SField(0)], Nil, refl, trivial) }
+
+// Used: a store through `t.tag` leaves `t.at.y` reading what it read.
+theorem store_tag_keeps_y(t: Tagged, g: Dyn(tys()) → Dyn(tys())):
+    Dyn::read(tys(), strs(), Nil, [SField(1), SField(1)], Dyn::write(tys(), strs(), Nil, [SField(0)], g, tg(t))) = Dyn::read(tys(), strs(), Nil, [SField(1), SField(1)], tg(t))
+{
+    (Dyn::apart(tys(), strs(), strs_laws(), Nil, [SField(1), SField(1)], [SField(0)], Nil, refl, trivial)).left_after_right(g, tg(t))
+}
+
+// The control: a field and a part of it are refused, and at a value they
+// are not apart (a write of `t.at.x` changes `t.at`).
+theorem field_prefix_refused(): Steps::apart([SField(1)], [SField(1), SField(0)]) = None { refl }
+
+theorem field_prefix_not_apart(): ¬apart_at(Nil, [SField(1)], [SField(1), SField(0)]) {
+    λ ap => {
+        let same = ap.left_after_right(λ _ => Dyn(nat_s(), 1), tg(Tagged(0, Point(0, 0))));
+        let x: (1 = 0) = cong_fn(λ (d: Dyn(tys())) => Dyn::index(tys(), Dyn::read(tys(), strs(), Nil, [SField(0)], d)), same);
+        absurd(x)
+    }
+}

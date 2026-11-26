@@ -353,6 +353,15 @@ fn LinuxSyscallAt<M>(io: LinuxIo<M>, state: MachineState<M>) → Type {
 
 fn linux_writes<M>(io: LinuxIo<M>) → ByteWrites<M> { ByteWrites(io.writable, io.store) }
 
+// `LinuxIo` states no law of its own: `linux_writes` repackages two of its
+// fields, so an io built from writes that keep the empty-range law
+// (`ByteWrites::EmptyRange`) keeps it, and an arbitrary io need not
+// (issues/byte-writes-empty-range.md).
+theorem linux_writes_empty<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, writes: ByteWrites<M>, empty: writes.EmptyRange()):
+    linux_writes<M>(LinuxIo<M>(fetch, data, writes.writable, writes.store)).EmptyRange() {
+    empty
+}
+
 // A step of the machine (x86_64_stack's `MachineStep`: a fetched step, a
 // store, or a stack form) at the profile's accesses.
 fn LinuxStep<M>(io: LinuxIo<M>, before, after: MachineState<M>) → Type {

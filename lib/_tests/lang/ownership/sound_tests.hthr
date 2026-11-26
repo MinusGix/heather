@@ -1,0 +1,35 @@
+// Probes of `check_sound`'s lemmas (lib/lang/ownership/sound.hthr,
+// issues/ownership-checker.md item 3), at a list of numbers.
+import logic;
+import bool;
+import nat;
+import option;
+import list;
+import bitvec;
+import span_set;
+import store;
+import atom;
+import steps;
+import shape;
+import sequences;
+import body;
+import level2;
+import run;
+import verdict;
+import checker;
+import sound;
+
+fn tys() → Nat → Type { λ k => match k { Zero => List<Nat>, Succ(_) => True } }
+
+fn strs() → Strs(tys()) {
+    λ k => match k { Zero => Struct(Object, None, Sequence(Seq::list(tys(), SWord(WNat), 0, None))), Succ(_) => Struct(Plain, None, Opaque) }
+}
+
+// A read of the element at 1 through two selection lists appended is the
+// read along each in turn.
+theorem read_two(xs: List<Nat>): Sel::read_at(tys(), strs(), Nil<Sel>() ++ [OnSeq(SeqOne(INat(1)))], Dyn(SNamed(0), xs)) = Dyn(SWord(WNat), xs.nth(1).unwrap_or(0)) {
+    Sel::read_append(tys(), strs(), Nil<Sel>(), [OnSeq(SeqOne(INat(1)))], Dyn(SNamed(0), xs))
+}
+
+// The levels of a state with two arguments and one local: `Loc(0)` is level 2.
+theorem loc_level(): (CSt([CVar(SNamed(0), KHold(0, AcRead)), CVar(SWord(WNat), KPlain)], [CVar(SWord(WNat), KPlain)], 2, 1, Nil, 2, Nil, Nil)).var_at(2) = Loc(0) { refl }

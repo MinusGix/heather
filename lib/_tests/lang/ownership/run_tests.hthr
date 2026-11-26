@@ -1,0 +1,253 @@
+// The run by evaluation (lib/lang/ownership/run.hthr,
+// issues/ownership-checker.md item 1): each pinned function of
+// `body_tests.hthr` run at closed arguments, enough fuel, its objects in
+// blocks, answers what its meaning answers (`refl`, both sides computed); a
+// run out of fuel is going; and the controls that are stuck.
+//
+// The environment is `body_tests.hthr`'s: a point record, a list of points,
+// a list of numbers. The program's callees: 0 is `gap` with a body, 1 (a
+// list's length) and 2 (`total`) are primitives, the world's own meaning;
+// the functions under test follow from index 3.
+import logic;
+import bool;
+import nat;
+import option;
+import list;
+import bitvec;
+import span_set;
+import store;
+import atom;
+import steps;
+import shape;
+import sequences;
+import body;
+import level2;
+import run;
+import linux_world;
+
+// ---------------------------------------------------------------------------
+// The environment (as `body_tests.hthr`)
+
+record Point { x: Nat, y: Nat }
+
+fn Point::origin() → Point { Point(0, 0) }
+
+fn tys() → Nat → Type { λ k => match k { Zero => Point, Succ(k1) => match k1 { Zero => List<Point>, Succ(k2) => match k2 { Zero => List<Nat>, Succ(_) => True } } } }
+
+fn pt_s() → Shape { SNamed(0) }
+
+fn pts_s() → Shape { SNamed(1) }
+
+fn nats_s() → Shape { SNamed(2) }
+
+fn nat_s() → Shape { SWord(WNat) }
+
+fn Point::fx() → Field(tys(), Point) { Field(nat_s(), λ (p: Point) => p.x, λ (p: Point) => λ (v: Nat) => Point(v, p.y)) }
+
+fn Point::fy() → Field(tys(), Point) { Field(nat_s(), λ (p: Point) => p.y, λ (p: Point) => λ (v: Nat) => Point(p.x, v)) }
+
+fn strs() → Strs(tys()) {
+    λ k => match k {
+        Zero => Struct(Plain, Some(Point::origin()), Record([Point::fx(), Point::fy()])),
+        Succ(k1) => match k1 {
+            Zero => Struct(Object, None, Sequence(Seq::list(tys(), pt_s(), Point::origin(), Some(Seq::list_win(tys(), pt_s(), pts_s(), λ (l: List<Point>) => l, λ (l: List<Point>) => l))))),
+            Succ(k2) => match k2 {
+                Zero => Struct(Object, None, Sequence(Seq::list(tys(), nat_s(), 0, Some(Seq::list_win(tys(), nat_s(), nats_s(), λ (l: List<Nat>) => l, λ (l: List<Nat>) => l))))),
+                Succ(_) => Struct(Plain, None, Opaque),
+            },
+        },
+    }
+}
+
+fn pts(ps: List<Point>) → Dyn(tys()) { Dyn(pts_s(), ps) }
+
+fn nat(n: Nat) → Dyn(tys()) { Dyn(nat_s(), n) }
+
+fn total(qs: List<Point>) → Nat { match qs { Nil => 0, Cons(q, r) => q.x + total(r) } }
+
+fn first(ds: List<Dyn(tys())>) → Dyn(tys()) { ds.nth(0).unwrap_or(Dyn::none(tys())) }
+
+fn world() → Callees(tys()) {
+    λ g ds => match g {
+        Zero => match Dyn::get(tys(), pt_s(), first(ds)) { Some(p) => [nat(p.x - p.y)], None => Nil },
+        Succ(g1) => match g1 {
+            Zero => match Dyn::get(tys(), pts_s(), first(ds)) { Some(qs) => [nat(qs.len())], None => Nil },
+            Succ(_) => match Dyn::get(tys(), pts_s(), first(ds)) { Some(qs) => [nat(total(qs))], None => Nil },
+        },
+    }
+}
+
+fn sig0() → Sig { Sig(Nil, Nil) }
+
+fn x_of(r: Var, i: Atom) → Place { Place(r, [SElem(i), SField(0)]) }
+
+fn y_of(r: Var, i: Atom) → Place { Place(r, [SElem(i), SField(1)]) }
+
+// ---------------------------------------------------------------------------
+// The functions (as `body_tests.hthr`'s reflections), and `gap` with a body
+
+fn gap_r() → Func {
+    Func(Sig([Param(pt_s(), ByTake)], [Result(nat_s(), OFresh)]), seq([Read(Place(Arg(0), [SField(0)])), Read(Place(Arg(0), [SField(1)])), Op(PSub, Loc(1), Loc(0))], Ret([Loc(0)])))
+}
+
+fn get_x_r() → Func { Func(sig0(), seq([Read(x_of(Arg(0), Var(1)))], Ret([Loc(0)]))) }
+
+fn set_x_r() → Func { Func(sig0(), seq([Write(x_of(Arg(0), Var(1)), Arg(2))], Ret([Arg(0)]))) }
+
+fn guarded_r() → Func {
+    Func(sig0(), seq([Call(1, [Arg(0)], 1)], Join(TLt(Arg(1), Loc(0)), seq([Read(x_of(Arg(0), Var(1)))], Yield([Loc(0)])), seq([Lit(WNat, 0)], Yield([Loc(0)])), Ret([Loc(0)]))))
+}
+
+fn call_gap_r() → Func { Func(sig0(), seq([Read(Place(Arg(0), [SElem(Var(1))])), Call(0, [Loc(0)], 1)], Ret([Loc(0)]))) }
+
+fn call_total_r() → Func { Func(sig0(), seq([View(Place(Arg(0), [SWindow(Var(1), Var(2))]), Reading), Call(2, [Loc(0)], 1)], Ret([Loc(0)]))) }
+
+fn after_join_r() → Func {
+    Func(sig0(), seq([Call(1, [Arg(0)], 1)], Join(TLt(Arg(1), Loc(0)), seq([Read(x_of(Arg(0), Var(1)))], Yield([Loc(0)])), seq([Lit(WNat, 0)], Yield([Loc(0)])),
+        seq([Read(y_of(Arg(0), Var(2)))], Ret([Loc(0)])))))
+}
+
+fn join_two_r() → Func {
+    Func(sig0(), Join(TLt(Arg(1), Arg(2)),
+        seq([Write(x_of(Arg(0), Var(1)), Arg(2)), Lit(WNat, 1), Op(PAdd, Arg(2), Loc(0))], Yield([Arg(0), Loc(0)])),
+        seq([Lit(WNat, 0)], Yield([Arg(0), Loc(0)])),
+        seq([Read(x_of(Loc(1), Var(3))), Op(PAdd, Loc(0), Loc(1))], Ret([Loc(0)]))))
+}
+
+fn early_r() → Func {
+    Func(sig0(), Join(TLt(Arg(0), Arg(1)),
+        Join(TLt(Arg(1), Arg(2)), seq([Lit(WNat, 0)], Ret([Loc(0)])), Yield(Nil), seq([Lit(WNat, 1), Op(PAdd, Arg(0), Loc(0))], Yield([Loc(0)]))),
+        seq([Lit(WNat, 2)], Yield([Loc(0)])),
+        seq([Op(PAdd, Loc(0), Arg(1))], Ret([Loc(0)]))))
+}
+
+// The loop's body at `(i)`, its own index 9: round again at `i - 1` or
+// answer `i`; the function that runs it.
+fn drain_r() → Func {
+    Func(Sig([Param(nat_s(), ByTake)], [Result(nat_s(), OFresh)]), seq([Lit(WNat, 1)], Join(TLe(Loc(0), Arg(0)), seq([Op(PSub, Arg(0), Loc(0))], Jump([Loc(0)])), Ret([Arg(0)]), Ret(Nil))))
+}
+
+fn drain_outer_r() → Func { Func(sig0(), seq([Call(9, [Arg(0)], 1)], Ret([Loc(0)]))) }
+
+fn sum_step_r() → Func { Func(sig0(), seq([Op(PAdd, Arg(0), Arg(1))], Ret([Loc(0)]))) }
+
+fn none_r() → Func { Func(sig0(), Ret(Nil)) }
+
+fn fns() → Nat → Func {
+    λ g => [gap_r(), none_r(), none_r(), get_x_r(), set_x_r(), guarded_r(), call_gap_r(), call_total_r(), after_join_r(), drain_r(), drain_outer_r(), sum_step_r(), join_two_r(), early_r()].nth(g).unwrap_or(none_r())
+}
+
+fn prim() → Nat → Bool { λ g => g.same(1) || g.same(2) }
+
+fn runs(fuel, g: Nat, vs: List<Value(tys())>, h: Heap(tys()), io: Io) → Ran(tys()) { Run::of(tys(), strs(), fns(), world(), prim(), fuel, g, vs, h, io) }
+
+// What a run answers, read through its heap; nothing where it is not done.
+fn reads(r: Ran(tys())) → Option<List<Dyn(tys())>> { match r { Done(a) => Value::get_all(tys(), strs(), a.heap, a.results), Exited(_, _) => None, Going(_) => None, Stuck => None } }
+
+fn means(g: Nat, ds: List<Dyn(tys())>) → List<Dyn(tys())> { (fns()(g)).denote(tys(), strs(), world(), g, ds) }
+
+fn going(r: Ran(tys())) → Bool { match r { Going(_) => True, Done(_) => False, Exited(_, _) => False, Stuck => False } }
+
+fn stuck(r: Ran(tys())) → Bool { match r { Stuck => True, Done(_) => False, Exited(_, _) => False, Going(_) => False } }
+
+fn ps2() → List<Point> { [Point(1, 2), Point(5, 3)] }
+
+fn ps4() → List<Point> { [Point(1, 2), Point(5, 3), Point(7, 7), Point(9, 4)] }
+
+// The list in block 0, referred to; the words plain.
+fn heap1(ps: List<Point>) → Heap(tys()) { [Live(Obj(pts(ps), Nil))] }
+
+fn obj0() → Value(tys()) { Refer(Ref(0, Nil)) }
+
+fn w(n: Nat) → Value(tys()) { Plain(nat(n)) }
+
+// ---------------------------------------------------------------------------
+// Each function: the run, read, is the meaning
+
+theorem get_x_runs(io: Io): reads(runs(1, 3, [obj0(), w(1)], heap1(ps2()), io)) = Some(means(3, [pts(ps2()), nat(1)])) { refl }
+
+theorem get_x_value(io: Io): reads(runs(1, 3, [obj0(), w(1)], heap1(ps2()), io)) = Some([nat(5)]) { refl }
+
+// The write is a store in the block: the result refers to it.
+theorem set_x_runs(io: Io): reads(runs(1, 4, [obj0(), w(1), w(8)], heap1(ps2()), io)) = Some(means(4, [pts(ps2()), nat(1), nat(8)])) { refl }
+
+theorem set_x_stored(io: Io): runs(1, 4, [obj0(), w(1), w(8)], heap1(ps2()), io) = Done(Answer([obj0()], heap1([Point(1, 2), Point(8, 3)]), io)) { refl }
+
+// Both arms of the join, through the length primitive.
+theorem guarded_in(io: Io): reads(runs(2, 5, [obj0(), w(1)], heap1(ps2()), io)) = Some(means(5, [pts(ps2()), nat(1)])) { refl }
+
+theorem guarded_out(io: Io): reads(runs(2, 5, [obj0(), w(4)], heap1(ps2()), io)) = Some(means(5, [pts(ps2()), nat(4)])) { refl }
+
+// A call of a function with a body, taking a copied point.
+theorem call_gap_runs(io: Io): reads(runs(2, 6, [obj0(), w(1)], heap1(ps2()), io)) = Some(means(6, [pts(ps2()), nat(1)])) { refl }
+
+theorem call_gap_value(io: Io): reads(runs(2, 6, [obj0(), w(1)], heap1(ps2()), io)) = Some([nat(2)]) { refl }
+
+// A view of a window passed to a primitive: a reference, read through.
+theorem call_total_runs(io: Io): reads(runs(2, 7, [obj0(), w(1), w(2)], heap1(ps4()), io)) = Some(means(7, [pts(ps4()), nat(1), nat(2)])) { refl }
+
+theorem call_total_value(io: Io): reads(runs(2, 7, [obj0(), w(1), w(2)], heap1(ps4()), io)) = Some([nat(12)]) { refl }
+
+theorem after_join_runs(io: Io): reads(runs(2, 8, [obj0(), w(0)], heap1(ps4()), io)) = Some(means(8, [pts(ps4()), nat(0)])) { refl }
+
+// An arm that writes the object it yields: the store is in the block, and
+// the output refers to it.
+theorem join_two_yes(io: Io): reads(runs(1, 12, [obj0(), w(0), w(1)], heap1(ps4()), io)) = Some(means(12, [pts(ps4()), nat(0), nat(1)])) { refl }
+
+theorem join_two_no(io: Io): reads(runs(1, 12, [obj0(), w(1), w(0)], heap1(ps2()), io)) = Some(means(12, [pts(ps2()), nat(1), nat(0)])) { refl }
+
+// An inner return, and both ways past it.
+theorem early_returns(io: Io): reads(runs(1, 13, [w(1), w(2), w(3)], Nil, io)) = Some(means(13, [nat(1), nat(2), nat(3)])) { refl }
+
+theorem early_falls(io: Io): reads(runs(1, 13, [w(1), w(3), w(2)], Nil, io)) = Some(means(13, [nat(1), nat(3), nat(2)])) { refl }
+
+theorem early_other(io: Io): reads(runs(1, 13, [w(3), w(1), w(2)], Nil, io)) = Some(means(13, [nat(3), nat(1), nat(2)])) { refl }
+
+theorem sum_step_runs(io: Io): reads(runs(1, 11, [w(3), w(4)], Nil, io)) = Some(means(11, [nat(3), nat(4)])) { refl }
+
+// The loop: three rounds and the answer, each round after the first a
+// call of itself, so it is done from fuel four (the outer call, three
+// jumps) with `drain(3)`'s answer, `0` (`body_tests.hthr` pins the meaning).
+theorem drain_runs(io: Io): reads(runs(4, 10, [w(3)], Nil, io)) = Some([nat(0)]) { refl }
+
+// Out of fuel, it is going with the world so far.
+theorem drain_going(io: Io): going(runs(3, 10, [w(3)], Nil, io)) = True { refl }
+
+theorem drain_going_at_one(io: Io): runs(1, 10, [w(3)], Nil, io) = Going(io) { refl }
+
+// ---------------------------------------------------------------------------
+// Stuck
+
+// A read past the object's end: the selection does not fit.
+theorem past_end_stuck(io: Io): stuck(runs(1, 3, [obj0(), w(2)], heap1(ps2()), io)) = True { refl }
+
+// The meaning reads the pad there: only the run's selection is undefined.
+theorem past_end_means(): means(3, [pts(ps2()), nat(2)]) = [nat(0)] { refl }
+
+// A reference to a block past the heap, and to a dead block.
+theorem dangling_stuck(io: Io): stuck(runs(1, 3, [Refer(Ref(1, Nil)), w(0)], heap1(ps2()), io)) = True { refl }
+
+theorem dead_block_stuck(io: Io): stuck(runs(1, 3, [obj0(), w(0)], [Dead], io)) = True { refl }
+
+// A write through a dead view: a fresh list of two zeros (word 2 copies of
+// word 0), a view to write of its first element, the owner's death, a
+// write through the view.
+fn dead_view_r() → Func {
+    Func(sig0(), seq([Lit(WNat, 2), Lit(WNat, 0), Fresh(nats_s(), Loc(1), Loc(0)), View(Place(Loc(0), [SElem(Lit(0))]), Writing), Death(Place(Loc(1), Nil)), Write(Place(Loc(0), Nil), Loc(3))], Ret(Nil)))
+}
+
+// Without the death it is done, the store in the fresh block.
+fn live_view_r() → Func {
+    Func(sig0(), seq([Lit(WNat, 2), Lit(WNat, 0), Fresh(nats_s(), Loc(1), Loc(0)), View(Place(Loc(0), [SElem(Lit(0))]), Writing), Write(Place(Loc(0), Nil), Loc(3))], Ret([Loc(1)])))
+}
+
+fn one_fn(f: Func, fuel, g: Nat, vs: List<Value(tys())>, h: Heap(tys()), io: Io) → Ran(tys()) { Run::of(tys(), strs(), λ _ => f, world(), λ _ => False, fuel, g, vs, h, io) }
+
+theorem dead_view_stuck(io: Io): stuck(one_fn(dead_view_r(), 1, 0, Nil, Nil, io)) = True { refl }
+
+theorem live_view_done(io: Io): one_fn(live_view_r(), 1, 0, Nil, Nil, io) = Done(Answer([Refer(Ref(0, Nil))], [Live(Obj(Dyn(nats_s(), [2, 0]), Nil))], io)) { refl }
+
+// A field the record does not have.
+fn no_field_r() → Func { Func(sig0(), seq([Read(Place(Arg(0), [SElem(Lit(0)), SField(2)]))], Ret([Loc(0)]))) }
+
+theorem no_field_stuck(io: Io): stuck(one_fn(no_field_r(), 1, 0, [obj0()], heap1(ps2()), io)) = True { refl }

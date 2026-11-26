@@ -1028,12 +1028,29 @@ The checker is one forward pass over the body with a state per place:
   one mode stays, its region the union of the arms' (a region is a window,
   the whole object, or a union of regions, so the coarsening loses nothing
   but which arm was taken); any other view is dead after the join. An arm's
-  residuals are owed under its test, as closed data with the test as their
-  hypothesis. A type that may not be dropped may not be `gone` by
-  weakening.
+  residuals are owed on its side of the test, and what follows the join
+  is owed in each arm (the verdict is a tree in the body's shape, below).
+  A type that may not be dropped may not be `gone` by weakening.
 - Overlap is decided on the places' steps where they are closed; otherwise
-  it is a residual obligation. A key access emits `Valid`; an index its
-  bound; a call the callee's precondition.
+  it is a residual obligation. A key access emits `Valid`; an element read
+  its bound; a call the callee's precondition.
+- A residual is the proposition the source writes at that site, read in
+  the state the site reads (§14 item 1): a bound is a squashed `<` on the
+  length of what the read reads (one per element read, through a view
+  too); a callee's precondition is stated at the value the call lends (the
+  object, a loan's window, or the owner with the slots of a collection of
+  references) and the call's words; two windows apart is the disjunction of
+  its two sides, the first ending before the second or the second before
+  the first, each spelled as a source spells it (`k <= j` for the window
+  `0..k` before `j`, `j < lo` for the element after), so the source's
+  hypothesis is the discharge by conversion and its proof names the side.
+  Where the checker cannot know the side, it owes the disjunction; a
+  source's proof is on one side. The verdict is a tree of residuals in the
+  body's shape, and what a function owes is one proposition along its
+  meaning: each statement's residuals at the state it reads, a branch's
+  under its test (the shape of the source's `if h:` proof). Writes owe no
+  bound in this fragment: the source's `update` is total; the bytes level's
+  store does need one, which is still to be stated.
 
 The first experiment (§15.6) keeps the state per object, not per name: a
 table of which name holds each object now, and the views, each naming its
@@ -1380,6 +1397,53 @@ whose arms open views on different windows), the full verdict `check_fn(…)
 = Some(rs)` costs 9.2k to 290k kernel steps, each doubling 1.96 to 2.03
 times the last. One object per function throughout, so the holder table the
 first experiment's quadratic came from does not arise.
+
+*Site facts in the checker* (2026-11-25,
+`issues/ownership-site-facts-into-the-checker.md`). The fifth experiment's
+additions (§18.4 item 1) are statements of the one checker, re-expressed
+rather than added beside it, and its probes run against it
+(`site_facts_tests.hthr`). What changed, each once:
+
+- *The words.* The meaning's and the run's words are an `Env`: the
+  parameters read by position and the words the body bound newest first,
+  with their count, so a parameter and a recent word are read in constant
+  time. The pin, which read through a snoc list by position, was quadratic
+  in the body; it is linear now.
+- *Residuals.* A residual is the proposition the source writes at its site
+  (§15.3): a bound per element read (`Inside`, through a view too), a
+  callee's precondition at the value the call lends (`Pre`), two windows
+  apart as the disjunction of its two sides spelled as a source spells
+  them (`Apart`). It is read in the state its site reads, along the
+  meaning, not in the final state: with the parameter a place there are no
+  versions for a final state to hold, and arms bind different numbers of
+  sites. The verdict is a tree in the body's shape (`Owes`), and a function
+  owes one proposition (`Owes::Due`): residuals at their sites, an arm's on
+  its side of the test, what follows a join in each arm. `Under` went with
+  the final-state reading.
+- *Branches.* The meaning carries what follows a branch into each arm, the
+  convoy a source's `if h:` elaborates to, so a function whose `if` ends it
+  pins by conversion, and its arms' residuals are discharged by
+  `Bool::cases` of the `if`'s evidence. One `If`, no `Branch`.
+- *Contracts.* A pre- and a postcondition are of the parameter's value (its
+  object and the slots it is lent) and the words; a postcondition is of the
+  whole answer. Owing every read's bound made both necessary: a read
+  through a view a callee answered is bounded by the callee's promise about
+  its view, a read through a lent reference by a precondition over what was
+  lent, and a read after a call by the callee's promise about the object it
+  hands back. `CallGet` calls a reader answering a word.
+- *Proofs.* The theorems whose statements changed are re-proved, as stage
+  lemmas; nothing is stated twice. The module's fresh elaboration and its
+  dearest declarations (the window lemmas) are as before.
+
+Costs, as shapes, at doubling bodies with a residual at every statement:
+the verdict, the pin (through parameters or a chain of lets) and the
+discharge as one ascription of the restated conjunction are linear in the
+body; the discharge as a tuple converted component by component is still
+quadratic, so a generator emits the restated form, as a statement and proof
+built by recursion (a literal conjunction is linear in the kernel but
+superlinear to elaborate). Owing every bound has a price for programs: each
+read needs its bound from the caller, and a program whose callee answers a
+view composes its depths from two (depth zero answers an empty view).
 
 ### 15.7 Settled by Minus, 2026-11-25, and what is still open
 
@@ -2430,7 +2494,11 @@ per function connects them.
   parameter reads the meaning's value after (the eager write-back); the
   heap is unchanged outside what was lent, which for a window is one lens
   equation; a returned view's selectors extend its parameter's; its events
-  are well formed. A postcondition is one more field.
+  are well formed. A pre- and a postcondition are propositions of the
+  parameter's value as it went in (its object and the slots it is lent,
+  whose values are the object's windows there) and of the words; the
+  postcondition is also of the whole answer (its value, word and view).
+  The callee's precondition is owed at the value the call lends (§15.3).
 
 ### 18.4 Three things not yet tested, and their tests
 
@@ -2442,9 +2510,11 @@ per function connects them.
    written by hand in the checker's language, its residual discharged from
    its own hypothesis.
 
-   **Result (2026-11-25, `lib/lang/ownership/site_facts.hthr`, probes in
-   `lib/_tests/lang/ownership/site_facts_tests.hthr`, log in
-   `issues/ownership-residuals-from-source-proofs.md`): it works, and the
+   **Result (2026-11-25, built as `lib/lang/ownership/site_facts.hthr`
+   beside the checker, now folded into it: probes in
+   `lib/_tests/lang/ownership/site_facts_tests.hthr`, logs in
+   `issues/ownership-residuals-from-source-proofs.md` and
+   `issues/ownership-site-facts-into-the-checker.md`): it works, and the
    discharge is the source's proof itself.** A read under a parameter proof,
    an index read into a `let`, a write apart from a held view under an `if`,
    and calls passing the caller's proof on (directly, and over a read) each
@@ -2480,6 +2550,26 @@ per function connects them.
    reader answering a word (no such call), and an `if` whose test reads a
    word the body bound (that is the checker's own branch, which the joins
    work brings).
+
+   **Folded into the one checker (2026-11-25,
+   `issues/ownership-site-facts-into-the-checker.md`).** The four additions
+   are statements of the checker now, not a module beside it, and the three
+   gaps are closed: a reader whose precondition reads its list is called on
+   the caller's list (`CallGet`) and on a loan's window (`CallMut`), its
+   precondition owed at the value lent; and a test over a word the body
+   bound is the checker's `If` (`hop_le`). Two things changed from the
+   experiment's form. A residual is read in the state its *site* reads,
+   along the meaning, not in the final state: with the parameter a place,
+   the final state no longer holds the value an earlier read read, and arms
+   bind different numbers of sites, so no static index into a log would
+   do. And apartness names its side: the residual is the disjunction of the
+   two sides, each spelled as a source spells it, so `poke`'s `k <= j` and
+   `after_read`'s `1 + xs[0] <= j` are their discharges by conversion
+   (`Inl(h)`), with no `omega` and no hypotheses kept beyond the site's
+   proof. The restated conjunction stays the shape a generator emits for
+   many residuals (the tuple, converted component by component, is still
+   quadratic); built by a recursive statement and proof it is linear and
+   pays no elaborator cost.
 2. **Loops.** A place state stable at the loop's head in one pass;
    residuals that hold at every pass and not "at the words the meaning ends
    with"; soundness by induction on fuel. Test: one loop added to the
@@ -2504,6 +2594,65 @@ per function connects them.
    an interface; a function general in its representation; how a place in
    the specification (an element, a window) becomes a place in a
    representation; and where the transfer sits relative to the checker.
+4. **How a typed function meets the checker's meaning.** Result
+   (2026-11-25, `lib/lang/ownership/coded.hthr`, probes in
+   `lib/_tests/lang/ownership/coded_tests.hthr`, log in
+   `issues/ownership-coded-values.md`).
+
+   **The universal value as a native value tagged with its code keeps both
+   headline results.** A code (`Shape`: word, sequence, named type) and its
+   decoding by large elimination (`El`), a structure per named type (a
+   record's field paths, or opaque), and `Dyn` (a code with a value of its
+   decoding). The decision on codes and the cast are `fn`s that reduce to
+   `refl` and the identity at closed codes, and `dec(c, c) = Inl(refl)` is
+   proved by induction on the code, with no unique identity proofs.
+
+   Over a list of user records and at an open type parameter, every pin
+   tried is by `refl`:
+   - a field of an element;
+   - its functional update;
+   - a generic element copy;
+   - an `if h:` guarding a read;
+   - a function that continues after its `if`;
+   - calls passing a record and a window.
+
+   Every residual (a bound, a callee's precondition at the value passed) is
+   the source's proof by conversion. The cost is linear, 1.5 to 2.3 times
+   the uncoded meaning's steps. The same read over `Val` is an induction per
+   operation.
+
+   What carries the result, and what it changes:
+   - **The meaning reads totally and writes by modifying.** An absent part
+     reads as its code's inhabitant, and a part is modified by a function.
+     A read through a path's `Option` stops at a stuck `nth`, since the
+     kernel does not do case-of-case. This is how today's `runtime fn`
+     sources already read: `Vec::at` and `Bytes::at` carry the bound as an
+     erased parameter and their bodies are total, 0 past the end. A read
+     that consumes its proof costs one library lemma per site. For an open
+     `T` the inhabitant can stay in the pin's statement, quantified: a
+     write then pins by `refl`, and a read needs that lemma.
+   - **A branch names its output.** Each output after the join is the
+     convoy of the arms' values, and what follows runs once. A function
+     that continues after its `if` then pins by `refl`, at linear cost.
+   - **A step's fit is relative to the value it replaces.**
+     `StepModelLaws` as stated cannot hold at `Dyn`
+     (`Dyn::elem_not_lawful`), since a fit over the written value alone
+     cannot say "the read part's code". With `fits(read, written)`:
+     - any model lawful as stated stays lawful (`Val`'s included);
+     - the decider's soundness holds by the same proof;
+     - `Dyn`'s model is lawful from the structures' laws alone, with no
+       unique identity proofs;
+     - a single-sorted step lemma (a store through a view keeps every view
+       the decider finds apart) follows from these laws without looking
+       inside a code.
+
+   **The level-1 interface should therefore be:**
+   - values are `Dyn` over a type environment and its structures, which a
+     derived instance per type supplies (field paths, their laws, an
+     inhabitant);
+   - the meaning's reads and writes are total and code-directed;
+   - a branch names its outputs;
+   - `steps.hthr`'s laws take the relative fit, changed once in place.
 
 ## 19. The representation tier (2026-11-25)
 
@@ -2687,3 +2836,1088 @@ signature alone: `fn f(xs: List<T>)` is a function on lists, usable in
 mathematics and proved about as one, with the instance found behind it.
 The machinery (instances and laws) is the same, and a `ListLike` class is
 an ordinary thing a library may also define.
+
+## 20. Where the experiments stop (2026-11-25)
+
+Written by the coordinating session after the checker's rebuild
+(`issues/ownership-site-facts-into-the-checker.md`) was read against §15 to
+§18. Five experiments and one rebuild have been spent on
+`lib/lang/ownership/call_check.hthr`. It answered what it was built to
+answer, and it is not the checker: one object per function, a list of
+numbers, windows as the only places, its own run over a file of lists, its
+own world built by depth. Each round reshaped most of its statements. Two
+more rounds were queued on it (several objects, loops), and three of the
+issues the rebuild filed are requests to change its meaning again. That is
+the feature being slid into. **The experiment module is not extended
+again.** What is still untested is tested in the modules that stay, against
+interfaces fixed first (§16's package 1), and `call_check.hthr` and
+`place_check.hthr` are deleted when their programs pass through those, as
+`lib/native/reference_cells/` was when the bytes level took its programs
+(§17.6).
+
+Four things about those interfaces are decided here, each from a defect the
+experiments showed. A fifth is under test.
+
+### 20.1 One text, two readings
+
+Every experiment proved one theorem about one body read twice: `eval1` and
+`run2` of the same statement, and §18.3's "there is no plan beyond the
+annotation". So level 1 and level 2 do not have a syntax each. There is one
+annotated body. Its *meaning* is the pure reading (values, no identity);
+its *run* is the level-2 reading (blocks, references, deaths). The checker
+is a function of the body, and `check_sound` is the agreement of the two
+readings. §16's "three interfaces" are therefore: the body with its
+annotation and signature record; the two readings, sharing one outcome type;
+the verdict. The bytes level's contract is the fourth and exists (stages 1
+and 2).
+
+### 20.2 One control skeleton, at every level
+
+The bytes level's body (§17.6) is a leaf of instructions, a sequence, a
+branch, a call, a loop that names its inputs, parameters, next values and
+outputs, a system call and an exit. FunctionIR's regions have that shape
+already. The body of §20.1 has the same skeleton, so the step from level 2
+to the bytes level is statement by statement, and a theorem about control
+(a branch's two cases, a loop by induction on fuel) is stated the same way
+at each level.
+
+### 20.3 A join binds its outputs
+
+*Amended by §21.2:* the join is the surface's, one convoy over the packed
+outputs with each output a projection, and a join point where an arm
+returns; "each output is the convoy of the two arms' values" below is the
+one-output case.
+
+The rebuilt checker's meaning carries what follows a branch into each arm:
+`If(cd, a, b, rest)` means `convoy(test, a then rest, b then rest)`, and
+what the function owes after the join is owed once per arm. Three things
+are wrong with that, and they are one defect.
+
+- *Cost.* What follows `k` branches in sequence is read `2^k` times: the
+  meaning's normal form and the proposition a function owes both double at
+  each open test. Every measurement so far was of straight-line bodies and
+  of one branch.
+- *The pin.* A source that continues after an `if` elaborates to the rest
+  over a convoy of values, which is not the convoy of two rests
+  (`issues/ownership-pin-after-join.md`). Only a function whose `if` is its
+  tail pins by `refl`.
+- *The discharge.* After its `if`, the source's proof at a later site is in
+  a context without the test, about the joined values. Owed once per arm,
+  the same residual is asked twice, each time about one arm's values.
+
+The join that matches the source is the one a compiler's intermediate form
+has: a branch names its outputs, and after it each output is the convoy of
+the two arms' values for it, `convoy(test, a's, b's)`, the term the source's
+own `let x = if h: … ` elaborates to. An arm's own bindings end with the
+arm. A view live after the join on both arms is an output like any other
+(its value the convoy, its region the union, §15.3). Residuals inside an arm
+are owed under its side of the test; residuals after the join are owed once,
+at the joined state, under no test. A function ending in an `if` is the
+case whose outputs are its results. In the once-theorem a branch is one
+case split on its test, where each output's convoy reduces. This replaces
+`mean_then` and the `OIf(a, b, rest)` reading of `Owes::Holds`; the verdict's
+tree keeps its shape.
+
+### 20.4 The world is clocked
+
+*Amended by §21.3 and §21.4:* a measured function's meaning takes no fuel
+and is a value; only its run is clocked, and a postcondition is the
+source's theorem, not a clause under `Done`.
+
+`prog_sound` builds a program's callees by depth, and at depth zero a call
+answers a made-up value (its argument, the word 0, an empty view), which
+every postcondition then has to allow
+(`issues/ownership-world-depth-zero-postconditions.md`): a callee that
+promises a nonempty view cannot be composed, and a recursive one not at
+all. This is §18.1 not yet applied to the checker. Both readings of a body
+take fuel and answer the bytes level's outcome (`Done`, `Exited`, `Going`,
+`Stuck`); out of fuel is `Going`, not a value. A function's safety speaks
+of the fuel at which its meaning is `Done`: there the run is `Done` with an
+answer that reads the meaning's, and a postcondition is a proposition of a
+`Done` answer only. So nothing is promised of the depth-zero world, and a
+loop (§18.4, item 2) and recursion are the same induction on fuel.
+
+A total source function's pin is then stated at enough fuel: for a
+straight-line body any fuel beyond its statement count, by evaluation; for a
+loop, by the one lemma that relates the source's recursion to the loop's
+iterations (§18.4, item 2's test).
+
+### 20.5 Under test: values typed by code
+
+Every experiment's object was a `List<Nat>`, so the meaning computed on the
+source's own values, the pin was `refl` and a residual was the source's
+proposition by conversion. With the universal value of
+`value_steps.hthr` (`Val`) neither survives for a real function: a read of
+an encoded list against the encoding of a read is a lemma per operation and
+per residual, and a generator would be writing proofs again.
+
+The sixth experiment (`issues/ownership-coded-values.md`, branch
+`claude/ownership-coded-values`) tests the alternative: the single sort of
+the step model is a native value tagged with its code. Codes are closed
+first-order data (a word, a sequence, a named type by index); a type
+environment decodes a named type to the source's own type, so a record and
+a type parameter are both names; a second environment gives a named record
+its fields as the library's paths with their laws, which is what a derived
+instance would supply and is the same mechanism as §19's representations.
+The reflected syntax stays untyped. If it holds, pins and discharges are
+conversions for records, lists of records and generic functions, and the
+once-theorem never looks inside a code. If it does not, the pin is a
+generated proof through an encoding and §18.4 item 1's result is restated.
+
+### 20.6 What follows
+
+1. The sixth experiment's result fixes the value sort.
+2. The interfaces of §20.1 are written as modules of definitions, with the
+   theorems' types stated and unproved, and reviewed against the five
+   experiments' programs before anything is proved over them.
+3. The checker, the two readings and `check_sound` are built once over
+   them, with several objects, places with steps, joins as §20.3 and loops
+   from the start: the cases the experiments left
+   (`issues/ownership-checker-several-objects.md`, §18.4 item 2) are this
+   build's first probes, not further rounds on the experiment.
+4. The issues that ask for changes to the experiment's meaning
+   (`ownership-pin-after-join`, `ownership-world-depth-zero-postconditions`,
+   `ownership-branch-on-object-length`, `ownership-write-bounds`) are
+   requirements on that build and are closed by it.
+
+## 21. The interfaces (2026-11-25)
+
+**§22 is this section as built, and holds where the two differ** (a
+reference holds selections, not closed steps; a pin is stated through the
+continuation that reads the answer back; written parameters are results;
+the environment's form).
+
+§20.6's step 2, written after the sixth experiment
+(`issues/ownership-coded-values.md`, §18.4 item 4) held, and revised
+against an adversarial review of its first draft (thirteen defects, each
+with a program; what each changed is §21.6). Each part says whether an
+experiment proved it (**shown**) or it is this section's proposal and one
+of the build's first probes (**proposed**). The modules of definitions are
+written from this section; a definition that cannot be written as stated
+comes back to this section, it is not adjusted in the module.
+
+**The rule that fixes the body: it has the forms the surface already lowers
+to.** `docs/language/sequencing-surface-design.md` §5, §14, §19 and §22 are
+built: straight-line code as aliases, a statement `if` as one convoy over
+the packed locals its arms assign, a branch that ends a block, a
+`while` as the library's loop combinator run on a named step
+(`docs/language/loop-combinator-design.md`), a `for` as a fold of a named
+step. (Its join point for a continuation needed in more than one place is
+designed and not built: §21.2.) The reflector reflects that
+lowered form one construct for one, so a pin is a conversion by
+construction and not by the luck of two designs agreeing. Where this
+section and that document differ about a form, that document holds and this
+section is corrected.
+
+### 21.1 Values
+
+- **Codes** (shown for a `Nat` word, `List` and names). `Shape` is closed
+  first-order data with decidable equality: a word of a width, or a named
+  type by index. A type environment `tys: Nat → Type` and `El(tys, c)` by
+  large elimination: a name is `tys(k)` itself. A user record, a type
+  parameter and a sequence type are all names.
+- **Structure.** A second environment gives each name its `Struct`: its
+  sharing class (§15.1), and one of
+  - *opaque*: nothing (a type parameter, a type the function does not look
+    into);
+  - *a record*: its fields, each a shape and a total read and update of the
+    field, with their laws and the apartness of distinct fields;
+  - *a sequence* (proposed): its element shape, a total read and update at
+    an index, a window, its length, and **the proposition its accessor
+    asks**, with the laws (a read after an update inside; distinct indices
+    and disjoint windows apart; an update keeps the length). `List<A>`,
+    `[A; n]` and `Bytes(n)` are three instances, each spelling its bound as
+    its own accessor does (`i < xs.len()`, `i < n`, an order on `u64`), so
+    the sources' three spellings are each a conversion. The experiment's
+    built-in `SSeq` is the `List` instance.
+
+  A `Struct` is what a derived instance supplies, found the way §19's
+  representations are found. Variants and stores are added the same way,
+  each with its probe; neither is in the first build's fragment.
+- **The pad** (amended the same day, from the build's first report). A
+  sequence's total read is its type's own total accessor, and what it
+  answers past the end is that accessor's: `[u64; n]` and `Bytes(n)` need
+  nothing. No total read of a `List<A>` exists at every `A`
+  (`read(False, Nil, 0)`), so `List<A>` and `[A; n]` are sequences at an
+  element structure that has a pad: zero for a word, a record's derived
+  default where every field has one, and for a type parameter a field of
+  its opaque structure, quantified in the pin's statement, so the function
+  takes no `T`. A source reading through that accessor pins by `refl`; one
+  reading through a proof-consuming accessor pins by one library lemma per
+  site, which is confined to generic library code. The meaning does not
+  take proofs as input: its type would depend on the states it computes.
+- **Words** (proposed beyond `Nat`). A word shape decodes to the source's
+  word type at that width. A selection's index is the word itself, a
+  number or a word at a width, and an instance reads it at its own
+  accessor's type (`Bytes::at` takes the `u64`; a number round-tripped
+  through `toNat` does not spell it); the decider and the obligations read
+  an index through `toNat`, which is how the sources state their bounds
+  (`∥i.toNat() < count.toNat()∥`).
+- **The single sort** is `Dyn(tys)`, a code and a value of its decoding.
+  A word is a `Dyn`, so the body has one kind of variable (§15.1) and one
+  environment. A newest-first list makes any long-lived variable dearer
+  with every binding after it (the build measured it on three axes:
+  parameters under locals, an object under words, a local under either).
+  Two indexed environments were measured against it, the library's trie
+  and a skew-binary list: both linear on every axis and two to three and a
+  half times dearer on the common ones, a level of numeral arithmetic
+  costing about sixty kernel steps where a list cell costs a few. So the
+  environment is arguments by position and locals newest first, a
+  variable `Arg(i)` or `Loc(j)`; its blind spot is a local that outlives
+  hundreds of bindings in straight-line code, since a loop's state is its
+  parameters (`issues/ownership-long-lived-local.md`). Theorems reach it
+  only through `push`, `get` and their two laws, so the representation can
+  change without a statement changing. A variable's code is
+  static, a function of the body alone and never of a value, so no later
+  dispatch waits on one.
+- **Steps are total, and stated once** (proposed). The step model is a
+  total read `at: Sel → S → S`, a total modification
+  `over: Sel → (S → S) → S → S` and a Boolean "this step fits this owner";
+  the laws hold where the step fits and are relative to what was read
+  there (the sixth experiment's relative fit: the same code, for a window
+  the same length; a fourth component of the model, "what is written is
+  like what was read"). A step that does not fit modifies nothing, and
+  reads a value that does not depend on its owner: the word zero for an
+  absent field, its accessor's pad for a sequence. That is what lets the
+  decider's verdict hold at every value, fitting or not (reading the owner
+  back, as the first text here had it, is unsound for the decider, an
+  absent field against a write of a present one, and would make the read's
+  code the bound's decision, stuck at an open index). This replaces `steps.hthr`'s `StepModelLaws`, `PathLawsOn` and `KeepsFit`
+  in place, and `Steps::apart_sound` is re-proved over it: the experiment
+  showed the relative laws at the `Option`-valued paths and pinned through
+  the total forms, and the agreement of the two was not built. One
+  spelling removes the need for it. `value_steps.hthr`'s `Val` has no
+  customer after this and goes, its probes restated at `Dyn`.
+
+### 21.2 The body
+
+One text (§20.1), in continuation form, so each reading is one structural
+recursion. Statements are shown; the control forms are the surface's and
+are proposed as stated here.
+
+```
+Place = a variable and steps
+Stmt  = a word primitive | a read of a place | a write of a place
+      | a view of a place, to read or to write | a take of a place
+      | fresh(shape, n, v) | a call | a death of a place
+Body  = Ret(results)                       // the function's result
+      | Yield(outputs)                     // to the enclosing join
+      | Do(stmt, rest)
+      | Join(test, yes, no, rest)          // rest sees the arms' yielded outputs as new variables
+      | Jump(args)                         // the function's own call, last (a loop's back edge)
+Func  = signature (§15.8), body
+```
+
+- **A join binds once.** Its arms are bodies whose leaves are `Yield` or
+  the function's own terminators (`Ret`, `Jump`). Where every leaf of both
+  arms is a `Yield`, the join's meaning is the surface's:
+  `j = convoy(test, pack(yes), pack(no))`, `pack` the nested `Mutated` of
+  the outputs' native values in first-assignment order (one output: the
+  value itself), and output `k` is the `Dyn` of its code and the `k`th
+  projection of `j`. Every variable an arm writes is an output.
+  Where an arm has a leaf that is not a `Yield` (an early return on an
+  inner path), `rest` is bound once as a function of the outputs and each
+  `Yield` calls it. The surface's own join point is designed and not built
+  (it copies what follows into each arm that falls through), and the bound
+  form converts to the copied one, so the pin holds and the meaning stays
+  linear in the body; the doubling is the source's own term's. A join's
+  codes are its yes arm's yielded ones, the no arm's values cast to them
+  with the yes arm's as the fallback; an ill-coded call binds the word
+  zero. So an ill-coded body has a junk meaning and never a missing one:
+  nothing in the meaning is optional and no pin has a `Some`. The check
+  refuses a join whose arms' codes differ and a call whose arguments'
+  codes are not its signature's, from the codes alone. A branch
+  that ends the body is the join none of whose leaves is a `Yield`; it is
+  not a second node. In every case what follows a join is read once.
+- **A view as an output.** A read view chosen by a join is an output like
+  any other, its region the union (§15.3). A view to write survives a join
+  only where both arms hold it at one parent and one place; otherwise it is
+  written back before the join. (An earlier text here allowed one root with
+  the slot a convoy of the arms' steps; a write-back's place is static, so
+  there is nothing to write back to. §23.)
+- **A loop is a function**, which is what the surface makes it: `while`
+  is the library's loop combinator run on a named step over the state
+  (`docs/language/loop-combinator-design.md`; an earlier text here described
+  the generated sibling that design replaced), the step's round ending in
+  the loop's own call; `for` is the fold of its step, pinned by the library's fold
+  lemma once. There is no loop node and no loop flag: a loop is a function
+  whose body has a `Jump`. Its parameters are **the places live at its
+  head, each with its state**: a word by value; a place by its mode; the
+  owner of a write view held across the loop as an erased in-out parameter
+  (§15.2); a variable partly `gone` as its available places. So the place
+  state at the head is the signature, a residual at every pass is the
+  loop's precondition, owed at entry and at the `Jump`, and the checker has
+  no rule for loops. What it does need beyond a function call's rule is
+  the passing of partly available variables, which is the build's probe.
+- **The step to the bytes level is a pass with its own theorem**, not
+  statement by statement (this departs from §20.2, which holds for
+  sequences, joins and calls only): a loop function is inlined at its use
+  and its `Jump` becomes that level's `Loop`. That node binds its outputs
+  to the final state, so a loop whose results are not its state is
+  widened by the pass, or the node is given results apart from its state;
+  which, is decided when the pass is built
+  (`issues/bytes-level-lowering-loops.md` is told).
+- **A fresh object takes its first value as an operand**: `fresh(shape, n,
+  v)` means `n` copies of `v`. An uninitialised fresh object, whose
+  elements start `gone` and become available as they are written (§18.2:
+  a load owes "defined", which the place state supplies), is a later
+  statement with its own probe.
+- **A death is of a place**, since a write to an owned place kills what was
+  there and no binder holds it. The annotation (§15.3) is otherwise in the
+  statements: a binder is own or a view with its mode.
+- **The world is a value** (§14 item 7, §18.2). `Io` is a variable of the
+  class that may be neither dropped nor duplicated, and a system call is a
+  call on it; `read_into` is a join on its outcome, the window an output
+  of the filled arm only. There is no `Sys` node and no `Exit` node: a
+  program is its entry function and an exit with its result, and the
+  exited clause is the program theorem's.
+
+### 21.3 The two readings
+
+- **The meaning.** Given `tys`, the structures and a world, the body's pure
+  reading. The world gives each callee's meaning as the source's own
+  function over `Dyn`s; a recursive function's world holds the function
+  itself. For a measured function the meaning takes no fuel and is a
+  value. A function with an unmeasured loop over `Io` has the source's own
+  type, `Partial`, observed at a count. (This supersedes §20.4's "both
+  readings take fuel" for measured functions.)
+- **The pin** of a function that does not call itself is `refl` (shown).
+  A function with `decreases` does not unfold at open arguments, so its
+  pin is its unfolding equation and then `refl`: one stated lemma per
+  recursive function, which a loop is. Composing a program needs each pin
+  pointwise, `W(g)(args) = mean(body_g, W)(args)`, as a premise.
+- **The run** (proposed: level 2 as §18.3 fixed it, over `Dyn`). A heap is
+  a list of blocks, each dead or live with an object. A variable holds a
+  plain value or a reference, a block and steps. An object is a `Dyn` and
+  its **holes**: selections (what was selected, an index being the
+  variable's own value; steps with their atoms are the body's syntax) at
+  which the value is not here
+  but *owned* (in a block it owns), *viewed* (a block and steps it does not
+  own: a stored view, §15.2) or *taken*. A nested part whose sharing class
+  is "object" is always an owned hole. **A reference is canonical**: it is
+  resolved through every hole before its last step, so two references are
+  compared in one block's steps or are in different blocks. Reading an
+  object as a value fills owned and viewed holes; it is defined except at
+  taken places, and its fuel is the number of owned holes plus the views'
+  depth, since only ownership is a tree. This keeps one decoding and one
+  sort; it is untested beyond one write through a view of an object with
+  no holes. The run takes fuel and answers the bytes level's outcome; a
+  call spends one, so recursion and loops are one induction.
+
+### 21.4 The verdict and the theorem
+
+- `check(sigs, f)` is one forward pass (§15.3) answering what the function
+  owes: a tree in the body's shape, each statement's residuals at the state
+  it reads, a join's arms under their sides of the test, what follows a
+  join once.
+- **Residual kinds are three.** `Apart` (a disjunction naming its sides).
+  `Pre`: a callee's precondition at the values passed, and **an accessor's
+  precondition at a step**: an element read, an element write, a take and
+  the opening of a view each owe what the sequence's accessor asks, so
+  there is no separate bound kind and writes owe theirs
+  (`issues/ownership-write-bounds.md`). `Fits`: a write of a whole place
+  owes that what is written fits what was there (a sequence of the same
+  length). Each is stated over the native values inside the `Dyn`s, so the
+  source's proof is its discharge by conversion; many are discharged as
+  one restated conjunction (§18.4 item 1). A call of a measured function
+  also owes `need_g(args') < need_f(args)` where the two are in one
+  recursion, discharged by the source's own `decreases` proof.
+- **`check_sound`, once.** A verdict and its residuals give the function's
+  safety, relative to its callees' at less fuel:
+  - at no fuel is the run `Stuck`;
+  - a measured function's run is `Done` at every fuel from its `need`
+    (the fuel half of §15.9's cost, one statement with it): termination is
+    proved in the same induction, since it needs what only that induction
+    has, that each call's arguments in the run read the meaning's;
+  - where the run is `Done`, its answer reads the meaning's except at
+    taken places; each written parameter reads the meaning's value after,
+    and fits its value before; the heap is unchanged outside what was
+    lent; a returned view is its parameter's reference narrowed by the
+    steps the signature names, at the call's words, by the run's own
+    narrowing;
+  - where an unmeasured run is `Going`, the world's history so far is a
+    prefix of one the meaning reaches (§18.1's second clause).
+- **A postcondition is not in safety.** With a meaning that is a value, a
+  postcondition is a theorem about the source function, and a caller cites
+  it as a hypothesis of its own residuals before any run exists.
+- A program's safety is each function's, composed on fuel, with the exit
+  clause at the entry (§20.4: no depth, no made-up answer).
+
+### 21.5 The build's first probes
+
+In this order, since each tests something proposed above before more is
+built on it.
+
+1. The total step model: `Steps::apart_sound` over it, and the three
+   sequence instances with a read under each one's own bound.
+2. One environment against two (cost), with word types other than `Nat`.
+3. A join assigning two variables, one an object an arm writes, then a use
+   of both; a join one of whose arms returns on an inner path; three such
+   in sequence (linear).
+4. A loop as a function: writing an element while a view of a later window
+   is held, its residual from its guard (§18.4 item 2's test); then one
+   whose parameter is partly `gone`, and one holding a write view of
+   another parameter.
+5. Two objects, a view of one beside a write of the other; a write of a
+   whole place owing `Fits`.
+6. Holes: a record holding a buffer and a list of lists, read and written
+   through a view; a view returned from behind a hole; a swap of two
+   fields' buffers.
+7. A recursive function composed on fuel, `Done` from its `need`.
+
+### 21.6 What the review changed
+
+The first draft was not committed. An adversarial review of it returned
+thirteen defects, each with a program; they are summarised here by what
+moved.
+
+- The join was per output and of `Dyn`s (a projection of a stuck convoy is
+  not a convoy of projections; a convoy of `Dyn`s has a stuck code); it is
+  now the surface's packed convoy with recorded codes.
+- Straight arms and a tail branch as two nodes brought the exponential
+  back for an arm with one returning path; a join now binds what follows
+  once, by the surface's join point. (A chain of joins each reading the
+  last one's output is still quadratic, as the source's own `let` chain
+  is: `issues/ownership-join-chain-cost.md`.)
+- Sequences were one built-in shape decoding to `List`; the cited sources
+  read `[u64; 16]` and `Bytes(n)`. A sequence is now a name with a
+  structure, and a bound is its accessor's precondition.
+- Reads through a default asked an inhabitant of every type; the pad is
+  now the accessor's own, asked only of a sequence's element where its
+  accessor has none, and a fresh object takes its value.
+- The step was spelled twice (total in the meaning, `Option`-valued in the
+  laws); it is stated once, total.
+- The meaning was total for every function and safety silent at `Going`,
+  against §18.1 and §18.2 for a program that never ends; unmeasured loops
+  keep the source's `Partial` and the prefix clause.
+- Termination was left to the cost theorem, which would repeat the
+  simulation; it is in the one induction, from `need`.
+- The postcondition was a clause of safety under `Done`; it is the
+  source's theorem.
+- Writes owed nothing and safety had lost the fit of a written parameter.
+- Holes were owned or taken only, references not canonical, and "extends"
+  a list prefix: stored views had no representation and a view returned
+  from behind a hole did not extend its parameter.
+- "A loop needs no new rule" overlooked parameters partly `gone` and a
+  write view held across the loop; the loop flag was a second spelling;
+  the step to the bytes level's `Loop` is a pass.
+- `Sys` and `Exit` as nodes were a second effects language beside §14 item
+  7's world as a value, and one continuation after a read could not give
+  the window back only where it was filled.
+- A death named a binding; a write view chosen by a join had no slot.
+
+## 22. The interfaces as built (2026-11-25)
+
+`issues/ownership-interfaces.md` built §21 as modules. This section says
+what each module holds, where a definition differs from §21 and why, and
+what was measured. Where it says "agreed", the coordinating session
+decided it; "pending" is reported and not yet decided.
+
+### 22.1 What each module holds
+
+| Module | Holds |
+|---|---|
+| `lib/lang/ownership/steps.hthr` | Steps, `Ix`, selections, the decider; the total step model (`StepModel { at, over, fits, like }`, `StepModelLaws`, `ApartAt`) and `Steps::apart_sound` over it |
+| `lib/lang/ownership/shape.hthr` | `Shape { SWord(Width), SNamed(k) }`, `El`, `Dyn`, `Struct { sharing, pad, kind }` (opaque, record, sequence with windows), the kinds' laws, `Dyn`'s model and `Dyn::model_laws` from the structures' laws alone |
+| `lib/lang/ownership/sequences.hthr` | `List<A>` (with windows), `[A; n]` and `Bytes(n)` as sequences; unique identity proofs at `Nat` for `Bytes`'s length proof |
+| `lib/lang/ownership/body.hthr` | `Var { Arg(i), Loc(j) }`, the environment `Env` and its laws, `Place`, `Stmt`, `Body`, a signature record, `Func`, the total meaning in continuation form, the pin's form `Func::then` and the one lemma relating it to the answer (`Body::mean_then`, `Func::then_denote`), the `Ret` convention (`Sig::written`), and the stage lemmas (`convoy_map`, `dconvoy_map`, `List::foldl_same`) |
+| `lib/lang/ownership/level2.hthr` | Heap, blocks, objects with holes at selections, values and references holding selections (`Sel::same`, `Sel::read_at`, `Ref::narrow`), a canonical reference, an object read as a value, the run's outcome and signature (definitions only) |
+| `lib/lang/ownership/verdict.hthr` | The residual kinds, the verdict's tree and what it owes along the meaning, a program, `SafeAt`/`Safety`; the code check `Func::coded` (a `Bool`, computed); `Checker`, `CheckRefusesIllCoded` and `CheckSound` (`Type`-valued definitions only) |
+
+Probes: `lib/_tests/lang/ownership/{shape,sequences,body,interfaces}_tests.hthr`.
+Retired: `value_steps.hthr`, `coded.hthr` and their probes, and
+`PathLawsOn`/`KeepsFit` from `lib/std/machine/path.hthr`.
+
+### 22.2 Where the built form differs from §21
+
+- **The step model has four parts** (agreed). §21.1's "relative to what
+  was read there" is a fourth component, `like(sel, read, written)`: for a
+  `Dyn` its code, through a window also its length.
+- **An unfit step does not read its owner back** (agreed, withdrawn from
+  §21.1). Soundness never reads an unfit step. Reading the owner back
+  would make a read's code the bound's decision, stuck at an open index.
+- **An unfit read answers a value independent of the owner** (agreed,
+  decision D): the word 0 for a step with no part at the owner's code, and
+  for a sequence the accessor's pad. An owner-back read is unsound beside a
+  write. `[SField(2)]` and `[SField(0)]` on a record of two fields are found
+  apart, yet a write through field 0 would change what field 2 read back.
+  The probes are `absent_field` (shape) and its sequence twin
+  `past_end_apart`/`past_end_kept` (an element past the end against a
+  write of one inside).
+- **The index is the variable's own value** (agreed, decision B). A
+  selection's index is an `Ix`, a number or a word at a width. An instance
+  reads it at its accessor's own type, and the decider reads it through
+  `toNat`. `Bytes::at` reads at the `u64` itself, so an index carried as
+  its number cannot spell it.
+- **A sequence's read is its type's own total accessor, with that
+  accessor's pad** (agreed, decision A; §21.1's "no inhabitant is asked" is
+  withdrawn).
+  - `[u64; n]` and `Bytes(n)` need nothing.
+  - `List<A>` and `[A; n]` take their pad as an instance parameter, at an
+    element structure that has one.
+  - A read through a proof-consuming accessor pins by one library lemma
+    per site (`copy_below_pin`).
+  - No real type was excluded for want of a pad in this package.
+- **The meaning is total; nothing is optional and nothing is recorded**
+  (agreed; the optional meaning first built here is taken out).
+  - Every pin is the meaning read back through a native continuation
+    equal to the source's term (below, "The pin's form").
+  - A join's codes come from its yes arm. The no arm's values are cast to
+    them, with the yes value as the fallback.
+  - A callee in the world is `List<Dyn> → List<Dyn>`. An ill-coded call
+    answers no results, and a binder with no result binds the word-zero
+    `Dyn`.
+  - A word primitive or test at a non-word reads the word 0 there.
+  - Ill-coded bodies therefore have a meaning, and it is junk. The probes
+    `join_ill_coded_junk`, `call_ill_junk` and `ill_word_junk` pin it.
+- **The code check refuses, from codes alone, what the casts would cover**
+  (agreed). `Func::coded` walks the body with each variable's code and
+  refuses:
+  - a join whose arms yield different codes;
+  - a call whose argument codes are not its signature's parameters;
+  - a word primitive or test at a non-word;
+  - a `Ret` whose codes are not the signature's results followed by its
+    written parameters' (the `Ret` convention, below).
+
+  Each refusal has a `= False` probe beside an accepted twin
+  (`interfaces_tests`). `CheckRefusesIllCoded` states that a checker's
+  verdict implies `coded`.
+- **A variable's code is static** because every arm of every join yields
+  closed codes, read off the yes arm, and no statement's code depends on a
+  value. Two statements record a code not computed from their operands:
+  `Fresh(c, …)` names its object's code, and a call's results take their
+  signature's result codes.
+- **A join binds what follows once** (agreed, decision C). A packed join
+  is one convoy over the packed outputs; a join with an inner return binds
+  what follows as a function of the outputs, which each `Yield` calls.
+- **The pin's form** (agreed). A pin states `f.then(R, …, args, k) =
+  source(args)`: the meaning in continuation form at the source's own
+  result type `R`, the continuation `k` reading the results back natively
+  (`Dyn::index`, `Dyn::back`). A tail join is then the source's
+  `convoy(test, …)` itself, so every pin is `refl`, a function ending in a
+  branch or returning on an inner path (`early_pin`) included, and no pin
+  cites a convoy lemma.
+  - One lemma relates the form to the answer: `Body::mean_then`, by
+    induction on the body, says the meaning at continuations that are
+    pointwise `f` of others is `f` of the meaning at those (pointwise,
+    because there is no funext). `Func::then_denote` is its instance,
+    `f.then(…, k) = k(f.denote(…))`; it is what `check_sound` and a
+    program's composition use.
+  - Inside it a statement hands its continuation the next environment
+    (`Stmt::eval_is`, by cases), a packed join needs nothing, and the
+    join-point join commutes its convoy once (`convoy_map`). The earlier
+    per-function use of `convoy_map` is gone.
+- **The `Ret` convention** (agreed). A function's `Ret` lists its results,
+  then its written (`ByWrite`) parameters' values at its end, in signature
+  order (`Sig::written`). A call binds all of them and the caller writes
+  each back to the place it lent (§15.2's eager write-back). There is one
+  meaning, and "the meaning's value after" of a written parameter is its
+  position in it. Against the source's `Mutated` nesting
+  (`sequencing-surface-design.md` §24.2: one `Mutated` per `&mut`
+  parameter in parameter order, the answer innermost): with written
+  parameters `p₁ … p_W` and one result, list position 0 is
+  `.value` taken W times, and position `k` (1 ≤ k ≤ W) is `.value` taken
+  `k − 1` times then `.after`. So `fn f(a: &mut A, b: &mut B) → R` ends
+  `Ret([r, a, b])` and is read back as `Mutated(rs[1], Mutated(rs[2],
+  rs[0]))` (probes `copy_elem_pin`, `bump_means`).
+- **The surface has no join point** (agreed). A statement `if` with a
+  return on an inner path copies what follows into each arm that falls
+  through (`sequencing-surface-design.md` §22 items 5 and 8). The meaning
+  binds it once, the same term after β.
+- **A `while` is the loop combinator** (pending: §21.2 says a generated
+  sibling function).
+  - The surface now lowers a `while` to `Loop(measure, f::step).run(state)`
+    (`docs/language/loop-combinator-design.md`), whose one equation is
+    `Loop::run_unfold`.
+  - The loop's body is still a function whose round ends in a `Jump`. The
+    world holds the loop as the source's function.
+  - The pin is the equation, then the step's split on its test
+    (`dconvoy_map`), each arm `refl`.
+  - `dconvoy_map` is one library lemma for every loop. What each loop
+    adds is its unfolding (`Loop::run_unfold` at its state) and one stated
+    equation of its step as the convoy of its test (`drain_step_is`, by
+    `refl`): the "one stated lemma per loop" §21.3 allows.
+- **A `for` is the fold of its step.** The step is a function pinned by
+  `refl`. The loop is the fold of the step's meaning, related to the
+  source's fold by `List::foldl_same`.
+- **Variables are `Arg(i)` or `Loc(j)`** (agreed, conditionally). An
+  environment holds the arguments by position and the locals newest-first.
+  Every theorem reaches it only through `Env::push`, `Env::get` and the
+  laws (`get_push_here`, `get_push_below`, `get_push_arg`). An index atom
+  `Var(w)` reads argument `w` below the argument count and local `w − A`
+  above it (`Env::ixs`). A local that lives long, such as a taken object,
+  still sinks one deeper with each binding: the issue
+  `ownership-long-lived-local` holds its measured shape.
+  - One indexed environment, variables named by level, was built twice
+    (the library's `NatMap` `Array`, and a skew-binary random-access list)
+    and measured against this split (§22.3). Both are linear up to the
+    logarithm and cure the long-lived local, but cost 1.3 to 3.7 times the
+    split on the other rows, past the agreed margin of a third, so the
+    split stays (agreed).
+  - The split's blind spot is only a long straight-line body. A loop's
+    state is its parameters (§21.2), and the reflector passes anything
+    long-lived into a loop as a parameter, which `Arg` reaches by position
+    at every round; only a local that outlives many bindings in one
+    straight run sinks. The issue says what would reopen the choice.
+  - Under an indexed environment a place's atoms name levels while the
+    decider reads indices from a `List<Ix>`, so each read renumbered its
+    own atoms and took only their words; that cost a further share on the
+    list-read row. The split needs none of it: an atom reads the
+    arguments' words, then the locals' newest first.
+- **Level 2 and the verdict are definitions.**
+  - `SafeAt` states, at each fuel:
+    - the run is not stuck;
+    - a measured run is done from its `need`;
+    - where it is done: its results read the meaning's results; each
+      written parameter's argument, read in the heap after, is the
+      meaning's value after, which fits its value before
+      (`Value::Written`); the heap outside what the arguments lend is
+      unchanged; and each returned view is its parameter's reference
+      narrowed by the steps its signature names at the call's words
+      (`Value::Views`, `Ref::narrow`);
+    - where an unmeasured run is going, its history is one the meaning
+      reaches.
+  - **References and holes hold selections** (agreed; §21.3's "steps,
+    closed in the run" is now "selections"). A reference is `Ref { b,
+    sels: List<Sel> }` and a hole sits at selections. A run-time value
+    holds what was selected, each index an `Ix` (the variable's own
+    value), not the body's steps with atoms. Closed steps could not say a
+    byte at a `u64` index: a literal atom reads a number, and `Bytes(n)`
+    reads a word only. A read folds the model's `at` over the selections
+    (`Sel::read_at`), narrowing appends a place's selections at the
+    call's words (`Ref::narrow`), and `Canonical` compares selections by
+    `Sel::same`. Probes: `view_clause` (a view narrowed at `IWord(64, i)`)
+    and `view_of_plain` (a view of a by-value parameter owes `False`).
+  - `CheckSound` quantifies over a checker, since the checker is not built.
+
+### 22.3 What was measured
+
+Kernel steps, width one, a fresh cache per run, read with `scripts/timings`.
+
+- **The option** cost a factor of 1.01 to 1.09 before it was taken out.
+  That was an optioned meaning against a copy with fallbacks and no
+  failure, on the same bodies.
+- **One newest-first list of variables is quadratic.**
+  - A variable that lives long, such as a parameter or an object, sinks one
+    deeper with every binding.
+  - N word additions reading one parameter: 11.5k, 29.7k, 87k, 289k steps at
+    N = 32 to 256.
+  - N reads of a list at the last read's index: 20k, 47k, 122k, 357k.
+  - With arguments addressed by position and locals newest-first, both are
+    exactly linear: 8.4k to 64k, and 17k to 129k. On the built `Arg`/`Loc`
+    environment: 8.0k, 15.5k, 30.8k, 61.6k, and 18.7k, 36.8k, 73.4k, 146k.
+  - A long-lived local is not: the same chain over a list first taken into
+    a local costs 23k, 52k, 133k, 379k. Each binding pushes it one deeper.
+- **One environment against two** (§21.5 probe 2), with a `[u64; 16]`
+  object and `u64` words. N rounds of a read at the last word's `toNat`
+  plus one:
+
+  | N | one | two |
+  |---|---|---|
+  | 32 | 121k | 109k |
+  | 64 | 263k | 218k |
+  | 128 | 613k | 436k |
+  | 256 | 2.62M | 873k |
+
+  Two (objects apart from words) is exactly linear. One is superlinear and
+  needs more than the default budget at 256.
+
+  Rerun on the built `Arg`/`Loc` environment, with the object taken from
+  an argument into a local:
+
+  | N | one | two |
+  |---|---|---|
+  | 32 | 128k | 117k |
+  | 64 | 280k | 236k |
+  | 128 | 660k | 485k |
+  | 256 | 2.76M (out of fuel) | 1.02M |
+
+  The result is unchanged. Splitting arguments from locals does not help
+  here, because the object is a local and sinks with each word bound. This
+  is the long-lived local's shape again.
+- **Joins in sequence.**
+  - Independent packed joins: 10.6k, 22.9k, 53.9k, 141k at K = 4 to 32. That
+    is mildly superlinear, from the same variable depth; the source alone
+    is linear.
+  - Joins with an inner return: 2.1k, 5.4k, 12.3k, 26.4k, 55.6k, 116k at K =
+    1 to 6. That is exponential, the surface's copied rest; the meaning's
+    text is linear (recorded on `bind-in-non-tail-match-arms`, the surface's
+    unbuilt join point).
+  - On the built `Arg`/`Loc` environment, independent packed joins: 11.8k,
+    25.4k, 58.5k, 149k at K = 4 to 32.
+- **An indexed environment against the split.** One environment, variables
+  named by level, the same sources and pins; "split" is `Arg`/`Loc`, or for
+  item 4's rounds the two environments:
+
+  | Row | N | `NatMap` `Array` | skew-binary list | split |
+  |---|---|---|---|---|
+  | add | 32 … 256 | 20.0k … 230k | 21.6k … 216k | 8.0k … 61.6k |
+  | chain | 32 … 256 | 31.4k … 320k | 33.0k … 306k | 18.7k … 146k |
+  | long-lived local | 32 … 256 | 33.5k … 319k | 32.4k … 298k | 23.0k … 379k |
+  | item 4 | 32 … 128 | 167k … 738k | 145k … 599k | 117k … 485k |
+  | packed joins | K = 4 … 32 | 22.5k … 281k | 20.9k … 200k | 11.8k … 149k |
+
+  Both indexed forms are linear up to the logarithm (item 4 runs out of the
+  default budget at 256 in both). Their constant is the lookup: each level
+  of a trie or tree is a comparison, a halving and a subtraction on
+  numerals, constant-time but tens of kernel steps each, where a list cell
+  is a few. The full rows are on `ownership-long-lived-local`.
+
+## 23. The checker as built (2026-11-25, in progress)
+
+`issues/ownership-checker.md` builds the run, the checker and `check_sound`
+over §22's interfaces, for objects whose nested parts are plain (no holes).
+This section grows with that issue: items 1 and 2 (definitions and
+evaluation) are here; the proofs (items 3 and 4) follow. Where it says
+"proposed", the coordinating session has not yet decided.
+
+### 23.1 What each module holds
+
+| Module | Holds |
+|---|---|
+| `lib/lang/ownership/run.hthr` | The run: a variable as a `Cell` (a `Value` and whether its frame owns the block it refers to), the run's environment with the meaning's shape (`REnv`), reads and writes at selections that fit (`Sel::get`, `Sel::put`), statements, bodies in continuation form, `Func::run`, `Run::calls` (a callee at one less fuel, a primitive natively), `Run::of` |
+| `lib/lang/ownership/checker.hthr` | The checker: a role per variable, the table of live views, the licence, the statements, calls, leaves, the join's meet, `check: Checker(tys)` |
+
+Probes: `lib/_tests/lang/ownership/{run,checker}_tests.hthr`.
+
+### 23.2 The run
+
+- **A body read over a heap.** An object is in a block; a variable holds a
+  plain value or a reference (`Value`), and its frame owns the block where
+  it took or made it (`Cell.own`). A read, a word primitive, a literal and
+  a take out of a part bind a plain copy. A view of a referring variable
+  binds its reference narrowed (`Ref::narrow`), of a plain one a copy. A take
+  of a whole variable passes its cell on. `fresh` makes the next block. A
+  write stores where the place is: in the block the root refers to, or in a
+  plain root's own value. A death of an owner kills its block; any other is
+  nothing. So the eager write-back the reflector places after each change
+  of a view stores, in the run, what the block already holds.
+- **Calls** run the callee's body at one less fuel (`Run::calls`): a taken
+  argument the caller owns is passed on, unless it is a word; a word and one
+  it does not own are copied; a read or written argument is passed as it
+  is. A **primitive** (a callee the program gives no body, such as a list's
+  length, which `body_tests.hthr` reaches as a callee) reads its arguments
+  through the heap and answers the world's results, plain. A `Jump` is a
+  call of the function itself. Out of fuel a call is `Going`.
+- **A join** runs the arm its test picks; a `Yield` continues after the join
+  with the outputs pushed on the environment from before it, as the
+  meaning's does. The run needs no convoy and no join point: both join forms
+  run alike.
+- **Stuck** is a read of a dead or dangling block, and any selection that
+  does not fit what it selects in (an element past the end, a field the
+  record lacks). The meaning's reads are total; the run's are not, which is
+  where the accessors' preconditions (`RAccess`) are needed at this level.
+
+The probes: each pinned function of `body_tests.hthr` at closed arguments,
+its objects in blocks, answers what its meaning answers (both by
+evaluation); a write is a store in the block; the loop is done from fuel
+four (the outer call and three jumps) and going below; a read past the end,
+a dangling and a dead block, a write through a view whose owner died, and a
+field the record lacks are stuck.
+
+### 23.3 The checker
+
+One forward pass, reading the signatures only, after the code check
+(`Func::coded`, folded in: `check` refuses what it refuses).
+
+- **The state mirrors the meaning's environment**: an entry per variable,
+  the arguments by position and the locals newest first, so a variable is
+  reached at the meaning's cost. A variable is plain (the run holds a
+  plain copy), holds an object with an access (an argument as its mode
+  lends it, a fresh object, a taken one), is a view, or is gone.
+- **A table of live views**, each naming its variable's level, its object,
+  its region there (steps with atoms at levels, so a stored region keeps its
+  meaning as locals are pushed), its mode, its parent (the variable it was
+  opened on) and its place in the parent, and for a view to write whether it
+  has been written back since it last changed.
+- **The licence** (§15.3): an access of a variable at a place lands at the
+  variable's region followed by the place's steps. A holder's access meets
+  every live view of its object; a view's meets only the views opened
+  through it, since every other live view was found apart from it when the
+  later of the two was opened (a live view to write is apart from every
+  other live view). A read meets only views to write. Apart is
+  `Steps::apart`: closed, decided; open, `RApart` naming its two sides, its
+  atoms read back at the site.
+- **The write-back** `Write(Place(p, at), w)` of a view to write onto its own
+  parent and place is licensed as it is (the run stores what is there),
+  marks `w` written back and changes `p`. A view to write dies only written
+  back; a view dies only after the views opened through it; an owner dies
+  or is taken only with no view of its object live. A word that a live
+  region reads is not written.
+- **Residuals**: an accessor's precondition at every element or window
+  prefix of a place read, written, taken or viewed (`RAccess`); `RFits` at a
+  write whose place is a sequence; `RPre` and `RMeasure` at every call and
+  `Jump`; `RApart` from the licence.
+- **Calls** read what they lend to read, write what they lend to write, and
+  move an owned non-word object they take (anything else taken is a copy).
+  Arguments lent where one may change are apart where one is a view of the
+  other or holds the object. Results: a fresh object; a taken object back;
+  a read view of a parameter at the steps the signature names. Then each
+  written parameter's value after, bound as a view to write of the argument
+  lent (its whole, not written back): the caller writes it back to that
+  argument, and the argument back to its own place.
+- **Leaves.** A `Ret` reads its variables owing nothing (a `Ret` owes
+  nothing in the verdict's tree), answers each result as its origin says,
+  and gives back each written parameter's object, held and written back. A
+  `Jump` passes each written or returned parameter back in its own place.
+- **The join** is the meet (§15.3). What each arm yields becomes the
+  outputs. A variable from before the join that an arm wrote or yielded is
+  gone after it (the meaning returns to its value before the join, the heap
+  does not); one the arms leave alike stays; any other is gone. A read view
+  chosen by the join keeps every arm's entries (its region the union); a
+  view to write survives only where both arms hold it on one parent at one
+  place. Every view an arm holds that the join does not keep is dropped, and
+  a dropped view to write must be written back.
+
+### 23.4 What changed in the interfaces
+
+Each agreed by the coordinating session after items 1 and 2.
+
+- **A call binds its results, then its written parameters.**
+  `Stmt::code_step` bound the results only, so after a call lending a view
+  to write its value after could not be bound or written back. It now
+  binds `ret_codes()`, §22.2's `Ret` convention read at the call.
+- **Primitives are §15.4's "level 2's primitives", and there is no other
+  kind.** A primitive is a world entry the program gives no body
+  (`Prog.prim`): every parameter read or taken plain, every result fresh and
+  plain (`Sig::reads_only`). Its run is, by definition, the world's function
+  at its arguments read through the heap (`Run::prim`), so it has no run of
+  its own to prove sound. The checker licenses a call of one as a read of
+  each argument and refuses a primitive, or a call of one, that is not
+  read-only. A list's length is the first (`body_tests.hthr` reaches it as
+  a callee).
+- **Passed by value is copied for plain data**, by the sharing class
+  (`Shape::plain`: a word, or a name whose class is `Plain`), in the run
+  (`Cell::pass`) and the checker (a taken plain parameter is a plain
+  variable; a taken non-plain owned one moves).
+- **The program's run is the defined one** (`Prog::run` is `Run::of`); the
+  field is gone.
+- **`SafeAt`** compares the run with the world `p.w`, and `CheckSound` takes
+  each function's pin pointwise as a premise (`Prog::Pinned`, §21.3). Both
+  hold under the function's own precondition. Its inputs are lendable
+  (`Lendable`, named once, the design's "a function requires only that what
+  it may change is not aliased"): each referring argument's block is live
+  and has no holes and its selections fit; an argument taken at a plain code
+  is plain; an argument the callee may change is apart from every other.
+  The caller's side of `Lendable` is to be a lemma the licence gives at
+  each call (item 3), not a premise re-proved per call.
+  `Heap::Frame` covers the blocks that existed before. `ReadAll` reads the
+  whole answer, results then written values. `Value::Written` reads a
+  referring written argument's block after; a plain one is in the written
+  slots. `Value::ViewIs`: a fresh result is plain or a block the call made
+  (none below the heap's length before it, so no argument reaches it; the
+  checker answers `OFresh` only with an object made in the call, never a
+  taken argument, which is `OParam`); an `OParam(i)` result is the argument
+  itself.
+- **A returned view's place reads the call's words, the arguments' and then
+  the results'** (§15.2: a view travels with its slot). In an `OView`'s
+  steps an atom past the parameters' count reads a result; the callee's
+  check requires that result to be a plain word, and the caller binds it
+  among the call's results, so its write-back place is static in its own
+  words. `call_check_tests`' `found` is accepted that way (`found_checked`,
+  `beside_found_checked`); no region coarser than the view is added.
+- **The sequences' laws**: `SeqLaws` and `WinLaws` have `pre_inside` (what
+  the accessor asks gives the run's fit) and `inside_len` (the fit reads
+  only the length, so a write that keeps lengths keeps every fit). A list's
+  `Pre` at a word index is `False`, as decision B makes an index of another
+  kind unfit (a source indexing by `i.toNat()` binds the number with a word
+  primitive). `[A; n]` reads any word through `toNat` in both, and `Bytes(n)`
+  a `u64` in both.
+- **`RMeasure` at every call.** Fuel is depth, so `Done` from `need` composes
+  through every call, and a signature does not name its recursion. Within
+  a recursion the source's `decreases` proof discharges it. Outside one a
+  generator writes the caller's `need` as one more than the largest of its
+  call sites' callee needs at the values passed, and the residual holds by
+  that definition (`both_due`: two calls of `pick`, need 1, from `both`,
+  need 2).
+- **A view to write survives a join only where both arms hold it at one
+  parent and one place**; otherwise it is written back before the join. A
+  write-back's place is static steps, so no place spells "the convoy of the
+  arms' steps" (`two_windows_refused`; §21.2's allowance is withdrawn).
+
+### 23.5 The experiments' programs
+
+Restated in `checker_tests.hthr`, each accepted one with its verdict by
+`refl`, each refusal refused and shown to pass the code check
+(`refusals_coded`). In the real body the experiments' versions
+(`let x1 = x.set(i, v)`) are writes in place, a take needing its place
+whole; a lending call is followed by the two write-backs; every arm that
+writes a variable yields it. Not restated: `call_check_tests` §9 (a
+collection of stored write references and the erased owner, next round's
+with stored views), and the first experiment's plan probes (two parameters
+on one buffer, a clone into its source's buffer), which have no
+counterpart: there is no plan, and arguments a callee may change are apart
+by `SafeAt`'s inputs.
+
+### 23.6 What was measured
+
+Kernel steps, a fresh copy of a library-only cache per run, read with
+`scripts/timings`. Each row is a generated body of `N` rounds over two
+objects, its verdict checked to its residual count (which forces every
+residual):
+
+| N | straight loans (11 statements a round) | joins in sequence | calls lending a view to write |
+|---|---|---|---|
+| 8 | 131k | 44.5k | 104k |
+| 16 | 264k | 86.7k | 206k |
+| 32 | 542k | 173k | 414k |
+| 48 | 836k | 262k | 627k |
+
+All three are linear. Past about a million steps a single declaration
+meets the kernel's budget, and the count it reports is no longer the
+term's (a plain list sum shows the same at the same count), so a verdict
+larger than about five hundred statements is checked in parts: the pass
+over a body's prefix is a function of the state it starts in
+(`Body::verdict` takes `CSt`), so a generator states, as one declaration,
+the state a prefix ends in, and as the next, the verdict of the rest from
+that state. Not a defect.
+
+The dearest definition to elaborate is `CSt::out_role` (half a million
+steps): a match on the two arms' roles, four by four, each arm an
+`Option` built by `then` over a nested match on view entries, whose
+motive the elaborator spells per arm. Not optimised. Of the
+probes the dearest is `long_checked` (six rounds, 21 apartness residuals,
+102k steps).
+
+### 23.7 `check_sound`, in progress
+
+**Three tightenings of the checker**, each so the invariant needs no case
+the probes do not use:
+
+- **The write-back is eager, as §15.2 says**: after a statement that
+  changes a view to write, the only statements until it is written back are
+  write-backs and deaths of views already written back; a join, a `Yield`,
+  a `Ret` and a `Jump` are refused while one is pending (`CSt::pending`,
+  `CSt::writes_back`; probes `between_refused`, `between_after_checked`).
+  This is §15.2's rule made a refusal, `between_refused` its probe. So
+  between statements at most the chain of a just-changed view is stale, and
+  the invariant's patch is only along that chain.
+- **Atoms read plain variables only** (`CSt::atoms_ok`): an index cannot move
+  under a region, the variable being written refused while a region reads
+  it and a plain variable's run value being its meaning's.
+- **A fresh result of a plain code is a plain value**, on both sides
+  (`Value::ViewIs`, the caller's role): a word a call answers is a plain
+  variable, which an atom may read.
+
+**The invariant** (`sound.hthr`'s `Inv`, stated once, with `Sim` as its
+first field): between the checker's state, the meaning's environment and
+the run's machine, for a function entered on heap `h0` and lent the blocks
+`lent`:
+
+- `sim`: each live variable's cell agrees with its meaning as its role says
+  (a plain variable holds the value; a holder or a view reads it through
+  the heap, its block live, its selections fitting; a gone one owes
+  nothing), with the environments' lengths and each variable's code;
+  against the meaning *with the pending chain written up*
+  (`CSt::patched`, `CSt::up`): while a view to write has changed and is not
+  yet written back, the heap already holds its value in each ancestor,
+  which the meaning holds only after each write-back. Nothing pending, it
+  is `Sim` itself (`Inv::sim_now`).
+- `root`, `refs`: each object has one run reference, and a live variable's
+  reference is its object's (a holder) or its object's narrowed by one of
+  its entries' region at the words (a view; `CSt::RefOk`). This is what
+  turns the licence's apartness of regions of one object into apartness of
+  the run's references.
+- `apart`: references to different objects, one of which something live
+  may change through, are apart (`Lendable`'s clause at entry; a fresh
+  block after).
+- `owned`, `frame`, `grows`: every live reference is to a block lent or
+  made here, so the blocks not lent are as they were (`Heap::Frame`).
+
+**Entry** (`Inv::start`): the invariant at a function's start from
+`SafeAt`'s premises: `ReadAll` and `Lendable` give each argument's cell its
+role's agreement and reference, `Lendable.apart` the cross-object clause,
+and `Dyn::Coded` the codes.
+
+**`Dyn::Coded`** (added 2026-11-26): the meaning's arguments have the
+parameters' codes, a premise of `SafeAt` and of `CheckSound`'s `Due`. Without
+it `CheckSound` is false: `get_x(p: Point, read) { p.x }` (a field step owes
+nothing) is checked owing nothing, and at the word `5` for `p` every other
+premise holds (it reads as itself, there is no precondition, a plain value
+is lendable) while the run is stuck reading a field of a word, at fuel 0,
+where `Safety` assumes nothing of callees. A junk meaning for an ill-coded
+input is sound only if inputs are coded, and codes come from outside only
+here. The call stage discharges it from the code check (`Stmt::code_step`'s
+`Call` case). Probes: `pick_args_coded`, `words_not_coded`.
+
+**Built** (`sound.hthr`, probes `sound_tests.hthr`): reads, writes and fits
+along appended selection paths; a place's steps as selections at the words;
+levels and variables, and a push keeping every earlier level; `Sim::push`,
+the one lemma every binding statement uses; `Value::get_more`; and
+`Place::fit_from`: a place whose codes have parts and whose accessors'
+residuals hold fits in the run, from `pre_inside`. A read's verdict split
+once into its parts (`ReadInv`); the stage lemmas for `Lit` and `Op`
+(`Stepped`: the run continues, the invariant holds after); and the words:
+an atom the checker reads at plain levels reads one index in the run and in
+the meaning (`Sim::atom_ix`), so a place's steps make one list of
+selections in both (`Sim::steps_same`).
+
+**Added to the interfaces** (decided 2026-11-26): writing back what was
+read changes nothing, `put_back`, a law of the model rather than of this
+proof: `FieldLaws` (`f.set(v, f.get(v)) = v`), `SeqLaws` and `WinLaws` (at
+every index, inside or out: outside it is `still`), `PartLaws`, and
+`StepModelLaws` (`over(a, λ _ => at(a, s), s) = s`, with no fit hypothesis),
+derived for `Dyn::model` by `Dyn::in_put_back` and proved for the list,
+`[A; n]`, `Bytes(n)` and list-window instances. The write-back stage needs
+it: the run stores, at the view's place, what the block holds there.
+`Lendable` carries the arity (`arity`: as many arguments as parameters),
+since the checker's levels assume it.
+
+**What remains for straight-line bodies and calls** (the invariant and
+its entry are proved; `Lit`, `Op` and `Read` are proved against `Sim`): the
+stage lemmas restated against `Inv` (the three above lift through
+`Inv::sim_now`, nothing being pending when they run), then `Take`, `View`,
+`Fresh`, `Write` (through a holder,
+through a view, a write-back), `Death`, `Call` (each argument's lending,
+`Lendable` at the callee from the licence, the callee's `SafeAt` at less
+fuel, results and written slots) and `Ret` (`ReadAll`, `Written`, `Frame`,
+`Views`); then `SafeAt` for a body with no join and no `Jump`.
+
+### 23.8 `check_sound` continued: the interfaces tightened (2026-11-26)
+
+Decided by the coordinating session after the first half of item 3, and
+found while designing the invariant for every stage.
+
+- **A block lent only to read is unchanged by the call.** `Heap::Frame` in
+  `SafeAt` exempts only the blocks lent to a parameter that may change them
+  (`Value::lends` takes the parameters). The caller's invariant after a call
+  of a reader needs it: its other variables' reads of a read-lent block stand
+  on the frame, not on the callee's word.
+- **An object taken is a whole block no other argument refers to**
+  (`Lendable.whole`). The callee owns it and its death frees the block, so a
+  taken argument sharing a block with another one made `CheckSound` false:
+  `f(a: Buf take, b: Buf read) { Death(a); Read(b) }` is checked, and at two
+  apart fields of one block the run kills the block and the read is stuck.
+  The caller's side is its own invariant (`own`, below).
+- **The code conditions are in the checker's pass.** `Func::coded`, its
+  `CEnv` walk and `CheckRefusesIllCoded` are gone from `verdict.hthr`; each
+  statement, test, leaf and join is refused first if its codes are wrong
+  (`Stmt::code_ok`, `Test::code_ok`, the leaves' and arms' code lists), from
+  the codes the checker's state records, so a stage reads its codes off the
+  verdict's inversion. A refusal says whether it was the codes or ownership
+  (`Why`, `Func::refusal`): the code-refusal probes answer `Some(WCodes)`
+  (`interfaces_tests`), and the experiments' refused programs `Some(WOwn)`
+  (`refusals_owned`, which replaces `refusals_coded`).
+- **A plain variable a live region reads does not die** (a checker
+  refusal): the invariant needs every word a region reads to stay a plain
+  variable.
+
+**The invariant's shape** (`Inv`; the reasons are beside its definition):
+`root: Nat → Option<Ref>` (an object held by value has no root); the
+cross-object clauses are per object over roots, so a binding touches none of
+them: roots of objects one of which may change are apart (`apart`), every root
+is in the heap (`inheap`, so a fresh block is past it), an object something
+may change through has its root in a block lent to change or made here
+(`owned`, which with `frame` gives the tightened `Frame` at `Ret`); a cell its
+frame owns is its object's whole block, which no other object's root is in
+(`own`); an object has one holder (`one`); every level a live region reads is
+plain (`words`). A view's reference is one of its entries' object's root
+narrowed (`RefOk`), since after a join a read view's entries may be of several
+objects. `Inv::start` proves every clause at entry.
+
+Found for the call stage (item 4), reported and not yet built: a written
+parameter's slot in the answer must be the argument where it refers, and two
+fresh results of one call must be distinct blocks; and three checker defects,
+each a refusal to add (a join over a read-lent holder binding an owned
+output; an arm yielding one holder twice; a returned view's region reading a
+non-plain level in the caller).

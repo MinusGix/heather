@@ -246,3 +246,63 @@ fn a_literal_spine_is_read_back_in_time_linear_in_its_length() {
         assert!(large < 8 * small, "under a parameter: {under_parameter}: {small} → {large} node visits for k = 64 → 256");
     }
 }
+
+/// Reading a closed literal costs evaluation steps linear in its length, no
+/// more than the same list written as a `Cons` spine. A two-valued element
+/// type packs the vector's last (up to 64) elements into one `VecLit`, and
+/// the elaborator's spine walk did not read a projection off it: each element
+/// past the packing point stayed a projection chain from the literal's root
+/// as deep as its position, which the kernel walked once per element, so a
+/// literal of 64 cost about ten times its spine
+/// (issues/list-literal-evaluation-quadratic.md). Counted on the exact
+/// `eval_steps` of a `refl` verdict that reads every element, the list
+/// elaborated in an earlier module so only its evaluation is counted, at
+/// three doubling lengths; a wrong verdict is refused as the control. At
+/// these lengths the quadratic term was not yet the larger one (2.5× and
+/// 2.9× per doubling), so the claims are the spine bound and an increment
+/// per doubling that at most doubles, not a ratio of totals.
+#[test]
+fn a_packed_literal_is_read_in_evaluation_steps_linear_in_its_length() {
+    use heather_elab::stats;
+    const BITS: &str = "import list;
+inductive Bit { Off, On }
+fn all(xs: List<Bit>) -> Bit { match xs { Nil => On, Cons(b, rest) => match b { Off => Off, On => all(rest) } } }
+";
+    fn steps(k: usize, spine: bool) -> u64 {
+        let elements: Vec<&str> = (0..k).map(|i| if i + 1 == k { "Off" } else { "On" }).collect();
+        let list = if spine {
+            elements.iter().rev().fold("Nil".to_string(), |rest, e| format!("Cons({e}, {rest})"))
+        } else {
+            format!("[{}]", elements.join(", "))
+        };
+        let mut elaborator = Elaborator::with_prelude().expect("prelude");
+        elaborator.set_kernel_workers(1);
+        elaborator.elab_module_source("list", LIST).expect("canonical list module");
+        let source = format!("{BITS}fn xs() -> List<Bit> {{ {list} }}\n");
+        elaborator
+            .elab_module_source("bits", &source)
+            .unwrap_or_else(|error| panic!("{}", error.render(&source)));
+        elaborator.enable_item_timings();
+        let verdict = "import list; import bits;\ntheorem verdict(): all(xs()) = Off { refl }\n";
+        elaborator
+            .elab_module_source("verdict", verdict)
+            .unwrap_or_else(|error| panic!("{}", error.render(verdict)));
+        let rows = elaborator.take_item_timings();
+        stats::disable();
+        let wrong = "import list; import bits;\ntheorem wrong(): all(xs()) = On { refl }\n";
+        assert!(elaborator.elab_module_source("wrong", wrong).is_err(), "a wrong verdict was accepted");
+        rows.into_iter().find(|r| r.item.ends_with("verdict")).expect("the verdict's row").kernel.eval_steps
+    }
+    let lengths = [16, 32, 64];
+    let literal: Vec<u64> = lengths.into_iter().map(|k| steps(k, false)).collect();
+    let spine: Vec<u64> = lengths.into_iter().map(|k| steps(k, true)).collect();
+    eprintln!("verdict steps at 16/32/64: literal {literal:?}, spine {spine:?}");
+    assert!(literal[0] > 0);
+    for (l, s) in literal.iter().zip(&spine) {
+        assert!(l <= s, "a literal's read cost more than its spine's: literal {literal:?}, spine {spine:?}");
+    }
+    assert!(
+        literal[2] - literal[1] <= 2 * (literal[1] - literal[0]),
+        "a literal's read grew faster than linearly: {literal:?}"
+    );
+}
