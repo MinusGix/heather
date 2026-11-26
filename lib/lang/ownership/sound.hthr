@@ -12063,3 +12063,99 @@ theorem CSt::lent_nth(self s: CSt, xs: List<Var>): (ps: List<Param>) → (i: Nat
         },
     }
 }
+
+theorem List::nth_map_inv<A, B>(self xs: List<A>, f: A → B): (i: Nat) → (y: B) → xs.map(f).nth(i) = Some(y) → Exists<A>(λ x => (xs.nth(i) = Some(x)) ∧ (f(x) = y)) {
+    match xs {
+        Nil => λ i y no => absurd(no),
+        Cons(h, t) => λ i => match i {
+            Zero => λ y e => Exists(h, ⟨refl, Option::some_inj(f(h), y, e)⟩),
+            Succ(k) => λ y e => t.nth_map_inv(f, k, y, e),
+        },
+    }
+}
+
+theorem Ref::eta(r: Ref): Ref(r.b, r.sels) = r { match r { Ref(_, _) => refl } }
+
+// `apart_one`'s verdict on one of its others.
+theorem CSt::apart_one_nth(self s: CSt, tys: Nat → Type, cx: Ctx(tys), env: Env(tys), a: Lent, bs: List<Lent>): (rs: List<Residual>) → s.apart_one(a, bs) = Some(rs) →
+    Residual::All(rs, tys, cx, env, True) → (k: Nat) → (b: Lent) → bs.nth(k) = Some(b) → Exists<List<Residual>>(λ r1 => (s.apart_lent(a, b) = Some(r1)) ∧ Residual::All(r1, tys, cx, env, True))
+{
+    match bs {
+        Nil => λ rs _ _ k b no => absurd(no),
+        Cons(b0, rest) => λ rs ok hold k b hb => {
+            let a1 = Option::and_then_some(s.apart_lent(a, b0), λ r1 => s.apart_one(a, rest).map(λ r2 => r1 ++ r2), rs, ok);
+            let a2 = Option::map_some_inv(s.apart_one(a, rest), λ r2 => a1.witness ++ r2, rs, a1.proof.right);
+            let hs = Residual::all_app(tys, cx, env, True, a1.witness, a2.witness, j(sym(a2.proof.right), λ q _ => Residual::All(q, tys, cx, env, True), hold));
+            match k {
+                Zero => j(Option::some_inj(b0, b, hb), λ q _ => Exists<List<Residual>>(λ r1 => (s.apart_lent(a, q) = Some(r1)) ∧ Residual::All(r1, tys, cx, env, True)), Exists(a1.witness, ⟨a1.proof.left, hs.left⟩)),
+                Succ(k1) => s.apart_one_nth(tys, cx, env, a, rest, a2.witness, a2.proof.left, hs.right, k1, b, hb),
+            }
+        },
+    }
+}
+
+// `apart_args`' verdict on two different arguments, in their order.
+theorem CSt::apart_args_pair(self s: CSt, tys: Nat → Type, cx: Ctx(tys), env: Env(tys), ls: List<Lent>): (rs: List<Residual>) → s.apart_args(ls) = Some(rs) →
+    Residual::All(rs, tys, cx, env, True) → (i, k: Nat) → i < k → (a, b: Lent) → ls.nth(i) = Some(a) → ls.nth(k) = Some(b) →
+    Exists<List<Residual>>(λ r1 => (s.apart_lent(a, b) = Some(r1)) ∧ Residual::All(r1, tys, cx, env, True))
+{
+    match ls {
+        Nil => λ rs _ _ i k _ a b no => absurd(no),
+        Cons(l0, rest) => λ rs ok hold i k lt a b ha hb => {
+            let a1 = Option::and_then_some(s.apart_one(l0, rest), λ r1 => s.apart_args(rest).map(λ r2 => r1 ++ r2), rs, ok);
+            let a2 = Option::map_some_inv(s.apart_args(rest), λ r2 => a1.witness ++ r2, rs, a1.proof.right);
+            let hs = Residual::all_app(tys, cx, env, True, a1.witness, a2.witness, j(sym(a2.proof.right), λ q _ => Residual::All(q, tys, cx, env, True), hold));
+            match k {
+                Zero => false_elim(Nat::not_succ_le_zero(i, lt)),
+                Succ(k1) => match i {
+                    Zero => j(Option::some_inj(l0, a, ha), λ q _ => Exists<List<Residual>>(λ r1 => (s.apart_lent(q, b) = Some(r1)) ∧ Residual::All(r1, tys, cx, env, True)),
+                        s.apart_one_nth(tys, cx, env, l0, rest, a1.witness, a1.proof.left, hs.left, k1, b, hb)),
+                    Succ(i1) => s.apart_args_pair(tys, cx, env, rest, a2.witness, a2.proof.left, hs.right, i1, k1, omega(lt), a, b, ha, hb),
+                },
+            }
+        },
+    }
+}
+
+// `apart_each`'s verdict on one pair of places.
+theorem CSt::apart_pls_mem(self s: CSt, tys: Nat → Type, cx: Ctx(tys), env: Env(tys), a: Pl, bs: List<Pl>): (rs: List<Residual>) → s.apart_pls(a, bs) = Some(rs) →
+    Residual::All(rs, tys, cx, env, True) → (b: Pl) → Mem(b, bs) → Exists<List<Residual>>(λ r1 => (s.apart_pl(a, b) = Some(r1)) ∧ Residual::All(r1, tys, cx, env, True))
+{
+    match bs {
+        Nil => λ rs _ _ b no => false_elim(no),
+        Cons(b0, rest) => λ rs ok hold b mb => {
+            let a1 = Option::and_then_some(s.apart_pl(a, b0), λ r1 => s.apart_pls(a, rest).map(λ r2 => r1 ++ r2), rs, ok);
+            let a2 = Option::map_some_inv(s.apart_pls(a, rest), λ r2 => a1.witness ++ r2, rs, a1.proof.right);
+            let hs = Residual::all_app(tys, cx, env, True, a1.witness, a2.witness, j(sym(a2.proof.right), λ q _ => Residual::All(q, tys, cx, env, True), hold));
+            match mb {
+                Inl(eq) => j(sym(eq), λ q _ => Exists<List<Residual>>(λ r1 => (s.apart_pl(a, q) = Some(r1)) ∧ Residual::All(r1, tys, cx, env, True)), Exists(a1.witness, ⟨a1.proof.left, hs.left⟩)),
+                Inr(mr) => s.apart_pls_mem(tys, cx, env, a, rest, a2.witness, a2.proof.left, hs.right, b, mr),
+            }
+        },
+    }
+}
+
+theorem CSt::apart_each_mem(self s: CSt, tys: Nat → Type, cx: Ctx(tys), env: Env(tys), ps: List<Pl>, bs: List<Pl>): (rs: List<Residual>) → s.apart_each(ps, bs) = Some(rs) →
+    Residual::All(rs, tys, cx, env, True) → (a, b: Pl) → Mem(a, ps) → Mem(b, bs) → Exists<List<Residual>>(λ r1 => (s.apart_pl(a, b) = Some(r1)) ∧ Residual::All(r1, tys, cx, env, True))
+{
+    match ps {
+        Nil => λ rs _ _ a b no => false_elim(no),
+        Cons(p0, rest) => λ rs ok hold a b ma mb => {
+            let a1 = Option::and_then_some(s.apart_pls(p0, bs), λ r1 => s.apart_each(rest, bs).map(λ r2 => r1 ++ r2), rs, ok);
+            let a2 = Option::map_some_inv(s.apart_each(rest, bs), λ r2 => a1.witness ++ r2, rs, a1.proof.right);
+            let hs = Residual::all_app(tys, cx, env, True, a1.witness, a2.witness, j(sym(a2.proof.right), λ q _ => Residual::All(q, tys, cx, env, True), hold));
+            match ma {
+                Inl(eq) => j(sym(eq), λ q _ => Exists<List<Residual>>(λ r1 => (s.apart_pl(q, b) = Some(r1)) ∧ Residual::All(r1, tys, cx, env, True)), s.apart_pls_mem(tys, cx, env, p0, bs, a1.witness, a1.proof.left, hs.left, b, mb)),
+                Inr(mr) => s.apart_each_mem(tys, cx, env, rest, bs, a2.witness, a2.proof.left, hs.right, a, b, mr, mb),
+            }
+        },
+    }
+}
+
+// One pair of places of one object found apart: apart at the words.
+theorem CSt::apart_pl_sound(self s: CSt, tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(tys, cx.strs), env: Env(tys), a, b: Pl, rs: List<Residual>, ok: s.apart_pl(a, b) = Some(rs),
+    hold: Residual::All(rs, tys, cx, env, True), same: a.obj = b.obj, r1: s.InRange(Steps::lvls(a.at)), r2: s.InRange(Steps::lvls(b.at))):
+    Sel::Apart(tys, cx.strs, Steps::sels(s.unsteps(a.at), Env::ixs(tys, env)), Steps::sels(s.unsteps(b.at), Env::ixs(tys, env)))
+{
+    s.against_sound(tys, cx, sl, env, VEnt(0, a.obj, a.at, Reading, 0, Nil, True), b, rs, ok, hold, same, Nil, a.at, b.at, refl, refl, r1, r2)
+}
