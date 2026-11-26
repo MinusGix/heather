@@ -4988,20 +4988,30 @@ theorem Cell::agrees_store(tys: Nat → Type, strs: Strs(tys), h, h2: Heap(tys),
 // The words regions read, after a write to a variable no region reads that
 // changes no other variable's meaning.
 theorem Inv::words_after(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: Nat → Bool}, inv: Inv(tys, strs, s, e, m, h0, lent),
-    none: s.pending() = False, {e2: Env(tys)}, {m2: Mach(tys)}, sim2: Sim(tys, strs, s, e2, m2), x: Var, l: Nat, hl: s.lvl(x) = Some(l), nrf: s.in_regions(l) = False,
-    ecell: (y: Var) → ¬(x = y) → Env::get(tys, e2, y) = Env::get(tys, e, y)):
+    none: s.pending() = False, {e2: Env(tys)}, {m2: Mach(tys)}, sim2: Sim(tys, strs, s, e2, m2),
+    ecw: (k: Nat) → s.in_regions(k) = True → Env::get(tys, e2, s.var_at(k)) = Env::get(tys, e, s.var_at(k))):
     (l2: Nat) → s.in_regions(l2) = True → (Mach::ixs(tys, strs, m2)).nth(s.ix_of(l2)) = (Mach::ixs(tys, strs, m)).nth(s.ix_of(l2))
 {
     let sim = Inv::sim_now(tys, strs, inv, none);
     λ l2 ir => {
         let wd = inv.words(l2, ir);
-        let ne: ¬(l2 = l) = λ eq => absurd(trans(sym(j(eq, λ q _ => s.in_regions(q) = True, ir)), nrf));
-        let hx2 = s.lvl_var_at(l2, wd.left);
-        let xn: ¬(x = s.var_at(l2)) = λ eq => s.var_ne(s.var_at(l2), x, l2, l, hx2, hl, ne)(sym(eq));
         trans(Sim::lvl_ix(tys, strs, sim2, l2, wd.left, wd.right),
             trans(s.env_ix(tys, e2, sim2.eargs, sim2.elocs, l2, wd.left),
-                trans(cong_fn(λ (d: Dyn(tys)) => Some(Dyn::ix(tys, d)), ecell(s.var_at(l2), xn)),
+                trans(cong_fn(λ (d: Dyn(tys)) => Some(Dyn::ix(tys, d)), ecw(l2, ir)),
                     trans(sym(s.env_ix(tys, e, sim.eargs, sim.elocs, l2, wd.left)), sym(Sim::lvl_ix(tys, strs, sim, l2, wd.left, wd.right))))))
+    }
+}
+
+// A meaning set at one variable no region reads agrees with the old at
+// every level a region reads.
+theorem CSt::regions_other(self s: CSt, tys: Nat → Type, e, e2: Env(tys), x: Var, l: Nat, hl: s.lvl(x) = Some(l), nrf: s.in_regions(l) = False,
+    words: (k: Nat) → s.in_regions(k) = True → k < s.na + s.nd,
+    ecell: (y: Var) → ¬(x = y) → Env::get(tys, e2, y) = Env::get(tys, e, y)):
+    (k: Nat) → s.in_regions(k) = True → Env::get(tys, e2, s.var_at(k)) = Env::get(tys, e, s.var_at(k))
+{
+    λ k ir => {
+        let ne: ¬(k = l) = λ eq => absurd(trans(sym(j(eq, λ q _ => s.in_regions(q) = True, ir)), nrf));
+        ecell(s.var_at(k), λ eq => s.var_ne(s.var_at(k), x, k, l, s.lvl_var_at(k, words(k, ir)), hl, ne)(sym(eq)))
     }
 }
 
@@ -5049,7 +5059,7 @@ theorem Inv::set_cell(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)
         };
     let sim2: Sim(tys, strs, s, e2, m2) = Sim(trans(Env::set_args(tys, e, x, f), sim.eargs), trans(REnv::set_args(tys, m.env, x, c), sim.margs),
         trans(Env::set_locs(tys, e, x, f), sim.elocs), trans(REnv::set_locs(tys, m.env, x, c), sim.mlocs), vars2, codes2);
-    let wsame = Inv::words_after(tys, strs, inv, none, sim2, x, l, hl, nrf, ecell);
+    let wsame = Inv::words_after(tys, strs, inv, none, sim2, s.regions_other(tys, e, e2, x, l, hl, nrf, λ k ir => (inv.words(k, ir)).left, ecell));
     let regs: ((en: VEnt) → Mem(en, s.views) → Steps::sels(s.unsteps(en.reg), Mach::ixs(tys, strs, m2)) = Steps::sels(s.unsteps(en.reg), Mach::ixs(tys, strs, m))) =
         λ en me => CSt::sels_keep(en.reg, s, Mach::ixs(tys, strs, m2), s, Mach::ixs(tys, strs, m), λ l2 ml => wsame(l2, s.region_lvl(en, me, l2, ml)));
     let refs2: ((y: Var) → (l2: Nat) → s.lvl(y) = Some(l2) → (r: Ref) → (REnv::get(tys, m2.env, y)).v = Refer(r) → s.RefOk(inv.root, Mach::ixs(tys, strs, m2), l2, r)) =
@@ -5087,6 +5097,43 @@ theorem Inv::set_cell(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)
 // live reference reads what it read, a reference of another object being
 // apart from the holder's root (`away`), a view of the holder's object apart
 // from the written path under the root (`under`, by the licence `lic`).
+// A root's block stored, with a meaning every variable agrees with and that
+// keeps the words regions read: the invariant's other clauses.
+theorem Inv::store_rest(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: Nat → Bool}, inv: Inv(tys, strs, s, e, m, h0, lent),
+    none: s.pending() = False, o: Nat, r: Ref, rt: inv.root(o) = Some(r), ch: s.Changes(o), nw: Dyn(tys), ex: Env(tys),
+    sim2: Sim(tys, strs, s, ex, Mach(Heap::store(tys, m.heap, r.b, nw), m.env, m.io)),
+    ecw: (k: Nat) → s.in_regions(k) = True → Env::get(tys, ex, s.var_at(k)) = Env::get(tys, e, s.var_at(k))):
+    Inv(tys, strs, s, ex, Mach(Heap::store(tys, m.heap, r.b, nw), m.env, m.io), h0, lent)
+{
+    let h2 = Heap::store(tys, m.heap, r.b, nw);
+    let m2: Mach(tys) = Mach(h2, m.env, m.io);
+    let ws = Mach::ixs(tys, strs, m);
+    let wsame = Inv::words_after(tys, strs, inv, none, sim2, ecw);
+    let ws2 = Mach::ixs(tys, strs, m2);
+    let regs: ((en: VEnt) → Mem(en, s.views) → Steps::sels(s.unsteps(en.reg), ws2) = Steps::sels(s.unsteps(en.reg), ws)) =
+        λ en me => CSt::sels_keep(en.reg, s, ws2, s, ws, λ l2 ml => wsame(l2, s.region_lvl(en, me, l2, ml)));
+    let lenh: (h2.len() = m.heap.len()) = Heap::store_len(tys, m.heap, r.b, nw);
+    let le0: (s.na + s.nd <= s.na + s.nd) = omega();
+    Inv(j(sym(s.patched_none(tys, strs, ex, m2, none)), λ q _ => Sim(tys, strs, s, q, m2), sim2), inv.root,
+        λ y l2 hy q cq => CSt::refok_keep(s, s, inv.root, inv.root, ws, ws2, l2, q, refl, refl, λ _ _ _ => refl, λ _ _ => refl,
+            λ en me => regs(en, s.views.mem_filter(en, λ e0 => e0.lvl.same(l2), me)), inv.refs(y, l2, hy, q, cq)),
+        inv.apart,
+        λ o3 r3 h3 => j(sym(lenh), λ n _ => r3.b < n, inv.inheap(o3, r3, h3)),
+        inv.owned, inv.own, inv.one, inv.words,
+        λ bb bl nl => match Nat::eq_or_ne(bb, r.b) {
+            Inl(eq) => match inv.owned(o, ch, r, rt) {
+                Inl(lt) => absurd(trans(sym(nl), j(sym(eq), λ q _ => lent(q) = True, lt))),
+                Inr(ge) => false_elim(Nat::lt_irrefl(bb, omega(bl, ge, eq))),
+            },
+            Inr(ne) => trans(m.heap.nth_update_other(r.b, λ bl0 => match bl0 { Live(ob) => Live(Obj(nw, ob.holes)), Dead => Dead }, bb, ne), inv.frame(bb, bl, nl)),
+        },
+        j(sym(lenh), λ n _ => h0.len() <= n, inv.grows),
+        inv.young, inv.held, inv.vents,
+        λ o3 r3 h3 ob ho => match Heap::obj_store_holes(tys, m.heap, r.b, r3.b, nw, ob, ho) { ⟨o0, po⟩ => trans(po.right, inv.bare(o3, r3, h3, o0, po.left)) },
+        inv.chain,
+        CSt::excl_keep(tys, strs, s, s, ws, ws2, refl, le0, λ en me => (inv.chain(en, me)).left, λ en me => (inv.vents(en, me)).right.left, regs, inv.excl), inv.wpar, inv.uni)
+}
+
 theorem Inv::store(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: Nat → Bool}, inv: Inv(tys, strs, s, e, m, h0, lent),
     none: s.pending() = False, x: Var, l: Nat, hl: s.lvl(x) = Some(l), nrf: s.in_regions(l) = False, o: Nat, a: Acc, hr: s.role(l) = KHold(o, a), aw: a.writes() = True,
     r: Ref, cr: (REnv::get(tys, m.env, x)).v = Refer(r), old: Dyn(tys), hv: Heap::val(tys, strs, m.heap, r.b) = Some(old), ss: List<Sel>, nw: Dyn(tys), f: Dyn(tys) → Dyn(tys),
@@ -5176,30 +5223,7 @@ theorem Inv::store(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, 
             Inr(ne) => trans(cong_fn(λ (d: Dyn(tys)) => d.code, ecell(y, other(y, l2, hy, ne))), sim.codes(y, l2, hy)),
         };
     let sim2: Sim(tys, strs, s, e2, m2) = Sim(trans(Env::set_args(tys, e, x, f), sim.eargs), sim.margs, trans(Env::set_locs(tys, e, x, f), sim.elocs), sim.mlocs, vars2, codes2);
-    let wsame = Inv::words_after(tys, strs, inv, none, sim2, x, l, hl, nrf, ecell);
-    let ws2 = Mach::ixs(tys, strs, m2);
-    let regs: ((en: VEnt) → Mem(en, s.views) → Steps::sels(s.unsteps(en.reg), ws2) = Steps::sels(s.unsteps(en.reg), ws)) =
-        λ en me => CSt::sels_keep(en.reg, s, ws2, s, ws, λ l2 ml => wsame(l2, s.region_lvl(en, me, l2, ml)));
-    let lenh: (h2.len() = m.heap.len()) = Heap::store_len(tys, m.heap, r.b, nw);
-    let le0: (s.na + s.nd <= s.na + s.nd) = omega();
-    Inv(j(sym(s.patched_none(tys, strs, e2, m2, none)), λ q _ => Sim(tys, strs, s, q, m2), sim2), inv.root,
-        λ y l2 hy q cq => CSt::refok_keep(s, s, inv.root, inv.root, ws, ws2, l2, q, refl, refl, λ _ _ _ => refl, λ _ _ => refl,
-            λ en me => regs(en, s.views.mem_filter(en, λ e0 => e0.lvl.same(l2), me)), inv.refs(y, l2, hy, q, cq)),
-        inv.apart,
-        λ o3 r3 h3 => j(sym(lenh), λ n _ => r3.b < n, inv.inheap(o3, r3, h3)),
-        inv.owned, inv.own, inv.one, inv.words,
-        λ bb bl nl => match Nat::eq_or_ne(bb, r.b) {
-            Inl(eq) => match inv.owned(o, ch, r, rt) {
-                Inl(lt) => absurd(trans(sym(nl), j(sym(eq), λ q _ => lent(q) = True, lt))),
-                Inr(ge) => false_elim(Nat::lt_irrefl(bb, omega(bl, ge, eq))),
-            },
-            Inr(ne) => trans(m.heap.nth_update_other(r.b, λ bl0 => match bl0 { Live(ob) => Live(Obj(nw, ob.holes)), Dead => Dead }, bb, ne), inv.frame(bb, bl, nl)),
-        },
-        j(sym(lenh), λ n _ => h0.len() <= n, inv.grows),
-        inv.young, inv.held, inv.vents,
-        λ o3 r3 h3 ob ho => match Heap::obj_store_holes(tys, m.heap, r.b, r3.b, nw, ob, ho) { ⟨o0, po⟩ => trans(po.right, inv.bare(o3, r3, h3, o0, po.left)) },
-        inv.chain,
-        CSt::excl_keep(tys, strs, s, s, ws, ws2, refl, le0, λ en me => (inv.chain(en, me)).left, λ en me => (inv.vents(en, me)).right.left, regs, inv.excl), inv.wpar, inv.uni)
+    Inv::store_rest(tys, strs, inv, none, o, r, rt, ch, nw, e2, sim2, s.regions_other(tys, e, e2, x, l, hl, nrf, λ k ir => (inv.words(k, ir)).left, ecell))
 }
 
 // ---------------------------------------------------------------------------
