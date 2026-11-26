@@ -210,11 +210,14 @@ fn bump(x: &mut Nat) → True {
 // The source's `Mutated(x, trivial)` read back: no results, then `x` after.
 theorem bump_means(x: Nat): bump_r().then(Mutated<Nat, True>, tys(), strs(), λ _ _ => Nil, 0, [nat(x)], λ rs => Mutated(as_nat(rs), trivial)) = bump(x) { refl }
 
-// The clause at a run that left `y` in the argument's block: `y` is the
-// meaning's `x + 1`, and it fits `x`.
-theorem bump_written_clause(x, y: Nat):
-    Value::Written(tys(), strs(), [Live(Obj(nat(y), Nil))], 1, [Refer(Ref(0, Nil))], [nat(x)], bump_sig().written(), bump_r().denote(tys(), strs(), λ _ _ => Nil, 0, [nat(x)]).drop(0))
-    = ((Some(nat(y)) = Some(nat(x + 1))) ∧ Dyn::Fits(tys(), strs(), nat(x), nat(x + 1)) ∧ True)
+fn arg0() → Value(tys()) { Refer(Ref(0, Nil)) }
+
+// The clause at a run whose answer's slot is the argument: the slot is the
+// argument itself, and the meaning's `x + 1` fits `x`; what the slot reads
+// is `ReadAll`'s.
+theorem bump_written_clause(x: Nat):
+    Value::Written(tys(), strs(), [arg0()], [nat(x)], bump_sig().written(), [arg0()], bump_r().denote(tys(), strs(), λ _ _ => Nil, 0, [nat(x)]).drop(0))
+    = ((arg0() = arg0()) ∧ Dyn::Fits(tys(), strs(), nat(x), nat(x + 1)) ∧ True)
 { refl }
 
 // ---------------------------------------------------------------------------

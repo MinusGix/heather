@@ -18,8 +18,8 @@
 // - **A function's safety** (`Safety`), relative to its callees' at less
 //   fuel: at no fuel is the run stuck; a measured function's run is done
 //   from its measure on; where it is done, its results read the meaning's,
-//   each written parameter reads the meaning's value after and that value
-//   fits its value before (`Value::Written`), the heap outside what was
+//   each referring written parameter's slot is the argument itself and the
+//   meaning's value after fits its value before (`Value::Written`), the heap outside what was
 //   lent is unchanged, and each returned view is its parameter's reference
 //   narrowed by the steps its signature names at the call's words
 //   (`Value::Views`, `Ref::narrow`); where an unmeasured run is going, its history is a
@@ -235,19 +235,23 @@ fn Dyn::coded(tys: Nat → Type, ds: List<Dyn(tys)>, ps: List<Param>) → Bool {
 
 fn Dyn::Coded(tys: Nat → Type, ds: List<Dyn(tys)>, ps: List<Param>) → Type { Dyn::coded(tys, ds, ps) = True }
 
-// Each written parameter, after: a referring argument's block reads the
-// meaning's value after; and that value fits the value before. (A plain
-// one's value after is in the answer's written slots, which `ReadAll`
-// reads.)
-fn Value::Written(tys: Nat → Type, strs: Strs(tys), h: Heap(tys), fuel: Nat, vs: List<Value(tys)>, ds: List<Dyn(tys)>, is: List<Nat>) → List<Dyn(tys)> → Type {
+// Each written parameter, after: a referring argument's slot in the answer
+// is the argument itself, so the caller's view of what it lent stays its
+// own reference (what the slot reads is `ReadAll`'s); and the meaning's
+// value after fits the value before. (A plain one's value after is in the
+// answer's written slots, which `ReadAll` reads.)
+fn Value::Written(tys: Nat → Type, strs: Strs(tys), vs: List<Value(tys)>, ds: List<Dyn(tys)>, is: List<Nat>) → List<Value(tys)> → List<Dyn(tys)> → Type {
     match is {
-        Nil => λ _ => True,
-        Cons(i, rest) => λ outs => match outs {
+        Nil => λ _ _ => True,
+        Cons(i, rest) => λ slots outs => match slots {
             Nil => False,
-            Cons(o, orest) =>
-                (match vs.nth(i).unwrap_or(Plain(Dyn::none(tys))) as λ _ => Type { Refer(r) => Value::read(tys, Refer(r), strs, h, fuel) = Some(o), Plain(_) => True }) ∧
-                Dyn::Fits(tys, strs, ds.nth(i).unwrap_or(Dyn::none(tys)), o) ∧
-                Value::Written(tys, strs, h, fuel, vs, ds, rest, orest),
+            Cons(a, arest) => match outs {
+                Nil => False,
+                Cons(o, orest) =>
+                    (match vs.nth(i).unwrap_or(Plain(Dyn::none(tys))) as λ _ => Type { Refer(r) => a = Refer(r), Plain(_) => True }) ∧
+                    Dyn::Fits(tys, strs, ds.nth(i).unwrap_or(Dyn::none(tys)), o) ∧
+                    Value::Written(tys, strs, vs, ds, rest, arest, orest),
+            },
         },
     }
 }
@@ -299,7 +303,7 @@ fn SafeAt(tys: Nat → Type, p: Prog(tys), g: Nat, fuel: Nat) → Type {
         ((match p.need(g) as λ _ => Type { Some(n) => n(g, ds) <= fuel → Exists<Answer(tys)>(λ a => p.run(tys, fuel, g, vs, h, io) = Done(a)), None => True }) ∧
         (((a: Answer(tys)) → p.run(tys, fuel, g, vs, h, io) = Done(a) →
             Value::ReadAll(tys, p.strs, a.heap, a.heap.len(), a.results, p.w(g, ds)) ∧
-            Value::Written(tys, p.strs, a.heap, a.heap.len(), vs, ds, (p.fns(g)).sig.written(), (p.w(g, ds)).drop((p.fns(g)).sig.results.len())) ∧
+            Value::Written(tys, p.strs, vs, ds, (p.fns(g)).sig.written(), a.results.drop((p.fns(g)).sig.results.len()), (p.w(g, ds)).drop((p.fns(g)).sig.results.len())) ∧
             Heap::Frame(tys, h, a.heap, λ b => Value::lends(tys, (p.fns(g)).sig.params, vs, b)) ∧
             Value::Views(tys, p.strs, h.len(), vs, Dyn::ixs(tys, ds ++ p.w(g, ds)), (p.fns(g)).sig.results, a.results)) ∧
         (match p.need(g) as λ _ => Type { Some(_) => True, None => (io2: Io) → p.run(tys, fuel, g, vs, h, io) = Going(io2) → p.reaches(g, ds, io2.past) })))
