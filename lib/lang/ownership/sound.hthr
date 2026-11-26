@@ -2839,6 +2839,21 @@ theorem Stmt::stage_read(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(tys, cx.s
         Inv::push_plain(tys, cx.strs, inv, none, g.code, d, False, Sim::place_code(tys, cx.strs, sim, p, g, ok)), λ _ => refl)
 }
 
+// A length read (`Len`): the run reads the place as `Read` does and pushes
+// the length's word, the meaning's, since the place's values agree.
+theorem Stmt::stage_len(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(tys, cx.strs), fns: Nat → Func, call: Caller(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>}, {root: Nat → Option<Ref>},
+    inv: Inv(tys, cx.strs, s, e, m, h0, lent, root), none: s.pending() = False, p: Place, wd: Width, g: Got, ok: s.read(tys, cx.strs, p) = Some(g), tail: Type, res: Residual::All(g.rs, tys, cx, e, tail)):
+    Stepped(tys, cx.strs, fns, call, Len(p, wd), s.push(CVar(SWord(wd), KPlain)), Env::push(tys, e, Dyn(SWord(wd), Width::of_nat(wd, Dyn::len(tys, cx.strs, p.val(tys, cx.strs, e))))), m, h0, lent, root)
+{
+    let sim = Inv::sim_now(tys, cx.strs, inv, none);
+    let d = p.val(tys, cx.strs, e);
+    let at = Sim::place(tys, cx, sl, sim, p, g, ok, tail, res);
+    let dl: Dyn(tys) = Dyn(SWord(wd), Width::of_nat(wd, Dyn::len(tys, cx.strs, d)));
+    Stepped(Mach::push(tys, m, Cell::plain(tys, dl)),
+        λ k => j(sym(at), λ o _ => (match o { Some(x) => k(Mach::push(tys, m, Cell::plain(tys, Dyn(SWord(wd), Width::of_nat(wd, Dyn::len(tys, cx.strs, x)))))), None => Stuck }) = k(Mach::push(tys, m, Cell::plain(tys, dl))), refl),
+        Inv::push_plain(tys, cx.strs, inv, none, SWord(wd), dl, False, refl), λ _ => refl)
+}
+
 // ---------------------------------------------------------------------------
 // A heap one block longer: the blocks the invariant reads are as they were
 
@@ -11974,7 +11989,7 @@ theorem Body::stage_ret(tys: Nat → Type, strs: Strs(tys), sig: Sig, {s: CSt}, 
     let sw = Inv::ret_words(tys, strs, inv, ri.none, sig.params, ds, lk, dl, xs, ri.ls, ri.lvls);
     RetOk(Sim::read_all(tys, strs, sim, xs, Nil, ri.reads), wr2, inv.frame.eq, ⟨inv.grows, inv.stays⟩,
         Inv::ret_views(tys, strs, inv, sim, sig.params, vs, ent, vl, Dyn::ixs(tys, ds ++ xs.map(λ x => Env::get(tys, e, x))), ri.ls, sw, sig.results, xs, ri.ls, ri.lvls, ri.rets),
-        Inv::ret_owned_apart(tys, strs, inv, sig.params, vs, ent, vl, ld, ri.ls, sig.results, 0, xs, ri.ls, ri.lvls, ri.rets, ri.once, sok),
+        Inv::ret_owned_apart(tys, strs, inv, sig.params, vs, ent, vl, ld, ri.ls, sig.results, 0, xs, ri.ls, ri.lvls, ri.rets, ri.once, (Bool::and_true_parts(Sig::ok_from(tys, strs, sig.params, sig.results, 0), Sig::once(tys, strs, sig.params, sig.results), sok)).left),
         Sim::coded_res(tys, strs, sim, sig.written().map(λ i => sig.params.nth(i).map(λ p => p.code).unwrap_or(SWord(WNat))), sig.results, xs, ri.ls, ri.lvls, cd))
 }
 

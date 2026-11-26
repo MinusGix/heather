@@ -342,3 +342,16 @@ fn set_fns() → Nat → Func { λ g => match g { Zero => set_x_r(), Succ(_) => 
 
 theorem plain_slot_back(io: Io):
     Run::of(tys(), strs(), set_fns(), world(), λ _ => False, 2, 1, [Plain(pts(ps2())), w(1), w(8)], Nil, io) = Done(Answer([Plain(pts([Point(1, 2), Point(8, 3)]))], Nil, io)) { refl }
+
+// A list's length read as a word (§23.23): the run reads it through the
+// block, the meaning from the value; both the number.
+fn len_r() → Func { Func(Sig([Param(pts_s(), ByRead)], [Result(nat_s(), OFresh)]), seq([Len(Place(Arg(0), Nil), WNat)], Ret([Loc(0)]))) }
+
+theorem len_runs(io: Io): one_fn(len_r(), 1, 0, [obj0()], heap1(ps4()), io) = Done(Answer([w(4)], heap1(ps4()), io)) { refl }
+
+theorem len_means(): (len_r()).denote(tys(), strs(), world(), 0, [pts(ps4())]) = [nat(4)] { refl }
+
+// Of a window: its own length.
+fn len_win_r() → Func { Func(Sig([Param(pts_s(), ByRead)], [Result(nat_s(), OFresh)]), seq([Len(Place(Arg(0), [SWindow(Lit(1), Lit(2))]), WNat)], Ret([Loc(0)]))) }
+
+theorem len_win_runs(io: Io): one_fn(len_win_r(), 1, 0, [obj0()], heap1(ps4()), io) = Done(Answer([w(2)], heap1(ps4()), io)) { refl }

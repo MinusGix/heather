@@ -61,6 +61,7 @@ inductive Residual {
     RPre(g: Nat, args: List<Var>),
     RAccess(p: Place),
     RFits(p: Place, v: Var),
+    RLen(p: Place, w: Width),
     RMeasure(g: Nat, args: List<Var>),
 }
 
@@ -98,6 +99,11 @@ fn Dyn::Fits(tys: Nat → Type, strs: Strs(tys), old, new: Dyn(tys)) → Type { 
 // arguments, which a measure is compared against.
 record Ctx(tys: Nat → Type) { strs: Strs(tys), w: Callees(tys), me: Nat, pres: Pres(tys), need: Need(tys), args: List<Dyn(tys)> }
 
+// A number a word of the width holds as itself: every one at `WNat`, one
+// below `2^k` at `k` bits (`Len` owes it, so its word is the length and never
+// a truncation of it).
+fn Width::Holds(w: Width, n: Nat) → Type { match w { WNat => True, WBits(k) => n < Nat::pow(2, k) } }
+
 fn Residual::Holds(self r: Residual, tys: Nat → Type, cx: Ctx(tys), env: Env(tys)) → Type {
     match r {
         RApart(lo1, n1, lo2, n2) => {
@@ -110,6 +116,7 @@ fn Residual::Holds(self r: Residual, tys: Nat → Type, cx: Ctx(tys), env: Env(t
             None => True,
         },
         RFits(p, v) => Dyn::Fits(tys, cx.strs, p.val(tys, cx.strs, env), Env::get(tys, env, v)),
+        RLen(p, w) => Width::Holds(w, Dyn::len(tys, cx.strs, p.val(tys, cx.strs, env))),
         RMeasure(g, args) => cx.need(g, args.map(λ x => Env::get(tys, env, x))) < cx.need(cx.me, cx.args),
     }
 }

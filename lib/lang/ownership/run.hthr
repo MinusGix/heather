@@ -161,8 +161,6 @@ fn Sel::starts(xs, ys: List<Sel>) → Bool {
     match xs { Nil => True, Cons(a, xr) => match ys { Nil => False, Cons(b, yr) => a.same(b) && Sel::starts(xr, yr) } }
 }
 
-
-
 // Whether a callee may change what it is passed at this parameter.
 fn PMode::changes(self m: PMode) → Bool { match m { ByTake => True, ByRead => False, ByWrite => True } }
 
@@ -324,6 +322,7 @@ fn Stmt::run(self s: Stmt, tys: Nat → Type, strs: Strs(tys), fns: Nat → Func
         },
         Lit(wd, n) => k(Mach::push(tys, m, Cell::plain(tys, Dyn(SWord(wd), Width::of_nat(wd, n))))),
         Read(p) => match Mach::place(tys, strs, m, p) { Some(d) => k(Mach::push(tys, m, Cell::plain(tys, d))), None => Stuck },
+        Len(p, wd) => match Mach::place(tys, strs, m, p) { Some(d) => k(Mach::push(tys, m, Cell::plain(tys, Dyn(SWord(wd), Width::of_nat(wd, Dyn::len(tys, strs, d)))))), None => Stuck },
         Write(p, x) => Stmt::write_run(tys, strs, act, m, p, x, k),
         Back(p, x) => match (REnv::get(tys, m.env, x)).v { Refer(_) => k(m), Plain(_) => Stmt::write_run(tys, strs, act, m, p, x, k) },
         View(p, _) => {

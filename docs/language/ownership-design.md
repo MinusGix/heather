@@ -5305,6 +5305,35 @@ read view result over an argument passed plain cannot meet it: `SafeAt`'s
 argument's part. Restricted to views to write it holds at every builder as
 before.
 
+**A parameter whose code moves is answered at most once** (`Sig::once`, a
+clause of `Sig::ok`; the coordinating session's ruling on a finding against
+§23.21's B). B's argument that no safe callee answers one taken parameter
+twice (`OwnedApart` against `ViewIs`) holds only where the argument refers.
+Where it is passed plain, `ViewIs` asks each result only to be plain and
+`owned_b` is `None`: the table entry `twice: Sig([Param(Buf, ByTake)],
+[Result(Buf, OParam(0)), Result(Buf, OParam(0))])`, with a world answering two
+copies, is safe, and its caller `h(a: Buf take) { Call(twice, [a], 2); … }`
+run with `a` plain bound both results `KHold(o_a, AcOwn)`, two levels holding
+one object, against `Inv.one`. A plain parameter answered twice is two
+copies and is allowed. Probes: `twice_param_refused` (where written),
+`twice_caller_refused` (at the call), `twice_plain_caller_checked`; the
+callee `twice_plain` is itself refused at its `Ret`, as is `once_plain`
+answering a plain taken parameter once (`CSt::returns` asks a parameter
+answered back to be held as an owner).
+
+**`Len(p, w)`, a place's length as a word** (issues/ownership-branch-on-
+object-length.md): meaning `Width::of_nat(w, Dyn::len(value at p))`, the
+sequence instance's own length; checked as `Read(p)` with `p`'s code a
+sequence (refused for its codes otherwise); at a bounded width it owes
+`RLen(p, w)` (`Width::Holds`: the length is below `2^k`), so the word is the
+length and never its truncation, at `WNat` nothing; the run reads the place
+as `Read` does (`Mach::place`), stuck where it is; the stage is
+`Stmt::stage_len`, `Read`'s with the word pushed. `RLen` is a new residual
+kind: none of the existing ones can say a length is below a bound.
+Probes: `len_runs`, `len_means`, `len_win_runs` (`run_tests`);
+`len_nat_owes`, `len_u64_owes`, `len_word_refused`, `len_guard_checked` (a
+branch on an index below the length, the read under it).
+
 ## 24. How the build is organised (2026-11-26, the coordinating session)
 
 Written after Minus asked that the work be organised to get it right rather
