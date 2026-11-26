@@ -5801,7 +5801,9 @@ locals' first. The others wait for `place`'s inversion lemmas (below).
   64 bits only: at a narrower width the run's word is the length modulo
   `2^w`, equal to it only under the checker's `RLen`, which a translation of
   every program does not see; the length is below `2^64` by `HeapInjects`
-  (F5). `Func::fragment` admits `Len` at 64 bits;
+  (F5). `Func::fragment` admits `Len` at 64 bits; a narrower `Len` waits on
+  the translation being allowed to use a residual, which it is not while
+  `PlacementSound` is a theorem about every placed program;
 - a word variable written whole rebinds its slot to the value's
   (`word_write_r` is placed);
 - a defect on a path no program had reached: a `Yield` into a copied join
@@ -5817,6 +5819,15 @@ entry, unchanged in form: every block a parameter lent to change reaches is
 writable. With `Act(Value::lent(ps, vs), h.len())` it gives `ActWrites` at
 the entry (a block made since the entry is not live then), and nothing is
 owed per store: a store the run makes is one `Act::may` allows.
+
+**`PlaceComplete` waits on two things**, both named: the six code
+comparisons, which go with §26.5's run (stuck where the meaning takes a
+fallback), not by a lemma tying the checker's code rule to each; and a view
+answered out of a loop (`view_loop_refused`: checked, in the fragment,
+refused, since the loop's results part is state, zeroed at entry, and a
+reference has no zero), which places once a pass can end in a leaf that
+leaves with its outputs (`issues/bytes-level-loop-exits.md`). Nothing is
+narrowed meanwhile.
 
 **`copy_window` like for like.** Its body now tests `end` against both
 lengths (read with `Len`) and against `from`, answering 0 with nothing

@@ -31,4 +31,8 @@ After [[bytes-level-out-of-room]], which is in the same modules.
 
 ## Done when
 
-`count_newlines`' and `copy_window`'s loops from the slice lower with no flag word, the loop rows of `scripts/bytes-level-compare` are no longer than the old pipeline's, and the lowering's theorem covers the form.
+`count_newlines`' and `copy_window`'s loops from the slice lower with no flag word, the loop rows of `scripts/bytes-level-compare` are no longer than the old pipeline's, and the lowering's theorem covers the form; and the slice's `view_loop_r` (a loop answering a view, `view_loop_refused` in `lib/_tests/lang/ownership/placement_tests.hthr`) is placed, its results not part of the loop's state.
+
+## Log
+
+- 2026-11-26: Done when also covers the ownership slice's view_loop_r (lib/_tests/lang/ownership/placement_tests.hthr, view_loop_refused): f(xs: &[u8] read, n: u64) answering &xs[0..1] after a Jump loop is checked and in the fragment, and place refuses it because the loop's results part is state, zeroed at entry, and a reference has no zero. With a pass that ends in a leaf leaving with its outputs, the results are not state and it places (ownership-design §25.9).
