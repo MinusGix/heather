@@ -42,6 +42,8 @@ import x86_64_stack_runs;
 import linux_calls;
 import linux_world;
 import linux_x86_64_io;
+import linux_x86_64_determinism;
+import x86_64_step_forms;
 import transition;
 import bitvec;
 import list;
@@ -102,6 +104,13 @@ fn stuck_after(r: Ran<Answer>) → Option<List<Exchange>> {
 // `later` is `earlier` with more exchanges after it (newest first).
 fn Extends(later, earlier: List<Exchange>) → Type { Exists<List<Exchange>>(λ extra => later = extra ++ earlier) }
 
+theorem extends_refl(h: List<Exchange>): Extends(h, h) { Exists(Nil, refl) }
+
+theorem extends_trans(a, b, c: List<Exchange>, ab: Extends(a, b), bc: Extends(b, c)): Extends(a, c) {
+    Exists(ab.witness ++ bc.witness, trans(ab.proof, trans(cong_fn<List<Exchange>, List<Exchange>>(λ l => ab.witness ++ l, bc.proof),
+        sym(ab.witness.append_assoc(bc.witness, c)))))
+}
+
 // A world whose every answer is one Linux may give.
 fn Io::Answerable(self io: Io) → Type { (past: List<Exchange>) → (c: LinuxCmd<Nat>) → c.Answers(io.world(past, c)) }
 
@@ -109,8 +118,8 @@ fn Io::Answerable(self io: Io) → Type { (past: List<Exchange>) → (c: LinuxCm
 // The machine with the world
 
 // The machine's state and the world, as the meaning's configuration has
-// it: what the code has asked so far is `io.past`.
-record Running<M> { state: MachineState<M>, io: Io }
+// it, is x86_64_stack_runs' `Running<M, Io>`: what the code has asked so
+// far is `io.past`.
 
 // Linux's model of the process at a site: its fetch and data, and the
 // stack's writes (linux_x86_64_io's `LinuxIo`).
@@ -124,7 +133,7 @@ fn Io::answer(self io: Io, c: LinuxCmd<Nat>) → c.Resp() { io.world(io.past, c)
 // At `at` the code makes the system call `c` the Linux model reads off its
 // registers and memory, with its buffers writable, and the world answers as
 // Linux may.
-fn Site::Asks<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), at: Running<M>, c: LinuxCmd<Nat>) → Type {
+fn Site::Asks<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), at: Running<M, Io>, c: LinuxCmd<Nat>) → Type {
     LinuxSyscallAt(site.linux(stack), at.state) ∧ (LinuxRequests(site.linux(stack), at.state, c) ∧ c.Answers(at.io.answer(c)))
 }
 
@@ -132,43 +141,59 @@ fn Site::Asks<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), at:
 // step, a store, a stack form), the world unchanged; or a system call the
 // world answers, the process resumed as Linux may (whatever a failed call
 // leaves and RCX and R11) and the exchange recorded.
-fn Site::Step<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), before, after: Running<M>) → Type {
+fn Site::Step<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), before, after: Running<M, Io>) → Type {
     (MachineStep(site.fetch, site.data, stack.writes, before.state, after.state) ∧ (after.io = before.io)) ∨
         Exists<LinuxCmd<Nat>>(λ c => site.Asks(stack, before, c) ∧ ((after.io = before.io.exchanged(c, before.io.answer(c))) ∧
             Exists<List<BitVec(8)>>(λ junk => LinuxLeaves(c, before.io.answer(c), junk) ∧ Exists<BitVec(64)>(λ rcx => Exists<BitVec(64)>(λ r11 =>
                 after.state = linux_answered(site.linux(stack), before.state, c, before.io.answer(c), junk, rcx, r11))))))
 }
 
-// The code performs `goal` from `from`, making at most `calls` system
-// calls: it steps to a state meeting `goal`, or to a system call the world
-// answers and from every state Linux may resume it in, the exchange
-// recorded, performs `goal` again. (Linux's model is a claim over every
-// resumption, `LinuxResumes`, as `RunsAs` reads it.)
-fn Site::Performs<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), goal: Running<M> → Type, calls: Nat) → Running<M> → Type {
-    match calls {
-        Zero => λ from => Exists<MachineState<M>>(λ t => MachineSteps(site.fetch, site.data, stack.writes, from.state, t) ∧ goal(Running(t, from.io))),
-        Succ(more) => λ from => Exists<MachineState<M>>(λ t => MachineSteps(site.fetch, site.data, stack.writes, from.state, t) ∧
-            (goal(Running(t, from.io)) ∨ Exists<LinuxCmd<Nat>>(λ c => site.Asks(stack, Running(t, from.io), c) ∧
-                LinuxResumes(site.linux(stack), t, c, from.io.answer(c),
-                    λ u => site.Performs(stack, goal, more, Running(u, from.io.exchanged(c, from.io.answer(c)))))))),
-    }
+// Linux as the claims' kernel: at `r` the code makes a system call `c` the
+// world answers, and from every state Linux may resume it in, the exchange
+// recorded, `P` (`LinuxResumes`, as `RunsAs` reads it).
+fn Site::linux_resumes<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), r: Running<M, Io>, P: Running<M, Io> → Type) → Type {
+    Exists<LinuxCmd<Nat>>(λ c => site.Asks(stack, r, c) ∧
+        LinuxResumes(site.linux(stack), r.state, c, r.io.answer(c), λ u => P(Running(u, r.io.exchanged(c, r.io.answer(c))))))
+}
+
+fn Site::linux_kernel<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data)) → Kernel<M, Io> {
+    Kernel(λ r P => site.linux_resumes(stack, r, P),
+        λ r P Q implies called => Exists(called.witness, ⟨called.proof.left, λ junk leaves rcx r11 =>
+            implies(Running(linux_answered(site.linux(stack), r.state, called.witness, r.io.answer(called.witness), junk, rcx, r11),
+                r.io.exchanged(called.witness, r.io.answer(called.witness))), called.proof.right(junk, leaves, rcx, r11))⟩))
+}
+
+// The code performs `goal` from a state, making at most `calls` system
+// calls, its machine steps at least `least` in number: x86_64_stack_runs'
+// claim at Linux.
+fn Site::LinuxPerforms<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), goal: Running<M, Io> → Type, calls, least: Nat) →
+    Running<M, Io> → Type {
+    site.Performs(stack.writes, site.linux_kernel(stack), goal, calls, least)
 }
 
 // ---------------------------------------------------------------------------
-// The contract
+// The contract (docs/language/ownership-design.md §17.7)
 
-// Routine `f` entered at stack offset `i`, as every clause of the contract
-// takes it: at its label, the program resident, the stack pointer at `i`
-// with room for the return address `ret` there, the arguments passed as
-// words, room for its frames below (`rooms(f)`) and the lending's words
-// above (`top`), the heap injected, and the world one Linux may be.
-fn Site::Entering<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), spans: Spans, top: Nat, rooms: Nat → Nat, bound: Nat,
-    clause: Nat → List<Value> → Heap → Io → MachineState<M> → Nat → BitVec(64) → Type) → Type {
-    (f: Nat) → f + 1 <= bound → (args: List<Value>) → (heap: Heap) → (io: Io) → io.Answerable() →
+// Routine `f` entered at stack offset `i`, as every clause takes it, under
+// one lending for the whole run: the stack and the spans lent under the
+// lending laws (`Loan`) and the meaning's own law of what it may write
+// against them (`lent`: the bytes level's `blocks.Lent(spans)`); at its
+// label, the program resident, the stack pointer at `i` with room for the
+// return address `ret` there, the arguments passed as words, the lending's
+// words above (`top`), and the heap injected. Then at every fuel `n` whose
+// deepest chain of calls (`peak`, the meaning's own) has its room below the
+// return address (`room(f, peak) <= i`, a table by routine and call depth),
+// `clause` at `n`.
+fn Site::Entering<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), spans: Spans, top: Nat, lent: Type, room: Nat → Nat → Nat,
+    peak: Nat → Nat → List<Value> → Heap → Io → Nat, bound: Nat,
+    clause: Nat → Nat → List<Value> → Heap → Io → MachineState<M> → Nat → BitVec(64) → Type) → Type {
+    Loan<M>(site.fetch, site.data, stack, top, spans) → lent →
+    (f: Nat) → f + 1 <= bound → (args: List<Value>) → (heap: Heap) → (io: Io) →
     (s: MachineState<M>) → s.rip = next_rip(site.origin, asm_labels(site.program)(f + 1)) → site.Resident(s.memory) →
     (i: Nat) → read_gpr(Rsp, s.gprs) = stack.at(i) → i + 8 <= stack.size →
-    stack.Passed(lower_values(spans, args), i, s) → rooms(f) <= i → i + 8 <= top → Injected<M>(site.data, spans, heap, s.memory) →
-    (ret: BitVec(64)) → read_word(site.data, s.memory, stack.at(i)) = Some(ret) → clause(f, args, heap, io, s, i, ret)
+    stack.Passed(lower_values(spans, args), i, s) → i + 8 <= top → Injected<M>(site.data, spans, heap, s.memory) →
+    (ret: BitVec(64)) → read_word(site.data, s.memory, stack.at(i)) = Some(ret) →
+    (n: Nat) → room(f, peak(n, f, args, heap, io)) <= i → clause(n, f, args, heap, io, s, i, ret)
 }
 
 // Returned with `a`: at the return address, the program resident, the stack
@@ -176,50 +201,437 @@ fn Site::Entering<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data),
 // `answer_registers()`, the callee-saved registers kept, its stores inside
 // the lending, the answer's heap injected, and the answer's world.
 fn Site::Returned<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), spans: Spans, s: MachineState<M>, i: Nat, ret: BitVec(64),
-    a: Answer, r: Running<M>) → Type {
+    a: Answer, r: Running<M, Io>) → Type {
     ((r.state.rip = ret) ∧ (site.Resident(r.state.memory) ∧ (read_gpr(Rsp, r.state.gprs) = stack.at(i + 8)))) ∧
     ((ArgsIn(lower_values(spans, a.words), Cons(Rax, answer_registers()), r.state.gprs) ∧ Kept(callee_kept(), s.gprs, r.state.gprs)) ∧
         ((stack.WroteIn(i, spans, s.memory, r.state.memory) ∧ Injected<M>(site.data, spans, a.heap, r.state.memory)) ∧ (r.io = a.io)))
 }
 
-// Done: wherever the meaning is done at some fuel, the code returns with it.
-fn Site::MeetsDone<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), spans: Spans, top: Nat, rooms: Nat → Nat, bound: Nat,
-    meaning: Nat → Calls()) → Type {
-    site.Entering(stack, spans, top, rooms, bound, λ f args heap io s i ret => (n: Nat) → (a: Answer) → meaning(n, f, args, heap, io) = Done(a) →
-        Exists<Nat>(λ calls => site.Performs(stack, λ r => site.Returned(stack, spans, s, i, ret, a, r), calls, Running(s, io))))
+// The state the code performs at a fuel, read off the meaning's outcome
+// there: done, returned with the answer; exited, at the exit call with its
+// status in its world; going, a state in the world so far; stuck, nothing.
+fn Site::Reached<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), spans: Spans, s: MachineState<M>, i: Nat, ret: BitVec(64),
+    outcome: Ran<Answer>) → Running<M, Io> → Type {
+    match outcome {
+        Done(a) => λ r => site.Returned(stack, spans, s, i, ret, a, r),
+        Exited(status, o) => λ r => (LinuxSyscallAt(site.linux(stack), r.state) ∧ LinuxExits(r.state, status)) ∧ (r.io = o),
+        Going(o) => λ r => r.io = o,
+        Stuck(_) => λ r => True,
+    }
 }
 
-// Exited: wherever the meaning exits at some fuel, the code makes the exit
-// call with that status, in that world.
-fn Site::MeetsExited<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), spans: Spans, top: Nat, rooms: Nat → Nat, bound: Nat,
-    meaning: Nat → Calls()) → Type {
-    site.Entering(stack, spans, top, rooms, bound, λ f args heap io s i ret => (n: Nat) → (status: BitVec(64)) → (o: Io) →
-        meaning(n, f, args, heap, io) = Exited(status, o) →
-        Exists<Nat>(λ calls => site.Performs(stack, λ r => (LinuxSyscallAt(site.linux(stack), r.state) ∧ LinuxExits(r.state, status)) ∧ (r.io = o), calls,
-            Running(s, io))))
+// The machine steps the code has taken by then: going at fuel `n`, the
+// chain of turns and calls the fuel paid for, less one, because the first
+// counted step is the caller's `CALL`, before `Site::Entering`'s state (a
+// body at fuel `m` gives at least `m`); otherwise none counted. The
+// predecessor is deliberate: the meaning's fuel is not shifted to match.
+fn going_least(n: Nat, outcome: Ran<Answer>) → Nat {
+    match outcome { Done(_) => 0, Exited(_, _) => 0, Going(_) => n - 1, Stuck(_) => 0 }
+}
+
+fn Site::Tracked<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), spans: Spans, s: MachineState<M>, i: Nat, ret: BitVec(64), io: Io,
+    n: Nat, outcome: Ran<Answer>) → Type {
+    Exists<Nat>(λ calls => site.LinuxPerforms(stack, site.Reached(stack, spans, s, i, ret, outcome), calls, going_least(n, outcome), Running(s, io)))
+}
+
+// The one clause a lowering proves: at every fuel, from the entry, the code
+// performs the state read off the meaning there, in a world whose every
+// answer is one Linux may give.
+fn Site::Tracks<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), spans: Spans, top: Nat, lent: Type, room: Nat → Nat → Nat,
+    peak: Nat → Nat → List<Value> → Heap → Io → Nat, bound: Nat, meaning: Nat → Calls()) → Type {
+    site.Entering(stack, spans, top, lent, room, peak, bound, λ n f args heap io s i ret => io.Answerable() →
+        site.Tracked(stack, spans, s, i, ret, io, n, meaning(n, f, args, heap, io)))
+}
+
+// Done: `Tracks` read where the meaning is done.
+fn Site::MeetsDone<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), spans: Spans, top: Nat, lent: Type, room: Nat → Nat → Nat,
+    peak: Nat → Nat → List<Value> → Heap → Io → Nat, bound: Nat, meaning: Nat → Calls()) → Type {
+    site.Entering(stack, spans, top, lent, room, peak, bound, λ n f args heap io s i ret => io.Answerable() → (a: Answer) →
+        meaning(n, f, args, heap, io) = Done(a) → site.Tracked(stack, spans, s, i, ret, io, n, Done(a)))
+}
+
+// Exited: `Tracks` read where the meaning exits.
+fn Site::MeetsExited<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), spans: Spans, top: Nat, lent: Type, room: Nat → Nat → Nat,
+    peak: Nat → Nat → List<Value> → Heap → Io → Nat, bound: Nat, meaning: Nat → Calls()) → Type {
+    site.Entering(stack, spans, top, lent, room, peak, bound, λ n f args heap io s i ret => io.Answerable() → (status: BitVec(64)) → (o: Io) →
+        meaning(n, f, args, heap, io) = Exited(status, o) → site.Tracked(stack, spans, s, i, ret, io, n, Exited(status, o)))
+}
+
+theorem Site::tracks_done<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), spans: Spans, top: Nat, lent: Type, room: Nat → Nat → Nat,
+    peak: Nat → Nat → List<Value> → Heap → Io → Nat, bound: Nat, meaning: Nat → Calls(),
+    tracks: site.Tracks(stack, spans, top, lent, room, peak, bound, meaning)): site.MeetsDone(stack, spans, top, lent, room, peak, bound, meaning) {
+    λ loan law f below args heap io s here resident i rsp inside passed high injected ret saved n roomy answerable a ran =>
+        j(ran, λ x _ => site.Tracked(stack, spans, s, i, ret, io, n, x),
+            tracks(loan, law, f, below, args, heap, io, s, here, resident, i, rsp, inside, passed, high, injected, ret, saved, n, roomy, answerable))
+}
+
+theorem Site::tracks_exited<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), spans: Spans, top: Nat, lent: Type, room: Nat → Nat → Nat,
+    peak: Nat → Nat → List<Value> → Heap → Io → Nat, bound: Nat, meaning: Nat → Calls(),
+    tracks: site.Tracks(stack, spans, top, lent, room, peak, bound, meaning)): site.MeetsExited(stack, spans, top, lent, room, peak, bound, meaning) {
+    λ loan law f below args heap io s here resident i rsp inside passed high injected ret saved n roomy answerable status o ran =>
+        j(ran, λ x _ => site.Tracked(stack, spans, s, i, ret, io, n, x),
+            tracks(loan, law, f, below, args, heap, io, s, here, resident, i, rsp, inside, passed, high, injected, ret, saved, n, roomy, answerable))
 }
 
 // The code has not yet returned to `ret`.
-fn Site::Before<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), i: Nat, ret: BitVec(64), r: Running<M>) → Type {
+fn Site::Before<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), i: Nat, ret: BitVec(64), r: Running<M, Io>) → Type {
     ¬((r.state.rip = ret) ∧ (read_gpr(Rsp, r.state.gprs) = stack.at(i + 8)))
 }
 
-// Going: every world the code reaches before it returns or exits is a
-// prefix of a history the meaning reaches. (An exit resumes nothing, so no
-// step leaves it.)
-fn Site::MeetsGoing<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), spans: Spans, top: Nat, rooms: Nat → Nat, bound: Nat,
-    meaning: Nat → Calls()) → Type {
-    site.Entering(stack, spans, top, rooms, bound, λ f args heap io s i ret => (r: Running<M>) →
-        Star(λ (a: Running<M>) (b: Running<M>) => site.Before(stack, i, ret, a) ∧ site.Step(stack, a, b), Running(s, io), r) →
-        Exists<Nat>(λ n => Exists<List<Exchange>>(λ h => (history(meaning(n, f, args, heap, io)) = Some(h)) ∧ Extends(h, r.io.past))))
+// Going: every world the code reaches in `j` steps before it returns or
+// exits, where the room is there at fuel `j + 1`, is a prefix of a history
+// the meaning reaches, or the meaning gets stuck at some fuel. (An exit
+// resumes nothing, so no step leaves it.)
+fn Site::MeetsGoing<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), spans: Spans, top: Nat, lent: Type, room: Nat → Nat → Nat,
+    peak: Nat → Nat → List<Value> → Heap → Io → Nat, bound: Nat, meaning: Nat → Calls()) → Type {
+    site.Entering(stack, spans, top, lent, room, peak, bound, λ n f args heap io s i ret => io.Answerable() → (j: Nat) → n = j + 1 →
+        (r: Running<M, Io>) → StarN(λ (a: Running<M, Io>) (b: Running<M, Io>) => site.Before(stack, i, ret, a) ∧ site.Step(stack, a, b), j, Running(s, io), r) →
+        Exists<Nat>(λ m => Exists<List<Exchange>>(λ h => (history(meaning(m, f, args, heap, io)) = Some(h)) ∧ Extends(h, r.io.past))) ∨
+        Exists<Nat>(λ m => Exists<Io>(λ o => meaning(m, f, args, heap, io) = Stuck(o))))
 }
 
 // The contract, over one lending for the whole run, for every routine
 // below `bound` and every fuel: done, exited, going. That the code left
 // alone what it was not lent is not said here: the injection after the call
 // pins every byte of every block, so it is a fact about the answer's heap.
-fn Site::Meets<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), spans: Spans, top: Nat, rooms: Nat → Nat, bound: Nat,
-    meaning: Nat → Calls()) → Type {
-    site.MeetsDone(stack, spans, top, rooms, bound, meaning) ∧
-        (site.MeetsExited(stack, spans, top, rooms, bound, meaning) ∧ site.MeetsGoing(stack, spans, top, rooms, bound, meaning))
+fn Site::Meets<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), spans: Spans, top: Nat, lent: Type, room: Nat → Nat → Nat,
+    peak: Nat → Nat → List<Value> → Heap → Io → Nat, bound: Nat, meaning: Nat → Calls()) → Type {
+    site.MeetsDone(stack, spans, top, lent, room, peak, bound, meaning) ∧
+        (site.MeetsExited(stack, spans, top, lent, room, peak, bound, meaning) ∧ site.MeetsGoing(stack, spans, top, lent, room, peak, bound, meaning))
+}
+
+// ---------------------------------------------------------------------------
+// The kernel's writes, from the loan (§17.7)
+//
+// What a claim's end conclusions need across a system call: the code stays
+// resident through the kernel's store of a read into a lent window, and the
+// process resumes past the SYSCALL. Not a law of the memory clause: a
+// system call's region re-establishes its own clause.
+
+// The window a call stores into: a read's, inside a written span at RSI;
+// a write's, none. Nothing else is asked yet.
+fn Spans::Window<M>(self spans: Spans, at: MachineState<M>, c: LinuxCmd<Nat>) → Type {
+    match c {
+        ReadCmd(_, max) => Exists<Nat>(λ b => Exists<Nat>(λ k => (spans.written(b) = True) ∧ ((k < spans.size(b)) ∧ ((k + max <= spans.size(b)) ∧
+            (read_gpr(Rsi, at.gprs) = spans.byte(b, k)))))),
+        WriteCmd(_, _) => True,
+        OpenCmd(_) => False,
+        CloseCmd(_) => False,
+        StatCmd(_) => False,
+    }
+}
+
+// Bytes the kernel stores into a lent window, no more than it holds, keep
+// the code resident.
+theorem Site::window_keeps_code<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), top: Nat, spans: Spans,
+    loan: Loan<M>(site.fetch, site.data, stack, top, spans), memory: M, b, k, max: Nat, written: spans.written(b) = True, inside: k < spans.size(b),
+    fits: k + max <= spans.size(b), bytes: List<BitVec(8)>, few: bytes.len() <= max, resident: site.Resident(memory)):
+    site.Resident(stack.writes.store(memory, spans.byte(b, k), bytes)) {
+    loan.keeps_code(memory, b, k, written, inside, bytes, { omega }, assemble(no_fills(), site.program, site.last), next_rip(site.origin, 0), resident)
+}
+
+// Every resumption of a call into its window: past the SYSCALL, the code
+// still resident.
+theorem Site::resumes_resident<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), top: Nat, spans: Spans,
+    loan: Loan<M>(site.fetch, site.data, stack, top, spans), at: MachineState<M>, c: LinuxCmd<Nat>, a: c.Resp(), answers: c.Answers(a),
+    window: spans.Window(at, c), resident: site.Resident(at.memory)):
+    LinuxResumes(site.linux(stack), at, c, a, λ u => (u.rip = next_rip(at.rip, 2)) ∧ site.Resident(u.memory)) {
+    (match c as λ c0 => (a0: c0.Resp()) → c0.Answers(a0) → spans.Window(at, c0) →
+        LinuxResumes(site.linux(stack), at, c0, a0, λ u => (u.rip = next_rip(at.rip, 2)) ∧ site.Resident(u.memory)) {
+        ReadCmd(fd, max) => λ r answered win junk leaves rcx r11 => {
+            let b = win.witness;
+            let k = win.proof.witness;
+            let w = win.proof.proof;
+            let stored = λ (bytes: List<BitVec(8)>) (few: bytes.len() <= max) =>
+                j(sym(w.right.right.right), λ address _ => site.Resident(stack.writes.store(at.memory, address, bytes)),
+                    site.window_keeps_code(stack, top, spans, loan, at.memory, b, k, max, w.left, w.right.left, w.right.right.left, bytes, few, resident));
+            (match r as λ r0 => (ReadCmd(fd, max)).Answers(r0) → LinuxLeaves(ReadCmd(fd, max), r0, junk) →
+                (linux_answered(site.linux(stack), at, ReadCmd(fd, max), r0, junk, rcx, r11).rip = next_rip(at.rip, 2)) ∧
+                site.Resident(linux_answered(site.linux(stack), at, ReadCmd(fd, max), r0, junk, rcx, r11).memory) {
+                ReadBytes(bytes) => λ few _ => ⟨refl, stored(bytes, few)⟩,
+                ReadFailed(errno) => λ _ few => ⟨refl, stored(junk, few)⟩,
+            })(answered, leaves)
+        },
+        WriteCmd(fd, bytes) => λ r answered win junk leaves rcx r11 => match r {
+            Wrote(count) => ⟨refl, resident⟩,
+            WriteFailed(errno) => ⟨refl, resident⟩,
+        },
+        OpenCmd(_) => λ r answered never => false_elim(never),
+        CloseCmd(_) => λ r answered never => false_elim(never),
+        StatCmd(_) => λ r answered never => false_elim(never),
+    })(a, answers, window)
+}
+
+// ---------------------------------------------------------------------------
+// The going clause from `Tracks`, once (§17.7)
+//
+// A state the code reaches in `j` steps lies, on its own branch of
+// resumptions, at or before the state `Tracks` performs at fuel `j + 1`:
+// going there, the claim's machine steps number at least `j`; done, the
+// returned state is not before the return; exited, no step leaves an exit.
+// Between system calls the machine is a function of the state's defined
+// components (`step_respects_defined`, `syscall_excludes_step`), at a system
+// call the request is (`asks_meet`) and so is each resumption
+// (`linux_answered_respects`), and the world only grows along a branch.
+
+// A step of the code before it returns to `ret`.
+fn Site::Onward<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), i: Nat, ret: BitVec(64)) → Running<M, Io> → Running<M, Io> → Type {
+    λ a b => site.Before(stack, i, ret, a) ∧ site.Step(stack, a, b)
+}
+
+// Machine steps from a state alike to where a path of the code starts: the
+// path either ends within them, the world unchanged, or passes a state
+// alike to where they end, from which it has a step still to take.
+theorem Site::steps_meet<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), i: Nat, ret: BitVec(64), n: Nat):
+    (k: Nat) → (x, t: MachineState<M>) → (start, r: Running<M, Io>) → x ≈ start.state →
+    MachineRuns(site.fetch, site.data, stack.writes, n, x, t) → StarN(site.Onward(stack, i, ret), k, start, r) →
+    ((k <= n) ∧ (r.io = start.io)) ∨ Exists<Running<M, Io>>(λ mid => Exists<Nat>(λ k2 => (k = n + (k2 + 1)) ∧
+        ((mid.state ≈ t) ∧ ((mid.io = start.io) ∧ StarN(site.Onward(stack, i, ret), k2 + 1, mid, r))))) {
+    match n {
+        Zero => λ k x t start r same run path => match k {
+            Zero => Inl(⟨trivial, cong_fn<Running<M, Io>, Io>(λ y => y.io, sym(path))⟩),
+            Succ(k2) => Inr(Exists(start, Exists(k2, ⟨{ omega }, ⟨j(run, λ y _ => start.state ≈ y, sym(same)), ⟨refl, path⟩⟩⟩))),
+        },
+        Succ(n2) => λ k x t start r same run path => match k {
+            Zero => Inl(⟨trivial, cong_fn<Running<M, Io>, Io>(λ y => y.io, sym(path))⟩),
+            Succ(k1) => {
+                let x1 = run.witness;
+                let r1 = path.witness;
+                let onward = path.proof.left;
+                match onward.right {
+                    Inl(machine) => {
+                        let same1: (x1 ≈ r1.state) = step_respects_defined(site.fetch, site.data, stack.writes, x, start.state, x1, r1.state, same,
+                            run.proof.left, machine.left);
+                        match site.steps_meet(stack, i, ret, n2, k1, x1, t, r1, r, same1, run.proof.right, path.proof.right) {
+                            Inl(within) => Inl(⟨within.left, trans(within.right, machine.right)⟩),
+                            Inr(passed) => Inr(Exists(passed.witness, Exists(passed.proof.witness, ⟨{ let e = passed.proof.proof.left; omega },
+                                ⟨passed.proof.proof.right.left, ⟨trans(passed.proof.proof.right.right.left, machine.right), passed.proof.proof.right.right.right⟩⟩⟩))),
+                        }
+                    },
+                    Inr(called) => false_elim(syscall_excludes_step(site.fetch, site.data, stack.writes, start.state, x, x1, sym(same),
+                        called.proof.left.left, run.proof.left)),
+                }
+            },
+        },
+    }
+}
+
+// Linux leaves nothing besides an answer, always allowed.
+theorem leaves_nothing(c: LinuxCmd<Nat>): (a: c.Resp()) → LinuxLeaves(c, a, []) {
+    match c {
+        ReadCmd(_, _) => λ (r: ReadResult) => match r { ReadBytes(_) => refl, ReadFailed(_) => trivial },
+        WriteCmd(_, _) => λ _ => refl,
+        OpenCmd(_) => λ _ => refl,
+        CloseCmd(_) => λ _ => refl,
+        StatCmd(_) => λ (r: StatResult) => match r { Stated(_) => refl, StatFailed(_) => trivial },
+    }
+}
+
+// A claim at Linux reaches its goal on some branch, in a world that
+// extends the one it started in.
+theorem Site::performs_reaches<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), goal: Running<M, Io> → Type, calls: Nat):
+    (least: Nat) → (x: Running<M, Io>) → site.LinuxPerforms(stack, goal, calls, least, x) →
+    Exists<Running<M, Io>>(λ g => goal(g) ∧ Extends(g.io.past, x.io.past)) {
+    match calls {
+        Zero => λ least x p => Exists(Running<M, Io>(p.witness, x.io), ⟨p.proof.proof.right.right, extends_refl(x.io.past)⟩),
+        Succ(more) => λ least x p => match p.proof.proof.right {
+            Inl(reached) => Exists(Running<M, Io>(p.witness, x.io), ⟨reached.right, extends_refl(x.io.past)⟩),
+            Inr(called) => {
+                let c = called.witness;
+                let a = x.io.answer(c);
+                let later = site.performs_reaches(stack, goal, more, least - p.proof.witness,
+                    Running<M, Io>(linux_answered(site.linux(stack), p.witness, c, a, [], BitVec::zero(), BitVec::zero()), x.io.exchanged(c, a)),
+                    called.proof.right([], leaves_nothing(c, a), BitVec::zero(), BitVec::zero()));
+                Exists(later.witness, ⟨later.proof.left, extends_trans(later.witness.io.past, Cons(Exchange(c, a), x.io.past), x.io.past, later.proof.right,
+                    Exists([Exchange(c, a)], refl))⟩)
+            },
+        },
+    }
+}
+
+// Machine steps to a goal state, from a state alike to a path's start.
+theorem Site::goal_meets<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), i: Nat, ret: BitVec(64), goal: Running<M, Io> → Type,
+    least, k, n: Nat, x, start, r: Running<M, Io>, t: MachineState<M>, same: x.state ≈ start.state, world: x.io = start.io,
+    run: MachineRuns(site.fetch, site.data, stack.writes, n, x.state, t), low: least <= n, path: StarN(site.Onward(stack, i, ret), k, start, r),
+    at: goal(Running<M, Io>(t, x.io))):
+    Exists<Running<M, Io>>(λ g => goal(g) ∧ Extends(g.io.past, r.io.past)) ∨
+    ((least < k) ∧ Exists<Running<M, Io>>(λ g => Exists<Running<M, Io>>(λ mid => Exists<Nat>(λ k2 => goal(g) ∧
+        ((g.state ≈ mid.state) ∧ StarN(site.Onward(stack, i, ret), k2 + 1, mid, r)))))) {
+    match site.steps_meet(stack, i, ret, n, k, x.state, t, start, r, same, run, path) {
+        Inl(within) => Inl(Exists(Running<M, Io>(t, x.io), ⟨at, j(trans(world, sym(within.right)), λ w _ => Extends(x.io.past, w.past),
+            extends_refl(x.io.past))⟩)),
+        Inr(passed) => {
+            let k2 = passed.proof.witness;
+            let e: (k = n + (k2 + 1)) = passed.proof.proof.left;
+            Inr(⟨{ omega }, Exists(Running<M, Io>(t, x.io), Exists(passed.witness, Exists(k2, ⟨at,
+                ⟨sym(passed.proof.proof.right.left), passed.proof.proof.right.right.right⟩⟩)))⟩)
+        },
+    }
+}
+
+// A claim at Linux from a state alike to where a path of the code starts:
+// the path ends at or before a goal state on its branch, its world a
+// prefix of that state's; or it passes a goal state, which then lay fewer
+// steps in than the path has, so more than the claim's lower bound.
+theorem Site::performs_meet<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), i: Nat, ret: BitVec(64), goal: Running<M, Io> → Type,
+    calls: Nat): (least, k: Nat) → (x, start, r: Running<M, Io>) → x.state ≈ start.state → x.io = start.io →
+    site.LinuxPerforms(stack, goal, calls, least, x) → StarN(site.Onward(stack, i, ret), k, start, r) →
+    Exists<Running<M, Io>>(λ g => goal(g) ∧ Extends(g.io.past, r.io.past)) ∨
+    ((least < k) ∧ Exists<Running<M, Io>>(λ g => Exists<Running<M, Io>>(λ mid => Exists<Nat>(λ k2 => goal(g) ∧
+        ((g.state ≈ mid.state) ∧ StarN(site.Onward(stack, i, ret), k2 + 1, mid, r)))))) {
+    match calls {
+        Zero => λ least k x start r same world p path =>
+            site.goal_meets(stack, i, ret, goal, least, k, p.proof.witness, x, start, r, p.witness, same, world, p.proof.proof.left, p.proof.proof.right.left, path,
+                p.proof.proof.right.right),
+        Succ(more) => λ least k x start r same world p path => {
+            let t = p.witness;
+            let n = p.proof.witness;
+            match p.proof.proof.right {
+                Inl(at) => site.goal_meets(stack, i, ret, goal, least, k, n, x, start, r, t, same, world, p.proof.proof.left, at.left, path, at.right),
+                Inr(called) => {
+                    let c = called.witness;
+                    let asks = called.proof.left;
+                    match site.steps_meet(stack, i, ret, n, k, x.state, t, start, r, same, p.proof.proof.left, path) {
+                        Inl(within) => {
+                            let later = site.performs_reaches(stack, goal, Succ(more), least, x, p);
+                            Inl(Exists(later.witness, ⟨later.proof.left, j(trans(world, sym(within.right)), λ w _ => Extends(later.witness.io.past, w.past),
+                                later.proof.right)⟩))
+                        },
+                        Inr(passed) => {
+                            let mid = passed.witness;
+                            let k2 = passed.proof.witness;
+                            let mid_t: (mid.state ≈ t) = passed.proof.proof.right.left;
+                            let mid_io: (mid.io = x.io) = trans(passed.proof.proof.right.right.left, sym(world));
+                            let onward = passed.proof.proof.right.right.right;
+                            let r1 = onward.witness;
+                            match onward.proof.left.right {
+                                Inl(machine) => false_elim(syscall_excludes_step(site.fetch, site.data, stack.writes, t, mid.state, r1.state,
+                                    sym(mid_t), asks.left, machine.left)),
+                                Inr(stepped) => {
+                                    let c2 = stepped.witness;
+                                    let same_c: (c2 = c) = asks_meet(site.linux(stack), mid.state, t, mid_t, c2, c, stepped.proof.left.right.left.left,
+                                        asks.right.left.left);
+                                    let resumed = stepped.proof.right.right;
+                                    let junk = resumed.witness;
+                                    let rcx = resumed.proof.right.witness;
+                                    let r11 = resumed.proof.right.proof.witness;
+                                    let landed: (r1.state = linux_answered(site.linux(stack), mid.state, c2, mid.io.answer(c2), junk, rcx, r11)) =
+                                        resumed.proof.right.proof.proof;
+                                    let leaves: LinuxLeaves(c2, mid.io.answer(c2), junk) = resumed.proof.left;
+                                    // The request and the answer are the claim's.
+                                    let Here = λ (d: LinuxCmd<Nat>) => (r1.state = linux_answered(site.linux(stack), mid.state, d, x.io.answer(d), junk, rcx, r11)) ∧
+                                        ((r1.io = x.io.exchanged(d, x.io.answer(d))) ∧ LinuxLeaves(d, x.io.answer(d), junk));
+                                    let here: Here(c) = j(same_c, λ d _ => Here(d), j(mid_io, λ w _ =>
+                                        (r1.state = linux_answered(site.linux(stack), mid.state, c2, w.answer(c2), junk, rcx, r11)) ∧
+                                        ((r1.io = w.exchanged(c2, w.answer(c2))) ∧ LinuxLeaves(c2, w.answer(c2), junk)),
+                                        ⟨landed, ⟨stepped.proof.right.left, leaves⟩⟩));
+                                    let u = linux_answered(site.linux(stack), t, c, x.io.answer(c), junk, rcx, r11);
+                                    let alike: (u ≈ r1.state) = j(sym(here.left), λ y _ => u ≈ y,
+                                        linux_answered_respects<M>(site.linux(stack), c, x.io.answer(c), junk, rcx, r11, t, mid.state,
+                                            sym(mid_t)));
+                                    match site.performs_meet(stack, i, ret, goal, more, least - n, k2, Running<M, Io>(u, x.io.exchanged(c, x.io.answer(c))), r1, r,
+                                        alike, sym(here.right.left), called.proof.right(junk, here.right.right, rcx, r11), onward.proof.right) {
+                                        Inl(found) => Inl(found),
+                                        Inr(past) => {
+                                            let e: (k = n + (k2 + 1)) = passed.proof.proof.left;
+                                            let lt: (least - n < k2) = past.left;
+                                            Inr(⟨{ omega }, past.right⟩)
+                                        },
+                                    }
+                                },
+                            }
+                        },
+                    }
+                },
+            }
+        },
+    }
+}
+
+// A goal passed before the path's end: not a return (the path's next step
+// is before it), and not an exit (no step leaves one).
+theorem Site::passed_not_reached<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), spans: Spans, s: MachineState<M>, i: Nat,
+    ret: BitVec(64), outcome: Ran<Answer>, g, mid, r: Running<M, Io>, k2: Nat, at: site.Reached(stack, spans, s, i, ret, outcome, g),
+    same: g.state ≈ mid.state, path: StarN(site.Onward(stack, i, ret), k2 + 1, mid, r)):
+    (Exists<Answer>(λ a => outcome = Done(a)) ∨ Exists<BitVec(64)>(λ status => Exists<Io>(λ o => outcome = Exited(status, o)))) → False {
+    let r1 = path.witness;
+    let onward = path.proof.left;
+    λ which => match which {
+        Inl(done) => {
+            let returned: site.Returned(stack, spans, s, i, ret, done.witness, g) = j(done.proof, λ x _ => site.Reached(stack, spans, s, i, ret, x, g), at);
+            onward.left(⟨trans(sym(SameDefinedState::rip(same)), returned.left.left),
+                trans(cong_fn<Gprs, BitVec(64)>(λ h => read_gpr(Rsp, h), sym(SameDefinedState::gprs(same))), returned.left.right.right)⟩)
+        },
+        Inr(exited) => {
+            let status = exited.witness;
+            let exit_at: (LinuxSyscallAt(site.linux(stack), g.state) ∧ LinuxExits(g.state, status)) ∧ (g.io = exited.proof.witness) =
+                j(exited.proof.proof, λ x _ => site.Reached(stack, spans, s, i, ret, x, g), at);
+            match onward.right {
+                Inl(machine) => syscall_excludes_step(site.fetch, site.data, stack.writes, g.state, mid.state, r1.state, same, exit_at.left.left, machine.left),
+                Inr(stepped) => exits_not_asks(site.linux(stack), g.state, mid.state, same, status, stepped.witness, exit_at.left.right,
+                    stepped.proof.left.right.left.left),
+            }
+        },
+    }
+}
+
+// What the code performs at a fuel, read off the meaning: its world a
+// history the meaning reaches there.
+theorem Site::reached_history<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), spans: Spans, s: MachineState<M>, i: Nat, ret: BitVec(64),
+    outcome: Ran<Answer>, g: Running<M, Io>, at: site.Reached(stack, spans, s, i, ret, outcome, g)):
+    (history(outcome) = Some(g.io.past)) ∨ Exists<Io>(λ o => outcome = Stuck(o)) {
+    (match outcome as λ x => site.Reached(stack, spans, s, i, ret, x, g) → (history(x) = Some(g.io.past)) ∨ Exists<Io>(λ o => x = Stuck(o)) {
+        Done(a) => λ returned => Inl(cong_fn<Io, Option<List<Exchange>>>(λ w => Some(w.past), sym(returned.right.right.right))),
+        Exited(status, o) => λ exited => Inl(cong_fn<Io, Option<List<Exchange>>>(λ w => Some(w.past), sym(exited.right))),
+        Going(o) => λ going => Inl(cong_fn<Io, Option<List<Exchange>>>(λ w => Some(w.past), sym(going))),
+        Stuck(o) => λ _ => Inr(Exists(o, refl)),
+    })(at)
+}
+
+// The going clause, from `Tracks`: proved once.
+theorem Site::tracks_going<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), spans: Spans, top: Nat, lent: Type, room: Nat → Nat → Nat,
+    peak: Nat → Nat → List<Value> → Heap → Io → Nat, bound: Nat, meaning: Nat → Calls(),
+    tracks: site.Tracks(stack, spans, top, lent, room, peak, bound, meaning)): site.MeetsGoing(stack, spans, top, lent, room, peak, bound, meaning) {
+    λ loan law f below args heap io s here resident i rsp inside passed high injected ret saved n roomy answerable k at r path => {
+        let outcome = meaning(n, f, args, heap, io);
+        let Goal = site.Reached(stack, spans, s, i, ret, outcome);
+        let tracked = tracks(loan, law, f, below, args, heap, io, s, here, resident, i, rsp, inside, passed, high, injected, ret, saved, n, roomy, answerable);
+        let found = λ (g: Running<M, Io>) (reached: Goal(g)) (prefix: Extends(g.io.past, r.io.past)) =>
+            match site.reached_history(stack, spans, s, i, ret, outcome, g, reached) as λ _ =>
+                Exists<Nat>(λ m => Exists<List<Exchange>>(λ h => (history(meaning(m, f, args, heap, io)) = Some(h)) ∧ Extends(h, r.io.past))) ∨
+                Exists<Nat>(λ m => Exists<Io>(λ o => meaning(m, f, args, heap, io) = Stuck(o))) {
+                Inl(seen) => Inl(Exists(n, Exists(g.io.past, ⟨seen, prefix⟩))),
+                Inr(stuck) => Inr(Exists(n, stuck)),
+            };
+        match site.performs_meet(stack, i, ret, Goal, tracked.witness, going_least(n, outcome), k, Running<M, Io>(s, io), Running<M, Io>(s, io), r,
+            refl, refl, tracked.proof, path) {
+            Inl(ahead) => found(ahead.witness, ahead.proof.left, ahead.proof.right),
+            Inr(passed_goal) => {
+                let g = passed_goal.right.witness;
+                let mid = passed_goal.right.proof.witness;
+                let k2 = passed_goal.right.proof.proof.witness;
+                let facts = passed_goal.right.proof.proof.proof;
+                (match outcome as λ x => going_least(n, x) < k → site.Reached(stack, spans, s, i, ret, x, g) →
+                    (Exists<Answer>(λ a => x = Done(a)) ∨ Exists<BitVec(64)>(λ status => Exists<Io>(λ o => x = Exited(status, o))) → False) →
+                    (meaning(n, f, args, heap, io) = x) →
+                    Exists<Nat>(λ m => Exists<List<Exchange>>(λ h => (history(meaning(m, f, args, heap, io)) = Some(h)) ∧ Extends(h, r.io.past))) ∨
+                    Exists<Nat>(λ m => Exists<Io>(λ o => meaning(m, f, args, heap, io) = Stuck(o))) {
+                    Done(a) => λ _ _ never _ => false_elim(never(Inl(Exists(a, refl)))),
+                    Exited(status, o) => λ _ _ never _ => false_elim(never(Inr(Exists(status, Exists(o, refl))))),
+                    Going(o) => λ (lt: n - 1 < k) _ _ _ => { let e: (n = k + 1) = at; false_elim(omega(lt, e)) },
+                    Stuck(o) => λ _ _ _ e => Inr(Exists(n, Exists(o, e))),
+                })(passed_goal.left, facts.left,
+                    site.passed_not_reached(stack, spans, s, i, ret, outcome, g, mid, r, k2, facts.left, facts.right.left, facts.right.right), refl)
+            },
+        }
+    }
+}
+
+// `Tracks` is the contract.
+theorem Site::tracks_meets<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), spans: Spans, top: Nat, lent: Type, room: Nat → Nat → Nat,
+    peak: Nat → Nat → List<Value> → Heap → Io → Nat, bound: Nat, meaning: Nat → Calls(),
+    tracks: site.Tracks(stack, spans, top, lent, room, peak, bound, meaning)): site.Meets(stack, spans, top, lent, room, peak, bound, meaning) {
+    ⟨site.tracks_done(stack, spans, top, lent, room, peak, bound, meaning, tracks),
+     ⟨site.tracks_exited(stack, spans, top, lent, room, peak, bound, meaning, tracks),
+      site.tracks_going(stack, spans, top, lent, room, peak, bound, meaning, tracks)⟩⟩
 }

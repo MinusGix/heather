@@ -1418,36 +1418,6 @@ fn Body::Fits(self body: Body, rooms: Nat → Nat, bound, avail: Nat) → Type {
     }
 }
 
-fn Body::fits(self body: Body, rooms: Nat → Nat, avail: Nat) → Bool {
-    match body {
-        Leaf(_) => True,
-        Seq(first, rest) => first.fits(rooms, avail) && rest.fits(rooms, avail),
-        Branch(_, yes, no) => yes.fits(rooms, avail) && no.fits(rooms, avail),
-        Call(callee, _, _) => (rooms(callee) + 24).leb(avail),
-        Loop(_, _, inner, _, _, _) => inner.fits(rooms, avail),
-        Sys(_) => True,
-        Exit(_) => True,
-    }
-}
-
-theorem Body::fits_sound(self body: Body, rooms: Nat → Nat, bound, avail: Nat): body.fits(rooms, avail).IsTrue() → body.Fits(rooms, bound, avail) {
-    match body {
-        Leaf(_) => λ _ => trivial,
-        Seq(first, rest) => λ ok => {
-            let parts = Bool::is_true_and(first.fits(rooms, avail), rest.fits(rooms, avail), ok);
-            ⟨first.fits_sound(rooms, bound, avail, parts.left), rest.fits_sound(rooms, bound, avail, parts.right)⟩
-        },
-        Branch(_, yes, no) => λ ok => {
-            let parts = Bool::is_true_and(yes.fits(rooms, avail), no.fits(rooms, avail), ok);
-            ⟨yes.fits_sound(rooms, bound, avail, parts.left), no.fits_sound(rooms, bound, avail, parts.right)⟩
-        },
-        Call(callee, _, _) => λ ok _ => (rooms(callee) + 24).leb_sound(avail, ok),
-        Loop(_, _, inner, _, _, _) => λ ok => inner.fits_sound(rooms, bound, avail, ok),
-        Sys(_) => λ _ => trivial,
-        Exit(_) => λ _ => trivial,
-    }
-}
-
 // The room a region's calls ask below a frame.
 fn Body::callee_room(self body: Body, rooms: Nat → Nat) → Nat {
     match body {
@@ -1616,6 +1586,61 @@ fn Body::Holds(self body: Body, spans: Spans, blocks: Blocks, values: Valuation(
         Loop(inputs, parameters, inner, exit, next, outputs) => Exists<Nat>(λ n => PassesHold(λ (v: Valuation()) (from: Heap) (to: Heap) =>
             inner.Holds(spans, blocks, v, answers, spare, from, to), parameters, exit, next, n, words_of(values, typed_ids(inputs)), before,
             words_of(values, typed_ids(outputs)), after)),
+        Sys(_) => False,
+        Exit(_) => False,
+    }
+}
+
+// What the routines answer that are still going, as `answers` is what they
+// answer done: routine `f` on values and a heap, going at the fuel the call
+// is made with.
+fn RoutineGoes() → Type<1> { Nat → List<Value> → Heap → Type }
+
+// A loop still going, from `state` over `from`: the first pass at `fuel`,
+// its own valuation binding the state to the parameters, still going
+// itself; or done, its exit bit clear, and `later` from the state it
+// leaves (the passes after a turn, as `loop_later` runs them).
+fn PassGo(Pass: Valuation() → Heap → Heap → Type, PassGoes: Valuation() → Nat → Heap → Type, parameters: List<Typed>, exit: Nat, next: List<Typed>,
+    fuel: Nat, later: List<BitVec(64)> → Heap → Type, state: List<BitVec(64)>, from: Heap) → Type {
+    Exists<Valuation()>(λ v => (words_of(v, typed_ids(parameters)) = state) ∧ (PassGoes(v, fuel, from) ∨
+        Exists<Heap>(λ mid => Pass(v, from, mid) ∧ ((v(1, exit).head_bit() = False) ∧ later(words_of(v, typed_ids(next)), mid)))))
+}
+
+fn LaterGo(Pass: Valuation() → Heap → Heap → Type, PassGoes: Valuation() → Nat → Heap → Type, parameters: List<Typed>, exit: Nat, next: List<Typed>,
+    fuel: Nat) → List<BitVec(64)> → Heap → Type {
+    match fuel {
+        Zero => λ state from => True,
+        Succ(rest) => λ state from => PassGo(Pass, PassGoes, parameters, exit, next, rest, LaterGo(Pass, PassGoes, parameters, exit, next, rest), state, from),
+    }
+}
+
+fn PassesGo(Pass: Valuation() → Heap → Heap → Type, PassGoes: Valuation() → Nat → Heap → Type, parameters: List<Typed>, exit: Nat, next: List<Typed>,
+    fuel: Nat, state: List<BitVec(64)>, from: Heap) → Type {
+    PassGo(Pass, PassGoes, parameters, exit, next, fuel, LaterGo(Pass, PassGoes, parameters, exit, next, fuel), state, from)
+}
+
+// A region's run still going at `fuel`, at the valuation, from `before`: a
+// sequence's first part going, or done and its rest going from where it
+// left; the arm the bit picks going; a call to a routine going on the
+// valuation's words at its arguments; a loop's passes going. A leaf is
+// never going.
+fn Body::Goes(self body: Body, spans: Spans, blocks: Blocks, values: Valuation(), answers: RoutineAnswers(), goes: RoutineGoes(), spare: Nat, fuel: Nat,
+    before: Heap) → Type {
+    match body {
+        Leaf(_) => False,
+        Seq(first, rest) => first.Goes(spans, blocks, values, answers, goes, spare, fuel, before) ∨
+            Exists<Heap>(λ mid => first.Holds(spans, blocks, values, answers, spare, before, mid) ∧
+                rest.Goes(spans, blocks, values, answers, goes, spare, fuel, mid)),
+        Branch(condition, yes, no) => match values(1, condition).head_bit() {
+            True => yes.Goes(spans, blocks, values, answers, goes, spare, fuel, before),
+            False => no.Goes(spans, blocks, values, answers, goes, spare, fuel, before),
+        },
+        Call(callee, arguments, _) => Exists<List<Value>>(λ args =>
+            (lower_values(spans, args) = words_of(values, typed_ids(arguments))) ∧ goes(callee, args, before)),
+        Loop(inputs, parameters, inner, exit, next, _) => PassesGo(λ (v: Valuation()) (from: Heap) (to: Heap) =>
+                inner.Holds(spans, blocks, v, answers, spare, from, to),
+            λ (v: Valuation()) (k: Nat) (from: Heap) => inner.Goes(spans, blocks, v, answers, goes, spare, k, from), parameters, exit, next, fuel,
+            words_of(values, typed_ids(inputs)), before),
         Sys(_) => False,
         Exit(_) => False,
     }
@@ -2243,5 +2268,701 @@ theorem Body::emit_emits<M>(self body: Body, saves, slots: Nat, site: Site<M>, l
                     answers, callees, v, spare, d, w, s0, framing, short, shallow, start, head, rest, names + 4, from, to)),
         Sys(_) => λ shallow prog file placement names before after => trivial,
         Exit(_) => λ shallow prog file placement names before after => trivial,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The code of a run still going (docs/language/ownership-design.md §17.7)
+//
+// What a region's code proves of a run still going: from the region's
+// start, at no system call, at least `least` machine steps, counted where
+// the fuel was spent (each turn's jump and each CALL). Which state it gets
+// to does not matter: the world, at no system call, is the one it started
+// in. A claim at the kernel of no system call, at the world `True`.
+
+fn GoesHeap<M>(saves: Nat, site: Site<M>, stack: Stack<M>(site.fetch, site.data), spans: Spans, values: Valuation(), d: Nat, s0: MachineState<M>,
+    prog: Prog, file: File, facts: Type, before: Heap, least: Nat, out: Emitted) → Type {
+    prog.Within(out.prog) ∧ (out.prog.Within(site.program) →
+        site.Claims(stack.writes, Kernel::none<M, True>(), 0, least, prog_len(prog),
+            λ (r: Running<M, True>) => ((file.Represents(values, r.state.gprs) ∧ facts) ∧
+                stack.TrailedBy(saves, spans, heap_in<M>(site.data, spans), d, s0, before, r.state)) ∧ True,
+            λ (_: Running<M, True>) => True))
+}
+
+fn MayGoHeap<M>(saves: Nat, site: Site<M>, stack: Stack<M>(site.fetch, site.data), spans: Spans, values: Valuation(), d: Nat, s0: MachineState<M>,
+    prog: Prog, file: File, facts: Type, before: Heap, least: Nat, out: Option<Emitted>) → Type {
+    out.All(λ (emitted: Emitted) => GoesHeap<M>(saves, site, stack, spans, values, d, s0, prog, file, facts, before, least, emitted))
+}
+
+// Every routine below `bound` still going, on the runs `goes` says, runs at
+// least `least` machine steps from its entry.
+fn CalleesGo<M>(site: Site<M>, stack: Stack<M>(site.fetch, site.data), spans: Spans, rooms: Nat → Nat, top, bound: Nat, goes: RoutineGoes(), least: Nat) → Type {
+    (f: Nat) → f + 1 <= bound → (args: List<Value>) → (heap: Heap) → goes(f, args, heap) →
+        site.EntersClaim(stack, Kernel::none<M, True>(), 0, least, asm_labels(site.program)(f + 1),
+            λ (i: Nat) (s: Running<M, True>) => RoutinePre<M>(site, stack, spans, rooms, top, f, args, heap)(i, s.state) ∧ True,
+            λ (_: Nat) (_: Running<M, True>) (_: BitVec(64)) (_: Running<M, True>) => True)
+}
+
+// The heap's clause where a run may have left it: `Some` the heap injected,
+// `None` nothing. The call sequence's claim at it, from `Some(before)` to
+// `None`, cannot arrive past the call: so it is a claim of reaching the
+// CALL.
+fn heap_left<M>(data: ByteReadAccess<M>, spans: Spans) → Option<Heap> → M → Type {
+    λ (o: Option<Heap>) (memory: M) => match o { None => True, Some(heap) => Injected<M>(data, spans, heap, memory) }
+}
+
+theorem heap_left_stable<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, stack: Stack<M>(fetch, data), top: Nat, spans: Spans,
+    loan: Loan<M>(fetch, data, stack, top, spans)): stack.ClauseStable(top, heap_left<M>(data, spans)) {
+    λ o => match o {
+        None => λ memory k low word held => trivial,
+        Some(heap) => loan.stable_injected(top, top.le_refl(), heap),
+    }
+}
+
+// The kernel that, at a CALL, hands the code to a callee whose run from
+// there makes at least `least` machine steps: the call sequence's claim at
+// it is a claim of the caller's code going on into the callee.
+fn into_callee<M>(site: Site<M>, writes: ByteWrites<M>, least: Nat) → Kernel<M, True> {
+    Kernel(λ (r: Running<M, True>) (P: Running<M, True> → Type) => site.Performs(writes, Kernel::none<M, True>(), λ (_: Running<M, True>) => True, 0, least,
+        Running<M, True>(r.state, trivial)), λ r P Q implies handed => handed)
+}
+
+// A call still going: the call's code to its CALL, the CALL, counted, and
+// the callee's run, still going.
+theorem call_heap_goes<M>(saves, slots: Nat, site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data),
+    top: Nat, spans: Spans, loan: Loan<M>(site.fetch, site.data, stack, top, spans), rooms: Nat → Nat, bound, avail: Nat, goes: RoutineGoes(), least: Nat,
+    callees: CalleesGo<M>(site, stack, spans, rooms, top, bound, goes, least), blocks: Blocks, values: Valuation(), spare: Nat, d: Nat,
+    s0: MachineState<M>, rsp0: read_gpr(Rsp, s0.gprs) = stack.at(d), room: avail <= d, deep: 24 <= d, fits: d + 8 * slots <= stack.size,
+    under: (d + 8 * slots) + 8 <= top, prog: Prog, file: File, callee: Nat, arguments, results: List<Typed>,
+    fit: callee + 1 <= bound → rooms(callee) + 24 <= avail, placement: List<Place>, names: Nat, before: Heap):
+    MayGoHeap<M>(saves, site, stack, spans, values, d + 8 * slots, s0, prog, file,
+        Exists<List<Value>>(λ args => (lower_values(spans, args) = words_of(values, typed_ids(arguments))) ∧ goes(callee, args, before)), before, 1 + least,
+        file.emit_call(slots, prog, callee, typed_ids(arguments), call_result(results, spare), call_also(results), placement, names, bound, [], [])) {
+    let Facts: Type = Exists<List<Value>>(λ (args: List<Value>) => (lower_values(spans, args) = words_of(values, typed_ids(arguments))) ∧ goes(callee, args, before));
+    let mem = heap_left<M>(site.data, spans);
+    let World = λ (o: Option<Heap>) (_: True) => o = Some(before);
+    let kernel = into_callee<M>(site, stack.writes, 1 + least);
+    let none = Kernel::none<M, True>();
+    let chain = file.emit_call_steps_claim<M, Option<Heap>, True>(saves, slots, site, laid, stack, top, bound, spans, mem, World, kernel, 1, 0,
+        heap_left_stable<M>(stack, top, spans, loan), values, d, s0, rsp0, fits, under, deep, prog, callee, typed_ids(arguments),
+        call_result(results, spare), call_also(results), placement, names, [], [], Facts, Some(before), None,
+        λ eight slotted below lends count few moved facts g0 rep rsp k at x here resident held => {
+            let i = (d - 8 * count) - 8;
+            let low: (rooms(callee) <= i) = { let f = fit(below); omega };
+            let high: (i + 8 <= top) = { omega };
+            let room8: (i + 8 <= stack.size) = { omega };
+            let displacement = asm_jump_of(asm_labels(site.program), prog_len(moved), CallTo(callee + 1));
+            let handed = site.claims_call_by(stack, none, site.program.laid_out_fits(laid), k, moved, 0, callee + 1, at, asm_labels(site.program)(callee + 1),
+                call_lands(asm_labels(site.program), k, site.program, moved, 0, callee + 1, site.program.laid_out_lands(laid), at), 0, least,
+                λ (j2: Nat) (u: Running<M, True>) => RoutinePre<M>(site, stack, spans, rooms, top, callee, facts.witness, before)(j2, u.state) ∧ True,
+                λ (_: Nat) (_: Running<M, True>) (_: BitVec(64)) (_: Running<M, True>) => True,
+                callees(callee, below, facts.witness, before, facts.proof.right),
+                λ (y: Running<M, True>) => stack.ArgsReadyBy(call_saves(placement), spans, mem, d, slots, s0, Some(before), g0, count,
+                    words_of(values, typed_ids(arguments)), y.state) ∧ True,
+                λ (_: Running<M, True>) => True, λ _ => i,
+                λ y ready => {
+                    let pushed = call_pushes<M, Option<Heap>>(call_saves(placement), slots, eight, slotted, site, stack, top, spans, mem,
+                        heap_left_stable<M>(stack, top, spans, loan), d, s0, fits, under, deep, count, few, words_of(values, typed_ids(arguments)), Some(before),
+                        g0, displacement, y.state, ready.left);
+                    ⟨pushed.left, ⟨room8, ⟨⟨⟨j(sym(facts.proof.left), λ ws _ => stack.Passed(ws, i, call_near_after(stack.writes, displacement, y.state)),
+                        pushed.right.right.right), low⟩, ⟨high, pushed.right.right.left.right⟩⟩, trivial⟩⟩⟩
+                },
+                λ y t _ _ _ => trivial)(Running<M, True>(x.state, trivial), here, resident, ⟨held.left, trivial⟩);
+            Exists(x.state, Exists(0, ⟨refl, Inr(handed)⟩))
+        });
+    (match file.emit_call(slots, prog, callee, typed_ids(arguments), call_result(results, spare), call_also(results), placement, names, bound, [], []) as λ o =>
+        MayEmitClaim<M, Option<Heap>, True>(saves, site, stack, spans, mem, World, kernel, 1, 0, values, d + 8 * slots, s0, prog, file, Facts, Some(before), None, o) →
+        MayGoHeap<M>(saves, site, stack, spans, values, d + 8 * slots, s0, prog, file, Facts, before, 1 + least, o) {
+        None => λ _ => trivial,
+        Some(out) => λ emits => ⟨emits.left, λ within r here resident held => {
+            let p = emits.right(within)(Running<M, True>(r.state, trivial), here, resident, ⟨held.left, refl⟩);
+            match p.proof.proof.right {
+                Inl(arrived) => {
+                    let never: (None<Heap> = Some(before)) = arrived.right.right.right;
+                    absurd(never)
+                },
+                Inr(handed) => site.performs_after(stack.writes, none, λ (_: Running<M, True>) => True, 0, 1 + least, r, p.witness,
+                    Exists(p.proof.witness, p.proof.proof.left), handed),
+            }
+        }⟩,
+    })(chain)
+}
+
+// A branch still going: the test, then the arm its bit picks, going.
+theorem branch_heap_goes<M>(saves: Nat, site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data),
+    spans: Spans, values: Valuation(), d: Nat, s0: MachineState<M>, prog: Prog, file: File, condition: Nat, Yes, No: Type, before: Heap, least: Nat,
+    tested: Tested(file, condition), names: Nat, short: List<Nat>, left, right: Emitted,
+    yes_goes: GoesHeap<M>(saves, site, stack, spans, values, d, s0, prog.branched_by(tested.test, names + 1, shorts(short, names + 1)),
+        file.know(Truth(condition)), Yes, before, least, left),
+    no_goes: GoesHeap<M>(saves, site, stack, spans, values, d, s0, left.prog.else_label_by(names + 1, names + 2, shorts(short, names + 2)),
+        file.know(Falsity(condition)), No, before, least, right),
+    left_within: prog.branched_by(tested.test, names + 1, shorts(short, names + 1)).Within(left.prog),
+    right_within: left.prog.else_label_by(names + 1, names + 2, shorts(short, names + 2)).Within(right.prog)):
+    GoesHeap<M>(saves, site, stack, spans, values, d, s0, prog, file, match values(1, condition).head_bit() { True => Yes, False => No }, before, least,
+        Emitted(right.prog.join_label(names + 2), left.file.meet(right.file, file.known), right.placement, right.names)) {
+    let test = tested.test;
+    let else_name = names + 1;
+    let join_name = names + 2;
+    let short_jcc = shorts(short, else_name);
+    let short_jmp = shorts(short, join_name);
+    let branched = prog.branched_by(test, else_name, short_jcc);
+    let jumped = At(left.prog, 0, jmp_item(short_jmp, join_name));
+    let second = left.prog.else_label_by(else_name, join_name, short_jmp);
+    let to_branch = prog.within_step(prog.tested(test), 0, jcc_item(short_jcc, test.cc(), else_name),
+        prog.within_then(0, Block([test.instruction()])));
+    let to_second = prog.within_step(jumped, else_name, Block([]),
+        prog.within_step(left.prog, 0, jmp_item(short_jmp, join_name), Prog::within_trans(to_branch, left_within)));
+    let picked = λ (b: Bool) => match b { True => Yes, False => No };
+    let pre = λ (g: Gprs) (m: M) (_: True) => ((file.Represents(values, g) ∧ picked(values(1, condition).head_bit())) ∧
+        (Kept(body_kept(saves), s0.gprs, g) ∧ stack.TrailBy(spans, heap_in<M>(site.data, spans), d, s0.memory, before, m))) ∧ True;
+    ⟨prog.within_step(right.prog, join_name, Block([]), Prog::within_trans(to_second, right_within)),
+     λ within => {
+        let program = site.program;
+        let labels = asm_labels(program);
+        let unique = program.laid_out_unique(laid);
+        let lands = program.laid_out_lands(laid);
+        let no_in = right.prog.within_before(join_name, Block([]), program, within);
+        let second_in = Prog::within_trans(right_within, no_in);
+        let jumped_in = jumped.within_before(else_name, Block([]), program, second_in);
+        let yes_in = left.prog.within_before(0, jmp_item(short_jmp, join_name), program, jumped_in);
+        let branched_in = Prog::within_trans(left_within, yes_in);
+        let tested_in = prog.tested(test).within_before(0, jcc_item(short_jcc, test.cc(), else_name), program, branched_in);
+        let else_lands = j(label_target(second_in.witness, program, jumped, names, Block([]), unique, second_in.proof),
+            λ to _ => JccLands(labels, prog_len(prog.tested(test)), short_jcc, test.cc(), else_name, to),
+            jcc_item_lands(labels, branched_in.witness, program, prog.tested(test), 0, short_jcc, test.cc(), else_name, lands, branched_in.proof));
+        let selects = tested.selects(values);
+        site.claims_test_by(stack.writes, Kernel::none<M, True>(), program.laid_out_fits(laid), prog, test, else_name, short_jcc, tested_in.witness,
+            tested_in.proof, branched_in.witness, branched_in.proof, prog_len(left.prog) + asm_len(jmp_item(short_jmp, join_name)), else_lands, 0, least,
+            pre, λ (_: Running<M, True>) => True,
+            site.claims_weaken(stack.writes, Kernel::none<M, True>(), 0, least, prog_len(branched),
+                λ (r: Running<M, True>) => ((file.know(Truth(condition)).Represents(values, r.state.gprs) ∧ Yes) ∧
+                    stack.TrailedBy(saves, spans, heap_in<M>(site.data, spans), d, s0, before, r.state)) ∧ True,
+                λ (_: Running<M, True>) => True,
+                λ (r: Running<M, True>) => pre(r.state.gprs, r.state.memory, r.io) ∧ test.taken(r.state.gprs) = False,
+                λ (_: Running<M, True>) => True,
+                yes_goes.right(yes_in),
+                λ r held => {
+                    let clear: (!values(1, condition).head_bit() = False) = trans(sym(selects(r.state.gprs, held.left.left.left.left)), held.right);
+                    let bit = function_ir_lower_calls::not_false(values(1, condition).head_bit(), clear);
+                    ⟨⟨⟨file.represents_know(values, r.state.gprs, Truth(condition), held.left.left.left.left, bit),
+                        j(bit, λ b _ => picked(b), held.left.left.left.right)⟩, held.left.left.right⟩, trivial⟩
+                },
+                λ t done => done),
+            site.claims_weaken(stack.writes, Kernel::none<M, True>(), 0, least, prog_len(second),
+                λ (r: Running<M, True>) => ((file.know(Falsity(condition)).Represents(values, r.state.gprs) ∧ No) ∧
+                    stack.TrailedBy(saves, spans, heap_in<M>(site.data, spans), d, s0, before, r.state)) ∧ True,
+                λ (_: Running<M, True>) => True,
+                λ (r: Running<M, True>) => pre(r.state.gprs, r.state.memory, r.io) ∧ test.taken(r.state.gprs) = True,
+                λ (_: Running<M, True>) => True,
+                no_goes.right(no_in),
+                λ r held => {
+                    let set: (!values(1, condition).head_bit() = True) = trans(sym(selects(r.state.gprs, held.left.left.left.left)), held.right);
+                    let bit = function_ir_lower_calls::not_true(values(1, condition).head_bit(), set);
+                    ⟨⟨⟨file.represents_know(values, r.state.gprs, Falsity(condition), held.left.left.left.left, bit),
+                        j(bit, λ b _ => picked(b), held.left.left.left.right)⟩, held.left.left.right⟩, trivial⟩
+                },
+                λ t done => done))
+     }⟩
+}
+
+// The turn round as a claim: the test falls to C, the next words move into
+// the state's registers, and the JMP to the head, the one step the fuel
+// pays for.
+theorem plain_turns_claim<M>(saves: Nat, site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data), keep: M → Type,
+    s0: MachineState<M>, pass: Prog, file: File, test: Test, exit: Nat, moves: List<Instruction>, ids: List<Nat>, registers: List<Gpr>, names: Nat,
+    short: List<Nat>, again_in: plain_again(pass, test, moves, names, short).Within(site.program),
+    c_lands: asm_target(site.program, names + 2) = prog_len(plain_jumped(pass, test, moves, names, short)),
+    h_at: Nat, h_lands: asm_target(site.program, names + 1) = h_at, values: Valuation(),
+    selects: (g: Gprs) → file.Represents(values, g) → test.taken(g) = !values(1, exit).head_bit(),
+    into: MovesInto<M>(saves, values, file, ids, registers, moves), clear: values(1, exit).head_bit() = False):
+    site.Claims(stack.writes, Kernel::none<M, True>(), 0, 1, prog_len(pass),
+        λ (r: Running<M, True>) => stack.LoopPassed(saves, keep, s0, file, values)(r.state.gprs, r.state.memory) ∧ True,
+        site.Arrived(h_at, λ (t: Running<M, True>) => stack.LoopAt(saves, keep, s0, registers, words_of(values, ids))(t.state.gprs, t.state.memory) ∧ True)) {
+    let program = site.program;
+    let back = plain_back(pass, test, moves, names, short);
+    let short_h = shorts(short, names + 1);
+    let back_in = back.within_before(0, jmp_item(short_h, names + 1), program, again_in);
+    let jump_lands = j(h_lands, λ target _ => JmpLands(asm_labels(program), prog_len(back), short_h, names + 1, target),
+        jmp_item_lands(asm_labels(program), again_in.witness, program, back, 0, short_h, names + 1, program.laid_out_lands(laid), again_in.proof));
+    let post = stack.LoopAt(saves, keep, s0, registers, words_of(values, ids));
+    let none = Kernel::none<M, True>();
+    site.claims_after_moves(stack.writes, none, 0, 1, prog_len(pass), prog_len(back),
+        λ (s: MachineState<M>) => stack.LoopPassed(saves, keep, s0, file, values)(s.gprs, s.memory),
+        λ (s: MachineState<M>) => post(s.gprs, s.memory), λ (_: True) => True,
+        site.Arrived(h_at, λ (t: Running<M, True>) => post(t.state.gprs, t.state.memory) ∧ True),
+        loop_turns<M>(saves, site, laid, stack, keep, s0, pass, file, test, exit, moves, ids, registers, plain_jumped(pass, test, moves, names, short),
+            names + 2, shorts(short, names + 2), Exists(2, refl), back_in, c_lands, values, selects, into, clear),
+        site.claims_weaken(stack.writes, none, 0, 1, prog_len(back),
+            λ (r: Running<M, True>) => post(r.state.gprs, r.state.memory),
+            site.Arrived(h_at, λ (t: Running<M, True>) => post(t.state.gprs, t.state.memory)),
+            λ (r: Running<M, True>) => post(r.state.gprs, r.state.memory) ∧ True,
+            site.Arrived(h_at, λ (t: Running<M, True>) => post(t.state.gprs, t.state.memory) ∧ True),
+            site.claims_jump_item(stack.writes, none, program.laid_out_fits(laid), again_in.witness, back, 0, short_h, names + 1, again_in.proof, h_at,
+                jump_lands, λ (g: Gprs) (m: M) (_: True) => post(g, m)),
+            λ r held => held.left, λ t arrived => ⟨arrived.left, ⟨arrived.right, trivial⟩⟩))
+}
+
+// The head's claim at a loop still going, from the state `state` over
+// `now`: at least `least` machine steps.
+fn PlainGoes<M>(saves: Nat, site: Site<M>, stack: Stack<M>(site.fetch, site.data), spans: Spans, w: Nat, s0: MachineState<M>, registers: List<Gpr>,
+    h_at, least: Nat, state: List<BitVec(64)>, now: Heap) → Type {
+    site.Claims(stack.writes, Kernel::none<M, True>(), 0, least, h_at,
+        λ (r: Running<M, True>) => PlainAt<M>(saves, site, stack, spans, w, s0, registers, state, now)(r.state) ∧ True, λ (_: Running<M, True>) => True)
+}
+
+// One pass from the head, still going: the pass itself, or done, the turn
+// round, and what follows from the head (`later`, at least `least`).
+theorem plain_pass_goes<M>(saves: Nat, site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data), spans: Spans,
+    Pass: Valuation() → Heap → Heap → Type, PassGoes: Valuation() → Nat → Heap → Type, w: Nat, s0: MachineState<M>, prog: Prog, code: List<Instruction>,
+    head: File, registers: List<Gpr>, parameters: List<Typed>, exit: Nat, next: List<Typed>, names: Nat, short: List<Nat>, pass: Emitted, test: Test,
+    moves: List<Instruction>, labels: PlainLabels<M>(site, prog, code, pass.prog, test, moves, names, short),
+    head_ok: (v: Valuation()) → (g: Gprs) → ArgsIn(words_of(v, typed_ids(parameters)), registers, g) → head.Represents(v, g),
+    pass_emits: (v: Valuation()) → (from, to: Heap) →
+        EmitsHeap<M>(saves, site, stack, spans, v, w, s0, plain_head(prog, code, names), head, Pass(v, from, to), from, to, pass),
+    cap: Nat, pass_goes: (v: Valuation()) → (k: Nat) → k <= cap → (from: Heap) →
+        GoesHeap<M>(saves, site, stack, spans, v, w, s0, plain_head(prog, code, names), head, PassGoes(v, k, from), from, k, pass),
+    pass_in: pass.prog.Within(site.program),
+    selects: (v: Valuation()) → (g: Gprs) → pass.file.Represents(v, g) → test.taken(g) = !v(1, exit).head_bit(),
+    into: (v: Valuation()) → MovesInto<M>(saves, v, pass.file, typed_ids(next), registers, moves),
+    fuel: Nat, Later: List<BitVec(64)> → Heap → Type, least: Nat,
+    later: (st: List<BitVec(64)>) → (at: Heap) → Later(st, at) →
+        PlainGoes<M>(saves, site, stack, spans, w, s0, registers, prog_len(At(prog, 0, Block(code))), least, st, at),
+    enough: fuel <= 1 + least, capped: fuel <= cap, state: List<BitVec(64)>, now: Heap, ran: PassGo(Pass, PassGoes, parameters, exit, next, fuel, Later, state, now)):
+    PlainGoes<M>(saves, site, stack, spans, w, s0, registers, prog_len(At(prog, 0, Block(code))), fuel, state, now) {
+    let h_at = prog_len(At(prog, 0, Block(code)));
+    let none = Kernel::none<M, True>();
+    let v = ran.witness;
+    let eq: (words_of(v, typed_ids(parameters)) = state) = ran.proof.left;
+    match ran.proof.right {
+        Inl(going) => λ r here resident held => pass_goes(v, fuel, capped, now).right(pass_in)(r, here, resident,
+            ⟨⟨⟨head_ok(v, r.state.gprs, j(sym(eq), λ x _ => ArgsIn(x, registers, r.state.gprs), held.left.left)), going⟩, held.left.right⟩, trivial⟩),
+        Inr(done) => {
+            let mid = done.witness;
+            let keep_mid = λ (x: M) => stack.TrailBy(spans, heap_in<M>(site.data, spans), w, s0.memory, mid, x);
+            let passed_at = λ (t: MachineState<M>) => stack.LoopPassed(saves, keep_mid, s0, pass.file, v)(t.gprs, t.memory);
+            let ran_body = loop_body_runs_by<M, Heap>(saves, site, stack, spans, heap_in<M>(site.data, spans), Pass, w, s0, plain_head(prog, code, names), head,
+                registers, typed_ids(parameters), head_ok, v, now, mid, pass, pass_emits(v, now, mid), pass_in, done.proof.left);
+            let start = j(eq, λ x _ => site.Moves(stack.writes, h_at, prog_len(pass.prog), PlainAt<M>(saves, site, stack, spans, w, s0, registers, x, now),
+                passed_at), ran_body);
+            let turn = plain_turns_claim<M>(saves, site, laid, stack, keep_mid, s0, pass.prog, pass.file, test, exit, moves, typed_ids(next), registers, names,
+                short, labels.again_in, labels.c_lands, h_at, labels.h_lands, v, selects(v), into(v), done.proof.right.left);
+            let onward = site.claims_trans(stack.writes, none, 0, 1, 0, least, prog_len(pass.prog), h_at,
+                λ (r: Running<M, True>) => passed_at(r.state) ∧ True,
+                λ (t: Running<M, True>) => PlainAt<M>(saves, site, stack, spans, w, s0, registers, words_of(v, typed_ids(next)), mid)(t.state) ∧ True,
+                λ (_: Running<M, True>) => True, turn, later(words_of(v, typed_ids(next)), mid, done.proof.right.right));
+            site.claims_loosen(stack.writes, none, 0 + 0, 1 + least, 0, fuel, h_at,
+                λ (r: Running<M, True>) => PlainAt<M>(saves, site, stack, spans, w, s0, registers, state, now)(r.state) ∧ True, λ (_: Running<M, True>) => True,
+                enough,
+                site.claims_after_moves(stack.writes, none, 0 + 0, 1 + least, h_at, prog_len(pass.prog),
+                    PlainAt<M>(saves, site, stack, spans, w, s0, registers, state, now), passed_at, λ (_: True) => True, λ (_: Running<M, True>) => True,
+                    start, onward))
+        },
+    }
+}
+
+// The passes from the head, still going at `fuel`: at least `fuel`
+// machine steps, by induction on it.
+theorem plain_passes_goes<M>(saves: Nat, site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data), spans: Spans,
+    Pass: Valuation() → Heap → Heap → Type, PassGoes: Valuation() → Nat → Heap → Type, w: Nat, s0: MachineState<M>, prog: Prog, code: List<Instruction>,
+    head: File, registers: List<Gpr>, parameters: List<Typed>, exit: Nat, next: List<Typed>, names: Nat, short: List<Nat>, pass: Emitted, test: Test,
+    moves: List<Instruction>, labels: PlainLabels<M>(site, prog, code, pass.prog, test, moves, names, short),
+    head_ok: (v: Valuation()) → (g: Gprs) → ArgsIn(words_of(v, typed_ids(parameters)), registers, g) → head.Represents(v, g),
+    pass_emits: (v: Valuation()) → (from, to: Heap) →
+        EmitsHeap<M>(saves, site, stack, spans, v, w, s0, plain_head(prog, code, names), head, Pass(v, from, to), from, to, pass),
+    cap: Nat, pass_goes: (v: Valuation()) → (k: Nat) → k <= cap → (from: Heap) →
+        GoesHeap<M>(saves, site, stack, spans, v, w, s0, plain_head(prog, code, names), head, PassGoes(v, k, from), from, k, pass),
+    pass_in: pass.prog.Within(site.program),
+    selects: (v: Valuation()) → (g: Gprs) → pass.file.Represents(v, g) → test.taken(g) = !v(1, exit).head_bit(),
+    into: (v: Valuation()) → MovesInto<M>(saves, v, pass.file, typed_ids(next), registers, moves), fuel: Nat):
+    fuel <= cap → (state: List<BitVec(64)>) → (now: Heap) → PassesGo(Pass, PassGoes, parameters, exit, next, fuel, state, now) →
+    PlainGoes<M>(saves, site, stack, spans, w, s0, registers, prog_len(At(prog, 0, Block(code))), fuel, state, now) {
+    match fuel {
+        Zero => λ capped state now ran => plain_pass_goes<M>(saves, site, laid, stack, spans, Pass, PassGoes, w, s0, prog, code, head, registers, parameters, exit,
+            next, names, short, pass, test, moves, labels, head_ok, pass_emits, cap, pass_goes, pass_in, selects, into, 0,
+            LaterGo(Pass, PassGoes, parameters, exit, next, 0), 0,
+            λ st at _ r here resident held => Exists(r.state, Exists(0, ⟨refl, ⟨trivial, trivial⟩⟩)), trivial, capped, state, now, ran),
+        Succ(rest) => λ capped state now ran => plain_pass_goes<M>(saves, site, laid, stack, spans, Pass, PassGoes, w, s0, prog, code, head, registers, parameters,
+            exit, next, names, short, pass, test, moves, labels, head_ok, pass_emits, cap, pass_goes, pass_in, selects, into, Succ(rest),
+            LaterGo(Pass, PassGoes, parameters, exit, next, Succ(rest)), rest,
+            plain_passes_goes<M>(saves, site, laid, stack, spans, Pass, PassGoes, w, s0, prog, code, head, registers, parameters, exit, next, names, short,
+                pass, test, moves, labels, head_ok, pass_emits, cap, pass_goes, pass_in, selects, into, rest, { omega }), { omega }, capped, state, now, ran),
+    }
+}
+
+// A plain loop still going: the entry's moves, then the passes from the
+// head, at least the loop's fuel.
+theorem plain_loop_goes<M>(saves: Nat, site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data), spans: Spans,
+    Pass: Valuation() → Heap → Heap → Type, PassGoes: Valuation() → Nat → Heap → Type, values: Valuation(), w: Nat, s0: MachineState<M>, prog: Prog,
+    file: File, inputs, parameters: List<Typed>, exit: Nat, next: List<Typed>, names: Nat, short: List<Nat>, registers: List<Gpr>, entry: PlainEntry,
+    entered: MovesInto<M>(saves, values, file, typed_ids(inputs), registers, entry.code),
+    head_ok: (v: Valuation()) → (g: Gprs) → ArgsIn(words_of(v, typed_ids(parameters)), registers, g) → entry.head.Represents(v, g),
+    pass: Emitted,
+    pass_emits: (v: Valuation()) → (from, to: Heap) →
+        EmitsHeap<M>(saves, site, stack, spans, v, w, s0, plain_head(prog, entry.code, names), entry.head, Pass(v, from, to), from, to, pass),
+    cap: Nat, pass_goes: (v: Valuation()) → (k: Nat) → k <= cap → (from: Heap) →
+        GoesHeap<M>(saves, site, stack, spans, v, w, s0, plain_head(prog, entry.code, names), entry.head, PassGoes(v, k, from), from, k, pass),
+    tested: Tested(pass.file, exit), moves: List<Instruction>, into: (v: Valuation()) → MovesInto<M>(saves, v, pass.file, typed_ids(next), registers, moves),
+    out: File, before: Heap, fuel: Nat, capped: fuel <= cap):
+    GoesHeap<M>(saves, site, stack, spans, values, w, s0, prog, file,
+        PassesGo(Pass, PassGoes, parameters, exit, next, fuel, words_of(values, typed_ids(inputs)), before), before, fuel,
+        Emitted(plain_done(pass.prog, tested.test, moves, names, short), out, pass.placement, pass.names)) {
+    let program = site.program;
+    let code = entry.code;
+    let test = tested.test;
+    let none = Kernel::none<M, True>();
+    let head_pass: plain_head(prog, code, names).Within(pass.prog) = (pass_emits(values, before, before)).left;
+    let facts: Type = PassesGo(Pass, PassGoes, parameters, exit, next, fuel, words_of(values, typed_ids(inputs)), before);
+    let pre = λ (g: Gprs) (m: M) => (file.Represents(values, g) ∧ facts) ∧
+        (Kept(body_kept(saves), s0.gprs, g) ∧ stack.TrailBy(spans, heap_in<M>(site.data, spans), w, s0.memory, before, m));
+    let into_head: prog.Within(plain_head(prog, code, names)) = Exists(2, refl);
+    let pass_done: pass.prog.Within(plain_done(pass.prog, test, moves, names, short)) = Exists(8, refl);
+    ⟨Prog::within_trans(into_head, Prog::within_trans(head_pass, pass_done)),
+     λ within r here resident held => {
+        let labels = plain_labels<M>(site, laid, prog, code, pass.prog, test, moves, names, short, head_pass, within);
+        let pass_in: pass.prog.Within(program) = Prog::within_trans(Exists(8, refl), within);
+        let entered_in: At(prog, 0, Block(code)).Within(program) = Prog::within_trans(Exists(1, refl), Prog::within_trans(head_pass, pass_in));
+        let entry_run = site.moves_block(stack.writes, program.laid_out_fits(laid), entered_in.witness, prog, 0, code, entered_in.proof,
+            program.block_reads_at(laid, entered_in.witness, prog, 0, code, entered_in.proof), pre,
+            λ (g: Gprs) (m: M) => stack.LoopAt(saves, λ (x: M) => stack.TrailBy(spans, heap_in<M>(site.data, spans), w, s0.memory, before, x), s0,
+                registers, words_of(values, typed_ids(inputs)))(g, m),
+            λ x memory held_x => {
+                let ran = entered(x, held_x.left.left);
+                ⟨ran.left, ⟨kept_trans(body_kept(saves), s0.gprs, x.gprs, execute_block_normal(code, x).gprs, held_x.right.left, ran.right),
+                    held_x.right.right⟩⟩
+            });
+        let passes = plain_passes_goes<M>(saves, site, laid, stack, spans, Pass, PassGoes, w, s0, prog, code, entry.head, registers, parameters, exit, next,
+            names, short, pass, test, moves, labels, head_ok, pass_emits, cap, pass_goes, pass_in, tested.selects, into, fuel, capped,
+            words_of(values, typed_ids(inputs)), before, held.left.left.right);
+        site.claims_after_moves(stack.writes, none, 0, fuel, prog_len(prog), prog_len(At(prog, 0, Block(code))),
+            λ (x: MachineState<M>) => pre(x.gprs, x.memory),
+            PlainAt<M>(saves, site, stack, spans, w, s0, registers, words_of(values, typed_ids(inputs)), before), λ (_: True) => True,
+            λ (_: Running<M, True>) => True, entry_run, passes)(r, here, resident, held)
+     }⟩
+}
+
+// A loop still going, as `Emitted::plain_close` checks it.
+theorem plain_close_goes<M>(saves: Nat, site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data), spans: Spans,
+    Pass: Valuation() → Heap → Heap → Type, PassGoes: Valuation() → Nat → Heap → Type, values: Valuation(), w: Nat, s0: MachineState<M>, prog: Prog, file: File, inputs, parameters: List<Typed>,
+    exit: Nat, next, outputs: List<Typed>, names: Nat, short: List<Nat>, registers: List<Gpr>, entry: PlainEntry,
+    entry_ok: MovesInto<M>(saves, values, file, typed_ids(inputs), registers, entry.code) ∧
+        ((v: Valuation()) → (g: Gprs) → ArgsIn(words_of(v, typed_ids(parameters)), registers, g) → entry.head.Represents(v, g)),
+    pass: Emitted,
+    pass_emits: (v: Valuation()) → (from, to: Heap) →
+        EmitsHeap<M>(saves, site, stack, spans, v, w, s0, plain_head(prog, entry.code, names), entry.head, Pass(v, from, to), from, to, pass),
+    cap: Nat, pass_goes: (v: Valuation()) → (k: Nat) → k <= cap → (from: Heap) →
+        GoesHeap<M>(saves, site, stack, spans, v, w, s0, plain_head(prog, entry.code, names), entry.head, PassGoes(v, k, from), from, k, pass),
+    before: Heap, fuel: Nat, capped: fuel <= cap):
+    MayGoHeap<M>(saves, site, stack, spans, values, w, s0, prog, file,
+        PassesGo(Pass, PassGoes, parameters, exit, next, fuel, words_of(values, typed_ids(inputs)), before), before, fuel,
+        pass.plain_close(saves, registers, exit, typed_ids(next), typed_ids(outputs), names, short)) {
+    let facts: Type = PassesGo(Pass, PassGoes, parameters, exit, next, fuel, words_of(values, typed_ids(inputs)), before);
+    let nexts = word_ports(typed_ids(next));
+    let outs = word_ports(typed_ids(outputs));
+    match pass.file.branch_test(exit) as λ t => MayGoHeap<M>(saves, site, stack, spans, values, w, s0, prog, file, facts, before, fuel, match t {
+            None => None,
+            Some(tested) => match pass.file.move_outputs(nexts, registers) {
+                None => None,
+                Some(moves) => match moves.file.outputs_check(nexts, registers) && leaves_all(moves.code, body_kept(saves)) {
+                    False => None,
+                    True => match input_file(outs, registers) {
+                        None => None,
+                        Some(out) => Some(Emitted(plain_done(pass.prog, tested.test, moves.code, names, short), out, pass.placement, pass.names)),
+                    },
+                },
+            },
+        }) {
+        None => trivial,
+        Some(tested) => (match pass.file.move_outputs(nexts, registers) as λ o => ((v: Valuation()) → MayKeep<M>(v, pass.file, True, o)) →
+            MayGoHeap<M>(saves, site, stack, spans, values, w, s0, prog, file, facts, before, fuel, match o {
+                None => None,
+                Some(moves) => match moves.file.outputs_check(nexts, registers) && leaves_all(moves.code, body_kept(saves)) {
+                    False => None,
+                    True => match input_file(outs, registers) {
+                        None => None,
+                        Some(out) => Some(Emitted(plain_done(pass.prog, tested.test, moves.code, names, short), out, pass.placement, pass.names)),
+                    },
+                },
+            }) {
+            None => λ _ => trivial,
+            Some(moves) => λ keeps => match checked: moves.file.outputs_check(nexts, registers) && leaves_all(moves.code, body_kept(saves)) {
+                False => trivial,
+                True => {
+                    let parts = Bool::is_true_and(moves.file.outputs_check(nexts, registers), leaves_all(moves.code, body_kept(saves)),
+                        is_true_of_eq(moves.file.outputs_check(nexts, registers) && leaves_all(moves.code, body_kept(saves)), checked));
+                    (match input_file(outs, registers) as λ o =>
+                        ((g: Gprs) → PortsAt(values, outs, registers, g) → o.All(λ (f: File) => f.Represents(values, g))) →
+                        MayGoHeap<M>(saves, site, stack, spans, values, w, s0, prog, file, facts, before, fuel, match o {
+                            None => None,
+                            Some(out) => Some(Emitted(plain_done(pass.prog, tested.test, moves.code, names, short), out, pass.placement, pass.names)),
+                        }) {
+                        None => λ _ => trivial,
+                        Some(out) => λ out_ok => plain_loop_goes<M>(saves, site, laid, stack, spans, Pass, PassGoes, values, w, s0, prog, file, inputs, parameters,
+                            exit, next, names, short, registers, entry, entry_ok.left, entry_ok.right, pass, pass_emits, cap, pass_goes, tested, moves.code,
+                            λ v => moves_into<M>(saves, v, pass.file, typed_ids(next), registers, moves, keeps(v), parts.left, parts.right), out,
+                            before, fuel, capped),
+                    })(λ g placed => input_file_represents(values, g, outs, registers, placed))
+                },
+            },
+        })(λ v => move_outputs_keeps<M>(v, nexts, pass.file, registers)),
+    }
+}
+
+// The loop's code still going, as `Body::emit` checks it.
+theorem loop_heap_goes<M>(saves, slots: Nat, site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data),
+    spans: Spans, blocks: Blocks, answers: RoutineAnswers(), goes: RoutineGoes(), values: Valuation(), spare, w: Nat, s0: MachineState<M>, short: List<Nat>, bound: Nat,
+    inputs, parameters: List<Typed>, inner: Body, exit: Nat, next, outputs: List<Typed>, prog: Prog, file: File, placement: List<Place>, names: Nat,
+    before: Heap, cap: Nat, fuel: Nat, capped: fuel <= cap,
+    inner_emits: (start: Prog) → (head: File) → (rest: List<Place>) → (v: Valuation()) → (from, to: Heap) →
+        MayEmitHeap<M>(saves, site, stack, spans, v, w, s0, start, head, inner.Holds(spans, blocks, v, answers, spare, from, to), from, to,
+            inner.emit(saves, slots, short, bound, spare, start, head, rest, names + 4)),
+    inner_goes: (start: Prog) → (head: File) → (rest: List<Place>) → (v: Valuation()) → (k: Nat) → k <= cap → (from: Heap) →
+        MayGoHeap<M>(saves, site, stack, spans, v, w, s0, start, head, inner.Goes(spans, blocks, v, answers, goes, spare, k, from), from, k,
+            inner.emit(saves, slots, short, bound, spare, start, head, rest, names + 4))):
+    MayGoHeap<M>(saves, site, stack, spans, values, w, s0, prog, file,
+        Body::Loop(inputs, parameters, inner, exit, next, outputs).Goes(spans, blocks, values, answers, goes, spare, fuel, before), before, fuel,
+        match state_registers(placement, typed_ids(parameters).len()) {
+            None => None,
+            Some(taken) => match file.plain_entry(saves, typed_ids(inputs), typed_ids(parameters), taken.registers) {
+                None => None,
+                Some(entry) => match inner.emit(saves, slots, short, bound, spare, plain_head(prog, entry.code, names), entry.head, taken.rest, names + 4) {
+                    None => None,
+                    Some(pass) => pass.plain_close(saves, taken.registers, exit, typed_ids(next), typed_ids(outputs), names, short),
+                },
+            },
+        }) {
+    let Pass = λ (v: Valuation()) (from: Heap) (to: Heap) => inner.Holds(spans, blocks, v, answers, spare, from, to);
+    let PassGoes = λ (v: Valuation()) (k: Nat) (from: Heap) => inner.Goes(spans, blocks, v, answers, goes, spare, k, from);
+    let facts = Body::Loop(inputs, parameters, inner, exit, next, outputs).Goes(spans, blocks, values, answers, goes, spare, fuel, before);
+    match state_registers(placement, typed_ids(parameters).len()) as λ o => MayGoHeap<M>(saves, site, stack, spans, values, w, s0, prog, file, facts,
+            before, fuel, match o {
+                None => None,
+                Some(taken) => match file.plain_entry(saves, typed_ids(inputs), typed_ids(parameters), taken.registers) {
+                    None => None,
+                    Some(entry) => match inner.emit(saves, slots, short, bound, spare, plain_head(prog, entry.code, names), entry.head, taken.rest, names + 4) {
+                        None => None,
+                        Some(pass) => pass.plain_close(saves, taken.registers, exit, typed_ids(next), typed_ids(outputs), names, short),
+                    },
+                },
+            }) {
+        None => trivial,
+        Some(taken) => (match file.plain_entry(saves, typed_ids(inputs), typed_ids(parameters), taken.registers) as λ e =>
+            MayPlainEntry<M>(saves, values, file, typed_ids(inputs), typed_ids(parameters), taken.registers, e) →
+            MayGoHeap<M>(saves, site, stack, spans, values, w, s0, prog, file, facts, before, fuel, match e {
+                None => None,
+                Some(entry) => match inner.emit(saves, slots, short, bound, spare, plain_head(prog, entry.code, names), entry.head, taken.rest, names + 4) {
+                    None => None,
+                    Some(pass) => pass.plain_close(saves, taken.registers, exit, typed_ids(next), typed_ids(outputs), names, short),
+                },
+            }) {
+            None => λ _ => trivial,
+            Some(entry) => λ entry_ok => (match inner.emit(saves, slots, short, bound, spare, plain_head(prog, entry.code, names), entry.head, taken.rest,
+                    names + 4) as λ e =>
+                ((v: Valuation()) → (from, to: Heap) → MayEmitHeap<M>(saves, site, stack, spans, v, w, s0, plain_head(prog, entry.code, names), entry.head,
+                    Pass(v, from, to), from, to, e)) →
+                ((v: Valuation()) → (k: Nat) → k <= cap → (from: Heap) → MayGoHeap<M>(saves, site, stack, spans, v, w, s0, plain_head(prog, entry.code, names),
+                    entry.head, PassGoes(v, k, from), from, k, e)) →
+                MayGoHeap<M>(saves, site, stack, spans, values, w, s0, prog, file, facts, before, fuel, match e {
+                    None => None,
+                    Some(pass) => pass.plain_close(saves, taken.registers, exit, typed_ids(next), typed_ids(outputs), names, short),
+                }) {
+                None => λ _ _ => trivial,
+                Some(pass) => λ pass_emits pass_goes => plain_close_goes<M>(saves, site, laid, stack, spans, Pass, PassGoes, values, w, s0, prog, file, inputs,
+                    parameters, exit, next, outputs, names, short, taken.registers, entry, entry_ok, pass, pass_emits, cap, pass_goes, before, fuel, capped),
+            })(λ v from to => inner_emits(plain_head(prog, entry.code, names), entry.head, taken.rest, v, from, to),
+                λ v k le from => inner_goes(plain_head(prog, entry.code, names), entry.head, taken.rest, v, k, le, from)),
+        })(plain_entry_sound<M>(saves, values, file, typed_ids(inputs), typed_ids(parameters), taken.registers)),
+    }
+}
+
+// Code whose facts say it cannot be going: only its extent.
+theorem goes_of_absurd<M>(saves: Nat, site: Site<M>, stack: Stack<M>(site.fetch, site.data), spans: Spans, values: Valuation(), d: Nat,
+    s0: MachineState<M>, prog: Prog, file: File, Facts: Type, before, after: Heap, least: Nat, out: Option<Emitted>,
+    emits: MayEmitHeap<M>(saves, site, stack, spans, values, d, s0, prog, file, Facts, before, after, out)):
+    MayGoHeap<M>(saves, site, stack, spans, values, d, s0, prog, file, False, before, least, out) {
+    (match out as λ o => MayEmitHeap<M>(saves, site, stack, spans, values, d, s0, prog, file, Facts, before, after, o) →
+        MayGoHeap<M>(saves, site, stack, spans, values, d, s0, prog, file, False, before, least, o) {
+        None => λ _ => trivial,
+        Some(emitted) => λ em => ⟨em.left, λ within r here resident held => false_elim(held.left.left.right)⟩,
+    })(emits)
+}
+
+// A sequence still going: its first part going, or done and its rest going
+// from where the first left it.
+theorem may_go_seq<M>(saves: Nat, site: Site<M>, stack: Stack<M>(site.fetch, site.data), spans: Spans, values: Valuation(), d: Nat,
+    s0: MachineState<M>, prog: Prog, file: File, First: Type, Held, Rest: Heap → Type, before: Heap, least: Nat, done: Emitted,
+    first_emits: (mid: Heap) → EmitsHeap<M>(saves, site, stack, spans, values, d, s0, prog, file, Held(mid), before, mid, done),
+    first_goes: GoesHeap<M>(saves, site, stack, spans, values, d, s0, prog, file, First, before, least, done), out: Option<Emitted>,
+    rest_goes: (mid: Heap) → MayGoHeap<M>(saves, site, stack, spans, values, d, s0, done.prog, done.file, Rest(mid), mid, least, out)):
+    MayGoHeap<M>(saves, site, stack, spans, values, d, s0, prog, file, First ∨ Exists<Heap>(λ (mid: Heap) => Held(mid) ∧ Rest(mid)), before, least, out) {
+    let none = Kernel::none<M, True>();
+    let mem = heap_in<M>(site.data, spans);
+    (match out as λ o => ((mid: Heap) → MayGoHeap<M>(saves, site, stack, spans, values, d, s0, done.prog, done.file, Rest(mid), mid, least, o)) →
+        MayGoHeap<M>(saves, site, stack, spans, values, d, s0, prog, file, First ∨ Exists<Heap>(λ (mid: Heap) => Held(mid) ∧ Rest(mid)), before, least, o) {
+        None => λ _ => trivial,
+        Some(emitted) => λ rest => {
+            let tail: done.prog.Within(emitted.prog) = rest(before).left;
+            ⟨Prog::within_trans(first_goes.left, tail), λ within r here resident held =>
+                match held.left.left.right as λ _ => site.Performs(stack.writes, none, λ (_: Running<M, True>) => True, 0, least, r) {
+                    Inl(going) => first_goes.right(Prog::within_trans(tail, within))(r, here, resident,
+                        ⟨⟨⟨held.left.left.left, going⟩, held.left.right⟩, trivial⟩),
+                    Inr(ex) => {
+                        let mid = ex.witness;
+                        site.claims_after_moves(stack.writes, none, 0, least, prog_len(prog), prog_len(done.prog),
+                            λ (x: MachineState<M>) => (file.Represents(values, x.gprs) ∧ Held(mid)) ∧ stack.TrailedBy(saves, spans, mem, d, s0, before, x),
+                            λ (t: MachineState<M>) => done.file.Represents(values, t.gprs) ∧ stack.TrailedBy(saves, spans, mem, d, s0, mid, t),
+                            λ (_: True) => True, λ (_: Running<M, True>) => True,
+                            first_emits(mid).right(Prog::within_trans(tail, within)),
+                            λ u u_here u_resident u_held => rest(mid).right(within)(u, u_here, u_resident,
+                                ⟨⟨⟨u_held.left.left, ex.proof.right⟩, u_held.left.right⟩, trivial⟩))(r, here, resident,
+                            ⟨⟨⟨held.left.left.left, ex.proof.left⟩, held.left.right⟩, trivial⟩)
+                    },
+                }⟩
+        },
+    })(rest_goes)
+}
+
+// Fewer steps claimed.
+theorem may_go_loosen<M>(saves: Nat, site: Site<M>, stack: Stack<M>(site.fetch, site.data), spans: Spans, values: Valuation(), d: Nat,
+    s0: MachineState<M>, prog: Prog, file: File, Facts: Type, before: Heap, least, fewer: Nat, le: fewer <= least, out: Option<Emitted>,
+    goes: MayGoHeap<M>(saves, site, stack, spans, values, d, s0, prog, file, Facts, before, least, out)):
+    MayGoHeap<M>(saves, site, stack, spans, values, d, s0, prog, file, Facts, before, fewer, out) {
+    (match out as λ o => MayGoHeap<M>(saves, site, stack, spans, values, d, s0, prog, file, Facts, before, least, o) →
+        MayGoHeap<M>(saves, site, stack, spans, values, d, s0, prog, file, Facts, before, fewer, o) {
+        None => λ _ => trivial,
+        Some(emitted) => λ g => ⟨g.left, λ within => site.claims_loosen(stack.writes, Kernel::none<M, True>(), 0, least, 0, fewer, prog_len(prog),
+            λ (r: Running<M, True>) => ((file.Represents(values, r.state.gprs) ∧ Facts) ∧
+                stack.TrailedBy(saves, spans, heap_in<M>(site.data, spans), d, s0, before, r.state)) ∧ True,
+            λ (_: Running<M, True>) => True, le, g.right(within))⟩,
+    })(goes)
+}
+
+// A region's code still going: from its start, at least the fuel its run
+// was given, at most `cap`, the routines it calls going on at least
+// `callee_least` from their entries, a CALL being one step more.
+theorem Body::emit_goes<M>(self body: Body, saves, slots: Nat, site: Site<M>, laid: site.program.laid_out().IsTrue(),
+    stack: Stack<M>(site.fetch, site.data), top: Nat, spans: Spans, loan: Loan<M>(site.fetch, site.data, stack, top, spans), blocks: Blocks,
+    lent: blocks.Lent(spans), rooms: Nat → Nat, bound, avail: Nat, answers: RoutineAnswers(),
+    callees: CalleesReturn<M>(site, stack, spans, rooms, top, bound, answers), goes: RoutineGoes(), callee_least: Nat,
+    callees_go: CalleesGo<M>(site, stack, spans, rooms, top, bound, goes, callee_least), cap: Nat, covered: cap <= 1 + callee_least,
+    values: Valuation(), spare: Nat, d, w: Nat, s0: MachineState<M>, framing: body.calls().IsTrue() → stack.CallFrame(top, avail, d, slots, w, s0),
+    short: List<Nat>):
+    body.Fits(rooms, bound, avail) → (prog: Prog) → (file: File) → (placement: List<Place>) → (names: Nat) → (fuel: Nat) → fuel <= cap →
+    (before: Heap) →
+    MayGoHeap<M>(saves, site, stack, spans, values, w, s0, prog, file, body.Goes(spans, blocks, values, answers, goes, spare, fuel, before), before, fuel,
+        body.emit(saves, slots, short, bound, spare, prog, file, placement, names)) {
+    match body {
+        Leaf(instrs) => λ shallow prog file placement names fuel capped before =>
+            goes_of_absurd<M>(saves, site, stack, spans, values, w, s0, prog, file, InstrsHold(spans, blocks, values, instrs, before, before), before, before,
+                fuel, emit_instrs(saves, prog, file, instrs, placement, names),
+                emit_instrs_emits<M>(saves, site, laid, stack, top, spans, loan, blocks, lent, values, w, s0, instrs, prog, file, placement, names, before,
+                    before)),
+        Seq(first, rest) => λ shallow prog file placement names fuel capped before => {
+            let first_framing = λ (c: first.calls().IsTrue()) => framing(Bool::is_true_or_l(first.calls(), rest.calls(), c));
+            (match first.emit(saves, slots, short, bound, spare, prog, file, placement, names) as λ o =>
+                ((mid: Heap) → MayEmitHeap<M>(saves, site, stack, spans, values, w, s0, prog, file,
+                    first.Holds(spans, blocks, values, answers, spare, before, mid), before, mid, o)) →
+                MayGoHeap<M>(saves, site, stack, spans, values, w, s0, prog, file, first.Goes(spans, blocks, values, answers, goes, spare, fuel, before),
+                    before, fuel, o) →
+                MayGoHeap<M>(saves, site, stack, spans, values, w, s0, prog, file,
+                    Body::Seq(first, rest).Goes(spans, blocks, values, answers, goes, spare, fuel, before), before, fuel,
+                    match o { None => None, Some(done) => rest.emit(saves, slots, short, bound, spare, done.prog, done.file, done.placement, done.names) }) {
+                None => λ _ _ => trivial,
+                Some(done) => λ first_emits first_goes => may_go_seq<M>(saves, site, stack, spans, values, w, s0, prog, file,
+                    first.Goes(spans, blocks, values, answers, goes, spare, fuel, before),
+                    λ (mid: Heap) => first.Holds(spans, blocks, values, answers, spare, before, mid),
+                    λ (mid: Heap) => rest.Goes(spans, blocks, values, answers, goes, spare, fuel, mid), before, fuel, done, first_emits, first_goes,
+                    rest.emit(saves, slots, short, bound, spare, done.prog, done.file, done.placement, done.names),
+                    λ mid => Body::emit_goes<M>(rest, saves, slots, site, laid, stack, top, spans, loan, blocks, lent, rooms, bound, avail, answers, callees,
+                        goes, callee_least, callees_go, cap, covered, values, spare, d, w, s0,
+                        λ c => framing(Bool::is_true_or_r(first.calls(), rest.calls(), c)), short, shallow.right, done.prog, done.file, done.placement,
+                        done.names, fuel, capped, mid)),
+            })(λ mid => Body::emit_emits<M>(first, saves, slots, site, laid, stack, top, spans, loan, blocks, lent, rooms, bound, avail, answers, callees,
+                    values, spare, d, w, s0, first_framing, short, shallow.left, prog, file, placement, names, before, mid),
+                Body::emit_goes<M>(first, saves, slots, site, laid, stack, top, spans, loan, blocks, lent, rooms, bound, avail, answers, callees, goes,
+                    callee_least, callees_go, cap, covered, values, spare, d, w, s0, first_framing, short, shallow.left, prog, file, placement, names, fuel,
+                    capped, before))
+        },
+        Branch(condition, yes, no) => λ shallow prog file placement names fuel capped before =>
+            (match file.branch_test(condition) as λ o => MayGoHeap<M>(saves, site, stack, spans, values, w, s0, prog, file,
+                    Body::Branch(condition, yes, no).Goes(spans, blocks, values, answers, goes, spare, fuel, before), before, fuel, match o {
+                        None => None,
+                        Some(tested) => match yes.emit(saves, slots, short, bound, spare, prog.branched_by(tested.test, names + 1, shorts(short, names + 1)),
+                            file.know(Truth(condition)), placement, names + 2) {
+                            None => None,
+                            Some(left) => match no.emit(saves, slots, short, bound, spare,
+                                left.prog.else_label_by(names + 1, names + 2, shorts(short, names + 2)), file.know(Falsity(condition)), left.placement,
+                                left.names) {
+                                None => None,
+                                Some(right) => Some(Emitted(right.prog.join_label(names + 2), left.file.meet(right.file, file.known), right.placement,
+                                    right.names)),
+                            },
+                        },
+                    }) {
+                None => trivial,
+                Some(tested) => {
+                    let yes_prog = prog.branched_by(tested.test, names + 1, shorts(short, names + 1));
+                    (match yes.emit(saves, slots, short, bound, spare, yes_prog, file.know(Truth(condition)), placement, names + 2) as λ o =>
+                        MayGoHeap<M>(saves, site, stack, spans, values, w, s0, yes_prog, file.know(Truth(condition)),
+                            yes.Goes(spans, blocks, values, answers, goes, spare, fuel, before), before, fuel, o) →
+                        MayGoHeap<M>(saves, site, stack, spans, values, w, s0, prog, file,
+                            Body::Branch(condition, yes, no).Goes(spans, blocks, values, answers, goes, spare, fuel, before), before, fuel, match o {
+                                None => None,
+                                Some(left) => match no.emit(saves, slots, short, bound, spare,
+                                    left.prog.else_label_by(names + 1, names + 2, shorts(short, names + 2)), file.know(Falsity(condition)), left.placement,
+                                    left.names) {
+                                    None => None,
+                                    Some(right) => Some(Emitted(right.prog.join_label(names + 2), left.file.meet(right.file, file.known), right.placement,
+                                        right.names)),
+                                },
+                            }) {
+                        None => λ _ => trivial,
+                        Some(left) => λ yes_goes => {
+                            let no_prog = left.prog.else_label_by(names + 1, names + 2, shorts(short, names + 2));
+                            (match no.emit(saves, slots, short, bound, spare, no_prog, file.know(Falsity(condition)), left.placement, left.names) as λ o =>
+                                MayGoHeap<M>(saves, site, stack, spans, values, w, s0, no_prog, file.know(Falsity(condition)),
+                                    no.Goes(spans, blocks, values, answers, goes, spare, fuel, before), before, fuel, o) →
+                                MayGoHeap<M>(saves, site, stack, spans, values, w, s0, prog, file,
+                                    Body::Branch(condition, yes, no).Goes(spans, blocks, values, answers, goes, spare, fuel, before), before, fuel, match o {
+                                        None => None,
+                                        Some(right) => Some(Emitted(right.prog.join_label(names + 2), left.file.meet(right.file, file.known),
+                                            right.placement, right.names)),
+                                    }) {
+                                None => λ _ => trivial,
+                                Some(right) => λ no_goes => branch_heap_goes<M>(saves, site, laid, stack, spans, values, w, s0, prog, file, condition,
+                                    yes.Goes(spans, blocks, values, answers, goes, spare, fuel, before),
+                                    no.Goes(spans, blocks, values, answers, goes, spare, fuel, before), before, fuel, tested, names, short, left, right,
+                                    yes_goes, no_goes, yes_goes.left, no_goes.left),
+                            })(Body::emit_goes<M>(no, saves, slots, site, laid, stack, top, spans, loan, blocks, lent, rooms, bound, avail, answers, callees,
+                                goes, callee_least, callees_go, cap, covered, values, spare, d, w, s0,
+                                λ c => framing(Bool::is_true_or_r(yes.calls(), no.calls(), c)), short, shallow.right, no_prog, file.know(Falsity(condition)),
+                                left.placement, left.names, fuel, capped, before))
+                        },
+                    })(Body::emit_goes<M>(yes, saves, slots, site, laid, stack, top, spans, loan, blocks, lent, rooms, bound, avail, answers, callees, goes,
+                        callee_least, callees_go, cap, covered, values, spare, d, w, s0, λ c => framing(Bool::is_true_or_l(yes.calls(), no.calls(), c)),
+                        short, shallow.left, yes_prog, file.know(Truth(condition)), placement, names + 2, fuel, capped, before))
+                },
+            }),
+        Call(callee, arguments, results) => λ shallow prog file placement names fuel capped before => {
+            let frame = framing(trivial);
+            let out = file.emit_call(slots, prog, callee, typed_ids(arguments), call_result(results, spare), call_also(results), placement, names, bound, [],
+                []);
+            let Facts: Type = Body::Call(callee, arguments, results).Goes(spans, blocks, values, answers, goes, spare, fuel, before);
+            may_go_loosen<M>(saves, site, stack, spans, values, w, s0, prog, file, Facts, before, 1 + callee_least, fuel, { omega }, out,
+                j(frame.right.right.right.left, λ x _ => MayGoHeap<M>(saves, site, stack, spans, values, x, s0, prog, file, Facts, before, 1 + callee_least,
+                        out),
+                    call_heap_goes<M>(saves, slots, site, laid, stack, top, spans, loan, rooms, bound, avail, goes, callee_least, callees_go, blocks, values,
+                        spare, d, s0, frame.left, frame.right.left, frame.right.right.left, frame.right.right.right.right.left,
+                        frame.right.right.right.right.right, prog, file, callee, arguments, results, shallow, placement, names, before)))
+        },
+        Loop(inputs, parameters, inner, exit, next, outputs) => λ shallow prog file placement names fuel capped before =>
+            loop_heap_goes<M>(saves, slots, site, laid, stack, spans, blocks, answers, goes, values, spare, w, s0, short, bound, inputs, parameters, inner,
+                exit, next, outputs, prog, file, placement, names, before, cap, fuel, capped,
+                λ start head rest v from to => Body::emit_emits<M>(inner, saves, slots, site, laid, stack, top, spans, loan, blocks, lent, rooms, bound, avail,
+                    answers, callees, v, spare, d, w, s0, framing, short, shallow, start, head, rest, names + 4, from, to),
+                λ start head rest v k le from => Body::emit_goes<M>(inner, saves, slots, site, laid, stack, top, spans, loan, blocks, lent, rooms, bound,
+                    avail, answers, callees, goes, callee_least, callees_go, cap, covered, v, spare, d, w, s0, framing, short, shallow, start, head, rest,
+                    names + 4, k, le, from)),
+        Sys(_) => λ shallow prog file placement names fuel capped before => trivial,
+        Exit(_) => λ shallow prog file placement names fuel capped before => trivial,
     }
 }

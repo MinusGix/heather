@@ -30,6 +30,7 @@ import logic;
 import nat;
 import option;
 import omega;
+import transition;
 
 // From `s`, a machine run to offset `to`, the program still resident, the
 // state satisfying `post`.
@@ -156,6 +157,41 @@ theorem Site::moves_absurd<M>(self site: Site<M>, writes: ByteWrites<M>, from, t
     λ s here resident holds => false_elim(never(s, holds))
 }
 
+// A test and its JCC, near or short as a hint chose: machine steps to the
+// state falling through where the JCC is not taken, at the jump's target
+// where it is, the registers and memory as they were.
+theorem Site::test_by_steps<M>(self site: Site<M>, writes: ByteWrites<M>, fits: FillsFit(site.program, no_fills()),
+    start: Prog, test: Test, else_name: Nat, short: Bool,
+    test_k: Nat, test_at: asm_back(site.program, test_k) = start.tested(test),
+    branch_k: Nat, branch_at: asm_back(site.program, branch_k) = start.branched_by(test, else_name, short),
+    else_to: Nat, else_lands: JccLands(asm_labels(site.program), prog_len(start.tested(test)), short, test.cc(), else_name, else_to),
+    s: MachineState<M>, here: s.rip = next_rip(site.origin, prog_len(start)), resident: site.Resident(s.memory)):
+    Exists<MachineState<M>>(λ v => MachineSteps(site.fetch, site.data, writes, s, v) ∧ (((v.gprs = s.gprs) ∧ (v.memory = s.memory)) ∧
+        ((test.taken(s.gprs) = False → v.rip = next_rip(site.origin, prog_len(start.branched_by(test, else_name, short)))) ∧
+         (test.taken(s.gprs) = True → v.rip = next_rip(site.origin, else_to))))) {
+    let instruction = test.instruction();
+    let tested = start.tested(test);
+    let labels = asm_labels(site.program);
+    let item = site.item_resident(fits, s.memory, resident, test_k, start, 0, Block([instruction]), test_at);
+    let ran = block_steps(site.fetch, site.data, [instruction], s,
+        j(sym(here), λ address _ => CodeResident(site.fetch, s.memory, canonical_block_bytes([instruction]), address), item),
+        test.reads(s));
+    let u = execute_block_normal([instruction], s);
+    let stepped = test.steps<M>(s);
+    let u_rip: (u.rip = next_rip(site.origin, prog_len(tested))) = trans(ran.right.left, trans(
+        cong_fn<BitVec(64), BitVec(64)>(λ address => next_rip(address, block_length([instruction])), here),
+        rip_compose(site.origin, prog_len(start), block_length([instruction]))));
+    let u_memory: (u.memory = s.memory) = ran.right.right;
+    let jumped = site.jcc_item_steps(fits, branch_k, tested, 0, short, test.cc(), else_name, branch_at, else_to, else_lands, u, u_rip,
+        j(sym(u_memory), λ memory _ => site.Resident(memory), resident), test.jcc_reads(s));
+    let v = jcc_after(labels, prog_len(tested), short, test.cc(), else_name, u);
+    let entry = machine_steps_of_fetched(site.fetch, site.data, writes, s, v,
+        fetched_steps_trans(site.fetch, site.data, s, u, v, ran.left, fetched_steps_one(site.fetch, site.data, u, v, jumped.left)));
+    let v_gprs: (v.gprs = s.gprs) = trans(jcc_after_gprs(labels, prog_len(tested), short, test.cc(), else_name, u), stepped.left);
+    let v_memory: (v.memory = s.memory) = trans(jcc_after_memory(labels, prog_len(tested), short, test.cc(), else_name, u), u_memory);
+    Exists(v, ⟨entry, ⟨⟨v_gprs, v_memory⟩, ⟨λ clear => jumped.right.left(trans(stepped.right, clear)), λ set => jumped.right.right(trans(stepped.right, set))⟩⟩⟩)
+}
+
 // The same with the JCC near or short, as a hint chose.
 theorem Site::moves_test_by<M>(self site: Site<M>, writes: ByteWrites<M>, fits: FillsFit(site.program, no_fills()),
     start: Prog, test: Test, else_name: Nat, short: Bool,
@@ -168,35 +204,19 @@ theorem Site::moves_test_by<M>(self site: Site<M>, writes: ByteWrites<M>, fits: 
     no: site.Moves(writes, else_to, to, λ (s: MachineState<M>) => pre(s.gprs, s.memory) ∧ test.taken(s.gprs) = True, post)):
     site.Moves(writes, prog_len(start), to, λ (s: MachineState<M>) => pre(s.gprs, s.memory), post) {
     λ s here resident holds => {
-        let instruction = test.instruction();
-        let tested = start.tested(test);
-        let labels = asm_labels(site.program);
-        let item = site.item_resident(fits, s.memory, resident, test_k, start, 0, Block([instruction]), test_at);
-        let ran = block_steps(site.fetch, site.data, [instruction], s,
-            j(sym(here), λ address _ => CodeResident(site.fetch, s.memory, canonical_block_bytes([instruction]), address), item),
-            test.reads(s));
-        let u = execute_block_normal([instruction], s);
-        let stepped = test.steps<M>(s);
-        let u_rip: (u.rip = next_rip(site.origin, prog_len(tested))) = trans(ran.right.left, trans(
-            cong_fn<BitVec(64), BitVec(64)>(λ address => next_rip(address, block_length([instruction])), here),
-            rip_compose(site.origin, prog_len(start), block_length([instruction]))));
-        let u_memory: (u.memory = s.memory) = ran.right.right;
-        let jumped = site.jcc_item_steps(fits, branch_k, tested, 0, short, test.cc(), else_name, branch_at, else_to, else_lands, u, u_rip,
-            j(sym(u_memory), λ memory _ => site.Resident(memory), resident), test.jcc_reads(s));
-        let v = jcc_after(labels, prog_len(tested), short, test.cc(), else_name, u);
-        let entry = machine_steps_of_fetched(site.fetch, site.data, writes, s, v,
-            fetched_steps_trans(site.fetch, site.data, s, u, v, ran.left, fetched_steps_one(site.fetch, site.data, u, v, jumped.left)));
-        let v_gprs: (v.gprs = s.gprs) = trans(jcc_after_gprs(labels, prog_len(tested), short, test.cc(), else_name, u), stepped.left);
-        let v_memory: (v.memory = s.memory) = trans(jcc_after_memory(labels, prog_len(tested), short, test.cc(), else_name, u), u_memory);
+        let found = site.test_by_steps(writes, fits, start, test, else_name, short, test_k, test_at, branch_k, branch_at, else_to, else_lands, s, here, resident);
+        let v = found.witness;
+        let v_gprs: (v.gprs = s.gprs) = found.proof.right.left.left;
+        let v_memory: (v.memory = s.memory) = found.proof.right.left.right;
         let v_resident = j(sym(v_memory), λ memory _ => site.Resident(memory), resident);
         let kept = λ (b: Bool) (taken: test.taken(s.gprs) = b) =>
             j(sym(v_gprs), λ g _ => pre(g, v.memory) ∧ test.taken(g) = b,
                 ⟨j(sym(v_memory), λ memory _ => pre(s.gprs, memory), holds), taken⟩);
         match nonzero: test.taken(s.gprs) {
-            False => site.arrives_after(writes, s, v, to, post, entry,
-                yes(v, jumped.right.left(trans(stepped.right, nonzero)), v_resident, kept(False, nonzero))),
-            True => site.arrives_after(writes, s, v, to, post, entry,
-                no(v, jumped.right.right(trans(stepped.right, nonzero)), v_resident, kept(True, nonzero))),
+            False => site.arrives_after(writes, s, v, to, post, found.proof.left,
+                yes(v, found.proof.right.right.left(nonzero), v_resident, kept(False, nonzero))),
+            True => site.arrives_after(writes, s, v, to, post, found.proof.left,
+                no(v, found.proof.right.right.right(nonzero), v_resident, kept(True, nonzero))),
         }
     }
 }
@@ -850,37 +870,6 @@ theorem Site::moves_call<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site
     }
 }
 
-// A function closed by RET: its body runs from its entry to the RET with
-// the stack pointer back where it entered and the return address still
-// there, and `post` holds of where it returns.
-theorem Site::returns_by<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), fits: FillsFit(site.program, no_fills()),
-    entry: Nat, k: Nat, before: Prog, name: Nat, at: asm_back(site.program, k) = At(before, name, Ret),
-    pre: Nat → MachineState<M> → Type, post: Nat → MachineState<M> → MachineState<M> → Type,
-    body: (s0: MachineState<M>) → (i: Nat) → (ret: BitVec(64)) → site.Moves(stack.writes, entry, prog_len(before),
-        λ (s: MachineState<M>) => (s = s0) ∧ ((read_gpr(Rsp, s0.gprs) = stack.at(i)) ∧ (i + 8 <= stack.size ∧
-            (pre(i, s0) ∧ read_word(site.data, s0.memory, stack.at(i)) = Some(ret)))),
-        λ (t: MachineState<M>) => (read_gpr(Rsp, t.gprs) = stack.at(i)) ∧
-            ((read_word(site.data, t.memory, stack.at(i)) = Some(ret)) ∧ post(i, s0, return_near_after(ret, t))))):
-    site.Returns(stack, entry, pre, post) {
-    λ s here resident i rsp room holds ret read => {
-        let ran = body(s, i, ret, s, here, resident, ⟨refl, ⟨rsp, ⟨room, ⟨holds, read⟩⟩⟩⟩);
-        let t = ran.witness;
-        let done = ran.proof.right.right.right;
-        let t_rsp: (read_gpr(Rsp, t.gprs) = stack.at(i)) = done.left;
-        let r = return_near_after(ret, t);
-        let executes: ReturnNear.Executes(site.data, stack.writes, t, r) =
-            ⟨j(sym(t_rsp), λ a _ => WordCanonical(a), stack.canonical(i, room)),
-             Exists(ret, ⟨j(sym(t_rsp), λ a _ => read_word(site.data, t.memory, a) = Some(ret), done.right.left), refl⟩)⟩;
-        let step = stack_step_machine(site.fetch, site.data, stack.writes, ReturnNear, t, r,
-            site.item_fetched(fits, t, ran.proof.right.right.left, k, before, name, Ret, at, ran.proof.right.left), executes);
-        Exists(r, ⟨machine_steps_trans(site.fetch, site.data, stack.writes, s, t, r, ran.proof.left, step),
-            ⟨refl, ⟨ran.proof.right.right.left,
-                ⟨trans(read_gpr_after_write(Rsp, read_gpr(Rsp, t.gprs).add(BitVec::ofNat(8)), t.gprs),
-                    trans(cong_fn<BitVec(64), BitVec(64)>(λ a => a.add(BitVec::ofNat(8)), t_rsp), pop_at(stack.low, i))),
-                 done.right.right⟩⟩⟩⟩)
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Saving registers in a frame and restoring them
 
@@ -1060,4 +1049,686 @@ theorem Site::moves_reloads<M>(self site: Site<M>, stack: Stack<M>(site.fetch, s
                 first, later)
         },
     }
+}
+
+// ---------------------------------------------------------------------------
+// Claims: runs that may make system calls (docs/language/ownership-design.md
+// §17.7)
+//
+// A run of the machine beside a world `W`, which only a system call
+// changes. What a system call does is the kernel's (`Kernel`): at a state,
+// the code makes a call and from every state the kernel may resume it in,
+// `P`. The machine's own steps are this module's; the contract's Linux
+// model is the one kernel with content (x86_64_call_contract's
+// `Site::linux_kernel`), and a claim at no system call needs none.
+//
+// `Site::Performs(writes, kernel, goal, calls, least)`: from a state, the
+// code reaches `goal` making at most `calls` system calls, and its machine
+// steps number at least `least` in total. Lower bounds add along a bind
+// (`performs_bind`); a run proved without counting has bound zero.
+
+record Running<M, W> { state: MachineState<M>, io: W }
+
+record Kernel<M, W> {
+    resumes: Running<M, W> → (Running<M, W> → Type) → Type,
+    monotone: (r: Running<M, W>) → (P, Q: Running<M, W> → Type) → ((u: Running<M, W>) → P(u) → Q(u)) → resumes(r, P) → resumes(r, Q),
+}
+
+fn Site::Performs<M, W>(self site: Site<M>, writes: ByteWrites<M>, kernel: Kernel<M, W>, goal: Running<M, W> → Type, calls, least: Nat) →
+    Running<M, W> → Type {
+    match calls {
+        Zero => λ from => Exists<MachineState<M>>(λ t => Exists<Nat>(λ n => MachineRuns(site.fetch, site.data, writes, n, from.state, t) ∧
+            ((least <= n) ∧ goal(Running(t, from.io))))),
+        Succ(more) => λ from => Exists<MachineState<M>>(λ t => Exists<Nat>(λ n => MachineRuns(site.fetch, site.data, writes, n, from.state, t) ∧
+            (((least <= n) ∧ goal(Running(t, from.io))) ∨
+                kernel.resumes(Running(t, from.io), λ (u: Running<M, W>) => site.Performs(writes, kernel, goal, more, least - n, u))))),
+    }
+}
+
+// A smaller lower bound.
+theorem Site::performs_less<M, W>(self site: Site<M>, writes: ByteWrites<M>, kernel: Kernel<M, W>, goal: Running<M, W> → Type, calls: Nat):
+    (least, fewer: Nat) → fewer <= least → (from: Running<M, W>) → site.Performs(writes, kernel, goal, calls, least, from) →
+    site.Performs(writes, kernel, goal, calls, fewer, from) {
+    match calls {
+        Zero => λ least fewer le from p => {
+            let n = p.proof.witness;
+            let at_least: (least <= n) = p.proof.proof.right.left;
+            Exists(p.witness, Exists(n, ⟨p.proof.proof.left, ⟨{ omega }, p.proof.proof.right.right⟩⟩))
+        },
+        Succ(more) => λ least fewer le from p => {
+            let t = p.witness;
+            let n = p.proof.witness;
+            Exists(t, Exists(n, ⟨p.proof.proof.left, match p.proof.proof.right {
+                Inl(reached) => {
+                    let at_least: (least <= n) = reached.left;
+                    Inl(⟨{ omega }, reached.right⟩)
+                },
+                Inr(called) => Inr(kernel.monotone(Running(t, from.io), λ (u: Running<M, W>) => site.Performs(writes, kernel, goal, more, least - n, u),
+                    λ (u: Running<M, W>) => site.Performs(writes, kernel, goal, more, fewer - n, u),
+                    λ u q => site.performs_less(writes, kernel, goal, more, least - n, fewer - n, { omega }, u, q), called)),
+            }⟩))
+        },
+    }
+}
+
+// One more system call allowed.
+theorem Site::performs_up<M, W>(self site: Site<M>, writes: ByteWrites<M>, kernel: Kernel<M, W>, goal: Running<M, W> → Type, calls: Nat):
+    (least: Nat) → (from: Running<M, W>) → site.Performs(writes, kernel, goal, calls, least, from) →
+    site.Performs(writes, kernel, goal, Succ(calls), least, from) {
+    match calls {
+        Zero => λ least from p => Exists(p.witness, Exists(p.proof.witness, ⟨p.proof.proof.left, Inl(p.proof.proof.right)⟩)),
+        Succ(more) => λ least from p => {
+            let t = p.witness;
+            let n = p.proof.witness;
+            Exists(t, Exists(n, ⟨p.proof.proof.left, match p.proof.proof.right {
+                Inl(reached) => Inl(reached),
+                Inr(called) => Inr(kernel.monotone(Running(t, from.io), λ (u: Running<M, W>) => site.Performs(writes, kernel, goal, more, least - n, u),
+                    λ (u: Running<M, W>) => site.Performs(writes, kernel, goal, Succ(more), least - n, u),
+                    λ u q => site.performs_up(writes, kernel, goal, more, least - n, u, q), called)),
+            }⟩))
+        },
+    }
+}
+
+// More system calls allowed.
+theorem Site::performs_more<M, W>(self site: Site<M>, writes: ByteWrites<M>, kernel: Kernel<M, W>, goal: Running<M, W> → Type, calls, least: Nat,
+    from: Running<M, W>, p: site.Performs(writes, kernel, goal, calls, least, from), extra: Nat):
+    site.Performs(writes, kernel, goal, calls + extra, least, from) {
+    match extra {
+        Zero => p,
+        Succ(e) => site.performs_up(writes, kernel, goal, calls + e, least, from, site.performs_more(writes, kernel, goal, calls, least, from, p, e)),
+    }
+}
+
+// A goal that follows from the goal.
+theorem Site::performs_weaken<M, W>(self site: Site<M>, writes: ByteWrites<M>, kernel: Kernel<M, W>, goal, weaker: Running<M, W> → Type,
+    implies: (r: Running<M, W>) → goal(r) → weaker(r), calls: Nat):
+    (least: Nat) → (from: Running<M, W>) → site.Performs(writes, kernel, goal, calls, least, from) →
+    site.Performs(writes, kernel, weaker, calls, least, from) {
+    match calls {
+        Zero => λ least from p => Exists(p.witness, Exists(p.proof.witness, ⟨p.proof.proof.left, ⟨p.proof.proof.right.left,
+            implies(Running(p.witness, from.io), p.proof.proof.right.right)⟩⟩)),
+        Succ(more) => λ least from p => {
+            let t = p.witness;
+            let n = p.proof.witness;
+            Exists(t, Exists(n, ⟨p.proof.proof.left, match p.proof.proof.right {
+                Inl(reached) => Inl(⟨reached.left, implies(Running(t, from.io), reached.right)⟩),
+                Inr(called) => Inr(kernel.monotone(Running(t, from.io), λ (u: Running<M, W>) => site.Performs(writes, kernel, goal, more, least - n, u),
+                    λ (u: Running<M, W>) => site.Performs(writes, kernel, weaker, more, least - n, u),
+                    λ u q => site.performs_weaken(writes, kernel, goal, weaker, implies, more, least - n, u, q), called)),
+            }⟩))
+        },
+    }
+}
+
+// `k` machine steps before: they count.
+theorem Site::performs_prefix<M, W>(self site: Site<M>, writes: ByteWrites<M>, kernel: Kernel<M, W>, goal: Running<M, W> → Type, calls: Nat):
+    (least, k: Nat) → (from: Running<M, W>) → (t: MachineState<M>) → MachineRuns(site.fetch, site.data, writes, k, from.state, t) →
+    site.Performs(writes, kernel, goal, calls, least, Running(t, from.io)) → site.Performs(writes, kernel, goal, calls, k + least, from) {
+    match calls {
+        Zero => λ least k from t first p => {
+            let n = p.proof.witness;
+            let at_least: (least <= n) = p.proof.proof.right.left;
+            Exists(p.witness, Exists(k + n, ⟨StarN::append(λ a b => MachineStep(site.fetch, site.data, writes, a, b), k, n, from.state, t, p.witness, first,
+                p.proof.proof.left), ⟨{ omega }, p.proof.proof.right.right⟩⟩))
+        },
+        Succ(more) => λ least k from t first p => {
+            let u = p.witness;
+            let n = p.proof.witness;
+            Exists(u, Exists(k + n, ⟨StarN::append(λ a b => MachineStep(site.fetch, site.data, writes, a, b), k, n, from.state, t, u, first,
+                p.proof.proof.left), match p.proof.proof.right {
+                Inl(reached) => {
+                    let at_least: (least <= n) = reached.left;
+                    Inl(⟨{ omega }, reached.right⟩)
+                },
+                Inr(called) => Inr(kernel.monotone(Running(u, from.io), λ (v: Running<M, W>) => site.Performs(writes, kernel, goal, more, least - n, v),
+                    λ (v: Running<M, W>) => site.Performs(writes, kernel, goal, more, (k + least) - (k + n), v),
+                    λ v q => site.performs_less(writes, kernel, goal, more, least - n, (k + least) - (k + n), { omega }, v, q), called)),
+            }⟩))
+        },
+    }
+}
+
+// Steps not counted before.
+theorem Site::performs_after<M, W>(self site: Site<M>, writes: ByteWrites<M>, kernel: Kernel<M, W>, goal: Running<M, W> → Type, calls, least: Nat,
+    from: Running<M, W>, t: MachineState<M>, steps: MachineSteps(site.fetch, site.data, writes, from.state, t),
+    p: site.Performs(writes, kernel, goal, calls, least, Running(t, from.io))): site.Performs(writes, kernel, goal, calls, least, from) {
+    site.performs_less(writes, kernel, goal, calls, steps.witness + least, least, Nat::le_add_r(steps.witness, least), from,
+        site.performs_prefix(writes, kernel, goal, calls, least, steps.witness, from, t, steps.proof, p))
+}
+
+// A goal reached by machine steps alone, counted as none.
+theorem Site::performs_steps<M, W>(self site: Site<M>, writes: ByteWrites<M>, kernel: Kernel<M, W>, goal: Running<M, W> → Type,
+    from: Running<M, W>, t: MachineState<M>, steps: MachineSteps(site.fetch, site.data, writes, from.state, t), reached: goal(Running(t, from.io))):
+    site.Performs(writes, kernel, goal, 0, 0, from) {
+    let n = steps.witness;
+    Exists(t, Exists(n, ⟨steps.proof, ⟨{ omega }, reached⟩⟩))
+}
+
+// The bind: from every goal state, a claim again. The system calls and the
+// lower bounds add.
+theorem Site::performs_bind<M, W>(self site: Site<M>, writes: ByteWrites<M>, kernel: Kernel<M, W>, goal, after: Running<M, W> → Type, calls2, least2: Nat,
+    then: (r: Running<M, W>) → goal(r) → site.Performs(writes, kernel, after, calls2, least2, r), calls: Nat):
+    (least: Nat) → (from: Running<M, W>) → site.Performs(writes, kernel, goal, calls, least, from) →
+    site.Performs(writes, kernel, after, calls2 + calls, least + least2, from) {
+    match calls {
+        Zero => λ least from p => {
+            let t = p.witness;
+            let n = p.proof.witness;
+            let at_least: (least <= n) = p.proof.proof.right.left;
+            site.performs_less(writes, kernel, after, calls2, n + least2, least + least2, { omega }, from,
+                site.performs_prefix(writes, kernel, after, calls2, least2, n, from, t, p.proof.proof.left,
+                    then(Running(t, from.io), p.proof.proof.right.right)))
+        },
+        Succ(more) => λ least from p => {
+            let t = p.witness;
+            let n = p.proof.witness;
+            match p.proof.proof.right {
+                Inl(reached) => {
+                    let at_least: (least <= n) = reached.left;
+                    site.performs_more(writes, kernel, after, calls2, least + least2, from,
+                        site.performs_less(writes, kernel, after, calls2, n + least2, least + least2, { omega }, from,
+                            site.performs_prefix(writes, kernel, after, calls2, least2, n, from, t, p.proof.proof.left, then(Running(t, from.io), reached.right))),
+                        Succ(more))
+                },
+                Inr(called) => Exists(t, Exists(n, ⟨p.proof.proof.left, Inr(kernel.monotone(Running(t, from.io),
+                    λ (u: Running<M, W>) => site.Performs(writes, kernel, goal, more, least - n, u),
+                    λ (u: Running<M, W>) => site.Performs(writes, kernel, after, calls2 + more, (least + least2) - n, u),
+                    λ u q => site.performs_less(writes, kernel, after, calls2 + more, (least - n) + least2, (least + least2) - n, { omega }, u,
+                        site.performs_bind(writes, kernel, goal, after, calls2, least2, then, more, least - n, u, q)), called))⟩)),
+            }
+        },
+    }
+}
+
+// The kernel of a world no system call reaches: a claim at it makes none.
+fn Kernel::none<M, W>() → Kernel<M, W> { Kernel(λ r P => False, λ r P Q implies never => never) }
+
+// Steps after the goal, not counted.
+theorem Site::performs_then_steps<M, W>(self site: Site<M>, writes: ByteWrites<M>, kernel: Kernel<M, W>, goal, after: Running<M, W> → Type,
+    then: (r: Running<M, W>) → goal(r) → Exists<MachineState<M>>(λ t => MachineSteps(site.fetch, site.data, writes, r.state, t) ∧ after(Running(t, r.io))),
+    calls: Nat): (least: Nat) → (from: Running<M, W>) → site.Performs(writes, kernel, goal, calls, least, from) →
+    site.Performs(writes, kernel, after, calls, least, from) {
+    match calls {
+        Zero => λ least from p => {
+            let t = p.witness;
+            let n = p.proof.witness;
+            let more = then(Running(t, from.io), p.proof.proof.right.right);
+            let m = more.proof.left.witness;
+            let at_least: (least <= n) = p.proof.proof.right.left;
+            Exists(more.witness, Exists(n + m, ⟨StarN::append(λ a b => MachineStep(site.fetch, site.data, writes, a, b), n, m, from.state, t, more.witness,
+                p.proof.proof.left, more.proof.left.proof), ⟨{ omega }, more.proof.right⟩⟩))
+        },
+        Succ(rest) => λ least from p => {
+            let t = p.witness;
+            let n = p.proof.witness;
+            match p.proof.proof.right {
+                Inl(reached) => {
+                    let more = then(Running(t, from.io), reached.right);
+                    let m = more.proof.left.witness;
+                    let at_least: (least <= n) = reached.left;
+                    Exists(more.witness, Exists(n + m, ⟨StarN::append(λ a b => MachineStep(site.fetch, site.data, writes, a, b), n, m, from.state, t,
+                        more.witness, p.proof.proof.left, more.proof.left.proof), Inl(⟨{ omega }, more.proof.right⟩)⟩))
+                },
+                Inr(called) => Exists(t, Exists(n, ⟨p.proof.proof.left, Inr(kernel.monotone(Running(t, from.io),
+                    λ (u: Running<M, W>) => site.Performs(writes, kernel, goal, rest, least - n, u),
+                    λ (u: Running<M, W>) => site.Performs(writes, kernel, after, rest, least - n, u),
+                    λ u q => site.performs_then_steps(writes, kernel, goal, after, then, rest, least - n, u, q), called))⟩)),
+            }
+        },
+    }
+}
+
+// Arrived at offset `to`, the program resident, `post` holding.
+fn Site::Arrived<M, W>(self site: Site<M>, to: Nat, post: Running<M, W> → Type) → Running<M, W> → Type {
+    λ t => (t.state.rip = next_rip(site.origin, to) ∧ site.Resident(t.state.memory)) ∧ post(t)
+}
+
+// Every state at offset `from`, the program resident, satisfying `pre`,
+// performs `goal`: `Site::Moves` as a claim, its goal any (arriving at an
+// offset, `Site::Arrived`, or a state with some world after some steps).
+fn Site::Claims<M, W>(self site: Site<M>, writes: ByteWrites<M>, kernel: Kernel<M, W>, calls, least, from: Nat, pre, goal: Running<M, W> → Type) → Type {
+    (r: Running<M, W>) → r.state.rip = next_rip(site.origin, from) → site.Resident(r.state.memory) → pre(r) →
+        site.Performs(writes, kernel, goal, calls, least, r)
+}
+
+// A machine run is a claim at no system call and bound zero, the world
+// whatever it was.
+theorem Site::claims_of_moves<M, W>(self site: Site<M>, writes: ByteWrites<M>, kernel: Kernel<M, W>, from, to: Nat, pre, post: MachineState<M> → Type,
+    World: W → Type, moves: site.Moves(writes, from, to, pre, post)):
+    site.Claims(writes, kernel, 0, 0, from, λ (r: Running<M, W>) => pre(r.state) ∧ World(r.io),
+        site.Arrived(to, λ (t: Running<M, W>) => post(t.state) ∧ World(t.io))) {
+    λ r here resident held => {
+        let a = moves(r.state, here, resident, held.left);
+        site.performs_steps(writes, kernel, site.Arrived(to, λ (t: Running<M, W>) => post(t.state) ∧ World(t.io)), r, a.witness, a.proof.left,
+            ⟨⟨a.proof.right.left, a.proof.right.right.left⟩, ⟨a.proof.right.right.right, held.right⟩⟩)
+    }
+}
+
+// A claim at no system call, of the machine's state alone, is a machine
+// run (in any world there is one of).
+theorem Site::moves_of_claims<M, W>(self site: Site<M>, writes: ByteWrites<M>, kernel: Kernel<M, W>, least, from, to: Nat, pre, post: MachineState<M> → Type,
+    w: W, claims: site.Claims(writes, kernel, 0, least, from, λ (r: Running<M, W>) => pre(r.state),
+        site.Arrived(to, λ (t: Running<M, W>) => post(t.state)))): site.Moves(writes, from, to, pre, post) {
+    λ s here resident held => {
+        let p = claims(Running(s, w), here, resident, held);
+        let reached = p.proof.proof.right.right;
+        Exists(p.witness, ⟨Exists(p.proof.witness, p.proof.proof.left), ⟨reached.left.left, ⟨reached.left.right, reached.right⟩⟩⟩)
+    }
+}
+
+// One claim then another from where it arrives: the system calls and the
+// lower bounds add.
+theorem Site::claims_trans<M, W>(self site: Site<M>, writes: ByteWrites<M>, kernel: Kernel<M, W>, calls, least, calls2, least2, from, middle: Nat,
+    pre, between, goal: Running<M, W> → Type,
+    first: site.Claims(writes, kernel, calls, least, from, pre, site.Arrived(middle, between)),
+    second: site.Claims(writes, kernel, calls2, least2, middle, between, goal)):
+    site.Claims(writes, kernel, calls2 + calls, least + least2, from, pre, goal) {
+    λ r here resident held => site.performs_bind(writes, kernel, site.Arrived(middle, between), goal, calls2, least2,
+        λ t arrived => second(t, arrived.left.left, arrived.left.right, arrived.right), calls, least, r, first(r, here, resident, held))
+}
+
+theorem Site::claims_weaken<M, W>(self site: Site<M>, writes: ByteWrites<M>, kernel: Kernel<M, W>, calls, least, from: Nat,
+    pre, goal, entry, exit: Running<M, W> → Type, claims: site.Claims(writes, kernel, calls, least, from, pre, goal),
+    into: (r: Running<M, W>) → entry(r) → pre(r), out: (t: Running<M, W>) → goal(t) → exit(t)):
+    site.Claims(writes, kernel, calls, least, from, entry, exit) {
+    λ r here resident held => site.performs_weaken(writes, kernel, goal, exit, out, calls, least, r, claims(r, here, resident, into(r, held)))
+}
+
+// Facts the run does not touch hold where it arrives.
+theorem Site::claims_carry<M, W>(self site: Site<M>, writes: ByteWrites<M>, kernel: Kernel<M, W>, calls, least, from, to: Nat,
+    pre, post: Running<M, W> → Type, facts: Type, claims: site.Claims(writes, kernel, calls, least, from, pre, site.Arrived(to, post))):
+    site.Claims(writes, kernel, calls, least, from, λ (r: Running<M, W>) => pre(r) ∧ facts,
+        site.Arrived(to, λ (t: Running<M, W>) => post(t) ∧ facts)) {
+    λ r here resident held => site.performs_weaken(writes, kernel, site.Arrived(to, post), site.Arrived(to, λ (t: Running<M, W>) => post(t) ∧ facts),
+        λ t arrived => ⟨arrived.left, ⟨arrived.right, held.right⟩⟩, calls, least, r, claims(r, here, resident, held.left))
+}
+
+// More system calls allowed, a smaller bound.
+theorem Site::claims_loosen<M, W>(self site: Site<M>, writes: ByteWrites<M>, kernel: Kernel<M, W>, calls, least, extra, fewer, from: Nat,
+    pre, goal: Running<M, W> → Type, le: fewer <= least, claims: site.Claims(writes, kernel, calls, least, from, pre, goal)):
+    site.Claims(writes, kernel, calls + extra, fewer, from, pre, goal) {
+    λ r here resident held => site.performs_more(writes, kernel, goal, calls, fewer, r,
+        site.performs_less(writes, kernel, goal, calls, least, fewer, le, r, claims(r, here, resident, held)), extra)
+}
+
+theorem Site::claims_absurd<M, W>(self site: Site<M>, writes: ByteWrites<M>, kernel: Kernel<M, W>, calls, least, from: Nat,
+    pre, goal: Running<M, W> → Type, never: (r: Running<M, W>) → pre(r) → False): site.Claims(writes, kernel, calls, least, from, pre, goal) {
+    λ r here resident held => false_elim(never(r, held))
+}
+
+// A JMP item at a label, near or short: one fetched step to where it
+// lands, the registers and memory as they were.
+theorem Site::jump_item_step<M>(self site: Site<M>, fits: FillsFit(site.program, no_fills()), k: Nat, before: Prog, name: Nat,
+    short: Bool, target: Nat, at: asm_back(site.program, k) = At(before, name, jmp_item(short, target)), to: Nat,
+    lands: JmpLands(asm_labels(site.program), prog_len(before), short, target, to),
+    s: MachineState<M>, here: s.rip = next_rip(site.origin, prog_len(before)), resident: site.Resident(s.memory)):
+    Exists<MachineState<M>>(λ t => FetchedStep(site.fetch, site.data, s, t) ∧
+        (t.rip = next_rip(site.origin, to) ∧ ((t.gprs = s.gprs) ∧ (t.memory = s.memory)))) {
+    (match short as λ b => asm_back(site.program, k) = At(before, name, jmp_item(b, target)) →
+        JmpLands(asm_labels(site.program), prog_len(before), b, target, to) →
+        Exists<MachineState<M>>(λ t => FetchedStep(site.fetch, site.data, s, t) ∧
+            (t.rip = next_rip(site.origin, to) ∧ ((t.gprs = s.gprs) ∧ (t.memory = s.memory)))) {
+        False => λ at lands => {
+            let displacement = asm_jump_of(asm_labels(site.program), prog_len(before), Jmp(target));
+            let control = JumpNear(displacement);
+            let item = site.item_resident(fits, s.memory, resident, k, before, name, Jmp(target), at);
+            let step = near_fetched_step(site.fetch, site.data, control, s,
+                j(sym(here), λ address _ => CodeResident(site.fetch, s.memory, near_control_bytes(control), address), item), refl);
+            Exists(execute_near_control(control, s), ⟨step,
+                ⟨trans(cong_fn<BitVec(64), BitVec(64)>(λ address => near_branch_target(address, 5, displacement), here),
+                    near_lands_target(site.origin, prog_len(before), displacement, to, lands)), ⟨refl, refl⟩⟩⟩)
+        },
+        True => λ at lands => {
+            let displacement = asm_short_of(asm_labels(site.program), prog_len(before), JmpShort(target));
+            let control = Jump(displacement);
+            let item = site.item_resident(fits, s.memory, resident, k, before, name, JmpShort(target), at);
+            let step = short_fetched_step(site.fetch, site.data, control, s,
+                j(sym(here), λ address _ => CodeResident(site.fetch, s.memory, short_control_bytes(control), address), item), refl);
+            let landed: (short_branch_target(next_rip(site.origin, prog_len(before)), displacement) = next_rip(site.origin, to)) = match lands {
+                Inl(ahead) => short_jumps_forward(site.origin, prog_len(before), displacement, to, ahead),
+                Inr(behind) => short_jumps_back(site.origin, prog_len(before), displacement, to, behind),
+            };
+            Exists(execute_short_control(control, s), ⟨step,
+                ⟨trans(cong_fn<BitVec(64), BitVec(64)>(λ address => short_branch_target(address, displacement), here), landed), ⟨refl, refl⟩⟩⟩)
+        },
+    })(at, lands)
+}
+
+// A JMP item as a claim: one machine step, counted.
+theorem Site::claims_jump_item<M, W>(self site: Site<M>, writes: ByteWrites<M>, kernel: Kernel<M, W>, fits: FillsFit(site.program, no_fills()), k: Nat,
+    before: Prog, name: Nat, short: Bool, target: Nat, at: asm_back(site.program, k) = At(before, name, jmp_item(short, target)), to: Nat,
+    lands: JmpLands(asm_labels(site.program), prog_len(before), short, target, to), pre: Gprs → M → W → Type):
+    site.Claims(writes, kernel, 0, 1, prog_len(before), λ (r: Running<M, W>) => pre(r.state.gprs, r.state.memory, r.io),
+        site.Arrived(to, λ (t: Running<M, W>) => pre(t.state.gprs, t.state.memory, t.io))) {
+    λ r here resident held => {
+        let jumped = site.jump_item_step(fits, k, before, name, short, target, at, to, lands, r.state, here, resident);
+        let t = jumped.witness;
+        let same_g: (t.gprs = r.state.gprs) = jumped.proof.right.right.left;
+        let same_m: (t.memory = r.state.memory) = jumped.proof.right.right.right;
+        Exists(t, Exists(1, ⟨Exists(t, ⟨Inl(jumped.proof.left), refl⟩), ⟨trivial, ⟨⟨jumped.proof.right.left,
+            j(sym(same_m), λ m _ => site.Resident(m), resident)⟩,
+            j(sym(same_g), λ g _ => pre(g, t.memory, r.io), j(sym(same_m), λ m _ => pre(r.state.gprs, m, r.io), held))⟩⟩⟩))
+    }
+}
+
+// A callee's claim: entered at `entry` with room for the return address
+// at offset `i` and `pre`, it performs `goal`, which may relate where it
+// was entered to where it got (a return, `Site::ReturnsClaim`; or a state
+// some steps in, for a callee still going).
+fn Site::EntersClaim<M, W>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), kernel: Kernel<M, W>, calls, least, entry: Nat,
+    pre: Nat → Running<M, W> → Type, goal: Nat → Running<M, W> → BitVec(64) → Running<M, W> → Type) → Type {
+    (s: Running<M, W>) → s.state.rip = next_rip(site.origin, entry) → site.Resident(s.state.memory) →
+    (i: Nat) → read_gpr(Rsp, s.state.gprs) = stack.at(i) → i + 8 <= stack.size → pre(i, s) →
+    (ret: BitVec(64)) → read_word(site.data, s.state.memory, stack.at(i)) = Some(ret) →
+    site.Performs(stack.writes, kernel, goal(i, s, ret), calls, least, s)
+}
+
+// The callee's contract as a claim: entered so, it performs a return to
+// that address, the program still resident, the stack pointer just above
+// it, and `post` relating where it was entered to where it returned
+// (`Site::Returns` is it at no system call).
+fn Site::ReturnsClaim<M, W>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), kernel: Kernel<M, W>, calls, least, entry: Nat,
+    pre: Nat → Running<M, W> → Type, post: Nat → Running<M, W> → Running<M, W> → Type) → Type {
+    site.EntersClaim(stack, kernel, calls, least, entry, pre, λ (i: Nat) (s: Running<M, W>) (ret: BitVec(64)) (t: Running<M, W>) =>
+        (t.state.rip = ret) ∧ (site.Resident(t.state.memory) ∧ ((read_gpr(Rsp, t.state.gprs) = stack.at(i + 8)) ∧ post(i, s, t))))
+}
+
+theorem Site::returns_claim_of<M, W>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), kernel: Kernel<M, W>, entry: Nat,
+    pre: Nat → MachineState<M> → Type, post: Nat → MachineState<M> → MachineState<M> → Type, World: W → Type,
+    returns: site.Returns(stack, entry, pre, post)):
+    site.ReturnsClaim(stack, kernel, 0, 0, entry, λ (i: Nat) (s: Running<M, W>) => pre(i, s.state) ∧ World(s.io),
+        λ (i: Nat) (s: Running<M, W>) (t: Running<M, W>) => post(i, s.state, t.state) ∧ World(t.io)) {
+    λ s here resident i rsp room held ret saved => {
+        let ran = returns(s.state, here, resident, i, rsp, room, held.left, ret, saved);
+        site.performs_steps(stack.writes, kernel, λ (t: Running<M, W>) => (t.state.rip = ret) ∧ (site.Resident(t.state.memory) ∧
+                ((read_gpr(Rsp, t.state.gprs) = stack.at(i + 8)) ∧ (post(i, s.state, t.state) ∧ World(t.io)))), s, ran.witness, ran.proof.left,
+            ⟨ran.proof.right.left, ⟨ran.proof.right.right.left, ⟨ran.proof.right.right.right.left, ⟨ran.proof.right.right.right.right, held.right⟩⟩⟩⟩)
+    }
+}
+
+// A CALL at a label into a callee's claim, whatever its goal: the CALL is
+// one machine step, counted, then the callee's run; `leave` reads the
+// caller's goal off the callee's.
+theorem Site::claims_call_by<M, W>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), kernel: Kernel<M, W>, fits: FillsFit(site.program, no_fills()),
+    k: Nat, before: Prog, name, target: Nat, at: asm_back(site.program, k) = At(before, name, CallTo(target)),
+    entry: Nat, lands: NearLands(prog_len(before), asm_jump_of(asm_labels(site.program), prog_len(before), CallTo(target)), entry),
+    calls, least: Nat, callee_pre: Nat → Running<M, W> → Type, callee_goal: Nat → Running<M, W> → BitVec(64) → Running<M, W> → Type,
+    callee: site.EntersClaim(stack, kernel, calls, least, entry, callee_pre, callee_goal),
+    pre, goal: Running<M, W> → Type, index: Running<M, W> → Nat,
+    enter: (s: Running<M, W>) → pre(s) → (read_gpr(Rsp, s.state.gprs) = stack.at(index(s) + 8)) ∧ (index(s) + 8 <= stack.size ∧
+        callee_pre(index(s), Running(call_near_after(stack.writes, asm_jump_of(asm_labels(site.program), prog_len(before), CallTo(target)), s.state), s.io))),
+    leave: (s, t: Running<M, W>) → s.state.rip = next_rip(site.origin, prog_len(before)) → pre(s) →
+        callee_goal(index(s), Running(call_near_after(stack.writes, asm_jump_of(asm_labels(site.program), prog_len(before), CallTo(target)), s.state), s.io),
+            next_rip(s.state.rip, 5), t) → goal(t)):
+    site.Claims(stack.writes, kernel, calls, 1 + least, prog_len(before), pre, goal) {
+    λ r here resident holds => {
+        let s = r.state;
+        let displacement = asm_jump_of(asm_labels(site.program), prog_len(before), CallTo(target));
+        let found = enter(r, holds);
+        let i = index(r);
+        let rsp: (read_gpr(Rsp, s.gprs) = stack.at(i + 8)) = found.left;
+        let room: (i + 8 <= stack.size) = found.right.left;
+        let pushed: (push_address(s.gprs) = stack.at(i)) =
+            trans(cong_fn<BitVec(64), BitVec(64)>(λ a => a.sub(BitVec::ofNat(8)), rsp), push_at(stack.low, i));
+        let ret = next_rip(s.rip, 5);
+        let u = call_near_after(stack.writes, displacement, s);
+        let executes: CallNear(displacement).Executes(site.data, stack.writes, s, u) =
+            ⟨j(sym(pushed), λ a _ => WordCanonical(a), stack.canonical(i, room)),
+             ⟨j(sym(pushed), λ a _ => stack.writes.writable(s.memory, a, 8), stack.writable(s.memory, i, room)), refl⟩⟩;
+        let fetched = site.item_fetched(fits, s, resident, k, before, name, CallTo(target), at, here);
+        let call: MachineRuns(site.fetch, site.data, stack.writes, 1, s, u) = Exists(u, ⟨Inr(Inr(Exists(CallNear(displacement), ⟨fetched, executes⟩))), refl⟩);
+        let u_rip: (u.rip = next_rip(site.origin, entry)) =
+            trans(cong_fn<BitVec(64), BitVec(64)>(λ a => near_branch_target(a, 5, displacement), here),
+                near_lands_target(site.origin, prog_len(before), displacement, entry, lands));
+        let u_resident: site.Resident(u.memory) =
+            j(sym(pushed), λ a _ => site.Resident(stack.writes.store(s.memory, a, word_bytes(ret))),
+                stack.keeps_code(s.memory, i, room, ret, assemble(no_fills(), site.program, site.last), next_rip(site.origin, 0), resident));
+        let u_rsp: (read_gpr(Rsp, u.gprs) = stack.at(i)) =
+            trans(read_gpr_after_write(Rsp, push_address(s.gprs), s.gprs), pushed);
+        let u_ret: (read_word(site.data, u.memory, stack.at(i)) = Some(ret)) =
+            j(sym(pushed), λ a _ => read_word(site.data, stack.writes.store(s.memory, a, word_bytes(ret)), stack.at(i)) = Some(ret),
+                stack.stored(s.memory, i, room, ret));
+        let entered = callee(Running<M, W>(u, r.io), u_rip, u_resident, i, u_rsp, room, found.right.right, ret, u_ret);
+        site.performs_prefix(stack.writes, kernel, goal, calls, least, 1, r, u, call,
+            site.performs_weaken(stack.writes, kernel, callee_goal(i, Running<M, W>(u, r.io), ret), goal, λ t reached => leave(r, t, here, holds, reached),
+                calls, least, Running<M, W>(u, r.io), entered))
+    }
+}
+
+// A CALL at a label against its callee's claim: the CALL is one machine
+// step, counted, then the callee's run; from the call to the item after
+// it.
+theorem Site::claims_call<M, W>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), kernel: Kernel<M, W>, fits: FillsFit(site.program, no_fills()),
+    k: Nat, before: Prog, name, target: Nat, at: asm_back(site.program, k) = At(before, name, CallTo(target)),
+    entry: Nat, lands: NearLands(prog_len(before), asm_jump_of(asm_labels(site.program), prog_len(before), CallTo(target)), entry),
+    calls, least: Nat, callee_pre: Nat → Running<M, W> → Type, callee_post: Nat → Running<M, W> → Running<M, W> → Type,
+    callee: site.ReturnsClaim(stack, kernel, calls, least, entry, callee_pre, callee_post),
+    pre, post: Running<M, W> → Type, index: Running<M, W> → Nat,
+    enter: (s: Running<M, W>) → pre(s) → (read_gpr(Rsp, s.state.gprs) = stack.at(index(s) + 8)) ∧ (index(s) + 8 <= stack.size ∧
+        callee_pre(index(s), Running(call_near_after(stack.writes, asm_jump_of(asm_labels(site.program), prog_len(before), CallTo(target)), s.state), s.io))),
+    leave: (s, t: Running<M, W>) → pre(s) → read_gpr(Rsp, t.state.gprs) = stack.at(index(s) + 8) →
+        callee_post(index(s), Running(call_near_after(stack.writes, asm_jump_of(asm_labels(site.program), prog_len(before), CallTo(target)), s.state), s.io), t) →
+        post(t)):
+    site.Claims(stack.writes, kernel, calls, 1 + least, prog_len(before), pre, site.Arrived(prog_len(before) + 5, post)) {
+    site.claims_call_by(stack, kernel, fits, k, before, name, target, at, entry, lands, calls, least, callee_pre,
+        λ (i: Nat) (s: Running<M, W>) (ret: BitVec(64)) (t: Running<M, W>) => (t.state.rip = ret) ∧ (site.Resident(t.state.memory) ∧
+            ((read_gpr(Rsp, t.state.gprs) = stack.at(i + 8)) ∧ callee_post(i, s, t))),
+        callee, pre, site.Arrived(prog_len(before) + 5, post), index, enter,
+        λ s t here held back => ⟨⟨trans(back.left, site.rip_after(s.state, prog_len(before), 5, here)), back.right.left⟩,
+            leave(s, t, held, back.right.right.left, back.right.right.right)⟩)
+}
+
+// A function closed by RET into its claim: its body performs, from its
+// entry, a state at the RET with the stack pointer back where it entered
+// and the return address still there, `post` holding of where it returns.
+theorem Site::returns_by_claim<M, W>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), kernel: Kernel<M, W>, fits: FillsFit(site.program, no_fills()),
+    entry: Nat, k: Nat, before: Prog, name: Nat, at: asm_back(site.program, k) = At(before, name, Ret), calls, least: Nat,
+    pre: Nat → Running<M, W> → Type, post: Nat → Running<M, W> → Running<M, W> → Type,
+    body: (s0: Running<M, W>) → (i: Nat) → (ret: BitVec(64)) → site.Claims(stack.writes, kernel, calls, least, entry,
+        λ (s: Running<M, W>) => (s = s0) ∧ ((read_gpr(Rsp, s0.state.gprs) = stack.at(i)) ∧ (i + 8 <= stack.size ∧
+            (pre(i, s0) ∧ read_word(site.data, s0.state.memory, stack.at(i)) = Some(ret)))),
+        site.Arrived(prog_len(before), λ (t: Running<M, W>) => (read_gpr(Rsp, t.state.gprs) = stack.at(i)) ∧
+            ((read_word(site.data, t.state.memory, stack.at(i)) = Some(ret)) ∧ post(i, s0, Running(return_near_after(ret, t.state), t.io)))))):
+    site.ReturnsClaim(stack, kernel, calls, least, entry, pre, post) {
+    λ s here resident i rsp room holds ret read => {
+        let ran = body(s, i, ret, s, here, resident, ⟨refl, ⟨rsp, ⟨room, ⟨holds, read⟩⟩⟩⟩);
+        site.performs_then_steps(stack.writes, kernel,
+            site.Arrived(prog_len(before), λ (t: Running<M, W>) => (read_gpr(Rsp, t.state.gprs) = stack.at(i)) ∧
+                ((read_word(site.data, t.state.memory, stack.at(i)) = Some(ret)) ∧ post(i, s, Running(return_near_after(ret, t.state), t.io)))),
+            λ (t: Running<M, W>) => (t.state.rip = ret) ∧ (site.Resident(t.state.memory) ∧ ((read_gpr(Rsp, t.state.gprs) = stack.at(i + 8)) ∧ post(i, s, t))),
+            λ x arrived => {
+                let t = x.state;
+                let done = arrived.right;
+                let t_rsp: (read_gpr(Rsp, t.gprs) = stack.at(i)) = done.left;
+                let r = return_near_after(ret, t);
+                let executes: ReturnNear.Executes(site.data, stack.writes, t, r) =
+                    ⟨j(sym(t_rsp), λ a _ => WordCanonical(a), stack.canonical(i, room)),
+                     Exists(ret, ⟨j(sym(t_rsp), λ a _ => read_word(site.data, t.memory, a) = Some(ret), done.right.left), refl⟩)⟩;
+                Exists(r, ⟨stack_step_machine(site.fetch, site.data, stack.writes, ReturnNear, t, r,
+                        site.item_fetched(fits, t, arrived.left.right, k, before, name, Ret, at, arrived.left.left), executes),
+                    ⟨refl, ⟨arrived.left.right,
+                        ⟨trans(read_gpr_after_write(Rsp, read_gpr(Rsp, t.gprs).add(BitVec::ofNat(8)), t.gprs),
+                            trans(cong_fn<BitVec(64), BitVec(64)>(λ a => a.add(BitVec::ofNat(8)), t_rsp), pop_at(stack.low, i))),
+                         done.right.right⟩⟩⟩⟩)
+            }, calls, least, s, ran)
+    }
+}
+
+// Machine steps after a claim's goal, not counted.
+theorem Site::claims_then<M, W>(self site: Site<M>, writes: ByteWrites<M>, kernel: Kernel<M, W>, calls, least, from: Nat,
+    pre, goal, after: Running<M, W> → Type, claims: site.Claims(writes, kernel, calls, least, from, pre, goal),
+    then: (r: Running<M, W>) → goal(r) → Exists<MachineState<M>>(λ t => MachineSteps(site.fetch, site.data, writes, r.state, t) ∧ after(Running(t, r.io)))):
+    site.Claims(writes, kernel, calls, least, from, pre, after) {
+    λ r here resident held => site.performs_then_steps(writes, kernel, goal, after, then, calls, least, r, claims(r, here, resident, held))
+}
+
+// A machine run from where a claim arrives, as the steps after it.
+theorem Site::moves_then<M, W>(self site: Site<M>, writes: ByteWrites<M>, middle, to: Nat, pre, post: MachineState<M> → Type, World: W → Type,
+    moves: site.Moves(writes, middle, to, pre, post), r: Running<M, W>,
+    arrived: site.Arrived(middle, λ (t: Running<M, W>) => pre(t.state) ∧ World(t.io), r)):
+    Exists<MachineState<M>>(λ t => MachineSteps(site.fetch, site.data, writes, r.state, t) ∧
+        site.Arrived(to, λ (u: Running<M, W>) => post(u.state) ∧ World(u.io), Running(t, r.io))) {
+    let a = moves(r.state, arrived.left.left, arrived.left.right, arrived.right.left);
+    Exists(a.witness, ⟨a.proof.left, ⟨⟨a.proof.right.left, a.proof.right.right.left⟩, ⟨a.proof.right.right.right, arrived.right.right⟩⟩⟩)
+}
+
+// A machine run, then a claim from where it arrives: its steps not counted.
+theorem Site::claims_after_moves<M, W>(self site: Site<M>, writes: ByteWrites<M>, kernel: Kernel<M, W>, calls, least, from, middle: Nat,
+    pre, between: MachineState<M> → Type, World: W → Type, goal: Running<M, W> → Type,
+    first: site.Moves(writes, from, middle, pre, between),
+    second: site.Claims(writes, kernel, calls, least, middle, λ (r: Running<M, W>) => between(r.state) ∧ World(r.io), goal)):
+    site.Claims(writes, kernel, calls, least, from, λ (r: Running<M, W>) => pre(r.state) ∧ World(r.io), goal) {
+    λ r here resident held => {
+        let a = first(r.state, here, resident, held.left);
+        site.performs_after(writes, kernel, goal, calls, least, r, a.witness, a.proof.left,
+            second(Running(a.witness, r.io), a.proof.right.left, a.proof.right.right.left, ⟨a.proof.right.right.right, held.right⟩))
+    }
+}
+
+// A test and its JCC, each way a claim: falling through where the JCC is
+// not taken, from the jump's target where it is.
+theorem Site::claims_test_by<M, W>(self site: Site<M>, writes: ByteWrites<M>, kernel: Kernel<M, W>, fits: FillsFit(site.program, no_fills()),
+    start: Prog, test: Test, else_name: Nat, short: Bool,
+    test_k: Nat, test_at: asm_back(site.program, test_k) = start.tested(test),
+    branch_k: Nat, branch_at: asm_back(site.program, branch_k) = start.branched_by(test, else_name, short),
+    else_to: Nat, else_lands: JccLands(asm_labels(site.program), prog_len(start.tested(test)), short, test.cc(), else_name, else_to),
+    calls, least: Nat, pre: Gprs → M → W → Type, goal: Running<M, W> → Type,
+    yes: site.Claims(writes, kernel, calls, least, prog_len(start.branched_by(test, else_name, short)),
+        λ (r: Running<M, W>) => pre(r.state.gprs, r.state.memory, r.io) ∧ test.taken(r.state.gprs) = False, goal),
+    no: site.Claims(writes, kernel, calls, least, else_to,
+        λ (r: Running<M, W>) => pre(r.state.gprs, r.state.memory, r.io) ∧ test.taken(r.state.gprs) = True, goal)):
+    site.Claims(writes, kernel, calls, least, prog_len(start), λ (r: Running<M, W>) => pre(r.state.gprs, r.state.memory, r.io), goal) {
+    λ r here resident holds => {
+        let s = r.state;
+        let found = site.test_by_steps(writes, fits, start, test, else_name, short, test_k, test_at, branch_k, branch_at, else_to, else_lands, s, here, resident);
+        let v = found.witness;
+        let v_gprs: (v.gprs = s.gprs) = found.proof.right.left.left;
+        let v_memory: (v.memory = s.memory) = found.proof.right.left.right;
+        let v_resident = j(sym(v_memory), λ memory _ => site.Resident(memory), resident);
+        let kept = λ (b: Bool) (taken: test.taken(s.gprs) = b) =>
+            j(sym(v_gprs), λ g _ => pre(g, v.memory, r.io) ∧ test.taken(g) = b,
+                ⟨j(sym(v_memory), λ memory _ => pre(s.gprs, memory, r.io), holds), taken⟩);
+        match nonzero: test.taken(s.gprs) {
+            False => site.performs_after(writes, kernel, goal, calls, least, r, v, found.proof.left,
+                yes(Running(v, r.io), found.proof.right.right.left(nonzero), v_resident, kept(False, nonzero))),
+            True => site.performs_after(writes, kernel, goal, calls, least, r, v, found.proof.left,
+                no(Running(v, r.io), found.proof.right.right.right(nonzero), v_resident, kept(True, nonzero))),
+        }
+    }
+}
+
+// A conditional as a claim: the test, each arm, the first arm's JMP to
+// the join (not counted).
+theorem Site::claims_branch_by<M, W>(self site: Site<M>, writes: ByteWrites<M>, kernel: Kernel<M, W>, fits: FillsFit(site.program, no_fills()),
+    start: Prog, test: Test, else_name, join_name: Nat, short_jcc, short_jmp: Bool, yes_end, no_end: Prog,
+    test_k: Nat, test_at: asm_back(site.program, test_k) = start.tested(test),
+    branch_k: Nat, branch_at: asm_back(site.program, branch_k) = start.branched_by(test, else_name, short_jcc),
+    jump_k: Nat, jump_at: asm_back(site.program, jump_k) = At(yes_end, 0, jmp_item(short_jmp, join_name)),
+    else_lands: JccLands(asm_labels(site.program), prog_len(start.tested(test)), short_jcc, test.cc(), else_name,
+        prog_len(yes_end) + asm_len(jmp_item(short_jmp, join_name))),
+    join_lands: JmpLands(asm_labels(site.program), prog_len(yes_end), short_jmp, join_name, prog_len(no_end)),
+    calls, least: Nat, pre, post: Gprs → M → W → Type,
+    yes: site.Claims(writes, kernel, calls, least, prog_len(start.branched_by(test, else_name, short_jcc)),
+        λ (r: Running<M, W>) => pre(r.state.gprs, r.state.memory, r.io) ∧ test.taken(r.state.gprs) = False,
+        site.Arrived(prog_len(yes_end), λ (t: Running<M, W>) => post(t.state.gprs, t.state.memory, t.io))),
+    no: site.Claims(writes, kernel, calls, least, prog_len(yes_end) + asm_len(jmp_item(short_jmp, join_name)),
+        λ (r: Running<M, W>) => pre(r.state.gprs, r.state.memory, r.io) ∧ test.taken(r.state.gprs) = True,
+        site.Arrived(prog_len(no_end), λ (t: Running<M, W>) => post(t.state.gprs, t.state.memory, t.io)))):
+    site.Claims(writes, kernel, calls, least, prog_len(start), λ (r: Running<M, W>) => pre(r.state.gprs, r.state.memory, r.io),
+        site.Arrived(prog_len(no_end), λ (t: Running<M, W>) => post(t.state.gprs, t.state.memory, t.io))) {
+    let join = site.Arrived(prog_len(no_end), λ (t: Running<M, W>) => post(t.state.gprs, t.state.memory, t.io));
+    site.claims_test_by(writes, kernel, fits, start, test, else_name, short_jcc, test_k, test_at, branch_k, branch_at,
+        prog_len(yes_end) + asm_len(jmp_item(short_jmp, join_name)), else_lands, calls, least, pre, join,
+        site.claims_then(writes, kernel, calls, least, prog_len(start.branched_by(test, else_name, short_jcc)),
+            λ (r: Running<M, W>) => pre(r.state.gprs, r.state.memory, r.io) ∧ test.taken(r.state.gprs) = False,
+            site.Arrived(prog_len(yes_end), λ (t: Running<M, W>) => post(t.state.gprs, t.state.memory, t.io)), join, yes,
+            λ x arrived => {
+                let jumped = site.jump_item_step(fits, jump_k, yes_end, 0, short_jmp, join_name, jump_at, prog_len(no_end), join_lands, x.state,
+                    arrived.left.left, arrived.left.right);
+                let t = jumped.witness;
+                let same_g: (t.gprs = x.state.gprs) = jumped.proof.right.right.left;
+                let same_m: (t.memory = x.state.memory) = jumped.proof.right.right.right;
+                Exists(t, ⟨machine_steps_of_fetched(site.fetch, site.data, writes, x.state, t, fetched_steps_one(site.fetch, site.data, x.state, t, jumped.proof.left)),
+                    ⟨⟨jumped.proof.right.left, j(sym(same_m), λ m _ => site.Resident(m), arrived.left.right)⟩,
+                     j(sym(same_g), λ g _ => post(g, t.memory, x.io), j(sym(same_m), λ m _ => post(x.state.gprs, m, x.io), arrived.right))⟩⟩)
+            }),
+        no)
+}
+
+// At the kernel of no system call, a claim's calls are none.
+theorem Site::performs_none<M, W>(self site: Site<M>, writes: ByteWrites<M>, goal: Running<M, W> → Type, calls, least: Nat, from: Running<M, W>,
+    p: site.Performs(writes, Kernel::none<M, W>(), goal, calls, least, from)): site.Performs(writes, Kernel::none<M, W>(), goal, 0, least, from) {
+    (match calls as λ c => site.Performs(writes, Kernel::none<M, W>(), goal, c, least, from) →
+        site.Performs(writes, Kernel::none<M, W>(), goal, 0, least, from) {
+        Zero => λ q => q,
+        Succ(_) => λ q => Exists(q.witness, Exists(q.proof.witness, ⟨q.proof.proof.left, match q.proof.proof.right {
+            Inl(reached) => reached,
+            Inr(never) => false_elim(never),
+        }⟩)),
+    })(p)
+}
+
+// A claim at the kernel of no system call, over the machine's state alone,
+// is a machine run: the converse of `claims_of_moves` at the world `True`.
+theorem Site::moves_of_quiet<M>(self site: Site<M>, writes: ByteWrites<M>, calls, least, from, to: Nat, pre, post: MachineState<M> → Type,
+    claims: site.Claims(writes, Kernel::none<M, True>(), calls, least, from, λ (r: Running<M, True>) => pre(r.state) ∧ True,
+        site.Arrived(to, λ (t: Running<M, True>) => post(t.state) ∧ True))): site.Moves(writes, from, to, pre, post) {
+    λ s here resident held => {
+        let p = site.performs_none(writes, site.Arrived(to, λ (t: Running<M, True>) => post(t.state) ∧ True), calls, least, Running(s, trivial),
+            claims(Running(s, trivial), here, resident, ⟨held, trivial⟩));
+        let reached = p.proof.proof.right.right;
+        Exists(p.witness, ⟨Exists(p.proof.witness, p.proof.proof.left), ⟨reached.left.left, ⟨reached.left.right, reached.right.left⟩⟩⟩)
+    }
+}
+
+// And `Site::Returns` from its claim there.
+theorem Site::returns_of_quiet<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), calls, least, entry: Nat,
+    pre: Nat → MachineState<M> → Type, post: Nat → MachineState<M> → MachineState<M> → Type,
+    returns: site.ReturnsClaim(stack, Kernel::none<M, True>(), calls, least, entry, λ (i: Nat) (s: Running<M, True>) => pre(i, s.state) ∧ True,
+        λ (i: Nat) (s: Running<M, True>) (t: Running<M, True>) => post(i, s.state, t.state) ∧ True)): site.Returns(stack, entry, pre, post) {
+    λ s here resident i rsp room held ret saved => {
+        let p = site.performs_none(stack.writes, λ (t: Running<M, True>) => (t.state.rip = ret) ∧ (site.Resident(t.state.memory) ∧
+                ((read_gpr(Rsp, t.state.gprs) = stack.at(i + 8)) ∧ (post(i, s, t.state) ∧ True))), calls, least, Running(s, trivial),
+            returns(Running(s, trivial), here, resident, i, rsp, room, ⟨held, trivial⟩, ret, saved));
+        let reached = p.proof.proof.right.right;
+        Exists(p.witness, ⟨Exists(p.proof.witness, p.proof.proof.left), ⟨reached.left, ⟨reached.right.left, ⟨reached.right.right.left,
+            reached.right.right.right.left⟩⟩⟩⟩)
+    }
+}
+
+// A function closed by RET: its body runs from its entry to the RET with
+// the stack pointer back where it entered and the return address still
+// there, and `post` holds of where it returns.
+theorem Site::returns_by<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), fits: FillsFit(site.program, no_fills()),
+    entry: Nat, k: Nat, before: Prog, name: Nat, at: asm_back(site.program, k) = At(before, name, Ret),
+    pre: Nat → MachineState<M> → Type, post: Nat → MachineState<M> → MachineState<M> → Type,
+    body: (s0: MachineState<M>) → (i: Nat) → (ret: BitVec(64)) → site.Moves(stack.writes, entry, prog_len(before),
+        λ (s: MachineState<M>) => (s = s0) ∧ ((read_gpr(Rsp, s0.gprs) = stack.at(i)) ∧ (i + 8 <= stack.size ∧
+            (pre(i, s0) ∧ read_word(site.data, s0.memory, stack.at(i)) = Some(ret)))),
+        λ (t: MachineState<M>) => (read_gpr(Rsp, t.gprs) = stack.at(i)) ∧
+            ((read_word(site.data, t.memory, stack.at(i)) = Some(ret)) ∧ post(i, s0, return_near_after(ret, t))))):
+    site.Returns(stack, entry, pre, post) {
+    site.returns_of_quiet(stack, 0, 0, entry, pre, post,
+        site.returns_by_claim(stack, Kernel::none<M, True>(), fits, entry, k, before, name, at, 0, 0,
+            λ (i: Nat) (s: Running<M, True>) => pre(i, s.state) ∧ True,
+            λ (i: Nat) (s: Running<M, True>) (t: Running<M, True>) => post(i, s.state, t.state) ∧ True,
+            λ s0 i ret => site.claims_weaken(stack.writes, Kernel::none<M, True>(), 0, 0, entry,
+                λ (r: Running<M, True>) => ((r.state = s0.state) ∧ ((read_gpr(Rsp, s0.state.gprs) = stack.at(i)) ∧ (i + 8 <= stack.size ∧
+                    (pre(i, s0.state) ∧ read_word(site.data, s0.state.memory, stack.at(i)) = Some(ret))))) ∧ True,
+                site.Arrived(prog_len(before), λ (t: Running<M, True>) => ((read_gpr(Rsp, t.state.gprs) = stack.at(i)) ∧
+                    ((read_word(site.data, t.state.memory, stack.at(i)) = Some(ret)) ∧ post(i, s0.state, return_near_after(ret, t.state)))) ∧ True),
+                λ (s: Running<M, True>) => (s = s0) ∧ ((read_gpr(Rsp, s0.state.gprs) = stack.at(i)) ∧ (i + 8 <= stack.size ∧
+                    ((pre(i, s0.state) ∧ True) ∧ read_word(site.data, s0.state.memory, stack.at(i)) = Some(ret)))),
+                site.Arrived(prog_len(before), λ (t: Running<M, True>) => (read_gpr(Rsp, t.state.gprs) = stack.at(i)) ∧
+                    ((read_word(site.data, t.state.memory, stack.at(i)) = Some(ret)) ∧ (post(i, s0.state, return_near_after(ret, t.state)) ∧ True))),
+                site.claims_of_moves(stack.writes, Kernel::none<M, True>(), entry, prog_len(before),
+                    λ (s: MachineState<M>) => (s = s0.state) ∧ ((read_gpr(Rsp, s0.state.gprs) = stack.at(i)) ∧ (i + 8 <= stack.size ∧
+                        (pre(i, s0.state) ∧ read_word(site.data, s0.state.memory, stack.at(i)) = Some(ret)))),
+                    λ (t: MachineState<M>) => (read_gpr(Rsp, t.gprs) = stack.at(i)) ∧
+                        ((read_word(site.data, t.memory, stack.at(i)) = Some(ret)) ∧ post(i, s0.state, return_near_after(ret, t))),
+                    λ (_: True) => True, body(s0.state, i, ret)),
+                λ r held => ⟨⟨cong_fn<Running<M, True>, MachineState<M>>(λ x => x.state, held.left), ⟨held.right.left, ⟨held.right.right.left,
+                    ⟨held.right.right.right.left.left, held.right.right.right.right⟩⟩⟩⟩, trivial⟩,
+                λ t arrived => ⟨arrived.left, ⟨arrived.right.left.left, ⟨arrived.right.left.right.left, ⟨arrived.right.left.right.right, trivial⟩⟩⟩⟩)))
 }

@@ -188,3 +188,63 @@ theorem heap_in_other_stable<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M
     loan: Loan<M>(fetch, data, stack, top, spans)): stack.ClauseStable(top, HeapIn<M>(data, other)) {
     λ heap => loan.stable_injected(top, top.le_refl(), heap)
 }
+
+// ---------------------------------------------------------------------------
+// The claim form at the bytes level's clause (docs/language/ownership-design.md
+// §17.7): the CALL against a callee's claim, any kernel and world, counts
+// one machine step more than the callee's.
+
+theorem heap_call_step_claim<M, W>(saved: List<Gpr>, slots: Nat, eight: saved.len() <= 8, slotted: saved.len() <= slots, site: Site<M>,
+    laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data), top: Nat, spans: Spans, World: Heap → W → Type, kernel: Kernel<M, W>,
+    loan: Loan<M>(site.fetch, site.data, stack, top, spans), d: Nat, s0: MachineState<M>,
+    fits: d + 8 * slots <= stack.size, under: (d + 8 * slots) + 8 <= top, prog: Prog, callee: Nat, deep: 24 <= d, count: Nat, few: count <= 2,
+    words: List<BitVec(64)>, answer: BitVec(64), extra: List<BitVec(64)>, before, after: Heap, calls, least: Nat,
+    Pre: Nat → Running<M, W> → Type, Post: Nat → Running<M, W> → Running<M, W> → Type,
+    returns: site.ReturnsClaim(stack, kernel, calls, least, asm_labels(site.program)(callee + 1), Pre, Post),
+    enters: (u: Running<M, W>) → stack.Passed(words, (d - 8 * count) - 8, u.state) → Injected<M>(site.data, spans, before, u.state.memory) →
+        World(before, u.io) → Pre((d - 8 * count) - 8, u),
+    leaves: (u, t: Running<M, W>) → Injected<M>(site.data, spans, before, u.state.memory) → World(before, u.io) → Post((d - 8 * count) - 8, u, t) →
+        (((read_gpr(Rax, t.state.gprs) = answer) ∧ ArgsIn(extra, answer_registers(), t.state.gprs)) ∧ (Kept(callee_kept(), u.state.gprs, t.state.gprs) ∧
+            (stack.WroteIn((d - 8 * count) - 8, spans, u.state.memory, t.state.memory) ∧ Injected<M>(site.data, spans, after, t.state.memory)))) ∧
+            World(after, t.io),
+    g0: Gprs, k: Nat, at: asm_back(site.program, k) = At(prog, 0, CallTo(callee + 1))):
+    site.Claims(stack.writes, kernel, calls, least + 1, prog_len(prog),
+        λ (x: Running<M, W>) => stack.ArgsReadyBy(saved, spans, HeapIn<M>(site.data, spans), d, slots, s0, before, g0, count, words, x.state) ∧
+            World(before, x.io),
+        site.Arrived(prog_len(prog) + 5, λ (t: Running<M, W>) =>
+            stack.CalledBy(saved, spans, HeapIn<M>(site.data, spans), d, slots, s0, after, g0, count, answer, extra, t.state) ∧ World(after, t.io))) {
+    let one = call_step_claim<M, Heap, W>(saved, slots, eight, slotted, site, laid, stack, top, spans, HeapIn<M>(site.data, spans), World, kernel, loan,
+        heap_in_stable<M>(stack, top, spans, loan), d, s0, fits, under, prog, callee, deep, count, few, words, answer, extra, before, after, calls, least,
+        Pre, Post, returns, enters, leaves, g0, k, at);
+    j(Nat::add_comm(1, least), λ l _ => site.Claims(stack.writes, kernel, calls, l, prog_len(prog),
+        λ (x: Running<M, W>) => stack.ArgsReadyBy(saved, spans, HeapIn<M>(site.data, spans), d, slots, s0, before, g0, count, words, x.state) ∧
+            World(before, x.io),
+        site.Arrived(prog_len(prog) + 5, λ (t: Running<M, W>) =>
+            stack.CalledBy(saved, spans, HeapIn<M>(site.data, spans), d, slots, s0, after, g0, count, answer, extra, t.state) ∧ World(after, t.io))), one)
+}
+
+// A plain loop whose turn counts its jump: after `n` passes the bound is
+// `n` (`Site::loop_iterates_claim` at `Least(n) = n`).
+theorem plain_loop_counted<M, W>(site: Site<M>, writes: ByteWrites<M>, kernel: Kernel<M, W>, head_at: Nat,
+    Head: List<BitVec(64)> → Heap → Running<M, W> → Type, Goal: Running<M, W> → Type, Ends: Nat → List<BitVec(64)> → Heap → Type,
+    stop: (state: List<BitVec(64)>) → (now: Heap) → Ends(0, state, now) → Exists<Nat>(λ c => site.Claims(writes, kernel, c, 0, head_at, Head(state, now), Goal)),
+    step: (n: Nat) → (state: List<BitVec(64)>) → (now: Heap) → Ends(n + 1, state, now) →
+        Exists<Nat>(λ c => site.Claims(writes, kernel, c, n + 1, head_at, Head(state, now), Goal)) ∨
+        Exists<List<BitVec(64)>>(λ next => Exists<Heap>(λ mid => Ends(n, next, mid) ∧ Exists<Nat>(λ c =>
+            site.Claims(writes, kernel, c, 1, head_at, Head(state, now), site.Arrived(head_at, Head(next, mid)))))),
+    n: Nat): (state: List<BitVec(64)>) → (now: Heap) → Ends(n, state, now) →
+    Exists<Nat>(λ c => site.Claims(writes, kernel, c, n, head_at, Head(state, now), Goal)) {
+    Site::loop_iterates_claim<M, Heap, W>(site, writes, kernel, head_at, λ (_: Nat) (state: List<BitVec(64)>) (now: Heap) => Head(state, now), Goal,
+        λ (m: Nat) => m, Ends, stop,
+        λ m state now ends => match step(m, state, now, ends) {
+            Inl(leaves) => Inl(leaves),
+            Inr(again) => {
+                let turn = again.proof.proof.right;
+                let one: ((m + 1) - m <= 1) = { omega };
+                Inr(Exists(again.witness, Exists(again.proof.witness, ⟨again.proof.proof.left, Exists(turn.witness,
+                    site.claims_loosen(writes, kernel, turn.witness, 1, 0, (m + 1) - m, head_at, Head(state, now),
+                        site.Arrived(head_at, Head(again.witness, again.proof.witness)), one, turn.proof))⟩)))
+            },
+        },
+        n)
+}

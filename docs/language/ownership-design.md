@@ -2132,6 +2132,143 @@ and the comparison over `crates/linked`'s exports
 (`issues/bytes-level-translation.md`), and the passes
 (`issues/bytes-level-passes.md`).
 
+### 17.7 The contract tracked on fuel (2026-11-26)
+
+§17.6 left three things wrong with `Site::Meets`. Its going clause
+quantified over every state the code reaches, which no region theorem
+proves. The region theorems were over `Site::Moves`, so a region with a
+system call could not cite them. And the room below a return address was
+one number for every fuel, so recursion could not be stated. Round
+`issues/call-contract-tracks.md` fixes all three. Its pieces, in the order
+they landed:
+
+**Fuel where the machine steps.** The fuel is spent where the code takes a
+step it can count. A loop's first pass runs at the loop's own fuel, and
+each turn back costs one (`loop_run` = `loop_pass` at the fuel, then
+`loop_later`, whose `Succ` case is the turn). A call costs one, as before.
+These are the two places where a fuel step is a machine step: a turn's JMP
+back to the head, and a call's CALL.
+
+**The claim, with a lower bound.** `Site::Performs` (in
+`x86_64_stack_runs`) is generic over a world type `W` and a `Kernel<M, W>`,
+which says what a system call resumes to (`resumes`, monotone). Beside the
+count of system calls it carries `least`, a lower bound on the machine
+steps taken. Under bind, the counts and the bounds add (`performs_bind`).
+Linux is one kernel (`Site::linux_kernel`), and `Site::LinuxPerforms` is
+the claim at it. The quiet kernel `Kernel::none` resumes nothing.
+*Differs from the design:* `Performs` lives with the stack runs, not the
+contract. The generic theorems' modules cannot import the Linux world
+(hand-listed module sets in `crates/elab/tests`), nor the contract (its
+`Answer` and `Value` collide with FunctionIR's).
+
+**The generic theorems in claim form.** Each is stated once over
+`Site::Claims`: a kernel, a world clause `World: S → W → Type`, at most
+`calls` system calls, at least `least` steps. Those are `EmitsClaim`,
+`may_emit_claim_seq`, `branch_emits_claim`, `call_step_claim`,
+`File::emit_call_steps_claim`, `function_runs_claim`,
+`Site::loop_iterates_claim` and `ReturnsClaim`. Their former statements
+(`EmitsBy`, `may_emit_by_seq`, `branch_emits_by`, `call_step_by`,
+`File::emit_call_steps_by`, `function_runs_by`, `Site::loop_iterates`,
+`Site::returns_by`) are one-line instances at the quiet kernel, the world
+`True`, no system call and bound zero, so every certificate is unchanged.
+Only two lemmas add a counted step: `claims_jump_item` (a JMP) and
+`claims_call` (a CALL). The two kernel-write facts the claims need come
+from the Loan, in the contract module (`Site::window_keeps_code`,
+`Site::resumes_resident`). No `ClauseStable` law for kernel writes was
+added, since one instance needs it.
+
+**One clause.** `Site::Tracks` says that at every fuel `n`, from the entry,
+the code performs the state read off the meaning there (`Site::Reached`):
+
+- *Done* is returned (`Site::Returned`), at least 0 steps.
+- *Exited* is at the exit call with its status, in the exit's world, at
+  least 0 steps.
+- *Going(o)* is any state in world `o`, at least `n - 1` steps
+  (`going_least`).
+- *Stuck* is nothing.
+
+The clause asks `io.Answerable()`, and it is the only clause that uses it.
+`Site::MeetsDone` and `Site::MeetsExited` are its readings
+(`Site::tracks_done`, `Site::tracks_exited`).
+*Differs from the design:* the going bound is `n - 1`, not `n`. The first
+CALL of the chain is the caller's instruction, executed before
+`Site::Entering`'s state.
+
+**Entering.** `Site::Entering` takes the Loan and the meaning's own law of
+what it may write (`lent: Type`; the bytes level's is
+`blocks.Lent(spans)`) as hypotheses of the clause, for one lending over the
+whole run. Its room premise is `room(f, peak(n, f, args, heap, io)) <= i`,
+a table by routine and call depth.
+
+**Room by call depth.** `Body::peak` is the deepest chain of calls a run
+enters, defined by the run's own recursion beside it in `bytes_level.hthr`
+(`program_peaks`, `run_peak`; `run` is unchanged). A call node entered
+counts one plus its callee's chain at the fuel the call gives it.
+Sequences, branches and passes take the deepest of what they run, each
+part from where `run` leaves the one before.
+
+The lowering no longer checks room. Its theorem holds under every table
+satisfying `RoomLaw`: at every depth `p`, each routine's largest frame fits,
+a call's 24 bytes fit below it, and its callees' rooms at `p - 1`
+(`rooms_below`) fit in what is left. `depth_rooms` is lawful for every
+program (`depth_rooms_lawful`). A call may go to any of the program's
+routines, itself included (emission's `bound` is the routine count).
+*Differs from the design:* the old `routine_rooms` is deleted, not kept as
+an instance. For an acyclic program the depth table is constant past the
+program's height, but I have not proved it equal to `routine_rooms` there.
+Probes: `down` (`bytes_level_routines_tests`), a routine that calls itself,
+is done at fuel 3 from 2 with `run_peak` 2 and is tracked. The control
+`down_no_constant_room` shows that no table constant in the depth is
+lawful for it. The run-time out-of-room outcome (the old compiler's exit
+139) has no meaning here: `issues/bytes-level-lowering-recursion.md`.
+
+**The lowering, re-proved to `Tracks`** (`lower_program_tracks`), by two
+inductions on fuel:
+
+- *Done* is `program_returns`, as before. Its callees are answered at the
+  caller's depth less one (`peak_answers`), so their room is the table's
+  there.
+- *Going* is `program_goes`. A routine still going at fuel `n + 1` makes at
+  least `n` steps from its entry: the entry's loads and frame
+  (`function_enters_claim`), then its body's code going
+  (`Body::emit_goes`). The latter is by induction on the region: the
+  CALL's step and the callee's run going on (`call_heap_goes`, with a
+  hand-off kernel `into_callee` that turns the call sequence's claim into
+  one of reaching the CALL); the arm the bit picks (`branch_heap_goes`); a
+  loop's passes, each turn's JMP counted (`plain_passes_goes`). The going
+  facts are read off a run going at a valuation of the locals where it went
+  on (`Body::goes_of`). A run still going leaves the world alone
+  (`program_going_quiet`), so the world is the entry's.
+- *Exited* is vacuous, since nothing is lowered that exits.
+- *Stuck* is trivial.
+
+**The going clause from `Tracks`, once.** `Site::MeetsGoing` is restated
+with the stuck alternative. Every world the code reaches in `j` steps
+before it returns, where its room is there at fuel `j + 1`, is a prefix of
+a history the meaning reaches at some fuel, or the meaning gets stuck at
+some fuel. `Site::tracks_meets` proves `Tracks → Meets`. A path of the code
+and `Tracks`' claim at fuel `j + 1` lie on one branch of resumptions, which
+gives three cases:
+
+- *Going there:* the claim's steps number at least `j`, so the path ends
+  at or before the claim's goal and its world is a prefix of the goal's.
+- *Done:* the returned state is not before the return.
+- *Exited:* no step leaves an exit.
+
+Determinism is needed only up to the state's defined components:
+`step_respects_defined` and `syscall_excludes_step` between system calls,
+`asks_meet` at one, `linux_answered_respects` for each resumption. These
+are facts of the Linux instance, used in two lemmas (`performs_reaches`,
+`performs_meet`). The lowering's `Site::Meets` is one line
+(`lower_program_meets`); the recursive probe has it (`down_meets`). Why
+this is stronger than `Sim`, and how it gives `RunsAs`:
+`issues/linux-sim-divergence.md`, `issues/call-contract-whole-program.md`.
+
+**Cost.** Stated as shapes: the claim lemmas are linear in their proof
+terms. The region theorems' claim forms cost what their `Moves` forms did,
+plus the counted step. The going induction mirrors the done induction
+region by region.
+
 ## 18. The world, termination, and level 2 fixed (2026-11-25)
 
 Round six of the design review. Where this section and §15.4, §15.5 or §17

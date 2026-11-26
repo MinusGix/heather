@@ -359,6 +359,47 @@ theorem pass_locals_renames(r: Renaming, parameters: List<Typed>, state: List<Va
     bind_values_renames(r, parameters, state, Locals::empty(), Locals::empty(), LocalsRenamed::words_only(r, Valuation::zero()))
 }
 
+// One pass, a renamed step, from a renamed state, what follows it alike.
+theorem loop_pass_renames(r: Renaming, step, step2: Nat → Config → Ran<Config>,
+    steps: (n: Nat) → (c, renamed: Config) → ConfigRenamed(r, c, renamed) → RanRelated<Config>(config_renamed(r), step(n, c), step2(n, renamed)),
+    parameters: List<Typed>, exit: Nat, next: List<Typed>, fuel: Nat, later, later2: List<Value> → Heap → Io → Ran<Ended>,
+    each: (state: List<Value>) → (m, renamed: Heap) → (io, io2: Io) → HeapRenamed(r, m, renamed) → io2 = io →
+        RanRelated<Ended>(ended_renamed(r), later(state, m, io), later2(rename_values(r, state), renamed, io2))):
+    (state: List<Value>) → (m, renamed: Heap) → (io, io2: Io) → HeapRenamed(r, m, renamed) → io2 = io →
+    RanRelated<Ended>(ended_renamed(r), loop_pass(step, parameters, exit, next, fuel, later, state, m, io),
+        loop_pass(step2, parameters, exit, next, fuel, later2, rename_values(r, state), renamed, io2)) {
+    λ state m renamed io io2 rel same => ran_of_then(locals_renamed(r), ended_renamed(r), pass_locals_renames(r, parameters, state), same,
+        λ l l2 hl => ran_then(config_renamed(r), ended_renamed(r), steps(fuel, Config(l, m, io), Config(l2, renamed, io2), ConfigRenamed(locals := hl, memory := rel, io := same)),
+            λ after after2 h => ran_of_map_then(ended_renamed(r), λ (xs: List<Value>) => rename_values(r, xs),
+                read_values_renames(r, next, after.locals, after2.locals, h.locals), h.io, λ more =>
+                    j(sym(h.locals.words), λ ws _ => RanRelated<Ended>(ended_renamed(r),
+                            match after.locals.words(1, exit).head_bit() {
+                                False => later(more, after.memory, after.io),
+                                True => Done(Ended(more, after.memory, after.io)),
+                            },
+                            match ws(1, exit).head_bit() {
+                                False => later2(rename_values(r, more), after2.memory, after2.io),
+                                True => Done(Ended(rename_values(r, more), after2.memory, after2.io)),
+                            }),
+                        match after.locals.words(1, exit).head_bit() {
+                            False => each(more, after.memory, after2.memory, after.io, after2.io, h.memory, h.io),
+                            True => EndedRenamed(state := refl, memory := h.memory, io := h.io),
+                        }))))
+}
+
+theorem loop_later_renames(r: Renaming, step, step2: Nat → Config → Ran<Config>,
+    steps: (n: Nat) → (c, renamed: Config) → ConfigRenamed(r, c, renamed) → RanRelated<Config>(config_renamed(r), step(n, c), step2(n, renamed)),
+    parameters: List<Typed>, exit: Nat, next: List<Typed>, fuel: Nat):
+    (state: List<Value>) → (m, renamed: Heap) → (io, io2: Io) → HeapRenamed(r, m, renamed) → io2 = io →
+    RanRelated<Ended>(ended_renamed(r), loop_later(step, parameters, exit, next, fuel, state, m, io),
+        loop_later(step2, parameters, exit, next, fuel, rename_values(r, state), renamed, io2)) {
+    match fuel {
+        Zero => λ state m renamed io io2 rel same => same,
+        Succ(rest) => loop_pass_renames(r, step, step2, steps, parameters, exit, next, rest, loop_later(step, parameters, exit, next, rest),
+            loop_later(step2, parameters, exit, next, rest), loop_later_renames(r, step, step2, steps, parameters, exit, next, rest)),
+    }
+}
+
 // The loop's passes, each a renamed step, from a renamed state.
 theorem loop_run_renames(r: Renaming, step, step2: Nat → Config → Ran<Config>,
     steps: (n: Nat) → (c, renamed: Config) → ConfigRenamed(r, c, renamed) → RanRelated<Config>(config_renamed(r), step(n, c), step2(n, renamed)),
@@ -366,27 +407,8 @@ theorem loop_run_renames(r: Renaming, step, step2: Nat → Config → Ran<Config
     (state: List<Value>) → (m, renamed: Heap) → (io, io2: Io) → HeapRenamed(r, m, renamed) → io2 = io →
     RanRelated<Ended>(ended_renamed(r), loop_run(step, parameters, exit, next, fuel, state, m, io),
         loop_run(step2, parameters, exit, next, fuel, rename_values(r, state), renamed, io2)) {
-    match fuel {
-        Zero => λ state m renamed io io2 rel same => same,
-        Succ(rest) => λ state m renamed io io2 rel same => ran_of_then(locals_renamed(r), ended_renamed(r), pass_locals_renames(r, parameters, state), same,
-            λ l l2 hl => ran_then(config_renamed(r), ended_renamed(r), steps(rest, Config(l, m, io), Config(l2, renamed, io2), ConfigRenamed(locals := hl, memory := rel, io := same)),
-                λ after after2 h => ran_of_map_then(ended_renamed(r), λ (xs: List<Value>) => rename_values(r, xs),
-                    read_values_renames(r, next, after.locals, after2.locals, h.locals), h.io, λ later =>
-                        j(sym(h.locals.words), λ ws _ => RanRelated<Ended>(ended_renamed(r),
-                                match after.locals.words(1, exit).head_bit() {
-                                    False => loop_run(step, parameters, exit, next, rest, later, after.memory, after.io),
-                                    True => Done(Ended(later, after.memory, after.io)),
-                                },
-                                match ws(1, exit).head_bit() {
-                                    False => loop_run(step2, parameters, exit, next, rest, rename_values(r, later), after2.memory, after2.io),
-                                    True => Done(Ended(rename_values(r, later), after2.memory, after2.io)),
-                                }),
-                            match after.locals.words(1, exit).head_bit() {
-                                False => loop_run_renames(r, step, step2, steps, parameters, exit, next, rest, later, after.memory, after2.memory, after.io,
-                                    after2.io, h.memory, h.io),
-                                True => EndedRenamed(state := refl, memory := h.memory, io := h.io),
-                            })))),
-    }
+    loop_pass_renames(r, step, step2, steps, parameters, exit, next, fuel, loop_later(step, parameters, exit, next, fuel),
+        loop_later(step2, parameters, exit, next, fuel), loop_later_renames(r, step, step2, steps, parameters, exit, next, fuel))
 }
 
 // ---------------------------------------------------------------------------
