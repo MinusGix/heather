@@ -724,26 +724,22 @@ inductive JFrame { JCopy(rest: body::Body, env: PEnv), JShare(env: PEnv, outs: O
 record BOut { code: bytes_level::Body, next: Nat, frames: List<JFrame> }
 
 // A comparison of two words at the first's width: its one-bit word at
-// `next`, and whether the arms swap (`a <= b` is `!(b < a)`).
-fn PEnv::less(self e: PEnv, a, b: Var, swap: Bool, next: Nat) → Option<Pair<List<Instr>, Bool>> {
-    match e.get(a) {
-        None => None,
-        Some(sa) => match e.get(b) {
-            None => None,
-            Some(sb) => match sa.code {
-                SNamed(_) => None,
-                SWord(w) => match sa.word() {
-                    None => None,
-                    Some(ta) => match sb.word() {
-                        None => None,
-                        // Interim (§25.8, F4): goes when the run is stuck at a code mismatch.
-                        Some(tb) => match sb.code.same(sa.code) { False => None, True => Some(Pair([Compute(UnsignedLessThan(64, next, ta.id, tb.id))], swap)) },
-                    },
-                },
-            },
-        },
-    }
+// `next`, and whether the arms swap (`a <= b` is `!(b < a)`). Named steps,
+// as `PEnv::place_op`.
+//
+// Interim (§25.8, F4): the guard goes when the run is stuck at a code
+// mismatch.
+fn PEnv::less_ta(self e: PEnv, sa, sb: PSlot, ta: Typed, swap: Bool, next: Nat) → Option<Pair<List<Instr>, Bool>> {
+    sb.word().and_then(λ tb => Bool::guard(sb.code.same(sa.code), Some(Pair([Compute(UnsignedLessThan(64, next, ta.id, tb.id))], swap))))
 }
+
+fn PEnv::less_w(self e: PEnv, sa, sb: PSlot, swap: Bool, next: Nat) → Option<Pair<List<Instr>, Bool>> { sa.word().and_then(λ ta => e.less_ta(sa, sb, ta, swap, next)) }
+
+fn PEnv::less_b(self e: PEnv, sa, sb: PSlot, swap: Bool, next: Nat) → Option<Pair<List<Instr>, Bool>> { sa.code.word_of().and_then(λ _ => e.less_w(sa, sb, swap, next)) }
+
+fn PEnv::less_a(self e: PEnv, sa: PSlot, b: Var, swap: Bool, next: Nat) → Option<Pair<List<Instr>, Bool>> { e.get(b).and_then(λ sb => e.less_b(sa, sb, swap, next)) }
+
+fn PEnv::less(self e: PEnv, a, b: Var, swap: Bool, next: Nat) → Option<Pair<List<Instr>, Bool>> { e.get(a).and_then(λ sa => e.less_a(sa, b, swap, next)) }
 
 fn Test::place(self t: Test, e: PEnv, next: Nat) → Option<Pair<List<Instr>, Bool>> {
     match t { TLt(a, b) => e.less(a, b, False, next), TLe(a, b) => e.less(b, a, True, next) }

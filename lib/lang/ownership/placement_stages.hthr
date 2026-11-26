@@ -711,3 +711,252 @@ theorem stage_op(tys: Nat → Type, strs: Strs(tys), sigs: Nat → Sig, prim: Na
         Exists(sa, p) => op_a_goal(tys, strs, fns, call, blocks, op, a, b, e, next, o, sa, p.left, p.right),
     }
 }
+
+// ---------------------------------------------------------------------------
+// A join's test: an unsigned comparison at 64 bits of zero-extended words
+
+// A word with a size is of a width at most 64.
+theorem Width::sized(w: Width, sz: Nat): w.size() = Some(sz) → Exists<Nat>(λ n => (w = WBits(n)) ∧ (n <= 64)) {
+    match w {
+        WNat => λ no => absurd(no),
+        WBits(n) => λ e => Exists(n, ⟨refl, match bool_arm(n.same(8), Some(1), size_from16(n), sz, e) {
+            Inl(p) => { let q = Nat::same_sound(n, 8, p.left); omega(q) },
+            Inr(p) => match bool_arm(n.same(16), Some(2), size_from32(n), sz, p.right) {
+                Inl(p2) => { let q = Nat::same_sound(n, 16, p2.left); omega(q) },
+                Inr(p2) => match bool_arm(n.same(32), Some(4), size_from64(n), sz, p2.right) {
+                    Inl(p3) => { let q = Nat::same_sound(n, 32, p3.left); omega(q) },
+                    Inr(p3) => match bool_arm(n.same(64), Some(8), None, sz, p3.right) {
+                        Inl(p4) => { let q = Nat::same_sound(n, 64, p4.left); omega(q) },
+                        Inr(p4) => absurd(p4.right),
+                    },
+                },
+            },
+        }⟩),
+    }
+}
+
+// A word of at most 64 bits, zero-extended, compares as it did.
+theorem widen_lt(n: Nat, a, b: BitVec(n), le: n <= 64):
+    (BitVec::ofNat(a.toNat(), n := 64)).unsigned_lt_bit(BitVec::ofNat(b.toNat(), n := 64)) = a.unsigned_lt_bit(b)
+{
+    let pw = Nat::pow_le_pow_r(2, n, 64, { omega }, le);
+    let la = BitVec::toNat_lt_pow(n, a);
+    let lb = BitVec::toNat_lt_pow(n, b);
+    let wa: ((BitVec::ofNat(a.toNat(), n := 64)).toNat() = a.toNat()) = BitVec::toNat_ofNat(64, a.toNat(), omega(la, pw));
+    let wb: ((BitVec::ofNat(b.toNat(), n := 64)).toNat() = b.toNat()) = BitVec::toNat_ofNat(64, b.toNat(), omega(lb, pw));
+    trans(bitvec_nat::unsigned_lt_nat(64, BitVec::ofNat(a.toNat(), n := 64), BitVec::ofNat(b.toNat(), n := 64)),
+        trans(eq2(λ (p: Nat) (q: Nat) => (p + 1).leb(q), wa, wb), sym(bitvec_nat::unsigned_lt_nat(n, a, b))))
+}
+
+// Two values of one word code compared at 64 bits, as level 2 compares
+// them at their width.
+theorem cmp_word(tys: Nat → Type, x, y: Dyn(tys), n: Nat, le: n <= 64, cx: x.code = SWord(WBits(n)), cy: y.code = SWord(WBits(n))):
+    (BitVec::ofNat(Dyn::index(tys, x), n := 64)).unsigned_lt_bit(BitVec::ofNat(Dyn::index(tys, y), n := 64)) = Dyn::words(tys, x, y, Width::lt)
+{
+    let c = SWord(WBits(n));
+    let u = Dyn::back(tys, c, x, BitVec::ofNat(0));
+    let v = Dyn::back(tys, c, y, BitVec::ofNat(0));
+    let bx = Dyn::back_like(tys, c, x, BitVec::ofNat(0), j(sym(cx), λ c2 _ => c2.same(c) = True, Shape::same_self(c)));
+    let by = Dyn::back_like(tys, c, y, BitVec::ofNat(0), j(sym(cy), λ c2 _ => c2.same(c) = True, Shape::same_self(c)));
+    let base: ((BitVec::ofNat(Dyn::index(tys, Dyn(c, u)), n := 64)).unsigned_lt_bit(BitVec::ofNat(Dyn::index(tys, Dyn(c, v)), n := 64)) = Dyn::words(tys, Dyn(c, u), Dyn(c, v), Width::lt)) =
+        trans(widen_lt(n, u, v, le), cong_fn(λ (q: BitVec(n)) => u.unsigned_lt_bit(q), sym(Dyn::back_self(tys, c, v, BitVec::ofNat(0)))));
+    j(bx, λ x2 _ => (BitVec::ofNat(Dyn::index(tys, x2), n := 64)).unsigned_lt_bit(BitVec::ofNat(Dyn::index(tys, y), n := 64)) = Dyn::words(tys, x2, y, Width::lt),
+        j(by, λ y2 _ => (BitVec::ofNat(Dyn::index(tys, Dyn(c, u)), n := 64)).unsigned_lt_bit(BitVec::ofNat(Dyn::index(tys, y2), n := 64)) = Dyn::words(tys, Dyn(c, u), y2, Width::lt), base))
+}
+
+// `a <= b` is `!(b < a)`, at one word code.
+theorem le_flip(tys: Nat → Type, x, y: Dyn(tys), n: Nat, cx: x.code = SWord(WBits(n)), cy: y.code = SWord(WBits(n))):
+    Dyn::words(tys, x, y, Width::le) = !Dyn::words(tys, y, x, Width::lt)
+{
+    let c = SWord(WBits(n));
+    let u = Dyn::back(tys, c, x, BitVec::ofNat(0));
+    let v = Dyn::back(tys, c, y, BitVec::ofNat(0));
+    let bx = Dyn::back_like(tys, c, x, BitVec::ofNat(0), j(sym(cx), λ c2 _ => c2.same(c) = True, Shape::same_self(c)));
+    let by = Dyn::back_like(tys, c, y, BitVec::ofNat(0), j(sym(cy), λ c2 _ => c2.same(c) = True, Shape::same_self(c)));
+    let base: (Dyn::words(tys, Dyn(c, u), Dyn(c, v), Width::le) = !Dyn::words(tys, Dyn(c, v), Dyn(c, u), Width::lt)) =
+        trans(cong_fn(λ (q: BitVec(n)) => !q.unsigned_lt_bit(u), Dyn::back_self(tys, c, v, BitVec::ofNat(0))),
+            cong_fn(λ (q: BitVec(n)) => !v.unsigned_lt_bit(q), sym(Dyn::back_self(tys, c, u, BitVec::ofNat(0)))));
+    j(bx, λ x2 _ => Dyn::words(tys, x2, y, Width::le) = !Dyn::words(tys, y, x2, Width::lt),
+        j(by, λ y2 _ => Dyn::words(tys, Dyn(c, u), y2, Width::le) = !Dyn::words(tys, y2, Dyn(c, u), Width::lt), base))
+}
+
+theorem Bool::not_not(b: Bool): !!b = b { match b { True => refl, False => refl } }
+
+// A plain value a word slot holds has a word code with a size.
+theorem word_sized(tys: Nat → Type, strs: Strs(tys), inj: Nat → Nat, h: level2::Heap(tys), s: PSlot, cell: Cell(tys), l: Locals,
+    hs: SlotHolds(tys, strs, inj, h, s, cell, l), t: Typed, sw: s.word() = Some(t), d: Dyn(tys), ev: cell.v = Plain(d)): Exists<Nat>(λ sz => d.code.word_size() = Some(sz))
+{
+    let wi = one_word_is(s.ids, t, sw);
+    let rd: (read_values(s.ids, l) = Some([x86_64_call_contract::Word(l.word(t.id))])) =
+        trans(cong_fn(λ (ids: List<Typed>) => read_values(ids, l), wi.left), read_word(t, l, wi.right));
+    let q = hs(j(sym(ev), λ v _ => value_live(tys, h, v) = True, refl));
+    let low: (Some([x86_64_call_contract::Word(l.word(t.id))]) = value_lower(tys, strs, inj, h, Plain(d))) =
+        trans(sym(rd), trans(q.left, cong_fn(λ (v: level2::Value(tys)) => value_lower(tys, strs, inj, h, v), ev)));
+    (match d.code.word_size() as λ z => Some(Cons(x86_64_call_contract::Word(l.word(t.id)), Nil)) =
+            (match z as λ _ => Option<List<x86_64_call_contract::Value>> { Some(_) => Some(Cons(x86_64_call_contract::Word(BitVec::ofNat(Dyn::index(tys, d))), Nil)), None => None }) →
+            Exists<Nat>(λ sz => z = Some(sz)) {
+        Some(sz) => λ _ => Exists(sz, refl),
+        None => λ no => absurd(no),
+    })(low)
+}
+
+// A word variable level 2 reads: the code its slot has, the slot's word
+// its 64-bit view, and its width at most 64.
+theorem word_of_var(tys: Nat → Type, strs: Strs(tys), inj: Nat → Nat, blocks: Blocks, act: Act, e: PEnv, m: Mach(tys), c: Config, next: Nat,
+    rel: StageRel(tys, strs, inj, blocks, act, e, m, c, next), f: Var, s: PSlot, t: Typed, w: Width, ef: e.get(f) = Some(s), sw: s.word() = Some(t),
+    cw: s.code = SWord(w), x: Dyn(tys), vx: Mach::val(tys, strs, m, f) = Some(x)):
+    (x.code = SWord(w)) ∧ ((c.locals.word(t.id) = BitVec::ofNat(Dyn::index(tys, x))) ∧ Exists<Nat>(λ n => (w = WBits(n)) ∧ (n <= 64)))
+{
+    let sl = slot_of(tys, strs, inj, blocks, act, e, m, c, next, rel, f, s, ef);
+    match word_slot(tys, strs, inj, m.heap, s, REnv::get(tys, m.env, f), c.locals, sl.left, t, sw) {
+        Inl(none) => absurd(trans(sym(vx), none)),
+        Inr(da) => {
+            let d = da.witness;
+            let xd: (d = x) = Option::some_inj(d, x, trans(sym(val_plain(tys, strs, m, f, d, da.proof.left)), vx));
+            let cd: (d.code = SWord(w)) = trans(da.proof.right.left, cw);
+            let sz = word_sized(tys, strs, inj, m.heap, s, REnv::get(tys, m.env, f), c.locals, sl.left, t, sw, d, da.proof.left);
+            let wn = Width::sized(w, sz.witness, j(cd, λ z _ => z.word_size() = Some(sz.witness), sz.proof));
+            j(xd, λ z _ => (z.code = SWord(w)) ∧ ((c.locals.word(t.id) = BitVec::ofNat(Dyn::index(tys, z))) ∧ Exists<Nat>(λ n => (w = WBits(n)) ∧ (n <= 64))),
+                ⟨cd, ⟨da.proof.right.right, wn⟩⟩)
+        },
+    }
+}
+
+// The relation at a configuration whose ids below `next` read as before.
+theorem rel_same(tys: Nat → Type, strs: Strs(tys), inj: Nat → Nat, blocks: Blocks, act: Act, e: PEnv, m: Mach(tys), c: Config, next: Nat,
+    rel: StageRel(tys, strs, inj, blocks, act, e, m, c, next), l2: Locals, ag: Locals::Agree(c.locals, l2, next), next2: Nat, le: next <= next2):
+    StageRel(tys, strs, inj, blocks, act, e, m, Config(l2, c.memory, c.io), next2)
+{
+    ⟨rel.left, ⟨rel.right.left, ⟨holds_agree(tys, strs, inj, m.heap, c.locals, l2, next, ag, e.vars, rel.right.right.right.right.right, m.env.args ++ m.env.locs.rev(), rel.right.right.left),
+        ⟨rel.right.right.right.left, ⟨rel.right.right.right.right.left, λ k s e2 t mm => { let x = rel.right.right.right.right.right(k, s, e2, t, mm); omega(x, le) }⟩⟩⟩⟩⟩
+}
+
+theorem bit_head(words: Valuation(), next: Nat, b: Bool): (Valuation::set(words, next, bit_value(b), 1, next)).head_bit() = b {
+    trans(cong_fn(λ (x: BitVec(1)) => x.head_bit(), Valuation::set_here(words, next, bit_value(b), 1)), match b { True => refl, False => refl })
+}
+
+// What a comparison's leaf concludes, for the variables level 2 reads.
+fn LessGoal(tys: Nat → Type, strs: Strs(tys), blocks: Blocks, e: PEnv, f, g: Var, swap: Bool, next: Nat, tested: Pair<List<Instr>, Bool>) → Type {
+    (act: Act) → (inj: Nat → Nat) → (m: Mach(tys)) → (c: Config) → StageRel(tys, strs, inj, blocks, act, e, m, c, next) →
+        (x: Dyn(tys)) → (y: Dyn(tys)) → Mach::val(tys, strs, m, f) = Some(x) → Mach::val(tys, strs, m, g) = Some(y) →
+        (tested.snd = swap) ∧ (Exists<Nat>(λ n => (x.code = SWord(WBits(n))) ∧ (y.code = SWord(WBits(n)))) ∧
+            Exists<Config>(λ c2 => (run_instrs(blocks, tested.fst, c) = Some(c2)) ∧ ((c2.locals.words(1, next).head_bit() = Dyn::words(tys, x, y, Width::lt)) ∧
+                StageRel(tys, strs, inj, blocks, act, e, m, c2, next + 1))))
+}
+
+theorem less_core(tys: Nat → Type, strs: Strs(tys), blocks: Blocks, e: PEnv, f, g: Var, swap: Bool, next: Nat, s1, s2: PSlot, t1, t2: Typed, w: Width,
+    e1: e.get(f) = Some(s1), e2: e.get(g) = Some(s2), cw: s1.code = SWord(w), cs: s2.code = s1.code, w1: s1.word() = Some(t1), w2: s2.word() = Some(t2)):
+    LessGoal(tys, strs, blocks, e, f, g, swap, next, Pair([Compute(UnsignedLessThan(64, next, t1.id, t2.id))], swap))
+{
+    λ act inj m c rel x y vx vy => {
+        let fx = word_of_var(tys, strs, inj, blocks, act, e, m, c, next, rel, f, s1, t1, w, e1, w1, cw, x, vx);
+        let fy = word_of_var(tys, strs, inj, blocks, act, e, m, c, next, rel, g, s2, t2, w, e2, w2, trans(cs, cw), y, vy);
+        let wn = fx.right.right;
+        let n = wn.witness;
+        let cx: (x.code = SWord(WBits(n))) = trans(fx.left, cong_fn(λ (z: Width) => SWord(z), wn.proof.left));
+        let cy: (y.code = SWord(WBits(n))) = trans(fy.left, cong_fn(λ (z: Width) => SWord(z), wn.proof.left));
+        let bit = c.locals.words(64, t1.id).unsigned_lt_bit(c.locals.words(64, t2.id));
+        let l2 = Locals(Valuation::set(c.locals.words, next, bit_value(bit)), c.locals.refs);
+        let head: (l2.words(1, next).head_bit() = Dyn::words(tys, x, y, Width::lt)) =
+            trans(bit_head(c.locals.words, next, bit), trans(eq2(λ (p: BitVec(64)) (q: BitVec(64)) => p.unsigned_lt_bit(q), fx.right.left, fy.right.left),
+                cmp_word(tys, x, y, n, wn.proof.right, cx, cy)));
+        ⟨refl, ⟨Exists(n, ⟨cx, cy⟩), Exists(Config(l2, c.memory, c.io), ⟨refl, ⟨head,
+            rel_same(tys, strs, inj, blocks, act, e, m, c, next, rel, l2, Locals::agree_set(c.locals, next, bit_value(bit), next, { omega }), next + 1, { omega })⟩⟩)⟩⟩
+    }
+}
+
+// The inversion of `PEnv::less`, one step per lemma.
+theorem less_ta_goal(tys: Nat → Type, strs: Strs(tys), blocks: Blocks, e: PEnv, f, g: Var, swap: Bool, next: Nat, tested: Pair<List<Instr>, Bool>, s1, s2: PSlot, t1: Typed, w: Width,
+    e1: e.get(f) = Some(s1), e2: e.get(g) = Some(s2), cw: s1.code = SWord(w), w1: s1.word() = Some(t1), h: e.less_ta(s1, s2, t1, swap, next) = Some(tested)):
+    LessGoal(tys, strs, blocks, e, f, g, swap, next, tested)
+{
+    match Option::bind_some(h) as λ _ => LessGoal(tys, strs, blocks, e, f, g, swap, next, tested) { Exists(t2, p) => {
+        let gd = Bool::guard_some(p.right);
+        j(Option::some_inj(Pair([Compute(UnsignedLessThan(64, next, t1.id, t2.id))], swap), tested, gd.right), λ o2 _ => LessGoal(tys, strs, blocks, e, f, g, swap, next, o2),
+            less_core(tys, strs, blocks, e, f, g, swap, next, s1, s2, t1, t2, w, e1, e2, cw, Shape::eq_of_same(s2.code, s1.code, gd.left), w1, p.left))
+    } }
+}
+
+theorem less_w_goal(tys: Nat → Type, strs: Strs(tys), blocks: Blocks, e: PEnv, f, g: Var, swap: Bool, next: Nat, tested: Pair<List<Instr>, Bool>, s1, s2: PSlot, w: Width,
+    e1: e.get(f) = Some(s1), e2: e.get(g) = Some(s2), cw: s1.code = SWord(w), h: e.less_w(s1, s2, swap, next) = Some(tested)):
+    LessGoal(tys, strs, blocks, e, f, g, swap, next, tested)
+{
+    match Option::bind_some(h) as λ _ => LessGoal(tys, strs, blocks, e, f, g, swap, next, tested) {
+        Exists(t1, p) => less_ta_goal(tys, strs, blocks, e, f, g, swap, next, tested, s1, s2, t1, w, e1, e2, cw, p.left, p.right),
+    }
+}
+
+theorem less_b_goal(tys: Nat → Type, strs: Strs(tys), blocks: Blocks, e: PEnv, f, g: Var, swap: Bool, next: Nat, tested: Pair<List<Instr>, Bool>, s1, s2: PSlot,
+    e1: e.get(f) = Some(s1), e2: e.get(g) = Some(s2), h: e.less_b(s1, s2, swap, next) = Some(tested)):
+    LessGoal(tys, strs, blocks, e, f, g, swap, next, tested)
+{
+    match Option::bind_some(h) as λ _ => LessGoal(tys, strs, blocks, e, f, g, swap, next, tested) {
+        Exists(w, p) => less_w_goal(tys, strs, blocks, e, f, g, swap, next, tested, s1, s2, w, e1, e2, Shape::word_of_is(s1.code, w, p.left), p.right),
+    }
+}
+
+theorem less_a_goal(tys: Nat → Type, strs: Strs(tys), blocks: Blocks, e: PEnv, f, g: Var, swap: Bool, next: Nat, tested: Pair<List<Instr>, Bool>, s1: PSlot,
+    e1: e.get(f) = Some(s1), h: e.less_a(s1, g, swap, next) = Some(tested)):
+    LessGoal(tys, strs, blocks, e, f, g, swap, next, tested)
+{
+    match Option::bind_some(h) as λ _ => LessGoal(tys, strs, blocks, e, f, g, swap, next, tested) {
+        Exists(s2, p) => less_b_goal(tys, strs, blocks, e, f, g, swap, next, tested, s1, s2, e1, p.left, p.right),
+    }
+}
+
+theorem less_goal(tys: Nat → Type, strs: Strs(tys), blocks: Blocks, e: PEnv, f, g: Var, swap: Bool, next: Nat, tested: Pair<List<Instr>, Bool>,
+    h: e.less(f, g, swap, next) = Some(tested)): LessGoal(tys, strs, blocks, e, f, g, swap, next, tested)
+{
+    match Option::bind_some(h) as λ _ => LessGoal(tys, strs, blocks, e, f, g, swap, next, tested) {
+        Exists(s1, p) => less_a_goal(tys, strs, blocks, e, f, g, swap, next, tested, s1, p.left, p.right),
+    }
+}
+
+// What `StageTest` concludes.
+fn TestGoal(tys: Nat → Type, strs: Strs(tys), blocks: Blocks, act: Act, inj: Nat → Nat, e: PEnv, m: Mach(tys), c: Config, next: Nat, tested: Pair<List<Instr>, Bool>, bit: Bool) → Type {
+    Exists<Config>(λ c2 => (run_instrs(blocks, tested.fst, c) = Some(c2)) ∧ ((c2.locals.words(1, next).head_bit() = (match tested.snd { False => bit, True => !bit })) ∧
+        StageRel(tys, strs, inj, blocks, act, e, m, c2, next + 1)))
+}
+
+// Level 2's test, read where it answers.
+theorem test_vals(tys: Nat → Type, strs: Strs(tys), m: Mach(tys), a, b: Var, r: Dyn(tys) → Dyn(tys) → Bool, bit: Bool):
+    (match Mach::val(tys, strs, m, a) { Some(x) => Mach::val(tys, strs, m, b).map(λ y => r(x, y)), None => None }) = Some(bit) →
+    Exists<Dyn(tys)>(λ x => Exists<Dyn(tys)>(λ y => (Mach::val(tys, strs, m, a) = Some(x)) ∧ ((Mach::val(tys, strs, m, b) = Some(y)) ∧ (r(x, y) = bit))))
+{
+    match ea: Mach::val(tys, strs, m, a) {
+        None => λ no => absurd(no),
+        Some(x) => match eb: Mach::val(tys, strs, m, b) {
+            None => λ no => absurd(no),
+            Some(y) => λ e2 => Exists(x, Exists(y, ⟨refl, ⟨refl, Option::some_inj(r(x, y), bit, e2)⟩⟩)),
+        },
+    }
+}
+
+theorem stage_test(tys: Nat → Type, strs: Strs(tys), blocks: Blocks): StageTest(tys, strs, blocks) {
+    λ t e next tested hp act inj m c rel bit hr => (match t as λ t2 => t2.place(e, next) = Some(tested) → t2.run(tys, strs, m) = Some(bit) →
+            TestGoal(tys, strs, blocks, act, inj, e, m, c, next, tested, bit) {
+        TLt(a, b) => λ h1 h2 => {
+            let tv = test_vals(tys, strs, m, a, b, λ x y => Dyn::words(tys, x, y, Width::lt), bit, h2);
+            let x = tv.witness;
+            let y = tv.proof.witness;
+            let q = tv.proof.proof;
+            let lg = less_goal(tys, strs, blocks, e, a, b, False, next, tested, h1, act, inj, m, c, rel, x, y, q.left, q.right.left);
+            let c2 = lg.right.right;
+            Exists(c2.witness, ⟨c2.proof.left, ⟨j(sym(lg.left), λ sw _ => c2.witness.locals.words(1, next).head_bit() = (match sw { False => bit, True => !bit }),
+                trans(c2.proof.right.left, q.right.right)), c2.proof.right.right⟩⟩)
+        },
+        TLe(a, b) => λ h1 h2 => {
+            let tv = test_vals(tys, strs, m, a, b, λ x y => Dyn::words(tys, x, y, Width::le), bit, h2);
+            let x = tv.witness;
+            let y = tv.proof.witness;
+            let q = tv.proof.proof;
+            let lg = less_goal(tys, strs, blocks, e, b, a, True, next, tested, h1, act, inj, m, c, rel, y, x, q.right.left, q.left);
+            let c2 = lg.right.right;
+            let cs = lg.right.left;
+            let flip: (!bit = Dyn::words(tys, y, x, Width::lt)) =
+                trans(cong_fn(λ (z: Bool) => !z, trans(sym(q.right.right), le_flip(tys, x, y, cs.witness, cs.proof.right, cs.proof.left))), Bool::not_not(Dyn::words(tys, y, x, Width::lt)));
+            Exists(c2.witness, ⟨c2.proof.left, ⟨j(sym(lg.left), λ sw _ => c2.witness.locals.words(1, next).head_bit() = (match sw { False => bit, True => !bit }),
+                trans(c2.proof.right.left, sym(flip))), c2.proof.right.right⟩⟩)
+        },
+    })(hp, hr)
+}
