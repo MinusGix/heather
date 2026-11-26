@@ -2583,10 +2583,12 @@ corollary, not a second contract.
 **Where the guards go.** Take the call graph's strongly connected
 components. A call whose callee can reach the caller (the two share a
 component; a self call is the least case) is *guarded*; every other call
-goes to a strictly lower component and is not. The table is then constant:
+goes to a strictly lower component and is not. The table is then constant
+(as built, §17.10: every call counts its 24 bytes, since the guard sits
+after the stack's argument words are stored):
 
-    rooms(f) = f's largest frame + the largest, over f's unguarded calls,
-               of 24 + rooms(g)
+    rooms(f) = f's largest frame + the largest, over f's calls,
+               of 24 + (rooms(g) where the call is unguarded, else 0)
 
 which is well founded on the components' order. A guarded call to `g`
 tests, before the CALL, that `24 + rooms(g)` fits in the room left, and
@@ -2598,8 +2600,8 @@ otherwise jumps to the stop. So:
 - A program with a cycle pays at its calls into the cycle and nowhere else:
   a compare against the stack's floor and a forward branch.
 - `RoomLaw` at depth is kept as the proof that the guards do not fire where
-  `room(f, peak) <= i`: `depth_rooms` is the sum the guards check one round
-  at a time.
+  `room(f, peak) <= i`, at a table by depth at least `rooms` at every depth
+  (`stop_rooms`; at `depth_rooms` it is false, §17.10).
 
 **The floor.** The guard compares the stack pointer against the lowest
 address the stack may reach. `Stack<M>` already says what the process owns
@@ -2607,7 +2609,8 @@ address the stack may reach. `Stack<M>` already says what the process owns
 (`_start`, or an export's prologue) computes it from the stack pointer it
 is given and the budget it was compiled with, and keeps it where the guard
 reads it. A data word is the first choice; a reserved register is a
-planner's decision later. The budget is a compile option, as it is today.
+planner's decision later. (As built the floor is RBP: the model has no
+load a data word could use, §17.10.) The budget is a compile option, as it is today.
 
 **What the entry asks.** One number, static: `rooms(entry) <= budget`. For
 `_start` the compile checks it and refuses otherwise (the gate's "64 bytes
@@ -2652,7 +2655,8 @@ program with no cycle lowers to the bytes it lowers to today.
 **Step 1: the statement, and §17.9's test by evaluation.** Written before
 anything is proved over it. The statement is in the contract
 (`x86_64_call_contract`: `Site::Entered`, `Site::Spent`,
-`Site::TracksSpent`, `Site::TracksAt`, `Site::tracks_at_of_spent`) and the
+`Site::TracksSpent`, `Site::TracksAt`, `Site::tracks_at_of_spent`; since
+step 2 `Site::Entering`, `Site::Tracks` and `Site::tracks_at`) and the
 routines (`bytes_level_routines`: the call graph, `program_guards`,
 `routine_rooms`, `rooms_settled`, the guard's code, `stop_rooms` with
 `stop_rooms_lawful` and `stop_rooms_over`, the theorem's type
@@ -2679,7 +2683,7 @@ What the test found, and where the statement differs from §17.9:
   clause. RBP is the last register a placement saves (`kept_order`), so a
   program that guards refuses only placements saving all six
   (`downh_six_refused`), and a program with no guard places as before.
-  `Site::Entered` asks `floored → RBP = stack.low`; `callee_kept` already
+  `Site::Entered` (now `Entering`) asks `floored → RBP = stack.low`; `callee_kept` already
   returns it.
 - **Where the guard sits, and the table's 24.** The only point of a call
   with a free register is after its argument moves, before the CALL (RAX:
@@ -2689,7 +2693,7 @@ What the test found, and where the statement differs from §17.9:
   frame + the largest over `f`'s calls of `24`, plus `routine_rooms(g)`
   where the call is unguarded (§17.9: only over unguarded calls). The
   guard tests `8 + routine_rooms(g)` against the room left at the CALL,
-  which is exactly the callee's `Site::Entered` premise `rooms(g) <= i`.
+  which is exactly the callee's entering premise `rooms(g) <= i`.
   The table is computed in as many rounds as routines and checked by the
   lowering (`rooms_settled`), so its law is a verdict, not a lemma.
 - **"No guard fires where `room(f, peak) <= i`" is false at `depth_rooms`**
@@ -2737,6 +2741,67 @@ The test, by evaluation (each a closed verdict by `refl`):
 - No cycle, no guard: `lend`, `both`, `countdown`, `exits_nested` and `echo`
   lower to the same bytes as today (`acyclic_same`). The export rows are
   step 3's witness (`scripts/bytes-level-compare`, `scripts/linked --check`).
+
+**The coordinating session's rulings on step 1** (2026-11-26):
+
+- The register is this layer's choice. The floor rides in a kept register
+  nothing writes, so `RBP = stack.low` is carried by the contract's own
+  kept-registers clause and costs no memory fact. A planner may revisit it
+  once the model has a RIP-relative load (the step forms decode
+  `LEA r, [rip + disp32]`, but no `Asm` item or load uses it; there is no
+  `LEA` with a base and displacement, so the guard stays four
+  instructions).
+- The stop is conservative. A guard checks the callee's room for its whole
+  round, its unguarded callees' rooms included, whether or not this run
+  enters them: it is early by at most the unguarded room below the last
+  round. `downh` shows it: at the room its run needs by depth (272) a
+  placement saving five stops it, and `stop_rooms` (320) is the room that
+  closes the stop; the difference is `inc`'s room less what the depth table
+  gave the callee at depth zero. The exact alternative, every routine
+  reachable from a cycle testing its own frame at entry, was rejected: it
+  puts a guard at every call under a recursion instead of one per round.
+- One table. `stop_rooms` is the room the statement speaks of, in the
+  corollary and in `Spent`'s `¬(stop_rooms(f, peak) <= i)`. `depth_rooms`
+  is deleted; `depth_room` remains as the step inside `stop_rooms`.
+- For a program with no cycle the premise is the constant
+  `routine_rooms(f) <= i`, whatever the peak: the ordinary static stack
+  bound, which is what an export states.
+
+**Step 2: the contract restated** (`x86_64_call_contract`). One entering
+premise and one clause:
+
+- `Site::Entering` takes `floored` and asks `floored → RBP = stack.low`;
+  it asks nothing of room. Each clause says what it asks.
+- `Site::Tracks(rooms, floored, room, peak, …)`: under `rooms(f) <= i`, at
+  every fuel `Tracked ∨ (¬(room(f, peak) <= i) ∧ Spent)`. The old `Tracks`
+  is gone.
+- `Site::Spent` is the exited reading at the reserved status with a fact
+  about its world: `∃ o, MeaningPrefix(o.past) ∧ Tracked(Exited(139, o))`.
+  So the stop is the alternative the claims already have for the process's
+  exit, with a different fact about the exited state (status 139, a prefix
+  world), and every reading of it reuses the exited case.
+- `MeaningPrefix` is `MeetsGoing`'s conclusion, named
+  (`meaning_prefix_extends` carries it down a prefix).
+- `Site::TracksAt` is the reading under the room by depth, and
+  `Site::tracks_at` its proof from `Tracks` at any table at least the table
+  by routine.
+- The readings: `MeetsDone` and `MeetsExited` carry the stop alternative;
+  `MeetsGoing` asks only `rooms(f) <= i` and no room by depth: every world
+  the code reaches is a prefix of the meaning's, room or none
+  (`tracks_going`, through one lemma `Site::tracked_prefix` for any tracked
+  outcome; the spent case is its exited case). `Site::tracks_meets` as
+  before.
+- `bytes_level_whole`: `RunsAsMeaning` carries the stop alternative, an
+  exit with the reserved status after a prefix world
+  (`tracks_runs_as`, by `tracked_runs_as` at `Exited(139, o)`).
+
+Until step 3 the lowering proves the clause under the room
+(`lower_program_tracks_at`: `TracksAt`, not floored, at every lawful table;
+its probes at `stop_rooms` by `stop_rooms_lawful`). The readings of the
+lowering (`lower_program_meets`, the probes' `*_meets*` and
+`echo_runs_as`) take the stated theorem `LowerProgramSpends` as a
+hypothesis; step 3 discharges it and `lower_program_tracks_at` becomes its
+corollary.
 
 **What step 3 costs, as the statement shows it.** The code no longer only
 returns or stops short where the meaning does: at any call into a cycle it

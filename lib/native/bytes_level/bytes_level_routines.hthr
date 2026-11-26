@@ -18,8 +18,8 @@
 //   by the depth of the deepest chain of calls its run enters (`run_peak`,
 //   beside the meaning): at depth `p` its frame fits, a call's 24 bytes
 //   below it, and its callees' rooms at depth `p - 1` (`RoomLaw`). The
-//   theorem holds under every lawful table; `depth_rooms` is one, for every
-//   program (`depth_rooms_lawful`).
+//   theorem holds under every lawful table; `stop_rooms` is one, for every
+//   program (`stop_rooms_lawful`).
 // - The clause: `Site::Tracks` (docs/language/ownership-design.md §17.7),
 //   by two inductions on fuel, at Linux, in the meaning's world: a run done
 //   is returned, as many system calls made as its world gained
@@ -226,38 +226,9 @@ fn depth_room(routines: List<Routine>, rooms: Nat → Nat, f: Nat) → Nat {
     match routines.nth(f) { None => 0, Some(r) => r.frame(8, 6) + r.body.callee_room(rooms) }
 }
 
-fn depth_rooms_at(routines: List<Routine>, p: Nat) → Nat → Nat {
-    match p {
-        Zero => λ (f: Nat) => depth_room(routines, λ (g: Nat) => 0, f),
-        Succ(q) => λ (f: Nat) => depth_room(routines, depth_rooms_at(routines, q), f),
-    }
-}
-
-fn depth_rooms(routines: List<Routine>) → Nat → Nat → Nat { λ (f: Nat) (p: Nat) => depth_rooms_at(routines, p)(f) }
-
-theorem depth_rooms_unfold(routines: List<Routine>, f, p: Nat):
-    depth_rooms(routines)(f, p) = depth_room(routines, rooms_below(depth_rooms(routines), p), f) {
-    match p { Zero => refl, Succ(q) => refl }
-}
-
 theorem depth_room_nth(routines: List<Routine>, rooms: Nat → Nat, f: Nat, r: Routine, nth: routines.nth(f) = Some(r)):
     depth_room(routines, rooms, f) = r.frame(8, 6) + r.body.callee_room(rooms) {
     j(sym(nth), λ o _ => (match o { None => 0, Some(x) => x.frame(8, 6) + x.body.callee_room(rooms) }) = r.frame(8, 6) + r.body.callee_room(rooms), refl)
-}
-
-// The table by depth is lawful, for every program.
-theorem depth_rooms_lawful(routines: List<Routine>): RoomLaw(routines, depth_rooms(routines)) {
-    λ f r nth p => {
-        let rooms = rooms_below(depth_rooms(routines), p);
-        let frame = r.frame(8, 6);
-        let asks = r.body.callee_room(rooms);
-        let own: (depth_rooms(routines)(f, p) = frame + asks) =
-            trans(depth_rooms_unfold(routines, f, p), depth_room_nth(routines, rooms, f, r, nth));
-        let left: (asks = (frame + asks) - frame) = { omega };
-        j(sym(own), λ x _ => r.Roomy(rooms, x, routines.len(), 8, 6),
-            ⟨{ omega }, ⟨λ c => { let enough = r.body.callee_room_calls(rooms, c); omega },
-                j(left, λ x _ => r.body.Fits(rooms, routines.len(), x), r.body.callee_fits(rooms, routines.len()))⟩⟩)
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -437,7 +408,7 @@ theorem stop_rooms_lawful(routines: List<Routine>): RoomLaw(routines, stop_rooms
 // fuel or stops spent where its run's room by depth is not there.
 fn LowerProgramSpends<M>(p: Program, program: Prog, fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64),
     stack: Stack<M>(fetch, data), top: Nat, spans: Spans, blocks: Blocks) → Type {
-    Site<M>(fetch, data, program, last, origin).TracksSpent(stack, spans, top, blocks.Lent(spans), routine_rooms(p.routines),
+    Site<M>(fetch, data, program, last, origin).Tracks(stack, spans, top, blocks.Lent(spans), routine_rooms(p.routines),
         any_guard(program_guards(p.routines)), stop_rooms(p.routines),
         λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run_peak(p, blocks, n, f, args, heap, io), p.routines.len(),
         λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run(p, blocks, n, f, args, heap, io))
@@ -450,7 +421,7 @@ theorem lower_spends_tracks_at<M>(p: Program, program: Prog, fetch: FetchAccess<
     Site<M>(fetch, data, program, last, origin).TracksAt(stack, spans, top, blocks.Lent(spans), any_guard(program_guards(p.routines)),
         stop_rooms(p.routines), λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run_peak(p, blocks, n, f, args, heap, io),
         p.routines.len(), λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run(p, blocks, n, f, args, heap, io)) {
-    Site<M>(fetch, data, program, last, origin).tracks_at_of_spent(stack, spans, top, blocks.Lent(spans), routine_rooms(p.routines),
+    Site<M>(fetch, data, program, last, origin).tracks_at(stack, spans, top, blocks.Lent(spans), routine_rooms(p.routines),
         any_guard(program_guards(p.routines)), stop_rooms(p.routines),
         λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run_peak(p, blocks, n, f, args, heap, io), p.routines.len(),
         λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run(p, blocks, n, f, args, heap, io),
@@ -1576,10 +1547,10 @@ theorem program_tracks<M>(site: Site<M>, stack: Stack<M>(site.fetch, site.data),
     p: Program, valid: p.valid() = True, scoped: Scoped::all(p.routines), law: RoomLaw(p.routines, room),
     at: Loan<M>(site.fetch, site.data, stack, top, spans) → blocks.Lent(spans) →
         RoutinesAt<M>(site, stack, spans, room, top, blocks, program_signatures(p.routines), p.routines.len(), p.routines, 0)):
-    site.Tracks(stack, spans, top, blocks.Lent(spans), room,
+    site.TracksAt(stack, spans, top, blocks.Lent(spans), False, room,
         λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run_peak(p, blocks, n, f, args, heap, io), p.routines.len(),
         λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run(p, blocks, n, f, args, heap, io)) {
-    λ loan lent f below args heap io s here resident i rsp inside passed high injected ret saved n roomy answerable => {
+    λ loan lent f below args heap io s here resident i rsp inside passed high injected ret saved floor n roomy answerable => {
         let all = at(loan, lent);
         let peak = run_peak(p, blocks, n, f, args, heap, io);
         let pre: RoutinePre<M>(site, stack, spans, λ (g: Nat) => room(g, peak), top, f, args, heap)(i, s) = ⟨⟨passed, roomy⟩, ⟨high, injected⟩⟩;
@@ -1662,15 +1633,15 @@ theorem Program::lower_scoped(self p: Program, placement: List<Place>, program: 
 // blocks lent under the lending laws, the blocks it may write among those
 // lent, tracks its meaning (`Site::Tracks`) for each of its routines at
 // every fuel, under every lawful room table.
-theorem lower_program_tracks<M>(p: Program, placement: List<Place>, program: Prog, lowered: p.lower(placement) = Some(program),
+theorem lower_program_tracks_at<M>(p: Program, placement: List<Place>, program: Prog, lowered: p.lower(placement) = Some(program),
     fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64), stack: Stack<M>(fetch, data), top: Nat, spans: Spans,     blocks: Blocks, room: Nat → Nat → Nat, law: RoomLaw(p.routines, room)):
-    Site<M>(fetch, data, program, last, origin).Tracks(stack, spans, top, blocks.Lent(spans), room,
+    Site<M>(fetch, data, program, last, origin).TracksAt(stack, spans, top, blocks.Lent(spans), False, room,
         λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run_peak(p, blocks, n, f, args, heap, io), p.routines.len(),
         λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run(p, blocks, n, f, args, heap, io)) {
     let bound = p.routines.len();
     let sigs = program_signatures(p.routines);
     let scoped = p.lower_scoped(placement, program, lowered);
-    let Goal = λ (q: Prog) => Site<M>(fetch, data, q, last, origin).Tracks(stack, spans, top, blocks.Lent(spans), room,
+    let Goal = λ (q: Prog) => Site<M>(fetch, data, q, last, origin).TracksAt(stack, spans, top, blocks.Lent(spans), False, room,
         λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run_peak(p, blocks, n, f, args, heap, io), bound,
         λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run(p, blocks, n, f, args, heap, io));
     (match v: p.valid() as λ b => (match b { False => None, True => match emit_routines(Start, p.routines, 0, bound, placement, bound) {
@@ -1698,42 +1669,18 @@ theorem lower_program_tracks<M>(p: Program, placement: List<Place>, program: Pro
     })(lowered)
 }
 
-// The done and exited clauses, `Tracks` read where the meaning is done and
-// where it exits, at the table by depth.
-theorem lower_program_meets_done<M>(p: Program, placement: List<Place>, program: Prog, lowered: p.lower(placement) = Some(program),
-    fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64), stack: Stack<M>(fetch, data), top: Nat, spans: Spans,     blocks: Blocks):
-    Site<M>(fetch, data, program, last, origin).MeetsDone(stack, spans, top, blocks.Lent(spans), depth_rooms(p.routines),
+// The contract's readings (`Site::tracks_meets`), from the lowering's
+// theorem as stated (`LowerProgramSpends`; proved in
+// issues/bytes-level-out-of-room.md's step 3).
+theorem lower_program_meets<M>(p: Program, program: Prog, fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64),
+    stack: Stack<M>(fetch, data), top: Nat, spans: Spans, blocks: Blocks,
+    spends: LowerProgramSpends<M>(p, program, fetch, data, last, origin, stack, top, spans, blocks)):
+    Site<M>(fetch, data, program, last, origin).Meets(stack, spans, top, blocks.Lent(spans), routine_rooms(p.routines),
+        any_guard(program_guards(p.routines)), stop_rooms(p.routines),
         λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run_peak(p, blocks, n, f, args, heap, io), p.routines.len(),
         λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run(p, blocks, n, f, args, heap, io)) {
-    Site<M>(fetch, data, program, last, origin).tracks_done(stack, spans, top, blocks.Lent(spans), depth_rooms(p.routines),
+    Site<M>(fetch, data, program, last, origin).tracks_meets(stack, spans, top, blocks.Lent(spans), routine_rooms(p.routines),
+        any_guard(program_guards(p.routines)), stop_rooms(p.routines),
         λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run_peak(p, blocks, n, f, args, heap, io), p.routines.len(),
-        λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run(p, blocks, n, f, args, heap, io),
-        lower_program_tracks<M>(p, placement, program, lowered, fetch, data, last, origin, stack, top, spans, blocks, depth_rooms(p.routines),
-            depth_rooms_lawful(p.routines)))
-}
-
-theorem lower_program_meets_exited<M>(p: Program, placement: List<Place>, program: Prog, lowered: p.lower(placement) = Some(program),
-    fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64), stack: Stack<M>(fetch, data), top: Nat, spans: Spans,     blocks: Blocks):
-    Site<M>(fetch, data, program, last, origin).MeetsExited(stack, spans, top, blocks.Lent(spans), depth_rooms(p.routines),
-        λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run_peak(p, blocks, n, f, args, heap, io), p.routines.len(),
-        λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run(p, blocks, n, f, args, heap, io)) {
-    Site<M>(fetch, data, program, last, origin).tracks_exited(stack, spans, top, blocks.Lent(spans), depth_rooms(p.routines),
-        λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run_peak(p, blocks, n, f, args, heap, io), p.routines.len(),
-        λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run(p, blocks, n, f, args, heap, io),
-        lower_program_tracks<M>(p, placement, program, lowered, fetch, data, last, origin, stack, top, spans, blocks, depth_rooms(p.routines),
-            depth_rooms_lawful(p.routines)))
-}
-
-// The contract, all three clauses (`Site::tracks_meets`), at the table by
-// depth.
-theorem lower_program_meets<M>(p: Program, placement: List<Place>, program: Prog, lowered: p.lower(placement) = Some(program), fetch: FetchAccess<M>,
-    data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64), stack: Stack<M>(fetch, data), top: Nat, spans: Spans, blocks: Blocks):
-    Site<M>(fetch, data, program, last, origin).Meets(stack, spans, top, blocks.Lent(spans), depth_rooms(p.routines),
-        λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run_peak(p, blocks, n, f, args, heap, io), p.routines.len(),
-        λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run(p, blocks, n, f, args, heap, io)) {
-    Site<M>(fetch, data, program, last, origin).tracks_meets(stack, spans, top, blocks.Lent(spans), depth_rooms(p.routines),
-        λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run_peak(p, blocks, n, f, args, heap, io), p.routines.len(),
-        λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run(p, blocks, n, f, args, heap, io),
-        lower_program_tracks<M>(p, placement, program, lowered, fetch, data, last, origin, stack, top, spans, blocks, depth_rooms(p.routines),
-            depth_rooms_lawful(p.routines)))
+        λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run(p, blocks, n, f, args, heap, io), spends)
 }

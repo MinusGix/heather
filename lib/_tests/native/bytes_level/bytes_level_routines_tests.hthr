@@ -79,23 +79,18 @@ theorem lend_lowers(): lowers(lend_program(3), lend_places()) = True { refl }
 
 theorem lend_tracks<M>(program: Prog, lowered: lend_program(3).lower(lend_places()) = Some(program), fetch: FetchAccess<M>,
     data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64), stack: Stack<M>(fetch, data), top: Nat, spans: Spans, blocks: Blocks):
-    Site<M>(fetch, data, program, last, origin).Tracks(stack, spans, top, blocks.Lent(spans), depth_rooms(lend_program(3).routines),
+    Site<M>(fetch, data, program, last, origin).TracksAt(stack, spans, top, blocks.Lent(spans), False, stop_rooms(lend_program(3).routines),
         λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run_peak(lend_program(3), blocks, n, f, args, heap, io), 2,
         λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run(lend_program(3), blocks, n, f, args, heap, io)) {
-    lower_program_tracks<M>(lend_program(3), lend_places(), program, lowered, fetch, data, last, origin, stack, top, spans, blocks, depth_rooms(lend_program(3).routines),
-        depth_rooms_lawful(lend_program(3).routines))
+    lower_program_tracks_at<M>(lend_program(3), lend_places(), program, lowered, fetch, data, last, origin, stack, top, spans, blocks, stop_rooms(lend_program(3).routines),
+        stop_rooms_lawful(lend_program(3).routines))
 }
 
-// The table by depth at a program whose calls do not cycle stops changing
-// past the call graph's height: `lend` calls `fill`, so from depth one on
-// each routine's room is one number (the lemma for every such program is
-// owed: issues/bytes-level-lowering-recursion.md).
-theorem lend_rooms_settle(): (depth_rooms(lend_program(3).routines)(1, 1) = depth_rooms(lend_program(3).routines)(1, 5)) ∧
-    (depth_rooms(lend_program(3).routines)(0, 0) = depth_rooms(lend_program(3).routines)(0, 5)) { ⟨refl, refl⟩ }
-
-// Below its height the table is smaller: at depth zero `lend` enters no
-// call, and asks only its frame and a call's 24 bytes.
-theorem lend_rooms_grow(): depth_rooms(lend_program(3).routines)(1, 0) < depth_rooms(lend_program(3).routines)(1, 1) { trivial }
+// At a program whose calls do not cycle, the stop's table by depth is the
+// table by routine at every depth: `lend` calls `fill`, unguarded.
+theorem lend_rooms_constant(): stop_rooms(lend_program(3).routines)(1, 0).same(routine_rooms(lend_program(3).routines)(1)) &&
+    (stop_rooms(lend_program(3).routines)(1, 5).same(routine_rooms(lend_program(3).routines)(1)) &&
+        stop_rooms(lend_program(3).routines)(0, 5).same(routine_rooms(lend_program(3).routines)(0))) = True { refl }
 
 // ---------------------------------------------------------------------------
 // Two windows of one block written by one callee
@@ -118,11 +113,11 @@ theorem both_lowers(): lowers(both_program(8), both_places()) = True { refl }
 
 theorem both_tracks<M>(program: Prog, lowered: both_program(8).lower(both_places()) = Some(program), fetch: FetchAccess<M>,
     data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64), stack: Stack<M>(fetch, data), top: Nat, spans: Spans, blocks: Blocks):
-    Site<M>(fetch, data, program, last, origin).Tracks(stack, spans, top, blocks.Lent(spans), depth_rooms(both_program(8).routines),
+    Site<M>(fetch, data, program, last, origin).TracksAt(stack, spans, top, blocks.Lent(spans), False, stop_rooms(both_program(8).routines),
         λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run_peak(both_program(8), blocks, n, f, args, heap, io), 2,
         λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run(both_program(8), blocks, n, f, args, heap, io)) {
-    lower_program_tracks<M>(both_program(8), both_places(), program, lowered, fetch, data, last, origin, stack, top, spans, blocks, depth_rooms(both_program(8).routines),
-        depth_rooms_lawful(both_program(8).routines))
+    lower_program_tracks_at<M>(both_program(8), both_places(), program, lowered, fetch, data, last, origin, stack, top, spans, blocks, stop_rooms(both_program(8).routines),
+        stop_rooms_lawful(both_program(8).routines))
 }
 
 // ---------------------------------------------------------------------------
@@ -161,11 +156,13 @@ theorem countdown_lowers(): lowers(countdown_program(), countdown_places()) = Tr
 
 // The done clause, `Tracks` read where the meaning is done.
 theorem countdown_meets_done<M>(program: Prog, lowered: countdown_program().lower(countdown_places()) = Some(program), fetch: FetchAccess<M>,
-    data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64), stack: Stack<M>(fetch, data), top: Nat, spans: Spans, blocks: Blocks):
-    Site<M>(fetch, data, program, last, origin).MeetsDone(stack, spans, top, blocks.Lent(spans), depth_rooms(countdown_program().routines),
+    data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64), stack: Stack<M>(fetch, data), top: Nat, spans: Spans, blocks: Blocks,
+    spends: LowerProgramSpends<M>(countdown_program(), program, fetch, data, last, origin, stack, top, spans, blocks)):
+    Site<M>(fetch, data, program, last, origin).MeetsDone(stack, spans, top, blocks.Lent(spans), routine_rooms(countdown_program().routines),
+        any_guard(program_guards(countdown_program().routines)), stop_rooms(countdown_program().routines),
         λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run_peak(countdown_program(), blocks, n, f, args, heap, io), 1,
         λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run(countdown_program(), blocks, n, f, args, heap, io)) {
-    lower_program_meets_done<M>(countdown_program(), countdown_places(), program, lowered, fetch, data, last, origin, stack, top, spans, blocks)
+    lower_program_meets<M>(countdown_program(), program, fetch, data, last, origin, stack, top, spans, blocks, spends).left
 }
 
 // The same loop with the next state placed in the state's register, so the
@@ -177,12 +174,13 @@ theorem countdown_straight_lowers(): lowers(countdown_program(), countdown_strai
 
 theorem countdown_straight_meets_done<M>(program: Prog, lowered: countdown_program().lower(countdown_straight_places()) = Some(program),
     fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64), stack: Stack<M>(fetch, data), top: Nat, spans: Spans,
-    blocks: Blocks):
-    Site<M>(fetch, data, program, last, origin).MeetsDone(stack, spans, top, blocks.Lent(spans), depth_rooms(countdown_program().routines),
+    blocks: Blocks,
+    spends: LowerProgramSpends<M>(countdown_program(), program, fetch, data, last, origin, stack, top, spans, blocks)):
+    Site<M>(fetch, data, program, last, origin).MeetsDone(stack, spans, top, blocks.Lent(spans), routine_rooms(countdown_program().routines),
+        any_guard(program_guards(countdown_program().routines)), stop_rooms(countdown_program().routines),
         λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run_peak(countdown_program(), blocks, n, f, args, heap, io), 1,
         λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run(countdown_program(), blocks, n, f, args, heap, io)) {
-    lower_program_meets_done<M>(countdown_program(), countdown_straight_places(), program, lowered, fetch, data, last, origin, stack, top, spans,
-        blocks)
+    lower_program_meets<M>(countdown_program(), program, fetch, data, last, origin, stack, top, spans, blocks, spends).left
 }
 
 // Control: an id a pass bound, bound again after the loop, is refused: the
@@ -201,11 +199,13 @@ theorem countdown_reusing_refused(): lowers(Program([countdown_reusing()]), coun
 
 // The exited clause, read off `Tracks` at the table by depth.
 theorem countdown_meets_exited<M>(program: Prog, lowered: countdown_program().lower(countdown_places()) = Some(program), fetch: FetchAccess<M>,
-    data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64), stack: Stack<M>(fetch, data), top: Nat, spans: Spans, blocks: Blocks):
-    Site<M>(fetch, data, program, last, origin).MeetsExited(stack, spans, top, blocks.Lent(spans), depth_rooms(countdown_program().routines),
+    data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64), stack: Stack<M>(fetch, data), top: Nat, spans: Spans, blocks: Blocks,
+    spends: LowerProgramSpends<M>(countdown_program(), program, fetch, data, last, origin, stack, top, spans, blocks)):
+    Site<M>(fetch, data, program, last, origin).MeetsExited(stack, spans, top, blocks.Lent(spans), routine_rooms(countdown_program().routines),
+        any_guard(program_guards(countdown_program().routines)), stop_rooms(countdown_program().routines),
         λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run_peak(countdown_program(), blocks, n, f, args, heap, io), 1,
         λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run(countdown_program(), blocks, n, f, args, heap, io)) {
-    lower_program_meets_exited<M>(countdown_program(), countdown_places(), program, lowered, fetch, data, last, origin, stack, top, spans, blocks)
+    lower_program_meets<M>(countdown_program(), program, fetch, data, last, origin, stack, top, spans, blocks, spends).right.left
 }
 
 // ---------------------------------------------------------------------------
@@ -239,19 +239,21 @@ theorem exits_keeps_world(blocks: Blocks, n: Nat, heap: Heap, io: Io): exited_wo
 // call with that status in RDI and sixty in RAX, in the meaning's world.
 theorem exits_tracks<M>(program: Prog, lowered: exits_program().lower(exits_places()) = Some(program), fetch: FetchAccess<M>, data: ByteReadAccess<M>,
     last: List<BitVec(8)>, origin: BitVec(64), stack: Stack<M>(fetch, data), top: Nat, spans: Spans, blocks: Blocks):
-    Site<M>(fetch, data, program, last, origin).Tracks(stack, spans, top, blocks.Lent(spans), depth_rooms(exits_program().routines),
+    Site<M>(fetch, data, program, last, origin).TracksAt(stack, spans, top, blocks.Lent(spans), False, stop_rooms(exits_program().routines),
         λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run_peak(exits_program(), blocks, n, f, args, heap, io), 1,
         λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run(exits_program(), blocks, n, f, args, heap, io)) {
-    lower_program_tracks<M>(exits_program(), exits_places(), program, lowered, fetch, data, last, origin, stack, top, spans, blocks,
-        depth_rooms(exits_program().routines), depth_rooms_lawful(exits_program().routines))
+    lower_program_tracks_at<M>(exits_program(), exits_places(), program, lowered, fetch, data, last, origin, stack, top, spans, blocks,
+        stop_rooms(exits_program().routines), stop_rooms_lawful(exits_program().routines))
 }
 
 theorem exits_meets_exited<M>(program: Prog, lowered: exits_program().lower(exits_places()) = Some(program), fetch: FetchAccess<M>,
-    data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64), stack: Stack<M>(fetch, data), top: Nat, spans: Spans, blocks: Blocks):
-    Site<M>(fetch, data, program, last, origin).MeetsExited(stack, spans, top, blocks.Lent(spans), depth_rooms(exits_program().routines),
+    data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64), stack: Stack<M>(fetch, data), top: Nat, spans: Spans, blocks: Blocks,
+    spends: LowerProgramSpends<M>(exits_program(), program, fetch, data, last, origin, stack, top, spans, blocks)):
+    Site<M>(fetch, data, program, last, origin).MeetsExited(stack, spans, top, blocks.Lent(spans), routine_rooms(exits_program().routines),
+        any_guard(program_guards(exits_program().routines)), stop_rooms(exits_program().routines),
         λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run_peak(exits_program(), blocks, n, f, args, heap, io), 1,
         λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run(exits_program(), blocks, n, f, args, heap, io)) {
-    lower_program_meets_exited<M>(exits_program(), exits_places(), program, lowered, fetch, data, last, origin, stack, top, spans, blocks)
+    lower_program_meets<M>(exits_program(), program, fetch, data, last, origin, stack, top, spans, blocks, spends).right.left
 }
 
 // An exit inside a callee: routine 1 calls routine 0, which exits; the
@@ -270,11 +272,11 @@ theorem exits_nested_at(blocks: Blocks, n: Nat, heap: Heap, io: Io): exited_stat
 
 theorem exits_nested_tracks<M>(program: Prog, lowered: exits_nested().lower(nested_places()) = Some(program), fetch: FetchAccess<M>,
     data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64), stack: Stack<M>(fetch, data), top: Nat, spans: Spans, blocks: Blocks):
-    Site<M>(fetch, data, program, last, origin).Tracks(stack, spans, top, blocks.Lent(spans), depth_rooms(exits_nested().routines),
+    Site<M>(fetch, data, program, last, origin).TracksAt(stack, spans, top, blocks.Lent(spans), False, stop_rooms(exits_nested().routines),
         λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run_peak(exits_nested(), blocks, n, f, args, heap, io), 2,
         λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run(exits_nested(), blocks, n, f, args, heap, io)) {
-    lower_program_tracks<M>(exits_nested(), nested_places(), program, lowered, fetch, data, last, origin, stack, top, spans, blocks,
-        depth_rooms(exits_nested().routines), depth_rooms_lawful(exits_nested().routines))
+    lower_program_tracks_at<M>(exits_nested(), nested_places(), program, lowered, fetch, data, last, origin, stack, top, spans, blocks,
+        stop_rooms(exits_nested().routines), stop_rooms_lawful(exits_nested().routines))
 }
 
 // Control: an exit whose status no id holds is refused (validity: the
@@ -323,11 +325,11 @@ theorem down_depth(): run_peak(down_program(), Blocks(λ (b: Nat) => False), 3, 
 
 theorem down_tracks<M>(program: Prog, lowered: down_program().lower(down_places()) = Some(program), fetch: FetchAccess<M>, data: ByteReadAccess<M>,
     last: List<BitVec(8)>, origin: BitVec(64), stack: Stack<M>(fetch, data), top: Nat, spans: Spans, blocks: Blocks):
-    Site<M>(fetch, data, program, last, origin).Tracks(stack, spans, top, blocks.Lent(spans), depth_rooms(down_program().routines),
+    Site<M>(fetch, data, program, last, origin).TracksAt(stack, spans, top, blocks.Lent(spans), False, stop_rooms(down_program().routines),
         λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run_peak(down_program(), blocks, n, f, args, heap, io), 1,
         λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run(down_program(), blocks, n, f, args, heap, io)) {
-    lower_program_tracks<M>(down_program(), down_places(), program, lowered, fetch, data, last, origin, stack, top, spans, blocks,
-        depth_rooms(down_program().routines), depth_rooms_lawful(down_program().routines))
+    lower_program_tracks_at<M>(down_program(), down_places(), program, lowered, fetch, data, last, origin, stack, top, spans, blocks,
+        stop_rooms(down_program().routines), stop_rooms_lawful(down_program().routines))
 }
 
 // Control: no table constant in the depth is lawful for it. At depth one
@@ -345,11 +347,13 @@ theorem down_no_constant_room(c: Nat): ¬RoomLaw(down_program().routines, λ (f:
 // The whole contract of the recursive routine's code, going clause included
 // (`lower_program_meets`, from `Tracks` by `Site::tracks_meets`).
 theorem down_meets<M>(program: Prog, lowered: down_program().lower(down_places()) = Some(program), fetch: FetchAccess<M>, data: ByteReadAccess<M>,
-    last: List<BitVec(8)>, origin: BitVec(64), stack: Stack<M>(fetch, data), top: Nat, spans: Spans, blocks: Blocks):
-    Site<M>(fetch, data, program, last, origin).Meets(stack, spans, top, blocks.Lent(spans), depth_rooms(down_program().routines),
+    last: List<BitVec(8)>, origin: BitVec(64), stack: Stack<M>(fetch, data), top: Nat, spans: Spans, blocks: Blocks,
+    spends: LowerProgramSpends<M>(down_program(), program, fetch, data, last, origin, stack, top, spans, blocks)):
+    Site<M>(fetch, data, program, last, origin).Meets(stack, spans, top, blocks.Lent(spans), routine_rooms(down_program().routines),
+        any_guard(program_guards(down_program().routines)), stop_rooms(down_program().routines),
         λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run_peak(down_program(), blocks, n, f, args, heap, io), 1,
         λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run(down_program(), blocks, n, f, args, heap, io)) {
-    lower_program_meets<M>(down_program(), down_places(), program, lowered, fetch, data, last, origin, stack, top, spans, blocks)
+    lower_program_meets<M>(down_program(), program, fetch, data, last, origin, stack, top, spans, blocks, spends)
 }
 
 // ---------------------------------------------------------------------------
@@ -445,11 +449,13 @@ theorem echo_past_read_stuck(): is_stuck(echo_run(3, 16)) = True { refl }
 
 theorem echo_meets<M>(back: Nat, program: Prog, lowered: echo_program(back).lower(echo_places()) = Some(program), fetch: FetchAccess<M>,
     data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64), stack: Stack<M>(fetch, data), top: Nat, spans: Spans,
-    blocks: Blocks):
-    Site<M>(fetch, data, program, last, origin).Meets(stack, spans, top, blocks.Lent(spans), depth_rooms(echo_program(back).routines),
+    blocks: Blocks,
+    spends: LowerProgramSpends<M>(echo_program(back), program, fetch, data, last, origin, stack, top, spans, blocks)):
+    Site<M>(fetch, data, program, last, origin).Meets(stack, spans, top, blocks.Lent(spans), routine_rooms(echo_program(back).routines),
+        any_guard(program_guards(echo_program(back).routines)), stop_rooms(echo_program(back).routines),
         λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run_peak(echo_program(back), blocks, n, f, args, heap, io), 1,
         λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run(echo_program(back), blocks, n, f, args, heap, io)) {
-    lower_program_meets<M>(echo_program(back), echo_places(), program, lowered, fetch, data, last, origin, stack, top, spans, blocks)
+    lower_program_meets<M>(echo_program(back), program, fetch, data, last, origin, stack, top, spans, blocks, spends)
 }
 
 // bytes_level_tests' `read_then_load`: read into block 0, load its first
@@ -475,11 +481,13 @@ theorem answered_read_defines(): done_words(run(rtl_program(), world_blocks(), 1
 
 theorem rtl_meets<M>(program: Prog, lowered: rtl_program().lower(rtl_places()) = Some(program), fetch: FetchAccess<M>,
     data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64), stack: Stack<M>(fetch, data), top: Nat, spans: Spans,
-    blocks: Blocks):
-    Site<M>(fetch, data, program, last, origin).Meets(stack, spans, top, blocks.Lent(spans), depth_rooms(rtl_program().routines),
+    blocks: Blocks,
+    spends: LowerProgramSpends<M>(rtl_program(), program, fetch, data, last, origin, stack, top, spans, blocks)):
+    Site<M>(fetch, data, program, last, origin).Meets(stack, spans, top, blocks.Lent(spans), routine_rooms(rtl_program().routines),
+        any_guard(program_guards(rtl_program().routines)), stop_rooms(rtl_program().routines),
         λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run_peak(rtl_program(), blocks, n, f, args, heap, io), 1,
         λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run(rtl_program(), blocks, n, f, args, heap, io)) {
-    lower_program_meets<M>(rtl_program(), rtl_places(), program, lowered, fetch, data, last, origin, stack, top, spans, blocks)
+    lower_program_meets<M>(rtl_program(), program, fetch, data, last, origin, stack, top, spans, blocks, spends)
 }
 
 // A pass that writes the window's first byte to fd 1 and never sets its
@@ -508,11 +516,13 @@ theorem writer_going_6(): going_history(writer_run(6)) = Some(6) { refl }
 
 theorem writer_meets<M>(program: Prog, lowered: writer_program().lower(writer_places()) = Some(program), fetch: FetchAccess<M>,
     data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64), stack: Stack<M>(fetch, data), top: Nat, spans: Spans,
-    blocks: Blocks):
-    Site<M>(fetch, data, program, last, origin).Meets(stack, spans, top, blocks.Lent(spans), depth_rooms(writer_program().routines),
+    blocks: Blocks,
+    spends: LowerProgramSpends<M>(writer_program(), program, fetch, data, last, origin, stack, top, spans, blocks)):
+    Site<M>(fetch, data, program, last, origin).Meets(stack, spans, top, blocks.Lent(spans), routine_rooms(writer_program().routines),
+        any_guard(program_guards(writer_program().routines)), stop_rooms(writer_program().routines),
         λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run_peak(writer_program(), blocks, n, f, args, heap, io), 1,
         λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run(writer_program(), blocks, n, f, args, heap, io)) {
-    lower_program_meets<M>(writer_program(), writer_places(), program, lowered, fetch, data, last, origin, stack, top, spans, blocks)
+    lower_program_meets<M>(writer_program(), program, fetch, data, last, origin, stack, top, spans, blocks, spends)
 }
 
 // The whole program (bytes_level_whole): `echo`'s code runs, as the Linux
@@ -521,15 +531,17 @@ theorem writer_meets<M>(program: Prog, lowered: writer_program().lower(writer_pl
 // and the write of them.
 theorem echo_runs_as<M>(program: Prog, lowered: echo_program(2).lower(echo_places()) = Some(program), fetch: FetchAccess<M>,
     data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64), stack: Stack<M>(fetch, data), top: Nat, spans: Spans,
-    blocks: Blocks):
-    Site<M>(fetch, data, program, last, origin).RunsAsMeaning(stack, spans, top, blocks.Lent(spans), depth_rooms(echo_program(2).routines),
+    blocks: Blocks,
+    spends: LowerProgramSpends<M>(echo_program(2), program, fetch, data, last, origin, stack, top, spans, blocks)):
+    Site<M>(fetch, data, program, last, origin).RunsAsMeaning(stack, spans, top, blocks.Lent(spans), routine_rooms(echo_program(2).routines),
+        any_guard(program_guards(echo_program(2).routines)), stop_rooms(echo_program(2).routines),
         λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run_peak(echo_program(2), blocks, n, f, args, heap, io), 1,
         λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run(echo_program(2), blocks, n, f, args, heap, io)) {
-    Site<M>(fetch, data, program, last, origin).tracks_runs_as(stack, spans, top, blocks.Lent(spans), depth_rooms(echo_program(2).routines),
+    Site<M>(fetch, data, program, last, origin).tracks_runs_as(stack, spans, top, blocks.Lent(spans), routine_rooms(echo_program(2).routines),
+        any_guard(program_guards(echo_program(2).routines)), stop_rooms(echo_program(2).routines),
         λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run_peak(echo_program(2), blocks, n, f, args, heap, io), 1,
         λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run(echo_program(2), blocks, n, f, args, heap, io),
-        lower_program_tracks<M>(echo_program(2), echo_places(), program, lowered, fetch, data, last, origin, stack, top, spans, blocks,
-            depth_rooms(echo_program(2).routines), depth_rooms_lawful(echo_program(2).routines)))
+        spends)
 }
 
 // The smallest program that needs the empty-range law
@@ -551,11 +563,13 @@ theorem empty_read_done(): done_words(run(empty_program(), Blocks(λ (b: Nat) =>
     Io::of(World::piped([])))) = Some([0]) { refl }
 
 theorem empty_read_meets<M>(program: Prog, lowered: empty_program().lower(empty_places()) = Some(program), fetch: FetchAccess<M>,
-    data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64), stack: Stack<M>(fetch, data), top: Nat, spans: Spans, blocks: Blocks):
-    Site<M>(fetch, data, program, last, origin).Meets(stack, spans, top, blocks.Lent(spans), depth_rooms(empty_program().routines),
+    data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64), stack: Stack<M>(fetch, data), top: Nat, spans: Spans, blocks: Blocks,
+    spends: LowerProgramSpends<M>(empty_program(), program, fetch, data, last, origin, stack, top, spans, blocks)):
+    Site<M>(fetch, data, program, last, origin).Meets(stack, spans, top, blocks.Lent(spans), routine_rooms(empty_program().routines),
+        any_guard(program_guards(empty_program().routines)), stop_rooms(empty_program().routines),
         λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run_peak(empty_program(), blocks, n, f, args, heap, io), 1,
         λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run(empty_program(), blocks, n, f, args, heap, io)) {
-    lower_program_meets<M>(empty_program(), empty_places(), program, lowered, fetch, data, last, origin, stack, top, spans, blocks)
+    lower_program_meets<M>(empty_program(), program, fetch, data, last, origin, stack, top, spans, blocks, spends)
 }
 
 // ---------------------------------------------------------------------------

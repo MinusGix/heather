@@ -144,17 +144,27 @@ theorem Site::tracked_runs_as<M>(self site: Site<M>, stack: Stack<M>(site.fetch,
 
 // `Tracks`, at every routine entered as the contract enters one, in every
 // world whose answers Linux may give, and at every fuel: the machine runs as
-// the trace of the meaning's outcome there.
-fn Site::RunsAsMeaning<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), spans: Spans, top: Nat, lent: Type, room: Nat → Nat → Nat,
-    peak: Nat → Nat → List<Value> → Heap → Io → Nat, bound: Nat, meaning: Nat → Calls()) → Type {
-    site.Entering(stack, spans, top, lent, room, peak, bound, λ n f args heap io s i ret => io.Answerable() →
-        RunsAs(site.linux(stack), meaning(n, f, args, heap, io).trace(io), s))
+// the trace of the meaning's outcome there; or, where the run's room by
+// depth is not there, as an exit with the reserved status after a prefix of
+// what the meaning does.
+fn Site::RunsAsMeaning<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), spans: Spans, top: Nat, lent: Type, rooms: Nat → Nat,
+    floored: Bool, room: Nat → Nat → Nat, peak: Nat → Nat → List<Value> → Heap → Io → Nat, bound: Nat, meaning: Nat → Calls()) → Type {
+    site.Entering(stack, spans, top, lent, floored, bound, λ f args heap io s i ret => rooms(f) <= i → (n: Nat) → io.Answerable() →
+        RunsAs(site.linux(stack), meaning(n, f, args, heap, io).trace(io), s) ∨
+        (¬(room(f, peak(n, f, args, heap, io)) <= i) ∧ Exists<Io>(λ o => MeaningPrefix(meaning, f, args, heap, io, o.past) ∧
+            RunsAs(site.linux(stack), Exited<Answer>(BitVec::ofNat(spent_status()), o).trace(io), s))))
 }
 
-theorem Site::tracks_runs_as<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), spans: Spans, top: Nat, lent: Type, room: Nat → Nat → Nat,
-    peak: Nat → Nat → List<Value> → Heap → Io → Nat, bound: Nat, meaning: Nat → Calls(),
-    tracks: site.Tracks(stack, spans, top, lent, room, peak, bound, meaning)): site.RunsAsMeaning(stack, spans, top, lent, room, peak, bound, meaning) {
-    λ loan law f below args heap io s here resident i rsp inside passed high injected ret saved n roomy answerable =>
-        site.tracked_runs_as(stack, spans, s, i, ret, io, n, meaning(n, f, args, heap, io),
-            tracks(loan, law, f, below, args, heap, io, s, here, resident, i, rsp, inside, passed, high, injected, ret, saved, n, roomy, answerable))
+theorem Site::tracks_runs_as<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), spans: Spans, top: Nat, lent: Type, rooms: Nat → Nat,
+    floored: Bool, room: Nat → Nat → Nat, peak: Nat → Nat → List<Value> → Heap → Io → Nat, bound: Nat, meaning: Nat → Calls(),
+    tracks: site.Tracks(stack, spans, top, lent, rooms, floored, room, peak, bound, meaning)):
+    site.RunsAsMeaning(stack, spans, top, lent, rooms, floored, room, peak, bound, meaning) {
+    λ loan law f below args heap io s here resident i rsp inside passed high injected ret saved floor roomy n answerable =>
+        match tracks(loan, law, f, below, args, heap, io, s, here, resident, i, rsp, inside, passed, high, injected, ret, saved, floor, roomy, n,
+            answerable) {
+            Inl(tracked) => Inl(site.tracked_runs_as(stack, spans, s, i, ret, io, n, meaning(n, f, args, heap, io), tracked)),
+            Inr(spent) => Inr(⟨spent.left, Exists(spent.right.witness, ⟨spent.right.proof.left,
+                site.tracked_runs_as(stack, spans, s, i, ret, io, 0, Exited<Answer>(BitVec::ofNat(spent_status()), spent.right.witness),
+                    spent.right.proof.right)⟩)⟩),
+        }
 }

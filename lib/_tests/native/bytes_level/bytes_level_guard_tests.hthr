@@ -498,6 +498,16 @@ theorem pingpong_returns(): halt_is(run_lowered(pingpong_program(), pingpong_pla
 
 theorem pingpong_spent(): halt_is(run_lowered(pingpong_program(), pingpong_places(), 1, [3], 300), [0, 139, 4188]) = True { refl }
 
+// The table by depth as §17.7 built it (`depth_rooms`, deleted since): at
+// each depth its routines' largest frames and their callees' rooms one
+// depth less.
+fn depth_only(routines: List<Routine>, p: Nat) → Nat → Nat {
+    match p {
+        Zero => λ (f: Nat) => depth_room(routines, λ (g: Nat) => 0, f),
+        Succ(q) => λ (f: Nat) => depth_room(routines, depth_only(routines, q), f),
+    }
+}
+
 // The finding: at the room the table by depth as built gives `downh`'s
 // run from one (one call deep), its guard fires where a placement saves
 // five; at the stop's table it returns. So the stop is read against
@@ -506,7 +516,7 @@ theorem downh_depth(): run_peak(downh_program(), Blocks(λ (b: Nat) => False), 5
     refl
 }
 
-theorem downh_depth_room(): depth_rooms(downh_program().routines)(1, 1).same(272) && stop_rooms(downh_program().routines)(1, 1).same(320) = True { refl }
+theorem downh_depth_room(): depth_only(downh_program().routines, 1)(1).same(272) && stop_rooms(downh_program().routines)(1, 1).same(320) = True { refl }
 
 theorem downh_spent_in_depth_room(): halt_is(run_lowered(downh_program(), downh_places(5), 1, [1], 272), [0, 139, 4256]) = True { refl }
 
