@@ -3003,6 +3003,85 @@ now general: a routine-level fact held in a kept register is visible at a
 frame's body, at a call's start and at a callee's entry, so the next such
 fact needs no new lemma.
 
+**Step 3, part 3, items 3–4: the region family at the ceiling, the routine
+level and the theorem** (`bytes_level_lower`, `bytes_level_scope`,
+`bytes_level_routines`). The lowering's theorem is proved:
+`lower_program_tracks` is `LowerProgramSpends` (`Site::Tracks`) for every
+program `Program::lower` returns, `lower_program_tracks_at` (today's
+`TracksAt`) its corollary by `tracks_at` and `stop_rooms_over`, and
+`lower_program_meets` its readings. The interim hypotheses are gone
+(`any_guard(…) = False`, `LowerProgramSpends` taken as a hypothesis), and
+with them `lower_plain_tracks_at`.
+
+- **One escape, two forms** (the coordinating session's ruling). The
+  contract states the stop as an escape (`Tracked`'s `esc`); the regions
+  carry it as a kernel step: every region of a routine is proved at one
+  `Ceiling { esc, top }` whose kernel is `linux_escaping(esc ∧ Extends(top,
+  ·))` and whose count is constant, `|top| + 1` (`Ceiling::count`), read
+  back once (`Site::claims_ceiling`, over `escaping_ceiling`). A region's
+  facts carry that its world after is under `top` (`Ceiling::Under`), so a
+  composite's count never has to be added up. The routine boundary converts
+  once (`out_of_room_of_ceiling`, by `performs_or_of_escaping`); nothing
+  above it mentions the escaping kernel.
+- **What still reads exact counts.** Only the leaves proved at Linux
+  (`EmitsLinux`, lifted once by `emits_now_of_linux`) and the stop's own
+  claims (`claims_stop_exact`, now the ceiling's).
+- **The meaning's exit is a goal of the stop side**, the machine's stop an
+  escape: the exit is read off the region's facts at a bound, as a going
+  stop is; the escape owes no bound.
+- **Per entry.** A routine's escape names the offset it was entered at:
+  `spends_at(table)(f, i) = SpentExit ∧ ¬(table(f) <= i)`, the ceiling of a
+  done run `Ceiling(spends_at(stop_rooms(·, cap))(k, i), a.io)` and of a
+  stopped run the stop's world. A callee's (`CalleesReturn`/`CalleesStop`,
+  per `i`) is the routine's own form one depth below
+  (`rooms_below(stop_rooms, cap)`), so `program_returns` and `program_stops`
+  keep their induction on fuel and depth unchanged.
+- **`spent` and `carries`** come from `RoomLaw(stop_rooms)` alone, by two
+  stage lemmas of arithmetic (`guard_not_short`, `callee_not_short`): where
+  `stop_rooms(k, cap) <= i`, the frame's offset is at least the depth law's
+  fit of the call, which holds the callee's room by routine
+  (`stop_rooms_over`, `rooms_below_over`: an answer within `cap` puts
+  `cap ≥ 1`), so no guard fires and a callee entered below has its own. For
+  this the region family's `spent` takes the call's `callee + 1 <= bound`,
+  read off the call's emission (`emit_call_below`, FunctionIR's first test,
+  no FunctionIR edit).
+- **`need` and the table's per-call term are the same number on purpose**:
+  `need = 24 + rooms(g)` (at most two stack words and the return address,
+  FunctionIR's call not exposing its own count where the guard is proved),
+  the term an unguarded call adds to its caller's room. **The table is the
+  tight one**: `Body::stop_room` gives a guarded call 0 and the routine's
+  room by routine is `Routine::RoomyBy` (`Body::FitsBy`: a guarded call asks
+  nothing); `by_routine_settled` reads it off the lowering's
+  `rooms_settled`. The probes' numbers moved with it: `down` returns at 272
+  (one table frame short) and stops at 271; `shout` at 272 stops after three
+  of its four writes; `ping`'s guard asks 208 (pong's 184 + 24) and `pong`'s
+  136 (ping's 112 + 24); from three `ping` is four calls deep and returns at
+  its room by depth (680). Every verdict keeps its status and its writes as
+  a prefix of the meaning's.
+- **The floor** is a fact of the entry where the program guards
+  (`Stack::Floored(floored, ·)`, beside `j = i` in the routine's pre and the
+  callees'). At a body it comes through `function_runs_claim_kept` /
+  `function_enters_claim_kept` and `kept_rbp` (saves ≤ 5, which
+  `Routine::emit_by` checks); at a call through
+  `File::emit_call_steps_claim_kept` (the region's kept registers at the
+  call's start) and `call_step_claim_kept` (the callee's entry,
+  `kept_callee_rbp`). The region family takes `floored`, `floor` (any
+  register file the body keeps holds RBP) and `guarding` (a guarded call
+  only where the program is floored). No new FunctionIR lemma was needed.
+- **One emission path.** The plain lowering (`Routine::emit`, saves six
+  allowed) is proved through `emit_body_by(CallGuards(guards_at(guards, k),
+  routine_rooms, 0))` with no floor, by `Body::emit_by_plain` (with no guard
+  listed, `emit_by(g)` is `emit` whatever `g.rooms` and `g.stop`) and
+  `guards_at_none` (no cycle, no guard). The guarded one (`Routine::emit_by`)
+  is proved floored, its stop laid out (`StopLaid`, from
+  `Program::lower_guarded`'s `stopped_at`). Both reach `program_tracks` at
+  the same tables.
+- **Histories.** A stopped run's world extends its start's
+  (`program_stop_extends`, by `Routine::call_stop_extends` and
+  `Body::stop_extends`), as a done run's does (`program_extends`): the
+  meaning's `StopsExtend` and `HistoryExtends` give the regions'
+  `GoesExtend` and `AnswersExtend`.
+
 ## 18. The world, termination, and level 2 fixed (2026-11-25)
 
 Round six of the design review. Where this section and §15.4, §15.5 or §17

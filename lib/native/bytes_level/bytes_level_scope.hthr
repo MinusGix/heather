@@ -1651,6 +1651,153 @@ theorem Body::run_extends(self body: Body, blocks: Blocks, calls: Calls(), exten
     }
 }
 
+// Calls whose stopped runs only extend: a call going on or exited at `x`
+// has the start's world under `x`'s (of the meaning alone, as
+// `HistoryExtends`).
+fn StopsExtend(calls: Calls()) → Type {
+    (f: Nat) → (args: List<Value>) → (heap: Heap) → (io: Io) → (x: Stop) → calls(f, args, heap, io).stopped() = Some(x) → Extends(x.world().past, io.past)
+}
+
+// A going world is the stop's.
+theorem going_extends(io: Io, x: Stop, e: Some(StopGoing(io)) = Some(x)): Extends(x.world().past, io.past) {
+    j(Option::some_inj(StopGoing(io), x, e), λ y _ => Extends(y.world().past, io.past), extends_refl(io.past))
+}
+
+theorem loop_pass_stop_extends(x: Stop, blocks: Blocks, calls: Calls(), inner: Body, parameters: List<Typed>, exit: Nat, next: List<Typed>,
+    passes: (rest: Nat) → (state: List<Value>) → (m: Heap) → (io: Io) → (l: Locals) → (after: Config) → pass_locals(parameters, state) = Some(l) →
+        inner.run(blocks, calls, rest, Config(l, m, io)) = Done(after) → Extends(after.io.past, io.past),
+    goes: (rest: Nat) → (m: Heap) → (io: Io) → (l: Locals) → inner.run(blocks, calls, rest, Config(l, m, io)).stopped() = Some(x) →
+        Extends(x.world().past, io.past),
+    fuel: Nat, later: List<Value> → Heap → Io → Ran<Ended>,
+    each: (state: List<Value>) → (m: Heap) → (io: Io) → later(state, m, io).stopped() = Some(x) → Extends(x.world().past, io.past)):
+    (state: List<Value>) → (m: Heap) → (io: Io) →
+    bytes_level::loop_pass(λ (n: Nat) (pass: Config) => inner.run(blocks, calls, n, pass), parameters, exit, next, fuel, later, state, m, io).stopped() = Some(x) →
+    Extends(x.world().past, io.past) {
+    λ state m io ran => {
+        let after_pass = λ (after: Config) => Ran::of(read_values(next, after.locals), after.io).then(λ (more: List<Value>) =>
+            match after.locals.words(1, exit).head_bit() {
+                False => later(more, after.memory, after.io),
+                True => Done(Ended(more, after.memory, after.io)),
+            });
+        match Ran::then_stopped<Locals, Ended>(Ran::of(pass_locals(parameters, state), io), λ (l: Locals) =>
+            inner.run(blocks, calls, fuel, Config(l, m, io)).then(after_pass), x, ran) {
+            Inl(bad) => false_elim(Ran::of_stopped<Locals>(pass_locals(parameters, state), io, x, bad)),
+            Inr(one) => {
+                let l = one.witness;
+                match Ran::then_stopped<Config, Ended>(inner.run(blocks, calls, fuel, Config(l, m, io)), after_pass, x, one.proof.right) {
+                    Inl(going) => goes(fuel, m, io, l, going),
+                    Inr(two) => {
+                        let after = two.witness;
+                        let pass_extends = passes(fuel, state, m, io, l, after,
+                            Ran::of_done<Locals>(pass_locals(parameters, state), io, l, one.proof.left), two.proof.left);
+                        match Ran::then_stopped<List<Value>, Ended>(Ran::of(read_values(next, after.locals), after.io), λ (more: List<Value>) =>
+                            match after.locals.words(1, exit).head_bit() {
+                                False => later(more, after.memory, after.io),
+                                True => Done(Ended(more, after.memory, after.io)),
+                            }, x, two.proof.right) {
+                            Inl(bad) => false_elim(Ran::of_stopped<List<Value>>(read_values(next, after.locals), after.io, x, bad)),
+                            Inr(three) => extends_trans(x.world().past, after.io.past, io.past,
+                                (match after.locals.words(1, exit).head_bit() as λ b =>
+                                    (match b { False => later(three.witness, after.memory, after.io), True => Done(Ended(three.witness, after.memory, after.io)) })
+                                        .stopped() = Some(x) → Extends(x.world().past, after.io.past) {
+                                    False => λ e => each(three.witness, after.memory, after.io, e),
+                                    True => λ never => absurd(never),
+                                })(three.proof.right), pass_extends),
+                        }
+                    },
+                }
+            },
+        }
+    }
+}
+
+theorem loop_later_stop_extends(x: Stop, blocks: Blocks, calls: Calls(), inner: Body, parameters: List<Typed>, exit: Nat, next: List<Typed>,
+    passes: (rest: Nat) → (state: List<Value>) → (m: Heap) → (io: Io) → (l: Locals) → (after: Config) → pass_locals(parameters, state) = Some(l) →
+        inner.run(blocks, calls, rest, Config(l, m, io)) = Done(after) → Extends(after.io.past, io.past),
+    goes: (rest: Nat) → (m: Heap) → (io: Io) → (l: Locals) → inner.run(blocks, calls, rest, Config(l, m, io)).stopped() = Some(x) →
+        Extends(x.world().past, io.past),
+    fuel: Nat): (state: List<Value>) → (m: Heap) → (io: Io) →
+    bytes_level::loop_later(λ (n: Nat) (pass: Config) => inner.run(blocks, calls, n, pass), parameters, exit, next, fuel, state, m, io).stopped() = Some(x) →
+    Extends(x.world().past, io.past) {
+    match fuel {
+        Zero => λ state m io e => going_extends(io, x, e),
+        Succ(rest) => loop_pass_stop_extends(x, blocks, calls, inner, parameters, exit, next, passes, goes, rest,
+            bytes_level::loop_later(λ (n: Nat) (pass: Config) => inner.run(blocks, calls, n, pass), parameters, exit, next, rest),
+            loop_later_stop_extends(x, blocks, calls, inner, parameters, exit, next, passes, goes, rest)),
+    }
+}
+
+// A run stopped: the stop's world extends the start's.
+theorem Body::stop_extends(self body: Body, blocks: Blocks, calls: Calls(), extends: HistoryExtends(calls), stops: StopsExtend(calls), fuel: Nat):
+    (used, used2: List<Nat>) → (c: Config) → (x: Stop) → body.fresh(used) = Some(used2) → body.run(blocks, calls, fuel, c).stopped() = Some(x) →
+    Extends(x.world().past, c.io.past) {
+    match body {
+        Leaf(instrs) => λ used used2 c x fresh ran => false_elim(Ran::of_stopped<Config>(run_instrs(blocks, instrs, c), c.io, x, ran)),
+        Seq(first, rest) => λ used used2 c x fresh ran => {
+            let fr = Option::and_then_some(first.fresh(used), λ (u: List<Nat>) => rest.fresh(u), used2, fresh);
+            match Ran::then_stopped<Config, Config>(first.run(blocks, calls, fuel, c), λ (mid: Config) => rest.run(blocks, calls, fuel, mid), x, ran) {
+                Inl(going) => first.stop_extends(blocks, calls, extends, stops, fuel, used, fr.witness, c, x, fr.proof.left, going),
+                Inr(one) => extends_trans(x.world().past, one.witness.io.past, c.io.past,
+                    rest.stop_extends(blocks, calls, extends, stops, fuel, fr.witness, used2, one.witness, x, fr.proof.right, one.proof.right),
+                    first.run_extends(blocks, calls, extends, fuel, used, fr.witness, c, one.witness, fr.proof.left, one.proof.left)),
+            }
+        },
+        Branch(condition, yes, no) => λ used used2 c x fresh ran => {
+            let fresh_yes = Option::and_then_some(yes.fresh(used), λ (uy: List<Nat>) => no.fresh(used).and_then(λ (un: List<Nat>) => Some(uy ++ un)),
+                used2, fresh);
+            let fresh_no = Option::and_then_some(no.fresh(used), λ (un: List<Nat>) => Some(fresh_yes.witness ++ un), used2, fresh_yes.proof.right);
+            (match c.locals.words(1, condition).head_bit() as λ bit =>
+                (match bit { True => yes.run(blocks, calls, fuel, c), False => no.run(blocks, calls, fuel, c) }).stopped() = Some(x) →
+                Extends(x.world().past, c.io.past) {
+                True => λ r => yes.stop_extends(blocks, calls, extends, stops, fuel, used, fresh_yes.witness, c, x, fresh_yes.proof.left, r),
+                False => λ r => no.stop_extends(blocks, calls, extends, stops, fuel, used, fresh_no.witness, c, x, fresh_no.proof.left, r),
+            })(ran)
+        },
+        Call(callee, arguments, results) => λ used used2 c x fresh ran => {
+            let rest_k = λ (args: List<Value>) => calls(callee, args, c.memory, c.io).then(λ (answer: Answer) =>
+                Ran::of(bind_values(results, answer.words, c.locals), answer.io).then(λ (l: Locals) => Done(Config(l, answer.heap, answer.io))));
+            match Ran::then_stopped<List<Value>, Config>(Ran::of(read_values(arguments, c.locals), c.io), rest_k, x, ran) {
+                Inl(bad) => false_elim(Ran::of_stopped<List<Value>>(read_values(arguments, c.locals), c.io, x, bad)),
+                Inr(one) => match Ran::then_stopped<Answer, Config>(calls(callee, one.witness, c.memory, c.io), λ (answer: Answer) =>
+                    Ran::of(bind_values(results, answer.words, c.locals), answer.io).then(λ (l: Locals) => Done(Config(l, answer.heap, answer.io))), x,
+                    one.proof.right) {
+                    Inl(going) => stops(callee, one.witness, c.memory, c.io, x, going),
+                    Inr(two) => false_elim(Ran::done_not_stopped<Locals, Config>(bind_values(results, two.witness.words, c.locals), two.witness.io,
+                        λ (l: Locals) => Config(l, two.witness.heap, two.witness.io), x, two.proof.right)),
+                },
+            }
+        },
+        Loop(inputs, parameters, inner, exit, next, outputs) => λ used used2 c x fresh ran => {
+            let fr = loop_fresh(used, used2, inputs, parameters, inner, exit, next, outputs, fresh);
+            let rest_k = λ (state: List<Value>) =>
+                bytes_level::loop_run(λ (n: Nat) (pass: Config) => inner.run(blocks, calls, n, pass), parameters, exit, next, fuel, state, c.memory, c.io)
+                    .then(λ (end: Ended) => Ran::of(bind_values(outputs, end.state, c.locals), end.io).then(λ (l: Locals) => Done(Config(l, end.memory, end.io))));
+            match Ran::then_stopped<List<Value>, Config>(Ran::of(read_values(inputs, c.locals), c.io), rest_k, x, ran) {
+                Inl(bad) => false_elim(Ran::of_stopped<List<Value>>(read_values(inputs, c.locals), c.io, x, bad)),
+                Inr(one) => match Ran::then_stopped<Ended, Config>(
+                    bytes_level::loop_run(λ (n: Nat) (pass: Config) => inner.run(blocks, calls, n, pass), parameters, exit, next, fuel, one.witness, c.memory,
+                        c.io),
+                    λ (end: Ended) => Ran::of(bind_values(outputs, end.state, c.locals), end.io).then(λ (l: Locals) => Done(Config(l, end.memory, end.io))), x,
+                    one.proof.right) {
+                    Inl(going) => loop_pass_stop_extends(x, blocks, calls, inner, parameters, exit, next,
+                        λ rest st m io l aft _ rn => inner.run_extends(blocks, calls, extends, rest, fr.start, fr.inside, Config(l, m, io), aft, fr.body, rn),
+                        λ rest m io l g => inner.stop_extends(blocks, calls, extends, stops, rest, fr.start, fr.inside, Config(l, m, io), x, fr.body, g), fuel,
+                        bytes_level::loop_later(λ (n: Nat) (pass: Config) => inner.run(blocks, calls, n, pass), parameters, exit, next, fuel),
+                        loop_later_stop_extends(x, blocks, calls, inner, parameters, exit, next,
+                            λ rest st m io l aft _ rn => inner.run_extends(blocks, calls, extends, rest, fr.start, fr.inside, Config(l, m, io), aft, fr.body, rn),
+                            λ rest m io l g => inner.stop_extends(blocks, calls, extends, stops, rest, fr.start, fr.inside, Config(l, m, io), x, fr.body, g), fuel),
+                        one.witness, c.memory, c.io, going),
+                    Inr(two) => false_elim(Ran::done_not_stopped<Locals, Config>(bind_values(outputs, two.witness.state, c.locals), two.witness.io,
+                        λ (l: Locals) => Config(l, two.witness.memory, two.witness.io), x, two.proof.right)),
+                },
+            }
+        },
+        Sys(call) => λ used used2 c x fresh ran => false_elim(absurd(trans(sym(ran), call.stopped_none(blocks, c)))),
+        Exit(status) => λ used used2 c x fresh ran => j(Option::some_inj(StopExited(c.locals.word(status), c.io), x, ran), λ y _ => Extends(y.world().past, c.io.past),
+            extends_refl(c.io.past)),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // The bridge: a run is its facts at the valuation
 
