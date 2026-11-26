@@ -10208,8 +10208,8 @@ theorem Inv::ret_fresh(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys
 // `Value::Written`'s fit; a holder of an argument object has its parameter's
 // access; an argument never written has its entry value (the meaning's side
 // of `CSt::sig_atom`'s refusal of a written argument, so a returned view's
-// words are the call's); a pending view is like what its place reads in its
-// parent, so its write-back keeps the parent like itself. It is carried
+// words are the call's); a view to write on a pending chain is like what its
+// place reads in its parent, so its write-back keeps the parent like itself. It is carried
 // beside `Inv`: a write-back's like-ness where nothing is pending is
 // `Inv::back_like`'s (the licence's apartness lives there), a call's
 // written slot's is the callee's (`CallFits`).
@@ -10224,11 +10224,18 @@ theorem Dyn::like_trans(tys: Nat → Type, strs: Strs(tys), a, b, c: Dyn(tys), h
 
 fn Dyn::arg(tys: Nat → Type, ds: List<Dyn(tys)>, o: Nat) → Dyn(tys) { ds.nth(o).unwrap_or(Dyn::none(tys)) }
 
+// A level on a pending chain: a pending entry's own, or an ancestor of one
+// (`CSt::pend_in` without the machine). `Like.pend` is asked of every view to
+// write on one: a backed view whose child is pending becomes pending when
+// the child is written back, and the invariant cannot say then that it is
+// like its place, the patch having written that place over (`back_under`).
+fn CSt::on_chain(self s: CSt, z: Nat) → Bool { s.views.any_bit(λ x => x.mode.writes() && !x.back && (x.lvl.same(z) || z.member(s.anc_of(x, s.na + s.nd)))) }
+
 record Like(tys: Nat → Type, strs: Strs(tys), ps: List<Param>, ds: List<Dyn(tys)>, s: CSt, e: Env(tys)) {
     acc: (l, o: Nat) → (a: Acc) → l < s.na + s.nd → s.role(l) = KHold(o, a) → o < s.na → (p: Param) → ps.nth(o) = Some(p) → CSt::role_of(tys, strs, p, o) = KHold(o, a),
     held: (x: Var) → (l, o: Nat) → s.lvl(x) = Some(l) → s.role(l) = KHold(o, AcWrite) → Dyn::Like(tys, strs, Env::get(tys, e, x), Dyn::arg(tys, ds, o)),
     keep: (k: Nat) → k < s.na → k.member(s.wrote) = False → Env::get(tys, e, Arg(k)) = Dyn::arg(tys, ds, k),
-    pend: (en: VEnt) → Mem(en, s.views) → (en.mode.writes() && !en.back) = True → (y, z: Var) → s.lvl(y) = Some(en.par) → s.lvl(z) = Some(en.lvl) →
+    pend: (en: VEnt) → Mem(en, s.views) → en.mode.writes() = True → s.on_chain(en.lvl) = True → (y, z: Var) → s.lvl(y) = Some(en.par) → s.lvl(z) = Some(en.lvl) →
         Dyn::Like(tys, strs, Env::get(tys, e, z), Dyn::read(tys, strs, Env::ixs(tys, e), s.unsteps(en.at), Env::get(tys, e, y))),
 }
 
@@ -10914,12 +10921,18 @@ theorem CSt::not_pending(self s: CSt, none: s.pending() = False, en: VEnt, mem: 
     })(refl))
 }
 
+// Nothing pending: no level is on a chain.
+theorem CSt::on_chain_none(self s: CSt, none: s.pending() = False, z: Nat): s.on_chain(z) = False {
+    s.views.any_bit_none(λ x => x.mode.writes() && !x.back && (x.lvl.same(z) || z.member(s.anc_of(x, s.na + s.nd))),
+        λ x mx => j(sym(s.not_pending(none, x, mx)), λ b _ => (b && (x.lvl.same(z) || z.member(s.anc_of(x, s.na + s.nd)))) = False, refl))
+}
+
 theorem Env::get_push_up(tys: Nat → Type, e: Env(tys), d: Dyn(tys), x: Var): Env::get(tys, Env::push(tys, e, d), x.up()) = Env::get(tys, e, x) { match x { Arg(_) => refl, Loc(_) => refl } }
 
 // A binding, nothing pending after it: an old variable keeps its value, the
 // new one is like the argument where it holds a written parameter's object.
 theorem Like::push(tys: Nat → Type, strs: Strs(tys), {ps: List<Param>}, {ds: List<Dyn(tys)>}, {s: CSt}, {e: Env(tys)}, lk: Like(tys, strs, ps, ds, s, e), vs2: List<VEnt>,
-    np: (en: VEnt) → Mem(en, vs2) → (en.mode.writes() && !en.back) = False, cv: CVar, d: Dyn(tys),
+    pn: (s.with_views(vs2)).pending() = False, cv: CVar, d: Dyn(tys),
     nacc: (o: Nat) → (a: Acc) → cv.role = KHold(o, a) → o < s.na → (p: Param) → ps.nth(o) = Some(p) → CSt::role_of(tys, strs, p, o) = KHold(o, a),
     nheld: (o: Nat) → cv.role = KHold(o, AcWrite) → Dyn::Like(tys, strs, d, Dyn::arg(tys, ds, o))):
     Like(tys, strs, ps, ds, (s.with_views(vs2)).push(cv), Env::push(tys, e, d))
@@ -10942,7 +10955,7 @@ theorem Like::push(tys: Nat → Type, strs: Strs(tys), {ps: List<Param>}, {ds: L
             },
         },
         lk.keep,
-        λ en mem w => absurd(trans(sym(w), np(en, mem))))
+        λ en mem w oc => absurd(trans(sym(oc), s2.on_chain_none(pn, en.lvl))))
 }
 
 theorem CSt::hold_set_gone(self s: CSt, l: Nat, b: l < s.na + s.nd, l2, o: Nat, a: Acc, b2: l2 < s.na + s.nd, hr: (s.set(l, KGone)).role(l2) = KHold(o, a)): s.role(l2) = KHold(o, a) {
@@ -10953,14 +10966,19 @@ theorem CSt::hold_set_gone(self s: CSt, l: Nat, b: l < s.na + s.nd, l2, o: Nat, 
 }
 
 theorem Like::gone(tys: Nat → Type, strs: Strs(tys), {ps: List<Param>}, {ds: List<Dyn(tys)>}, {s: CSt}, {e: Env(tys)}, lk: Like(tys, strs, ps, ds, s, e), vs2: List<VEnt>,
-    pv: (en: VEnt) → Mem(en, vs2) → (en.mode.writes() && !en.back) = True → Mem(en, s.views), l: Nat, b: l < s.na + s.nd): Like(tys, strs, ps, ds, (s.with_views(vs2)).set(l, KGone), e)
+    l: Nat, b: l < s.na + s.nd,
+    pd: (en: VEnt) → Mem(en, vs2) → en.mode.writes() = True → ((s.with_views(vs2)).set(l, KGone)).on_chain(en.lvl) = True → Mem(en, s.views) ∧ (s.on_chain(en.lvl) = True)):
+    Like(tys, strs, ps, ds, (s.with_views(vs2)).set(l, KGone), e)
 {
     let s1 = s.with_views(vs2);
     Like(
         λ l2 o a b2 hr lt p hp => lk.acc(l2, o, a, b2, s1.hold_set_gone(l, b, l2, o, a, b2, hr), lt, p, hp),
         λ x l2 o hl hr => lk.held(x, l2, o, hl, s1.hold_set_gone(l, b, l2, o, AcWrite, s.lvl_below(x, l2, hl), hr)),
         lk.keep,
-        λ en mem w => lk.pend(en, pv(en, mem, w), w))
+        λ en mem w oc => {
+            let q = pd(en, mem, w, oc);
+            lk.pend(en, q.left, w, q.right)
+        })
 }
 
 theorem Bool::or_false_parts(a, b: Bool, h: (a || b) = False): (a = False) ∧ (b = False) {
@@ -10993,7 +11011,7 @@ theorem Env::get_set_self(tys: Nat → Type, e: Env(tys), x: Var, f: Dyn(tys) �
 // after it is the stage's to show (`pp`).
 theorem Like::write(tys: Nat → Type, strs: Strs(tys), {ps: List<Param>}, {ds: List<Dyn(tys)>}, {s: CSt}, {e: Env(tys)}, lk: Like(tys, strs, ps, ds, s, e),
     x: Var, l: Nat, hl: s.lvl(x) = Some(l), f: Dyn(tys) → Dyn(tys), lx: Dyn::Like(tys, strs, f(Env::get(tys, e, x)), Env::get(tys, e, x)), vs2: List<VEnt>, t2: List<Nat>,
-    pp: (en: VEnt) → Mem(en, vs2) → (en.mode.writes() && !en.back) = True → (y, z: Var) → s.lvl(y) = Some(en.par) → s.lvl(z) = Some(en.lvl) →
+    pp: (en: VEnt) → Mem(en, vs2) → en.mode.writes() = True → (CSt(s.args, s.locs, s.na, s.nd, vs2, s.nobj, t2, Cons(l, s.wrote))).on_chain(en.lvl) = True → (y, z: Var) → s.lvl(y) = Some(en.par) → s.lvl(z) = Some(en.lvl) →
         Dyn::Like(tys, strs, Env::get(tys, Env::set(tys, e, x, f), z), Dyn::read(tys, strs, Env::ixs(tys, Env::set(tys, e, x, f)), s.unsteps(en.at), Env::get(tys, Env::set(tys, e, x, f), y)))):
     Like(tys, strs, ps, ds, CSt(s.args, s.locs, s.na, s.nd, vs2, s.nobj, t2, Cons(l, s.wrote)), Env::set(tys, e, x, f))
 {
@@ -11021,6 +11039,196 @@ theorem Like::write(tys: Nat → Type, strs: Strs(tys), {ps: List<Param>}, {ds: 
             trans(Env::get_set_other(tys, e, x, Arg(k), f, ne), lk.keep(k, lt, p.right))
         },
         pp)
+}
+
+// ---------------------------------------------------------------------------
+// `Like`'s steps, one per statement kind, at the states the stages leave
+
+// A plain binding: `Lit`, `Op`, `Read`, a `Take` of a part or of a plain
+// variable, a `View` of a plain variable.
+theorem Like::plain(tys: Nat → Type, strs: Strs(tys), {ps: List<Param>}, {ds: List<Dyn(tys)>}, {s: CSt}, {e: Env(tys)}, lk: Like(tys, strs, ps, ds, s, e), none: s.pending() = False,
+    c: Shape, d: Dyn(tys)): Like(tys, strs, ps, ds, s.push(CVar(c, KPlain)), Env::push(tys, e, d))
+{
+    Like::push(tys, strs, lk, s.views, none, CVar(c, KPlain), d, λ o a no => absurd(no), λ o no => absurd(no))
+}
+
+theorem Role::hold_obj(o, o2: Nat, a, a2: Acc, h: KHold(o, a) = KHold(o2, a2)): (o = o2) ∧ (a = a2) {
+    ⟨cong_fn(λ (r: Role) => match r { KHold(q, _) => q, KPlain => o, KView => o, KGone => o }, h), cong_fn(λ (r: Role) => match r { KHold(_, b) => b, KPlain => a, KView => a, KGone => a }, h)⟩
+}
+
+// `Fresh`: the new holder's object is past the arguments' (`Inv.nbase`).
+theorem Like::fresh(tys: Nat → Type, strs: Strs(tys), {ps: List<Param>}, {ds: List<Dyn(tys)>}, {s: CSt}, {e: Env(tys)}, lk: Like(tys, strs, ps, ds, s, e), none: s.pending() = False,
+    nb: s.na <= s.nobj, k: Nat, d: Dyn(tys)): Like(tys, strs, ps, ds, s.push(CVar(SNamed(k), KHold(s.nobj, AcOwn))).fresh_obj(), Env::push(tys, e, d))
+{
+    let cv = CVar(SNamed(k), KHold(s.nobj, AcOwn));
+    let lp = Like::push(tys, strs, lk, s.views, none, cv, d,
+        λ o a h lt => {
+            let eo = Role::hold_obj(s.nobj, o, AcOwn, a, h);
+            let no: False = omega(eo.left, lt, nb);
+            false_elim(no)
+        },
+        λ o h => absurd((Role::hold_obj(s.nobj, o, AcOwn, AcWrite, h)).right));
+    Like(lp.acc, lp.held, lp.keep, λ en mem w oc => absurd(trans(sym(oc), (s.push(cv).fresh_obj()).on_chain_none(none, en.lvl))))
+}
+
+// A `Take` of a holder: the new holder has the old one's role.
+theorem Like::take_hold(tys: Nat → Type, strs: Strs(tys), {ps: List<Param>}, {ds: List<Dyn(tys)>}, {s: CSt}, {e: Env(tys)}, lk: Like(tys, strs, ps, ds, s, e), none: s.pending() = False,
+    x: Var, g: Got, ok: s.read_var(tys, strs, x) = Some(g), o: Nat, a: Acc, hr: s.role(g.root) = KHold(o, a)):
+    Like(tys, strs, ps, ds, (s.set(g.root, KGone)).push(CVar(g.code, KHold(o, a))), Env::push(tys, e, Env::get(tys, e, x)))
+{
+    let hl: (s.lvl(x) = Some(g.root)) = (s.read_inv(tys, strs, Place(x, Nil), g, ok)).lvl;
+    let b: (g.root < s.na + s.nd) = s.lvl_below(x, g.root, hl);
+    let lg = Like::gone(tys, strs, lk, s.views, g.root, b, λ en _ _ oc => absurd(trans(sym(oc), (s.set(g.root, KGone)).on_chain_none(none, en.lvl))));
+    Like::push(tys, strs, lg, s.views, none, CVar(g.code, KHold(o, a)), Env::get(tys, e, x),
+        λ o2 a2 h lt p hp => {
+            let eo = Role::hold_obj(o, o2, a, a2, h);
+            let r0 = lk.acc(g.root, o, a, b, hr, j(sym(eo.left), λ q _ => q < s.na, lt), p, j(sym(eo.left), λ q _ => ps.nth(q) = Some(p), hp));
+            j(eo.left, λ q _ => CSt::role_of(tys, strs, p, q) = KHold(q, a2), j(eo.right, λ c _ => CSt::role_of(tys, strs, p, o) = KHold(o, c), r0))
+        },
+        λ o2 h => {
+            let eo = Role::hold_obj(o, o2, a, AcWrite, h);
+            j(eo.left, λ q _ => Dyn::Like(tys, strs, Env::get(tys, e, x), Dyn::arg(tys, ds, q)), lk.held(x, g.root, o, hl, j(eo.right, λ c _ => s.role(g.root) = KHold(o, c), hr)))
+        })
+}
+
+// The entries of a level handed to another keep their flags, so nothing
+// becomes pending.
+theorem CSt::rename_pending(self s: CSt, l, l2: Nat): (s.rename(l, l2)).pending() = s.pending() {
+    s.views.any_bit_map_eq(λ e => match e.lvl.same(l) { True => VEnt(l2, e.obj, e.reg, e.mode, e.par, e.at, e.back), False => e }, λ e => e.mode.writes() && !e.back, λ e => e.mode.writes() && !e.back,
+        λ x _ => match x.lvl.same(l) as λ c => (match c as λ _ => VEnt { True => VEnt(l2, x.obj, x.reg, x.mode, x.par, x.at, x.back), False => x }).mode.writes() &&
+                !(match c as λ _ => VEnt { True => VEnt(l2, x.obj, x.reg, x.mode, x.par, x.at, x.back), False => x }).back = x.mode.writes() && !x.back { True => refl, False => refl })
+}
+
+// A `Take` of a view: its entries move to the new level, a view.
+theorem Like::take_view(tys: Nat → Type, strs: Strs(tys), {ps: List<Param>}, {ds: List<Dyn(tys)>}, {s: CSt}, {e: Env(tys)}, lk: Like(tys, strs, ps, ds, s, e), none: s.pending() = False,
+    x: Var, g: Got, ok: s.read_var(tys, strs, x) = Some(g)):
+    Like(tys, strs, ps, ds, ((s.rename(g.root, s.next())).set(g.root, KGone)).push(CVar(g.code, KView)), Env::push(tys, e, Env::get(tys, e, x)))
+{
+    let hl: (s.lvl(x) = Some(g.root)) = (s.read_inv(tys, strs, Place(x, Nil), g, ok)).lvl;
+    let b: (g.root < s.na + s.nd) = s.lvl_below(x, g.root, hl);
+    let rn = s.rename(g.root, s.next());
+    let pn: (rn.pending() = False) = trans(s.rename_pending(g.root, s.next()), none);
+    let lg = Like::gone(tys, strs, lk, rn.views, g.root, b, λ en _ _ oc => absurd(trans(sym(oc), (rn.set(g.root, KGone)).on_chain_none(pn, en.lvl))));
+    Like::push(tys, strs, lg, rn.views, pn, CVar(g.code, KView), Env::get(tys, e, x), λ o a no => absurd(no), λ o no => absurd(no))
+}
+
+// A `View` of a holder or of a view: new entries, written back.
+theorem Like::view(tys: Nat → Type, strs: Strs(tys), {ps: List<Param>}, {ds: List<Dyn(tys)>}, {s: CSt}, {e: Env(tys)}, lk: Like(tys, strs, ps, ds, s, e), none: s.pending() = False,
+    ne: List<VEnt>, nb: (en: VEnt) → Mem(en, ne) → en.back = True, c: Shape, d: Dyn(tys)): Like(tys, strs, ps, ds, s.with_view(ne, c), Env::push(tys, e, d))
+{
+    let p = λ (x: VEnt) => x.mode.writes() && !x.back;
+    let pn: ((ne ++ s.views).any_bit(p) = False) = trans(ne.any_bit_skip(s.views, p, λ x mx => j(sym(nb(x, mx)), λ q _ => (x.mode.writes() && !q) = False, x.mode.writes().and_false_r())), none);
+    Like::push(tys, strs, lk, ne ++ s.views, pn, CVar(c, KView), d, λ o a no => absurd(no), λ o no => absurd(no))
+}
+
+// A `Death` of a plain variable or of a holder.
+theorem Like::death(tys: Nat → Type, strs: Strs(tys), {ps: List<Param>}, {ds: List<Dyn(tys)>}, {s: CSt}, {e: Env(tys)}, lk: Like(tys, strs, ps, ds, s, e), none: s.pending() = False,
+    l: Nat, b: l < s.na + s.nd): Like(tys, strs, ps, ds, s.set(l, KGone), e)
+{
+    Like::gone(tys, strs, lk, s.views, l, b, λ en _ _ oc => absurd(trans(sym(oc), (s.set(l, KGone)).on_chain_none(none, en.lvl))))
+}
+
+// A view's death: it has no children, so ancestry is unchanged and every
+// level on a chain after was on one before.
+theorem CSt::on_chain_drop(self s: CSt, l: Nat, noch: (en: VEnt) → Mem(en, s.views) → ¬(en.par = l), z: Nat, h: (s.drop(l)).on_chain(z) = True): s.on_chain(z) = True {
+    let nl = s.na + s.nd;
+    match (s.views.filter(λ en => !en.lvl.same(l))).any_bit_sound(λ x => x.mode.writes() && !x.back && (x.lvl.same(z) || z.member((s.drop(l)).anc_of(x, nl))), h) {
+        ⟨x, px⟩ => {
+            let mx: Mem(x, s.views) = s.views.mem_filter(x, λ en => !en.lvl.same(l), px.left);
+            let ae: ((s.drop(l)).anc_of(x, nl) = s.anc_of(x, nl)) = CSt::anc_drop(nl, s, l, noch, x, noch(x, mx));
+            s.views.any_bit_mem(λ y => y.mode.writes() && !y.back && (y.lvl.same(z) || z.member(s.anc_of(y, nl))), x, mx,
+                j(ae, λ t _ => (x.mode.writes() && !x.back && (x.lvl.same(z) || z.member(t))) = True, px.right))
+        },
+    }
+}
+
+theorem Like::death_view(tys: Nat → Type, strs: Strs(tys), {ps: List<Param>}, {ds: List<Dyn(tys)>}, {s: CSt}, {e: Env(tys)}, lk: Like(tys, strs, ps, ds, s, e),
+    l: Nat, b: l < s.na + s.nd, noch: (en: VEnt) → Mem(en, s.views) → ¬(en.par = l)): Like(tys, strs, ps, ds, s.drop(l), e)
+{
+    Like::gone(tys, strs, lk, s.views.filter(λ en => !en.lvl.same(l)), l, b, λ en mem _ oc => ⟨s.views.mem_filter(en, λ q => !q.lvl.same(l), mem), s.on_chain_drop(l, noch, en.lvl, oc)⟩)
+}
+
+// What a place reads at the meaning's words, where the meaning keeps the
+// plain variables the place reads.
+theorem CSt::read_agree(self s: CSt, tys: Nat → Type, strs: Strs(tys), e: Env(tys), ea: e.args.len() = s.na, el: e.locs.len() = s.nd, xs: List<Step>,
+    words: (k: Nat) → k.member(Steps::lvls(xs)) = True → (k < s.na + s.nd) ∧ ((s.role(k)).plain() = True), ee: Env(tys), ag: s.AgreeW(tys, e, ee), d: Dyn(tys)):
+    Dyn::read(tys, strs, Env::ixs(tys, ee), s.unsteps(xs), d) = Dyn::read(tys, strs, Env::ixs(tys, e), s.unsteps(xs), d)
+{
+    let se: (Steps::sels(s.unsteps(xs), Env::ixs(tys, ee)) = Steps::sels(s.unsteps(xs), Env::ixs(tys, e))) =
+        CSt::sels_keep(xs, s, Env::ixs(tys, ee), s, Env::ixs(tys, e), λ k mk => {
+            let wd = words(k, mk);
+            trans(s.env_ix(tys, ee, ag.right.left, ag.right.right, k, wd.left),
+                trans(cong_fn(λ (dd: Dyn(tys)) => Some(Dyn::ix(tys, dd)), ag.left(k, wd.left, wd.right)), sym(s.env_ix(tys, e, ea, el, k, wd.left))))
+        });
+    trans(Steps::read_sels(tys, strs, Env::ixs(tys, ee), s.unsteps(xs), d),
+        trans(cong_fn(λ (ss: List<Sel>) => Sel::read_at(tys, strs, ss, d), se), sym(Steps::read_sels(tys, strs, Env::ixs(tys, e), s.unsteps(xs), d))))
+}
+
+// What `Like::write` asks of what is on a chain after a write of the
+// variable at `l` (not plain): each such view to write was like its place
+// before (`old`: `Like.pend`, or `Inv::back_like` where nothing was
+// pending); the written variable stays like itself (`lx`); a child of it on
+// a chain reads at its place what it read (`ch`: `sib` at a write-back; at
+// an ordinary write no child is on a chain); and the places read plain
+// levels, which the write keeps.
+theorem Like::pp_write(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, s2: CSt, x: Var, l: Nat, hl: s.lvl(x) = Some(l), f: Dyn(tys) → Dyn(tys),
+    lx: Dyn::Like(tys, strs, f(Env::get(tys, e, x)), Env::get(tys, e, x)), lp: (s.role(l)).plain() = False, ea: e.args.len() = s.na, el: e.locs.len() = s.nd, vs2: List<VEnt>,
+    words: (en: VEnt) → Mem(en, vs2) → (k: Nat) → k.member(Steps::lvls(en.at)) = True → (k < s.na + s.nd) ∧ ((s.role(k)).plain() = True),
+    npl: (en: VEnt) → Mem(en, vs2) → ¬(en.par = en.lvl),
+    old: (en: VEnt) → Mem(en, vs2) → en.mode.writes() = True → s2.on_chain(en.lvl) = True → (y, z: Var) → s.lvl(y) = Some(en.par) → s.lvl(z) = Some(en.lvl) →
+        Dyn::Like(tys, strs, Env::get(tys, e, z), Dyn::read(tys, strs, Env::ixs(tys, e), s.unsteps(en.at), Env::get(tys, e, y))),
+    ch: (en: VEnt) → Mem(en, vs2) → en.mode.writes() = True → s2.on_chain(en.lvl) = True → en.par = l →
+        Dyn::read(tys, strs, Env::ixs(tys, e), s.unsteps(en.at), f(Env::get(tys, e, x))) = Dyn::read(tys, strs, Env::ixs(tys, e), s.unsteps(en.at), Env::get(tys, e, x))):
+    (en: VEnt) → Mem(en, vs2) → en.mode.writes() = True → s2.on_chain(en.lvl) = True → (y, z: Var) → s.lvl(y) = Some(en.par) → s.lvl(z) = Some(en.lvl) →
+        Dyn::Like(tys, strs, Env::get(tys, Env::set(tys, e, x, f), z), Dyn::read(tys, strs, Env::ixs(tys, Env::set(tys, e, x, f)), s.unsteps(en.at), Env::get(tys, Env::set(tys, e, x, f), y)))
+{
+    λ en mem w oc y z hy hz => {
+        let e2 = Env::set(tys, e, x, f);
+        let xat: (s.var_at(l) = x) = s.lvl_var(x, l, hl);
+        let lb: (l < s.na + s.nd) = s.lvl_below(x, l, hl);
+        let ag0: s.AgreeW(tys, e, Env::set(tys, e, s.var_at(l), f)) = s.agree_set(tys, e, e, ⟨λ k _ _ => refl, ⟨ea, el⟩⟩, l, lb, lp, f);
+        let ag: s.AgreeW(tys, e, e2) = j(xat, λ q _ => s.AgreeW(tys, e, Env::set(tys, e, q, f)), ag0);
+        let rk = λ (dd: Dyn(tys)) => s.read_agree(tys, strs, e, ea, el, en.at, words(en, mem), e2, ag, dd);
+        let od = old(en, mem, w, oc, y, z, hy, hz);
+        let ex = λ (dd: Dyn(tys)) => Dyn::read(tys, strs, Env::ixs(tys, e), s.unsteps(en.at), dd);
+        let gy: Dyn(tys) = Env::get(tys, e2, y);
+        let goal = λ (dz: Dyn(tys)) (dy: Dyn(tys)) => Dyn::Like(tys, strs, dz, ex(dy));
+        let fin: goal(Env::get(tys, e2, z), gy) = match Nat::eq_or_ne(en.lvl, l) {
+            Inl(zl) => {
+                let zx: (z = x) = trans(sym(s.lvl_var(z, en.lvl, hz)), trans(cong_fn(λ (q: Nat) => s.var_at(q), zl), xat));
+                let yne: ¬(x = y) = λ eq => npl(en, mem)(trans(Option::some_inj(en.par, l, trans(sym(hy), trans(cong_fn(λ (q: Var) => s.lvl(q), sym(eq)), hl))), sym(zl)));
+                let gyy: (gy = Env::get(tys, e, y)) = Env::get_set_other(tys, e, x, y, f, yne);
+                let od2: Dyn::Like(tys, strs, Env::get(tys, e, x), ex(Env::get(tys, e, y))) = j(zx, λ q _ => Dyn::Like(tys, strs, Env::get(tys, e, q), ex(Env::get(tys, e, y))), od);
+                let zz: goal(Env::get(tys, e2, x), Env::get(tys, e, y)) = match Env::get_set_self(tys, e, x, f) {
+                    Inl(h1) => j(sym(h1), λ q _ => goal(q, Env::get(tys, e, y)), Dyn::like_trans(tys, strs, f(Env::get(tys, e, x)), Env::get(tys, e, x), ex(Env::get(tys, e, y)), lx, od2)),
+                    Inr(h2) => j(sym(h2), λ q _ => goal(q, Env::get(tys, e, y)), od2),
+                };
+                j(sym(gyy), λ q _ => goal(Env::get(tys, e2, z), q), j(sym(zx), λ q _ => goal(Env::get(tys, e2, q), Env::get(tys, e, y)), zz))
+            },
+            Inr(zn) => {
+                let zne: ¬(x = z) = λ eq => s.var_ne(z, x, en.lvl, l, hz, hl, zn)(sym(eq));
+                let gzz: (Env::get(tys, e2, z) = Env::get(tys, e, z)) = Env::get_set_other(tys, e, x, z, f, zne);
+                let yy: goal(Env::get(tys, e, z), gy) = match Nat::eq_or_ne(en.par, l) {
+                    Inl(yl) => {
+                        let yx: (y = x) = trans(sym(s.lvl_var(y, en.par, hy)), trans(cong_fn(λ (q: Nat) => s.var_at(q), yl), xat));
+                        let od2: Dyn::Like(tys, strs, Env::get(tys, e, z), ex(Env::get(tys, e, x))) = j(yx, λ q _ => Dyn::Like(tys, strs, Env::get(tys, e, z), ex(Env::get(tys, e, q))), od);
+                        let cx = ch(en, mem, w, oc, yl);
+                        let zz: goal(Env::get(tys, e, z), Env::get(tys, e2, x)) = match Env::get_set_self(tys, e, x, f) {
+                            Inl(h1) => j(sym(h1), λ q _ => goal(Env::get(tys, e, z), q), j(sym(cx), λ q _ => Dyn::Like(tys, strs, Env::get(tys, e, z), q), od2)),
+                            Inr(h2) => j(sym(h2), λ q _ => goal(Env::get(tys, e, z), q), od2),
+                        };
+                        j(sym(yx), λ q _ => goal(Env::get(tys, e, z), Env::get(tys, e2, q)), zz)
+                    },
+                    Inr(yn) => {
+                        let yne: ¬(x = y) = λ eq => s.var_ne(y, x, en.par, l, hy, hl, yn)(sym(eq));
+                        j(sym(Env::get_set_other(tys, e, x, y, f, yne)), λ q _ => goal(Env::get(tys, e, z), q), od)
+                    },
+                };
+                j(sym(gzz), λ q _ => goal(q, gy), yy)
+            },
+        };
+        j(sym(rk(gy)), λ q _ => Dyn::Like(tys, strs, Env::get(tys, e2, z), q), fin)
+    }
 }
 
 // The frame at a block lent to nothing: its whole object reads as before.
