@@ -243,3 +243,136 @@ theorem atom_sound(tys: Nat → Type, strs: Strs(tys), inj: Nat → Nat, blocks:
             } } },
     })(h)
 }
+
+// ---------------------------------------------------------------------------
+// Leaves run in parts, locals agreeing
+
+theorem run_app(blocks: Blocks, xs: List<Instr>): (ys: List<Instr>) → (c: Config) →
+    run_instrs(blocks, xs ++ ys, c) = run_instrs(blocks, xs, c).and_then(λ (m: Config) => run_instrs(blocks, ys, m)) {
+    match xs {
+        Nil => λ ys c => refl,
+        Cons(x, rest) => λ ys c => (match x.step(blocks, c) as λ o => o.and_then(λ (m: Config) => run_instrs(blocks, rest ++ ys, m)) =
+                o.and_then(λ (m: Config) => run_instrs(blocks, rest, m)).and_then(λ (m: Config) => run_instrs(blocks, ys, m)) {
+            None => refl,
+            Some(m) => run_app(blocks, rest, ys, m),
+        }),
+    }
+}
+
+theorem run_app_some(blocks: Blocks, xs, ys: List<Instr>, c, c1: Config, h: run_instrs(blocks, xs, c) = Some(c1)): run_instrs(blocks, xs ++ ys, c) = run_instrs(blocks, ys, c1) {
+    trans(run_app(blocks, xs, ys, c), cong_fn(λ (o: Option<Config>) => o.and_then(λ (m: Config) => run_instrs(blocks, ys, m)), h))
+}
+
+fn ref_of(o: Option<x86_64_call_contract::Value>) → Option<x86_64_memory_contract::Loc> {
+    match o { Some(v) => match v { Word(_) => None, Ref(loc) => Some(loc) }, None => None }
+}
+
+theorem ref_of_map(o: Option<x86_64_memory_contract::Loc>): ref_of(o.map(λ (loc: x86_64_memory_contract::Loc) => x86_64_call_contract::Ref(loc))) = o {
+    match o { Some(_) => refl, None => refl }
+}
+
+// A reference id below where two locals agree holds the same in both.
+theorem agree_ref(l, l2: Locals, next: Nat, ag: Locals::Agree(l, l2, next), id: Nat, lt: id < next): l2.refs(id) = l.refs(id) {
+    trans(sym(ref_of_map(l2.refs(id))), trans(cong_fn(λ (o: Option<x86_64_call_contract::Value>) => ref_of(o), ag(ref_id(id), lt)), ref_of_map(l.refs(id))))
+}
+
+// ---------------------------------------------------------------------------
+// The scaled index
+
+theorem shl1_toNat(x: BitVec(64), small: 2 * x.toNat() < Nat::pow(2, 64)): (x.shift_left_one()).toNat() = 2 * x.toNat() {
+    let pw: (Nat::pow(2, 64) = Nat::pow(2, 63) * 2) = refl;
+    let i = BitVec::init_toNat(63, x, omega(small, pw));
+    let a: ((x.shift_left_one()).toNat() = 0 + (x.init().toNat()).twice()) = refl;
+    let t = Nat::twice_add_self(x.init().toNat());
+    omega(a, t, i)
+}
+
+// Element sizes are 1, 2, 4 and 8 bytes.
+theorem size_cases(c: Shape, s: Nat, h: c.word_size() = Some(s)): (s = 1) ∨ ((s = 2) ∨ ((s = 4) ∨ (s = 8))) {
+    (match c as λ c2 => c2.word_size() = Some(s) → (s = 1) ∨ ((s = 2) ∨ ((s = 4) ∨ (s = 8))) {
+        SNamed(_) => λ no => absurd(no),
+        SWord(w) => (match w as λ w2 => (SWord(w2)).word_size() = Some(s) → (s = 1) ∨ ((s = 2) ∨ ((s = 4) ∨ (s = 8))) {
+            WNat => λ no => absurd(no),
+            WBits(b) => λ e => match bool_arm(b.same(8), Some(1), size_from16(b), s, e) {
+                Inl(p) => Inl(sym(Option::some_inj(1, s, p.right))),
+                Inr(p) => match bool_arm(b.same(16), Some(2), size_from32(b), s, p.right) {
+                    Inl(p2) => Inr(Inl(sym(Option::some_inj(2, s, p2.right)))),
+                    Inr(p2) => match bool_arm(b.same(32), Some(4), size_from64(b), s, p2.right) {
+                        Inl(p3) => Inr(Inr(Inl(sym(Option::some_inj(4, s, p3.right))))),
+                        Inr(p3) => match bool_arm(b.same(64), Some(8), None, s, p3.right) {
+                            Inl(p4) => Inr(Inr(Inr(sym(Option::some_inj(8, s, p4.right))))),
+                            Inr(p4) => absurd(p4.right),
+                        },
+                    },
+                },
+            },
+        }),
+    })(h)
+}
+
+// What the scaling adds after the index's code.
+fn ScaledAt(blocks: Blocks, i, sc: Word1, size: Nat, cwa: Config) → Type {
+    Exists<List<Instr>>(λ extra => (sc.instrs = i.instrs ++ extra) ∧ Exists<Config>(λ cws => (run_instrs(blocks, extra, cwa) = Some(cws)) ∧
+        ((cws.memory = cwa.memory) ∧ ((cws.io = cwa.io) ∧ (Locals::Agree(cwa.locals, cws.locals, i.next) ∧ ((i.next <= sc.next) ∧
+            ((sc.id < sc.next) ∧ ((cws.locals.word(sc.id)).toNat() = (cwa.locals.word(i.id)).toNat() * size))))))))
+}
+
+fn ScaledRan(blocks: Blocks, i: Word1, size: Nat, cwa: Config) → Type { ScaledAt(blocks, i, scaled(i, size), size, cwa) }
+
+fn shl_config(cwa: Config, out, src, k: Nat) → Config {
+    Config(Locals(Valuation::set(cwa.locals.words, out, λ (w: Nat) => (cwa.locals.words(w, src)).shift_left(k)), cwa.locals.refs), cwa.memory, cwa.io)
+}
+
+theorem shl_word(cwa: Config, out, src, k: Nat): ((shl_config(cwa, out, src, k)).locals.word(out)) = (cwa.locals.word(src)).shift_left(k) {
+    Valuation::set_here(cwa.locals.words, out, λ (w: Nat) => (cwa.locals.words(w, src)).shift_left(k), 64)
+}
+
+theorem scaled_shl(blocks: Blocks, i: Word1, size, k: Nat, cwa: Config, ei: scaled(i, size) = Word1(i.instrs ++ Cons(Compute(ShiftLeft(64, i.next, i.id, k)), Nil), i.next, i.next + 1),
+    tn: ((shl_config(cwa, i.next, i.id, k)).locals.word(i.next)).toNat() = (cwa.locals.word(i.id)).toNat() * size): ScaledRan(blocks, i, size, cwa)
+{
+    j(sym(ei), λ sc _ => ScaledAt(blocks, i, sc, size, cwa),
+        Exists(Cons(Compute(ShiftLeft(64, i.next, i.id, k)), Nil), ⟨refl, Exists(shl_config(cwa, i.next, i.id, k), ⟨refl, ⟨refl, ⟨refl,
+            ⟨Locals::agree_set(cwa.locals, i.next, λ (w: Nat) => (cwa.locals.words(w, i.id)).shift_left(k), i.next, { omega }), ⟨{ omega }, ⟨{ omega }, tn⟩⟩⟩⟩⟩⟩)⟩))
+}
+
+theorem scaled_ran(blocks: Blocks, i: Word1, size: Nat, cwa: Config, cs: (size = 1) ∨ ((size = 2) ∨ ((size = 4) ∨ (size = 8))), lt: i.id < i.next,
+    small: (cwa.locals.word(i.id)).toNat() * size < Nat::pow(2, 64)): ScaledRan(blocks, i, size, cwa)
+{
+    let x = cwa.locals.word(i.id);
+    match cs {
+        Inl(e1) => j(sym(e1), λ z _ => ScaledRan(blocks, i, z, cwa), Exists(Nil, ⟨sym(List::append_nil(i.instrs)), Exists(cwa, ⟨refl, ⟨refl, ⟨refl, ⟨Locals::agree_refl(cwa.locals, i.next),
+            ⟨(i.next).le_refl(), ⟨lt, {
+                let t = (cwa.locals.word(i.id)).toNat();
+                let one: (t = t * 1) = omega();
+                one
+            }⟩⟩⟩⟩⟩⟩)⟩)),
+        Inr(c2) => match c2 {
+            Inl(e2) => j(sym(e2), λ z _ => ScaledRan(blocks, i, z, cwa), scaled_shl(blocks, i, 2, 1, cwa, refl, {
+                let sm = j(e2, λ z _ => x.toNat() * z < Nat::pow(2, 64), small);
+                let s1 = shl1_toNat(x, omega(sm));
+                let fin: (2 * x.toNat() = x.toNat() * 2) = omega();
+                trans(cong_fn(λ (y: BitVec(64)) => y.toNat(), shl_word(cwa, i.next, i.id, 1)), trans(s1, fin))
+            })),
+            Inr(c4) => match c4 {
+                Inl(e4) => j(sym(e4), λ z _ => ScaledRan(blocks, i, z, cwa), scaled_shl(blocks, i, 4, 2, cwa, refl, {
+                    let sm = j(e4, λ z _ => x.toNat() * z < Nat::pow(2, 64), small);
+                    let y1 = x.shift_left_one();
+                    let s1: (y1.toNat() = 2 * x.toNat()) = shl1_toNat(x, omega(sm));
+                    let s2: ((y1.shift_left_one()).toNat() = 2 * y1.toNat()) = shl1_toNat(y1, omega(sm, s1));
+                    let fin: (2 * y1.toNat() = x.toNat() * 4) = omega(s1);
+                    trans(cong_fn(λ (y: BitVec(64)) => y.toNat(), shl_word(cwa, i.next, i.id, 2)), trans(s2, fin))
+                })),
+                Inr(e8) => j(sym(e8), λ z _ => ScaledRan(blocks, i, z, cwa), scaled_shl(blocks, i, 8, 3, cwa, refl, {
+                    let sm = j(e8, λ z _ => x.toNat() * z < Nat::pow(2, 64), small);
+                    let y1 = x.shift_left_one();
+                    let y2 = y1.shift_left_one();
+                    let s1: (y1.toNat() = 2 * x.toNat()) = shl1_toNat(x, omega(sm));
+                    let s2: (y2.toNat() = 2 * y1.toNat()) = shl1_toNat(y1, omega(sm, s1));
+                    let s3: ((y2.shift_left_one()).toNat() = 2 * y2.toNat()) = shl1_toNat(y2, omega(sm, s1, s2));
+                    let fin: (2 * y2.toNat() = x.toNat() * 8) = omega(s1, s2);
+                    trans(cong_fn(λ (y: BitVec(64)) => y.toNat(), shl_word(cwa, i.next, i.id, 3)), trans(s3, fin))
+                })),
+            },
+        },
+    }
+}
