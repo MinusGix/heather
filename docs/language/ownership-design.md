@@ -3837,7 +3837,9 @@ Probes: `lib/_tests/lang/ownership/{run,checker}_tests.hthr`.
   write stores where the place is: in the block the root refers to, or in a
   plain root's own value. A death of an owner kills its block; any other is
   nothing. So the eager write-back the reflector places after each change
-  of a view stores, in the run, what the block already holds.
+  of a view stores nothing in the run: its source is the very place
+  (§23.22). A store is stuck outside what the activation may change, and a
+  written argument that refers comes back as itself (§23.22).
 - **Calls** run the callee's body at one less fuel (`Run::calls`): a taken
   argument the caller owns is passed on, unless it is a word; a word and one
   it does not own are copied; a read or written argument is passed as it
@@ -5203,6 +5205,134 @@ substituted steps name, in the binding state (the arguments' levels, and the
 earlier results', which the telescope puts there). One rule for an atom,
 wherever a region is formed. `at_by_view0_refused` passes a view of a word as
 `at`'s index; `at_by_copy0_checked` copies the word into a plain local first.
+
+### 23.22 The run as the machine's reading (2026-11-26, twelfth session)
+
+The coordinating session's ruling, after a slice carried three programs from
+their bodies to x86 and its translation to the bytes level grew syntactic
+copies of ownership rules to do it: **level 2's run is the machine's
+reading.** Where the run transported, stored or allowed a store the machine
+does not, the run changed once, and `check_sound` says the change of every
+checked program. Three changes (`run.hthr`), each probed by evaluation first
+(`run_tests.hthr`, the section "The run as the machine's reading"):
+
+1. **A referring written parameter is not transported back.** After a call
+   the caller binds `Value::slots`: the callee's results, then for each
+   written parameter `Value::back` of the argument as passed and the
+   callee's answer: the argument itself where it refers, the callee's value
+   where it was passed plain (`Value::backs`; anything answered past the
+   written slots binds as answered). `Answer` and `SafeAt`'s `Written`
+   clause keep their shape: the callee still shows its slot is the argument,
+   which is how a caller knows what the argument's block reads after, and
+   the caller's slot is now the argument's own reference by the run. Probes:
+   `slot_is_argument` (a callee answering its read parameter's reference as
+   its written slot: before, the caller's slot referred to that block) and
+   `plain_slot_back` (passed plain, the callee's copy comes back, as before).
+2. **A write-back through a reference stores nothing.** (Superseded by
+   `Back`, §23.23: the run below decided it by a test the bytes level cannot
+   make.) The run cannot see
+   the checker's state, so the test is dynamic and exact: `Write(p, x)` with
+   `p`'s root referring to `r` and `x`'s cell `Refer(q)` with `q` the very
+   place, `r.narrow(ws, p.steps)` (`Value::is_ref`, a decided equality on
+   references, sound by `Ref::same_sound` down to `Ix::same_sound` and
+   `BitVec::toNat_inj`), continues at the machine unchanged. Every other
+   write stores, a view of one place written into another of the same block
+   included (`view_into_other_stores`). In this fragment a block is bare and
+   a put of what a place reads is the identity, so the change is visible only
+   with 3: `back_read_done` writes a view back through a list lent only to
+   read, where a write of a copy at the same place is stuck
+   (`back_copy_read_stuck`). Of the write-back stage's four cases (the chain
+   refers, the child pending or not; the chain is copies, the parent a
+   holder or a view) the two where the chain refers changed, through
+   `Stmt::back_runs_ref`, which now reaches `write_runs_self` and needs no
+   bareness and no put-back law; the copy cases did not change. The ordinary
+   write stages through a reference (`stage_write_hold`'s referring case,
+   `write_view_ref`) go through `Stmt::write_runs_store`, which covers the
+   case of a source that happens to be the very place by the identity above.
+3. **A store is stuck outside what the activation may change.** `Act`
+   (`lent`, `h0`) is a parameter of `Stmt::run` and `Body::run`, made by
+   `Func::run` at the entry: `Value::lent` of the parameters and the values
+   passed, and the heap's length. A store at block `b` and path `ps` is
+   allowed by `Act::may`: `h0 <= b` (made since the entry) or a lent
+   reference into `b` whose selections start `ps` (`Sel::starts`). A store
+   elsewhere is stuck: a block lent only to read, or not lent, is never
+   stored to, which is what the bytes level's contract needs and what
+   `Heap::Frame` alone did not say (it says such a block keeps its value).
+   `Stepped.runs` is at `Act(lent, h0.len())`, the invariant's own indices,
+   so no stage statement changed; the run lemmas take the `Act` as a
+   parameter, and each write stage through a reference has one new
+   obligation, met by `Inv.owned` (the changing object's root is lent or
+   made, `Act::may_owned`). `Value::lent` and `PMode::changes` moved from
+   `verdict.hthr` to `run.hthr`. A death is not a store and is unchanged: it
+   kills only a block its frame owns. Probes: `set_x_unlent_stuck`,
+   `set_x_read_stuck`, `under_lent_done` (a store under a lent element);
+   `set_x` and `join_two` now carry signatures that lend the list to write.
+
+The cost in the proved stages was a handful of new obligations, each met
+from a clause the invariant already had, beside the decided equality's
+soundness lemmas; the write-back's referring cases became shorter.
+
+### 23.23 The write-back as its own statement, and three smaller changes (2026-11-26, twelfth session)
+
+**`Back(p, x)`** (the coordinating session's ruling, replacing §23.22's
+item 2). The translation to the bytes level must know from the text alone
+whether to emit nothing or a copy, so the run may not decide a write-back by
+comparing references. A write-back is now its own statement: in the meaning
+the write of `x`'s value at `p` (as `Write`); in the checker what `Write`
+did in its write-back cases (`CSt::back_of`: `x` a view to write on `p`'s
+root at `p`'s steps), `Write` refused where it would be one and `Back`
+refused where it is not; in the run the identity where `x`'s cell refers (no
+test of where) and `Stmt::write_run`, the write, under `Act::may`, where it
+is a copy. `Write(p, x)` always stores. `CSt::writes_back` (the only
+statement while a write-back is pending) names `Back`. The decided equality
+on references and its soundness lemmas are gone; `Sel::same_self` stays for
+`Act::may`. In the proof the write-back stages are about `Back` and their
+referring cases reach the identity by the cell alone (`Stmt::back_runs_ref`;
+the copy case through `Stmt::back_runs_copy`, `Back` of a copy running as
+`Write`); the ordinary write stages lost the case of a source that is the
+very place. Probes: `back_read_done` (a write-back through a list lent only
+to read), `write_self_read_stuck` (the same text as a `Write`),
+`back_copy_read_stuck`, `back_copy_plain_writes` (`run_tests`);
+`back_as_write_refused`, `back_not_back_refused`, `back_one_checked`
+(`checker_tests`, whose write-backs are now written `Back`).
+
+**`Inv.cfit` covers views to write only** (a gap in the proof's own
+invariant). It said of every live view whose parent's cell is a copy that its
+place fits the copy and its own copy is like what the place reads. Only views
+to write consume it (a write-back's `Like`, the write-back of a copy), and a
+read view result over an argument passed plain cannot meet it: `SafeAt`'s
+`ViewIs` asks such a result only to be plain, and no clause relates it to the
+argument's part. Restricted to views to write it holds at every builder as
+before.
+
+**A parameter whose code moves is answered at most once** (`Sig::once`, a
+clause of `Sig::ok`; the coordinating session's ruling on a finding against
+§23.21's B). B's argument that no safe callee answers one taken parameter
+twice (`OwnedApart` against `ViewIs`) holds only where the argument refers.
+Where it is passed plain, `ViewIs` asks each result only to be plain and
+`owned_b` is `None`: the table entry `twice: Sig([Param(Buf, ByTake)],
+[Result(Buf, OParam(0)), Result(Buf, OParam(0))])`, with a world answering two
+copies, is safe, and its caller `h(a: Buf take) { Call(twice, [a], 2); … }`
+run with `a` plain bound both results `KHold(o_a, AcOwn)`, two levels holding
+one object, against `Inv.one`. A plain parameter answered twice is two
+copies and is allowed. Probes: `twice_param_refused` (where written),
+`twice_caller_refused` (at the call), `twice_plain_caller_checked`; the
+callee `twice_plain` is itself refused at its `Ret`, as is `once_plain`
+answering a plain taken parameter once (`CSt::returns` asks a parameter
+answered back to be held as an owner).
+
+**`Len(p, w)`, a place's length as a word** (issues/ownership-branch-on-
+object-length.md): meaning `Width::of_nat(w, Dyn::len(value at p))`, the
+sequence instance's own length; checked as `Read(p)` with `p`'s code a
+sequence (refused for its codes otherwise); at a bounded width it owes
+`RLen(p, w)` (`Width::Holds`: the length is below `2^k`), so the word is the
+length and never its truncation, at `WNat` nothing; the run reads the place
+as `Read` does (`Mach::place`), stuck where it is; the stage is
+`Stmt::stage_len`, `Read`'s with the word pushed. `RLen` is a new residual
+kind: none of the existing ones can say a length is below a bound.
+Probes: `len_runs`, `len_means`, `len_win_runs` (`run_tests`);
+`len_nat_owes`, `len_u64_owes`, `len_word_refused`, `len_guard_checked` (a
+branch on an index below the length, the read under it).
 
 ## 24. How the build is organised (2026-11-26, the coordinating session)
 
