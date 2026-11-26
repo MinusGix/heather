@@ -496,7 +496,6 @@ fn encd(d: Dyn(tys())) → List<Nat> {
     }
 }
 
-
 fn enc_finding(x: Finding) → List<Nat> { Cons(x.clause, Cons(x.fuel, enc_func(x.f) ++ enc_list(λ (v: Value(tys())) => enc_value(tys(), encd, v), x.vs))) }
 
 // The search as a stream of numbers, one record per checked function: the
