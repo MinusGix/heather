@@ -29,91 +29,87 @@ Items 1 and 2 are definitions and evaluation; item 3 waits for the coordinating 
 
 `CheckSound` has an inhabitant for the fragment, the experiments' programs are probes or theorems of the real modules, and the experiment modules are gone.
 
-## Handoff (2026-11-26, end of the eighth session: the frame restated, D and the bare fresh block, P4's frame)
+## Handoff (2026-11-26, end of the ninth session: P4 built but for the swap)
 
-Continue on branch `claude/ownership-checker-sound`. Read design §23.17 (`SafeAt`
-clause by clause) and §23.18 (this session: the frame as the lens equation,
-`LentFrame`, P4's frame) first. Everything is in `lib/lang/ownership/sound.hthr`
-(the lens lemmas after the moved selection lemmas, before `// The invariant`;
-the call's parts at the end) and `verdict.hthr` (the interface).
+Continue on branch `claude/ownership-checker-sound`. Read design §23.19 (this
+session: the callee's heap as puts) after §23.17–§23.18. Everything is at the
+end of `lib/lang/ownership/sound.hthr`, after `LentFrame::call`, in the
+order the parts are listed below.
 
-**Done this session (the coordinating session's items 1–3, and P4's frame):**
-- Item 1. `Heap::Frame` restated as §18.3's lens equation: a fold of puts
-  (`Sel::put_ref`, `Sel::put_lent`, list order; `Sel::put_ref_comm`), live
-  after at every block live before that nothing was lent whole. Derived:
-  `Heap::frame_apart` (a path apart from every lent reference reads and fits
-  as before), `Heap::frame_whole` (a block lent nothing is its value before).
-  `Inv.frame` is a `LentFrame`: `eq` (the equation from `h0`), `pw` (the lent
-  references pairwise apart, `Ref::Pairwise`, from `Lendable.apart` by
-  `Value::lent_pairwise`), `like` (at a block not lent whole, each lent
-  reference fits the entry and reads now its code and length: a gap in the
-  proof's own invariant, fixed; §23.18 says why). `Inv::start` takes
-  `StrsLaws`. `Inv::store_rest` (and `Inv::store`) take the store as `ff`
-  applied at the root's selections keeping code and length; the frame is
-  `Inv::store_frame` (`Sel::put_lent_store` over `Sel::put_lent_set`).
-  No statement kind lacked the like-ness: no finding.
-- Items 2, 3. `Value::ViewIs`/`Views` take the heap after; a referring fresh
-  result's block is `Heap::Bare` (live, no holes; this fragment's clause).
-  `Value::FreshApart` beside `Views` in `SafeAt` and `RetOk`: two fresh
-  results are in different blocks (`Inv::ret_fresh_apart` from `one`, `made`,
-  `apart`; `Sel::apart_nil_nil`). **Checker defect found and fixed**: `CSt::ret`
-  accepted `Ret([x, x])` against two fresh results, one owned object as two;
-  now `CSt::fresh_once` refuses it (`fresh_twice_refused`,
-  `fresh_two_checked`). §23.17 has both programs.
-- P4's frame (`LentFrame::call`, over `Sel::put_lent_compose`): the caller's
-  `LentFrame` after a call, from its own before, the callee's `Heap::Frame`,
-  `un` (each callee reference lent to change into a block live at entry
-  extends a caller lent reference) and `lk` (each reads after the code and
-  length it read before).
+**Done this session (P4 but its last two steps):**
+- The lends: `CSt::lend_gone`, `Inv::lend_one`, `Inv::lends` (generic in
+  meaning and machine).
+- The frame's premises: `Value::lent_mem_p`, `Inv::call_un`,
+  `Inv::call_lk` (`LentFrame::call`'s `lk` now only under a selection).
+- `Inv::heap_rest`: the invariant on any heap with `Sim` there, a
+  `LentFrame` there and `Heap::Stays`/growth from the current one.
+- The licence across the lends: `Thin` records `na`/`nd`;
+  `CSt::unatom_eq`, `owed_all_eq`, `against_eq`, `against_all_eq`,
+  `meets_eq`, `license_eq`. `Inv::view_off_by` (the licence as the
+  descendants' apartness); `Inv::view_off` is its wrapper.
+- One put: `Inv::put_view_upat`, `Inv::put_view`, `Inv::put_view_mean`,
+  `Inv::put_hold`, `CSt::put_mean`, `Heap::put_at`, `Inv::put_arg`.
+- The puts in turn: `Heap::puts`, `CSt::puts_mean`, `Inv::puts` over
+  `PutAt`; `Nat::Incr`, `Param::written_in`, `Param::written_incr`;
+  `Heap::put_at_apart`, `Heap::put_at_holes`.
+- Each `PutAt` from the lend: `CSt::lend_all_res`, `CSt::lend_write_rw`,
+  `Inv::put_at_arg`.
+- The swap's block lemmas: `Sel::put_lent_whole_in`, `Value::wrefs`,
+  `Value::OutsRead`, `Heap::puts_block`; the list lemmas `Value::wlent`,
+  `Value::wrefs_wlent` (the written list's references are the written
+  parameters', by position), `Value::lent_put_w` (at a block no taken
+  argument reaches, `Value::lent` puts as `Value::wlent`).
 
-**Next, in this order (items 4–7 of the coordinating session's list):**
-1. **P4, the rest**: `Inv(nl.st, e_upd, Mach(a.heap, m.env, a.io), h0, lent)`
-   with nothing pending.
-   - The state after the lends: `CSt::lend` changes only a moved owned holder
-     (`set(l, KGone)`, no views of it); an `Inv` at `nl.st` on the same machine
-     and meaning is `Inv::gone`'s shape (the root stays; the callee owns the
-     block now, so `own`/`one` lose nothing). `Thin`/`CSt::lend_all_at` (P2)
-     walk the lends.
-   - `un` for `LentFrame::call`: a lent-to-change argument's reference is its
-     object's root narrowed (`ArgAt`, `Inv::arg_at`), the object `Changes`, so
-     `owned` puts the root in `lent` or past `h0`; for a block live at entry
-     it is in `lent` (`made`/`inheap` exclude the other). A taken argument is
-     a whole owned root (`own`), so never under a part-lent block.
-   - `lk`: `Value::Written` (slot = the argument's reference, its meaning
-     after `Dyn::Fits` the argument's) with `ReadAll` at both heaps; no holes
-     (`Heap::Stays`, `Inv.bare`) so `Obj::read` is the block's value.
-   - `Sim` at `e_upd` (each written argument's chain written up with its
-     slot's value, as `CSt::patched` will write it up once P6 marks the slots
-     pending): a live variable is the lent argument (`Written`, `ReadAll`), an
-     ancestor on its write chain (`wpar`; the equation), or apart from every
-     callee reference into its block (licence at the lend: `CSt::lend` ByWrite
-     is `write_at(l, Nil)`, which meets every live entry of a lent holder's
-     object and every descendant of a lent view; `excl`/`apart` for the rest)
-     and reads as before (`Heap::frame_apart`).
-   - `Heap::Kept` gives `grows`, `inheap`, `stays` (`Heap::stays_trans`), and
-     `bare` at old blocks (`Heap::Stays`' no-holes part).
-   Then report P4 to the coordinating session.
-2. P5–P9 as planned (the old Handoff's item 3, unchanged): results pushed
-   (generalise `Inv::fresh` to a given block past every root; `Heap::Bare` and
-   `FreshApart` now give `bare` and `own` for the new roots), slots pushed as
-   written-back views then `Inv::rekin`, the moved argument (P7), `Like` at the
-   call with `CallFits` (P8), the stage split (P9). Report after P9.
-3. Items 5–7 of the coordinating session's list (the body induction without
-   joins, joins and `Jump`, the walk retired).
+**Next, in this order:**
+1. **P4's swap.** `Sim(nl.st, e_K, Mach(a.heap, m.env, a.io))` from the
+   puts' `Sim(nl.st, e_K, Mach(h_K, m.env, m.io))` (`h_K =
+   Heap::puts(m.heap, vs, sig.written(), outs)`, `outs = (w(g, ds)).drop(nres)`):
+   for every block a live variable of `nl.st` reads, the callee's block
+   equals the puts' block (both bare), then `Cell::agrees_store`'s pattern.
+   At a block `b`:
+   - no reference of `ks = Value::lent(ps, vs)` whole into `b`: the frame's
+     equation gives `put_lent(ks, b, aa_b, mm_b)`; `Heap::puts_block` gives
+     `put_lent(Value::wrefs(vs, written_from(ps)(0)), b, aa_b, mm_b)`. The two
+     lists put alike at `b`: the taken references are whole (`Lendable.whole`),
+     so none is into `b`, and the rest are the written ones in the same order.
+     Needs a list lemma with an offset (say `Value::wlent(ps, vs)` beside
+     `Value::lent`, and `wrefs(vsf, written_from(ps)(k)) = wlent(ps, vsf.drop(k))`).
+   - a written whole reference into `b`: both are `aa_b`
+     (`Sel::put_lent_whole_in`; `aa_b` live by `ReadAll`).
+   - a taken reference into `b`: no live variable of `nl.st` reads `b`
+     (the moved holder is gone, `own` puts no other root there, and the
+     lend saw no view of it).
+   `OutsRead` comes as in `Inv::call_lk` (slot = argument by `Written`,
+   `ReadAll` at the callee's heap, no holes by `Heap::Stays`).
+2. **P4's assembly** (`Inv::call_after`): `Sim::pass_all` (P1),
+   `Inv::lendable` (P2: `apart` gives `Inv::puts`' `apb`, `live` its
+   bareness), the callee's `SafeAt` parts (P3), `Inv::puts` with `arg :=
+   Inv::put_at_arg`, `rd` from `ReadAll` at the call (`Value::get_of_read`),
+   `written_incr`/`written_in`; then `Inv::lends`; then `Inv::heap_rest`
+   with `LentFrame::call(inv.frame, aa, ks, frame, Inv::call_un, Inv::call_lk)`
+   and `Heap::Stays(h_K, aa)` from `Heap::Kept` (the puts keep length,
+   liveness and holes). Report P4 to the coordinating session.
+3. P5–P9 as planned. **P6's trap (new)**: the meaning after P4 is
+   `CSt::puts_mean`, a fold in the written list's order; the final state's
+   invariant reads `CSt::patched`, a fold by levels. Show they agree at
+   every variable (peel the slots' write-backs with `CSt::patched_back`, or
+   commute walks at places `sib` says are apart). Report after P9.
+4. The consolidation (the coordinating session's item 3:
+   `issues/ownership-sound-consolidate.md` is not filed yet), then the body
+   induction.
 
 **Traps found this session:**
-- `SafeAt`'s `Done` part now ends `Kept ∧ (Views ∧ FreshApart)`; anything
-  destructuring it positionally moves.
-- A worktree's `scripts/fmt` builds its own `target/` from scratch; run
-  `/home/user/heather/target/release/heather fmt --limits dev,cpu=300 --check lib`
-  there instead, and give the worktree its own `HEATHER_CACHE_DIR`.
-- `Sel::Apart` is semantic: two "apart" paths may be degenerate (one reads a
-  constant). Every lemma over the fold uses only the laws, never syntactic
-  disjointness; the composition needs the callee's references under the
-  caller's, not apart from each other.
-- The lens laws (`over_over`, `over_at`) hold only where what is put keeps the
-  code and length there (a window's length): every set-set step carries a
-  `Sel::LikeAt`.
+- A recursive theorem recurses only on a parameter declared before the
+  colon; one bound by a `λ` after it is not a guard (`Inv::puts` takes `is`
+  as a parameter).
+- A `match` on a theorem's parameter takes no nested pattern (`Inl(⟨a, b⟩)`);
+  nest the matches.
+- `absurd(…)` and `⟨…⟩` need an expected type; annotate the `let`.
+- A builder that ends in `j(…)` hides its record's fields (`root`) from
+  conversion; recompute what a later step needs from `inv.refs` at that
+  step, as `Inv::put_arg` does, rather than carrying `root` facts across.
+- `--cache` makes an edit's check take seconds; the whole file uncached is
+  about a minute and a half at this size.
 
 ## Log
 
@@ -142,3 +138,4 @@ the call's parts at the end) and `verdict.hthr` (the interface).
 - 2026-11-26 (eighth session): item 1, the frame as §18.3's lens equation (`00e9be0`): `Heap::Frame` restated as a fold of puts, `Inv.frame` a `LentFrame` (equation, pairwise, like), `Inv::store_frame`. `scripts/test --pr` at `00e9be0`: `== suite: 4140 passed, 0 failed, 3 ignored ==`.
 - 2026-11-26 (eighth session): items 2 and 3 (`0d165b3`): `Heap::Bare` in the fresh case of `Value::ViewIs`, `Value::FreshApart` in `SafeAt`; checker defect `Ret([x, x])` fixed (`CSt::fresh_once`). P4's frame (`f278a42`): `LentFrame::call` over `Sel::put_lent_compose`. Handoff rewritten.
 - 2026-11-26: `scripts/test --pr` at `f278a42` (items 2, 3, P4's frame; `de9bc47` after it is docs and this issue): `== suite: 4140 passed, 0 failed, 3 ignored ==`. Probes `fresh_and_its_view_refused`, `fresh_and_its_view_fresh_refused` (one made object answered as owner and as a view under it: refused, a returned view must be of a parameter).
+- 2026-11-26 (ninth session): P4 built but for the swap and the assembly: the lends (`Inv::lends`), the frame's premises (`Inv::call_un`, `Inv::call_lk`), `Inv::heap_rest`, the licence across the lends (`CSt::license_eq`, `Inv::view_off_by`), the puts (`Inv::put_arg`, `Inv::puts`, `Inv::put_at_arg`), the swap's block and list lemmas; design §23.19. `scripts/test --pr` at `0ba781f`: `== suite: 4139 passed, 1 failed, 3 ignored ==`, the failure `native_linked.rs` (`linked_exports_are_what_the_compiler_emits`, the sha256 certificate check), which this branch does not touch (only `sound.hthr` changed); rerun alone (`scripts/test --pr --test native_linked`): `== suite: 2 passed, 0 failed, 0 ignored ==`, a flake under the suite's load beside the library gate. `f535c5a` (list lemmas) after it is checked by `heather check --cache` only.
