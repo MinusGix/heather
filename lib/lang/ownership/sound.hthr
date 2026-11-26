@@ -2952,6 +2952,18 @@ theorem Inv::heap_rest_ws(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(
         inv.args, inv.href, inv.made, inv.nbase, Heap::stays_trans(tys, h0, m.heap, h2, inv.stays, st, inv.grows))
 }
 
+// The object count raised past an object no root and no holder names: the
+// invariant is as it was (P5's fresh result passed by value).
+theorem Inv::bump(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>}, inv: Inv(tys, strs, s, e, m, h0, lent)):
+    Inv(tys, strs, s.fresh_obj(), e, m, h0, lent)
+{
+    Inv(inv.sim, inv.root, inv.refs, inv.apart, inv.inheap, inv.owned, inv.own, inv.one, inv.words, inv.frame, inv.grows,
+        λ o ge => inv.young(o, omega(ge)),
+        λ l o a b hr => omega(inv.held(l, o, a, b, hr)),
+        λ en mem => { let vv = inv.vents(en, mem); ⟨omega(vv.left), vv.right⟩ },
+        inv.bare, inv.chain, inv.excl, inv.wpar, inv.uni, inv.cfit, inv.sib, inv.args, inv.href, inv.made, omega(inv.nbase), inv.stays)
+}
+
 // A fresh holder bound at a block already live and bare, past the entry
 // heap, that no root reaches: a call's fresh result (P5), or `Fresh`'s new
 // block (`Inv::fresh`, after `Inv::heap_rest` grows the heap).
