@@ -11891,3 +11891,88 @@ theorem Sel::apart_pre(tys: Nat → Type, strs: Strs(tys), sl: StrsLaws(tys, str
         },
     }
 }
+
+// A write along a path depends only on what its function gives at the
+// value read there.
+theorem Sel::write_ext(tys: Nat → Type, strs: Strs(tys), sl: StrsLaws(tys, strs), xs: List<Sel>, g, h: Dyn(tys) → Dyn(tys), d: Dyn(tys),
+    e: g(Sel::read_at(tys, strs, xs, d)) = h(Sel::read_at(tys, strs, xs, d))): Sel::write_at(tys, strs, xs, g, d) = Sel::write_at(tys, strs, xs, h, d)
+{
+    match xs {
+        Nil => e,
+        Cons(a, rest) => (Dyn::model_laws(tys, strs, sl)).over_read(a, λ x => Sel::write_at(tys, strs, rest, g, x), λ x => Sel::write_at(tys, strs, rest, h, x), d,
+            Sel::write_ext(tys, strs, sl, rest, g, h, Dyn::at(tys, strs, a, d), e)),
+    }
+}
+
+theorem Sel::write_id(tys: Nat → Type, strs: Strs(tys), sl: StrsLaws(tys, strs), xs: List<Sel>, d: Dyn(tys)): Sel::write_at(tys, strs, xs, λ z => z, d) = d {
+    trans(Sel::write_ext(tys, strs, sl, xs, λ z => z, λ _ => Sel::read_at(tys, strs, xs, d), d, refl), Sel::put_back_path(tys, strs, sl, xs, d))
+}
+
+// A write along a path keeps whether that path fits.
+theorem Sel::fit_write_self(tys: Nat → Type, strs: Strs(tys), sl: StrsLaws(tys, strs), xs: List<Sel>, g: Dyn(tys) → Dyn(tys), d: Dyn(tys)):
+    Sel::fit(tys, strs, xs, Sel::write_at(tys, strs, xs, g, d)) = Sel::fit(tys, strs, xs, d)
+{
+    let md = Dyn::model(tys, strs);
+    let ml = Dyn::model_laws(tys, strs, sl);
+    match xs {
+        Nil => refl,
+        Cons(a, rest) => {
+            let h = λ (x: Dyn(tys)) => Sel::write_at(tys, strs, rest, g, x);
+            let e1: (md.fits(a, md.over(a, h, d)) = md.fits(a, d)) = ml.fits_over(a, a, h, d);
+            (match md.fits(a, d) as λ c => md.fits(a, d) = c → (md.fits(a, md.over(a, h, d)) && Sel::fit(tys, strs, rest, md.at(a, md.over(a, h, d)))) = (c && Sel::fit(tys, strs, rest, md.at(a, d))) {
+                False => λ off => trans(cong_fn(λ (q: Bool) => q && Sel::fit(tys, strs, rest, md.at(a, md.over(a, h, d))), trans(e1, off)), refl),
+                True => λ on => {
+                    let ih = Sel::fit_write_self(tys, strs, sl, rest, g, md.at(a, d));
+                    let inner: (Sel::fit(tys, strs, rest, md.at(a, md.over(a, h, d))) = Sel::fit(tys, strs, rest, md.at(a, d))) = (match rest as λ r =>
+                            Sel::fit(tys, strs, r, Sel::write_at(tys, strs, r, g, md.at(a, d))) = Sel::fit(tys, strs, r, md.at(a, d)) →
+                            Sel::fit(tys, strs, r, md.at(a, md.over(a, λ x => Sel::write_at(tys, strs, r, g, x), d))) = Sel::fit(tys, strs, r, md.at(a, d)) {
+                        Nil => λ _ => refl,
+                        Cons(b, rr) => λ ih2 => {
+                            let hb = λ (x: Dyn(tys)) => Sel::write_at(tys, strs, Cons(b, rr), g, x);
+                            let lk: (md.like(a, md.at(a, d), hb(md.at(a, d))) = True) = ml.keeps(a, b, md.at(a, d), md.at(a, d), ml.like_refl(a, md.at(a, d)), λ y => Sel::write_at(tys, strs, rr, g, y));
+                            let ov: (md.at(a, md.over(a, hb, d)) = hb(md.at(a, d))) = ml.over_at(a, hb, d, on, lk);
+                            trans(cong_fn(λ (t: Dyn(tys)) => Sel::fit(tys, strs, Cons(b, rr), t), ov), ih2)
+                        },
+                    })(ih);
+                    trans(cong_fn(λ (q: Bool) => q && Sel::fit(tys, strs, rest, md.at(a, md.over(a, h, d))), trans(e1, on)), cong_fn(λ (t: Bool) => True && t, inner))
+                },
+            })(refl)
+        },
+    }
+}
+
+// The degenerate case: a path apart from the whole is one nothing reads or
+// writes, so it stays apart under any prefix.
+theorem Sel::apart_nil_pre(tys: Nat → Type, strs: Strs(tys), sl: StrsLaws(tys, strs), ys: List<Sel>, h: Sel::Apart(tys, strs, Nil, ys), p: List<Sel>):
+    Sel::Apart(tys, strs, p, p ++ ys)
+{
+    let wy: ((g: Dyn(tys) → Dyn(tys)) → (d: Dyn(tys)) → Sel::write_at(tys, strs, ys, g, d) = d) = λ g d => h.reads.left_after_right(g, d);
+    let ry: ((x, y: Dyn(tys)) → Sel::read_at(tys, strs, ys, x) = Sel::read_at(tys, strs, ys, y)) = λ x y => h.reads.right_after_left(λ _ => x, y);
+    let fy: ((x, y: Dyn(tys)) → Sel::fit(tys, strs, ys, x) = Sel::fit(tys, strs, ys, y)) = λ x y => h.fit2(λ _ => x, y);
+    let wp: ((g: Dyn(tys) → Dyn(tys)) → (d: Dyn(tys)) → Sel::write_at(tys, strs, p ++ ys, g, d) = d) = λ g d =>
+        trans(Sel::write_append(tys, strs, p, ys, g, d),
+            trans(Sel::write_ext(tys, strs, sl, p, λ x => Sel::write_at(tys, strs, ys, g, x), λ z => z, d, wy(g, Sel::read_at(tys, strs, p, d))), Sel::write_id(tys, strs, sl, p, d)));
+    SelApart(
+        ApartAt(
+            λ g d => cong_fn(λ (t: Dyn(tys)) => Sel::read_at(tys, strs, p, t), wp(g, d)),
+            λ g d => trans(Sel::read_append(tys, strs, p, ys, Sel::write_at(tys, strs, p, g, d)),
+                trans(ry(Sel::read_at(tys, strs, p, Sel::write_at(tys, strs, p, g, d)), Sel::read_at(tys, strs, p, d)), sym(Sel::read_append(tys, strs, p, ys, d)))),
+            λ f g d => trans(cong_fn(λ (t: Dyn(tys)) => Sel::write_at(tys, strs, p, f, t), wp(g, d)), sym(wp(g, Sel::write_at(tys, strs, p, f, d))))),
+        λ g d => cong_fn(λ (t: Dyn(tys)) => Sel::fit(tys, strs, p, t), wp(g, d)),
+        λ g d => trans(Sel::fit_append(tys, strs, p, ys, Sel::write_at(tys, strs, p, g, d)),
+            trans(cong_fn(λ (q: Bool) => q && Sel::fit(tys, strs, ys, Sel::read_at(tys, strs, p, Sel::write_at(tys, strs, p, g, d))), Sel::fit_write_self(tys, strs, sl, p, g, d)),
+                trans(cong_fn(λ (q: Bool) => Sel::fit(tys, strs, p, d) && q, fy(Sel::read_at(tys, strs, p, Sel::write_at(tys, strs, p, g, d)), Sel::read_at(tys, strs, p, d))),
+                    sym(Sel::fit_append(tys, strs, p, ys, d))))))
+}
+
+// Two paths apart are apart under a common prefix.
+theorem Sel::apart_under(tys: Nat → Type, strs: Strs(tys), sl: StrsLaws(tys, strs), xs, ys: List<Sel>, h: Sel::Apart(tys, strs, xs, ys), p: List<Sel>): Sel::Apart(tys, strs, p ++ xs, p ++ ys) {
+    (match xs as λ q => Sel::Apart(tys, strs, q, ys) → Sel::Apart(tys, strs, p ++ q, p ++ ys) {
+        Nil => λ h0 => j(sym(p.append_nil()), λ q _ => Sel::Apart(tys, strs, q, p ++ ys), Sel::apart_nil_pre(tys, strs, sl, ys, h0, p)),
+        Cons(a, xr) => λ h0 => (match ys as λ q => Sel::Apart(tys, strs, Cons(a, xr), q) → Sel::Apart(tys, strs, p ++ Cons(a, xr), p ++ q) {
+            Nil => λ h1 => j(sym(p.append_nil()), λ q _ => Sel::Apart(tys, strs, p ++ Cons(a, xr), q),
+                Sel::apart_sym(tys, strs, p, p ++ Cons(a, xr), Sel::apart_nil_pre(tys, strs, sl, Cons(a, xr), Sel::apart_sym(tys, strs, Cons(a, xr), Nil, h1), p))),
+            Cons(b, yr) => λ h1 => Sel::apart_pre(tys, strs, sl, Cons(a, xr), Cons(b, yr), λ no => absurd(no), λ no => absurd(no), h1, p),
+        })(h0),
+    })(h)
+}
