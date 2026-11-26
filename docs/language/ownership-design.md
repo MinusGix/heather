@@ -4039,3 +4039,57 @@ the patch keeps the plain variables, `CSt::pfold_agree`), `uni`, `wpar` and
   patch before, set there.
 - The view's death and `Inv::rekin` lost their `pone` premise. Nothing else
   changed.
+
+### 23.16 `Like` on the pending chains, and its steps (2026-11-26, seventh session)
+
+**`Like.pend` covers every view to write on a pending chain**, not only the
+pending ones (`CSt::on_chain`: a pending entry's level, or an ancestor's by
+`anc_of`, without the machine `pend_in` reads). A write-back whose parent
+was already pending keeps `Like.pend` as designed: the parent's new meaning
+is `over` at the child's place with a value `Like.pend` says is like what is
+there, so the parent stays like itself (`Dyn::write_like`). The gap was the
+other parent. A write-back of a pending child into a backed parent makes the
+parent pending, and `Like.pend` then asks that the parent's meaning be like
+its place in the grandparent's. `Like` held nothing of a backed view, and
+`Inv` speaks of the meaning only through the patch, which has already
+written the pending chain over exactly that place, so `Inv` cannot give it
+either. The smallest program is `back_under` (`checker_tests`): views
+`A = x[0]` and `B = A.0` to write, `B` written, then written back into `A`.
+The fact is recorded when the chain forms, where nothing is pending and
+`Inv` gives it, and carried while it stands.
+
+**`Inv::back_like`**: where nothing is pending, a live view to write that is
+its level's one entry is like what its place reads in its parent's meaning.
+Where the chain refers, its reference is the parent's narrowed by the place
+(`Inv::ref_child`), so it reads exactly that (`Value::read_narrow`); where
+it is a copy, `cfit` says so.
+
+**The steps**, at the states the stages leave:
+- With nothing pending before and after: `Like::plain` (`Lit`, `Op`, `Read`,
+  a `Take` of a part or of a plain variable, a `View` of a plain variable),
+  `Like::fresh` (the new object is past the arguments, `Inv.nbase`),
+  `Like::take_hold`, `Like::take_view`, `Like::view`, `Like::death`. All are
+  `Like::push` and `Like::gone`, whose chain premise is vacuous
+  (`CSt::on_chain_none`).
+- `Like::death_view`, with chains pending elsewhere: a view with no children
+  is no entry's ancestor, so every level on a chain after was on one before
+  (`CSt::on_chain_drop`).
+- `Like::stage_write`, an ordinary write. What is written is like what is at
+  the place (`WriteInv::facts`), so the root stays like itself. The written
+  view and its ancestors join the chain, each its level's one entry
+  (`CSt::anc_ent`, `wpar` up the chain), each like its place by
+  `Inv::back_like`. No child of the written view is on a chain.
+- `Like::stage_back`, a write-back. What is written is like what is at the
+  place: by `Like.pend` where the view is pending, by `Inv::back_like` where
+  nothing is. If something was pending, every level on a chain after was on
+  one before: the parent's entry's ancestors are the pending view's
+  (`CSt::anc_up`). If nothing was, the chain after is the parent and its
+  ancestors, like their places by `Inv::back_like`. The view written back is
+  on no chain after (`CSt::anc_child` and `Stmt::back_nk`). A sibling on a
+  chain reads at its place what it read (`sib`).
+- Both writes are `Like::rekin_write`, the entries' flags changed, over
+  `Like::pp_write` (the meaning after a write, entry by entry).
+
+The call's step is the call's own part (P8), since `CallFits` is what the
+callee's safety gives; a `Jump` is a leaf, and its like-ness belongs to the
+induction on fuel (item 4).

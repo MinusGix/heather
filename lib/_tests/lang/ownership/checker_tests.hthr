@@ -1161,3 +1161,15 @@ theorem nested_two_checked(): verdict([two_nat_w(), nested_two(False)], 1).is_so
 // reads `A`, which meets its live child `a`, a view to write. So a view
 // written back has no pending descendant, which `CSt::patched_back` uses.
 theorem nested_two_late_refused(): verdict([two_nat_w(), nested_two(True)], 1) = None { refl }
+
+// A backed view whose child is pending (§23.16): `B`, a view of `A.x` of
+// `x[0]`, is written, so `B` is pending and `A` is not; writing `B` back
+// makes `A` pending. The meaning's `A` must then be like `x[0]`, which the
+// invariant cannot say (the patch has written that place over), so `Like`
+// carries it for every view to write on a pending chain.
+fn back_under() → Func {
+    Func(Sig([Param(pts_s(), ByWrite)], Nil), seq([View(el(Arg(0), Lit(0)), Writing), View(Place(Loc(0), [SField(0)]), Writing), Lit(WNat, 7), Write(whole(Loc(1)), Loc(0)),
+        Write(Place(Loc(2), [SField(0)]), Loc(1)), Death(whole(Loc(1))), Write(el(Arg(0), Lit(0)), Loc(2)), Death(whole(Loc(2)))], Ret([Arg(0)])))
+}
+
+theorem back_under_checked(): verdict([back_under()], 0).is_some() = True { refl }

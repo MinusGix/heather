@@ -9526,6 +9526,20 @@ theorem Stmt::stage_back_copy(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(tys,
 // its own place. While something is pending the checker allows it only of
 // the pending child (`writes_back`). Four cases: the chain refers, the child
 // pending or not; the chain is copies; the parent a holder or a view in each.
+// A write-back while something is pending: its view is pending (`writes_back`).
+theorem Stmt::back_pend(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {p: Place}, {v: Var}, {n: Next}, wi: WriteInv(tys, strs, s, p, v, n), bf: BackFacts(tys, strs, s, p, v, n, wi),
+    wb: s.pending() = True → s.writes_back(Write(p, v)) = True, pend: s.pending() = True): bf.ce.back = False
+{
+    let st1 = j(wi.hl, λ o _ => (match o as λ _ => Bool { Some(l0) => match s.lvl(v) as λ _ => Bool { Some(lv0) => match s.steps(p.steps) as λ _ => Bool {
+        Some(xs) => s.is_back(l0, xs, lv0) && (s.ents(lv0)).any_bit(λ e => !e.back), None => False }, None => False }, None => False }) = True, wb(pend));
+    let st2 = j(wi.hlv, λ o _ => (match o as λ _ => Bool { Some(lv0) => match s.steps(p.steps) as λ _ => Bool {
+        Some(xs) => s.is_back(wi.l, xs, lv0) && (s.ents(lv0)).any_bit(λ e => !e.back), None => False }, None => False }) = True, st1);
+    let st3 = j(wi.hxs, λ o _ => (match o as λ _ => Bool { Some(xs) => s.is_back(wi.l, xs, wi.lv) && (s.ents(wi.lv)).any_bit(λ e => !e.back), None => False }) = True, st2);
+    let anyb = (Bool::and_true_parts(s.is_back(wi.l, wi.xs, wi.lv), (s.ents(wi.lv)).any_bit(λ e => !e.back), st3)).right;
+    let one: (((!bf.ce.back) || False) = True) = j(bf.he, λ es _ => es.any_bit(λ e => !e.back) = True, anyb);
+    (match bf.ce.back as λ b => ((!b) || False) = True → b = False { True => λ no => absurd(no), False => λ _ => refl })(one)
+}
+
 theorem Stmt::stage_back(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(tys, cx.strs), fns: Nat → Func, call: Caller(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>},
     inv: Inv(tys, cx.strs, s, e, m, h0, lent), p: Place, v: Var, n: Next, ok: s.write(tys, cx.strs, p, v) = Some(n), wb: s.pending() = True → s.writes_back(Write(p, v)) = True,
     l: Nat, hl: s.lvl(p.root) = Some(l), bk: (xs: List<Step>) → s.steps(p.steps) = Some(xs) → (lv: Nat) → s.lvl(v) = Some(lv) → s.is_back(l, xs, lv) = True):
@@ -9535,16 +9549,7 @@ theorem Stmt::stage_back(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(tys, cx.s
     let wi = s.write_inv(tys, strs, p, v, n, ok);
     let ll: (l = wi.l) = Option::some_inj(l, wi.l, trans(sym(hl), wi.hl));
     let bf = wi.back_facts(tys, strs, j(ll, λ q _ => s.is_back(q, wi.xs, wi.lv) = True, bk(wi.xs, wi.hxs, wi.lv, wi.hlv)));
-    let wb2: (s.pending() = True → bf.ce.back = False) = λ pend => {
-        let st1 = j(wi.hl, λ o _ => (match o as λ _ => Bool { Some(l0) => match s.lvl(v) as λ _ => Bool { Some(lv0) => match s.steps(p.steps) as λ _ => Bool {
-            Some(xs) => s.is_back(l0, xs, lv0) && (s.ents(lv0)).any_bit(λ e => !e.back), None => False }, None => False }, None => False }) = True, wb(pend));
-        let st2 = j(wi.hlv, λ o _ => (match o as λ _ => Bool { Some(lv0) => match s.steps(p.steps) as λ _ => Bool {
-            Some(xs) => s.is_back(wi.l, xs, lv0) && (s.ents(lv0)).any_bit(λ e => !e.back), None => False }, None => False }) = True, st1);
-        let st3 = j(wi.hxs, λ o _ => (match o as λ _ => Bool { Some(xs) => s.is_back(wi.l, xs, wi.lv) && (s.ents(wi.lv)).any_bit(λ e => !e.back), None => False }) = True, st2);
-        let anyb = (Bool::and_true_parts(s.is_back(wi.l, wi.xs, wi.lv), (s.ents(wi.lv)).any_bit(λ e => !e.back), st3)).right;
-        let one: (((!bf.ce.back) || False) = True) = j(bf.he, λ es _ => es.any_bit(λ e => !e.back) = True, anyb);
-        (match bf.ce.back as λ b => ((!b) || False) = True → b = False { True => λ no => absurd(no), False => λ _ => refl })(one)
-    };
+    let wb2: (s.pending() = True → bf.ce.back = False) = λ pend => Stmt::back_pend(tys, strs, wi, bf, wb, pend);
     (match (REnv::get(tys, m.env, p.root)).v as λ u => (REnv::get(tys, m.env, p.root)).v = u →
             Stepped(tys, strs, fns, call, Write(p, v), n.st, Env::set(tys, e, p.root, λ d => Dyn::write(tys, strs, Env::ixs(tys, e), p.steps, λ _ => Env::get(tys, e, v), d)), m, h0, lent) {
         Plain(dp) => λ hp => Stmt::stage_back_copy(tys, cx, sl, fns, call, inv, wi, bf, dp, hp),
@@ -11433,6 +11438,229 @@ theorem Like::stage_write(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(tys, cx.
         },
     })(refl);
     j(sym(wf.nst), λ q _ => Like(tys, strs, ps, ds, q, e2), body)
+}
+
+// What is written like what is at the place keeps the whole like itself.
+theorem Dyn::write_like(tys: Nat → Type, strs: Strs(tys), sl: StrsLaws(tys, strs), ws: List<Ix>, xs: List<Step>, w, d: Dyn(tys),
+    h: Dyn::Like(tys, strs, w, Dyn::read(tys, strs, ws, xs, d))): Dyn::Like(tys, strs, Dyn::write(tys, strs, ws, xs, λ _ => w, d), d)
+{
+    let ss = Steps::sels(xs, ws);
+    let h2: Dyn::Like(tys, strs, w, Sel::read_at(tys, strs, ss, d)) = j(Steps::read_sels(tys, strs, ws, xs, d), λ q _ => Dyn::Like(tys, strs, w, q), h);
+    let wk = Sel::write_keeps(tys, strs, sl, λ _ => w, ss, d, h2.left, h2.right);
+    j(sym(Steps::write_sels(tys, strs, ws, xs, λ _ => w, d)), λ q _ => Dyn::Like(tys, strs, q, d), ⟨wk.left, wk.right⟩)
+}
+
+// An ancestor of a view to write has a child to write.
+theorem CSt::anc_child(self f: Nat, s: CSt, tr: Walkable(s)): (x: VEnt) → Mem(x, s.views) → x.mode.writes() = True → (z: Nat) → z.member(s.anc_of(x, f)) = True →
+    Exists<VEnt>(λ w => Mem(w, s.views) ∧ ((w.mode.writes() = True) ∧ (w.par = z)))
+{
+    match f {
+        Zero => λ x _ _ z no => absurd(no),
+        Succ(f1) => λ x mx w z hz => {
+            let ne: ¬(x.par = x.lvl) = λ eq => Nat::lt_irrefl(x.lvl, omega(tr.lt(x, mx), eq));
+            let hz2 = j(s.anc_step(x, f1, ne), λ ll _ => z.member(ll) = True, hz);
+            match Bool::or_true_parts(x.par.same(z), z.member((s.ents(x.par)).foldr(λ (pe: VEnt) (acc: List<Nat>) => s.anc_of(pe, f1) ++ acc, Nil)), hz2) {
+                Inl(sz) => Exists(x, ⟨mx, ⟨w, x.par.same_sound(z, sz)⟩⟩),
+                Inr(mz) => match VEnt::foldr_member(s.ents(x.par), λ pe => s.anc_of(pe, f1), z, mz) {
+                    Exists(pe, pp) => {
+                        let pm: Mem(pe, s.views) = s.views.mem_filter(pe, λ q => q.lvl.same(x.par), pp.left);
+                        let pl: (pe.lvl = x.par) = pe.lvl.same_sound(x.par, s.views.mem_filter_holds(pe, λ q => q.lvl.same(x.par), pp.left));
+                        let rv: (s.role(x.par) = KView) = j(pl, λ q _ => s.role(q) = KView, (tr.vk(pe, pm)).right);
+                        match tr.wpar(x, mx, w)(rv) {
+                            ⟨pw, ppw⟩ => {
+                                let eq: (pe = pw) = s.ent_only(x.par, pw, ppw.left, pe, pm, pl);
+                                CSt::anc_child(f1, s, tr, pe, pm, j(sym(eq), λ q _ => q.mode.writes() = True, ppw.right), z, pp.right)
+                            },
+                        }
+                    },
+                },
+            }
+        },
+    }
+}
+
+// An ancestor of an entry of a view's parent is the view's ancestor.
+theorem CSt::anc_up(self s: CSt, lt: (en: VEnt) → Mem(en, s.views) → en.par < en.lvl, ce: VEnt, mce: Mem(ce, s.views), cl: ce.lvl < s.na + s.nd,
+    x0: VEnt, mx: Mem(x0, s.views), xp: x0.lvl = ce.par, z: Nat, h: z.member(s.anc_of(x0, s.na + s.nd)) = True): z.member(s.anc_of(ce, s.na + s.nd)) = True
+{
+    let k = s.na + s.nd - 1;
+    let kk: (s.na + s.nd = Succ(k)) = omega(cl);
+    let ne: ¬(ce.par = ce.lvl) = λ eq => Nat::lt_irrefl(ce.lvl, omega(lt(ce, mce), eq));
+    let h1: (z.member(s.anc_of(x0, Succ(k))) = True) = j(kk, λ q _ => z.member(s.anc_of(x0, q)) = True, h);
+    let h2: (z.member(s.anc_of(x0, k)) = True) = j(sym(CSt::anc_more(k, s, lt, x0, mx, omega(xp, lt(ce, mce), cl))), λ q _ => z.member(q) = True, h1);
+    let mxe: Mem(x0, s.ents(ce.par)) = VEnt::mem_filter_lvl(s.views, ce.par, x0, trans(cong_fn(λ (q: Nat) => q.same(ce.par), xp), ce.par.same_self()), mx);
+    let rest = (s.ents(ce.par)).foldr(λ (pe: VEnt) (acc: List<Nat>) => s.anc_of(pe, k) ++ acc, Nil);
+    let mr: (z.member(rest) = True) = VEnt::member_foldr(s.ents(ce.par), λ pe => s.anc_of(pe, k), z, x0, mxe, h2);
+    let hd: (z.member(Cons(ce.par, rest)) = True) = j(sym(mr), λ c _ => (ce.par.same(z) || c) = True, Bool::or_true_right(ce.par.same(z)));
+    j(sym(trans(cong_fn(λ (q: Nat) => s.anc_of(ce, q), kk), s.anc_step(ce, k, ne))), λ q _ => z.member(q) = True, hd)
+}
+
+// A write-back's `Like`. What is written is like what is at the place: by
+// `Like.pend` where the view is pending, by `Inv::back_like` where nothing
+// is. Every level on a chain after it was on one before, unless nothing was
+// pending (then it is the parent's or an ancestor's, like its place by
+// `Inv::back_like`); the view written back is on none (it has no live child
+// to write, `Stmt::back_nk`); a sibling reads at its place what it read
+// (`sib`).
+theorem Like::stage_back(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(tys, cx.strs), {ps: List<Param>}, {ds: List<Dyn(tys)>}, {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>},
+    inv: Inv(tys, cx.strs, s, e, m, h0, lent), lk: Like(tys, cx.strs, ps, ds, s, e), p: Place, v: Var, n: Next, ok: s.write(tys, cx.strs, p, v) = Some(n),
+    wb: s.pending() = True → s.writes_back(Write(p, v)) = True,
+    l: Nat, hl: s.lvl(p.root) = Some(l), bk: (xs: List<Step>) → s.steps(p.steps) = Some(xs) → (lv: Nat) → s.lvl(v) = Some(lv) → s.is_back(l, xs, lv) = True):
+    Like(tys, cx.strs, ps, ds, n.st, Env::set(tys, e, p.root, λ d => Dyn::write(tys, cx.strs, Env::ixs(tys, e), p.steps, λ _ => Env::get(tys, e, v), d)))
+{
+    let strs = cx.strs;
+    let nl = s.na + s.nd;
+    let wi = s.write_inv(tys, strs, p, v, n, ok);
+    let ll: (l = wi.l) = Option::some_inj(l, wi.l, trans(sym(hl), wi.hl));
+    let bf = wi.back_facts(tys, strs, j(ll, λ q _ => s.is_back(q, wi.xs, wi.lv) = True, bk(wi.xs, wi.hxs, wi.lv, wi.hlv)));
+    let ce = bf.ce;
+    let cm = s.ent_mem(wi.lv, ce, bf.he);
+    let tr = Inv::walkable(tys, strs, inv);
+    let ro = Stmt::back_roles(tys, strs, inv, wi, bf);
+    let nk = Stmt::back_nk(tys, strs, inv, wi, bf);
+    let ln = CSt::pfold_len(nl, s, tys, strs, m, e);
+    let ea: (e.args.len() = s.na) = trans(sym(ln.left), inv.sim.eargs);
+    let el: (e.locs.len() = s.nd) = trans(sym(ln.right), inv.sim.elocs);
+    let unst: (s.unsteps(ce.at) = p.steps) = j(sym(bf.cat), λ q _ => s.unsteps(q) = p.steps, CSt::unsteps_steps(p.steps, s, wi.xs, wi.hxs));
+    let hpar: (s.lvl(p.root) = Some(ce.par)) = trans(wi.hl, cong_fn(λ (q: Nat) => Some(q), sym(bf.cpar)));
+    let hz: (s.lvl(v) = Some(ce.lvl)) = trans(wi.hlv, cong_fn(λ (q: Nat) => Some(q), sym(cm.right)));
+    let g = λ (_: Dyn(tys)) => Env::get(tys, e, v);
+    let f = λ (d: Dyn(tys)) => Dyn::write(tys, strs, Env::ixs(tys, e), p.steps, g, d);
+    let old = Env::get(tys, e, p.root);
+    let e2 = Env::set(tys, e, p.root, f);
+    // The view's own like-ness, and so the parent's.
+    let wl0: Dyn::Like(tys, strs, Env::get(tys, e, v), Dyn::read(tys, strs, Env::ixs(tys, e), s.unsteps(ce.at), old)) = (match s.pending() as λ b => s.pending() = b →
+            Dyn::Like(tys, strs, Env::get(tys, e, v), Dyn::read(tys, strs, Env::ixs(tys, e), s.unsteps(ce.at), old)) {
+        False => λ none => Inv::back_like(tys, strs, inv, none, wi.lv, ce, bf.he, bf.cw, p.root, v, hpar, wi.hlv),
+        True => λ pend => {
+            let cb: (ce.back = False) = Stmt::back_pend(tys, strs, wi, bf, wb, pend);
+            let pw: ((ce.mode.writes() && !ce.back) = True) = j(sym(cb), λ b _ => (ce.mode.writes() && !b) = True, j(sym(bf.cw), λ b _ => (b && True) = True, refl));
+            let oc: (s.on_chain(ce.lvl) = True) = s.views.any_bit_mem(λ x => x.mode.writes() && !x.back && (x.lvl.same(ce.lvl) || ce.lvl.member(s.anc_of(x, nl))), ce, cm.left,
+                j(sym(pw), λ b _ => (b && (ce.lvl.same(ce.lvl) || ce.lvl.member(s.anc_of(ce, nl)))) = True, j(sym(ce.lvl.same_self()), λ b _ => (True && (b || ce.lvl.member(s.anc_of(ce, nl)))) = True, refl)));
+            lk.pend(ce, cm.left, bf.cw, oc, p.root, v, hpar, hz)
+        },
+    })(refl);
+    let wl: Dyn::Like(tys, strs, Env::get(tys, e, v), Dyn::read(tys, strs, Env::ixs(tys, e), p.steps, old)) = j(unst, λ q _ => Dyn::Like(tys, strs, Env::get(tys, e, v), Dyn::read(tys, strs, Env::ixs(tys, e), q, old)), wl0);
+    let lx: Dyn::Like(tys, strs, f(old), old) = Dyn::write_like(tys, strs, sl, Env::ixs(tys, e), p.steps, Env::get(tys, e, v), old, wl);
+    let fk = λ (y: VEnt) => y.reback(wi.lv, wi.l);
+    let kf = λ (y: VEnt) => y.reback_kin(wi.lv, wi.l);
+    let tl = Cons(wi.l, s.touched);
+    let s2 = s.rekin(fk, tl, Cons(wi.l, s.wrote));
+    // A level on a chain after: its entry's original is pending after, so is
+    // the parent's entry or was pending before (not the view written back).
+    let onc = λ (z: Nat) (oc: s2.on_chain(z) = True) => s.on_chain_rekin(fk, kf, tl, Cons(wi.l, s.wrote), z, oc);
+    let after = λ (x0: VEnt) (mx: Mem(x0, s.views)) (pa: ((fk(x0)).mode.writes() && !(fk(x0)).back) = True) =>
+        (match x0.lvl.same(wi.l) as λ c => x0.lvl.same(wi.l) = c → (x0.lvl = wi.l) ∨ ((x0.mode.writes() && !x0.back) = True) {
+            True => λ sc => Inl(x0.lvl.same_sound(wi.l, sc)),
+            False => λ sc => Inr((match x0.lvl.same(wi.lv) as λ c => x0.lvl.same(wi.lv) = c → (x0.mode.writes() && !x0.back) = True {
+                True => λ sv => {
+                    let bb: (x0.backed(wi.lv) = VEnt(x0.lvl, x0.obj, x0.reg, x0.mode, x0.par, x0.at, True)) = j(sym(sv), λ c _ => (match c as λ _ => VEnt { True => VEnt(x0.lvl, x0.obj, x0.reg, x0.mode, x0.par, x0.at, True), False => x0 }) = VEnt(x0.lvl, x0.obj, x0.reg, x0.mode, x0.par, x0.at, True), refl);
+                    let ub: ((x0.backed(wi.lv)).unbacked(wi.l) = x0.backed(wi.lv)) = j(sym(bb), λ q _ => q.unbacked(wi.l) = q, j(sym(sc), λ c _ => (match c as λ _ => VEnt { True => VEnt(x0.lvl, x0.obj, x0.reg, x0.mode, x0.par, x0.at, False), False => VEnt(x0.lvl, x0.obj, x0.reg, x0.mode, x0.par, x0.at, True) }) = VEnt(x0.lvl, x0.obj, x0.reg, x0.mode, x0.par, x0.at, True), refl));
+                    let p2: ((x0.mode.writes() && !True) = True) = j(trans(ub, bb), λ q _ => (q.mode.writes() && !q.back) = True, pa);
+                    absurd(trans(sym(p2), x0.mode.writes().and_false_r()))
+                },
+                False => λ sv => {
+                    let bb: (x0.backed(wi.lv) = x0) = j(sym(sv), λ c _ => (match c as λ _ => VEnt { True => VEnt(x0.lvl, x0.obj, x0.reg, x0.mode, x0.par, x0.at, True), False => x0 }) = x0, refl);
+                    let ub: (x0.unbacked(wi.l) = x0) = j(sym(sc), λ c _ => (match c as λ _ => VEnt { True => VEnt(x0.lvl, x0.obj, x0.reg, x0.mode, x0.par, x0.at, False), False => x0 }) = x0, refl);
+                    j(trans(cong_fn(λ (q: VEnt) => q.unbacked(wi.l), bb), ub), λ q _ => (q.mode.writes() && !q.back) = True, pa)
+                },
+            })(refl)),
+        })(refl);
+    let wds = λ (en: VEnt) (mem: Mem(en, s.views)) (k: Nat) (mk: k.member(Steps::lvls(en.at)) = True) =>
+        inv.words(k, s.views.any_bit_mem(λ x => k.member(Steps::lvls(x.reg)) || k.member(Steps::lvls(x.at)), en, mem,
+            j(sym(mk), λ b _ => (k.member(Steps::lvls(en.reg)) || b) = True, Bool::or_true_right(k.member(Steps::lvls(en.reg))))));
+    let npl = λ (en: VEnt) (mem: Mem(en, s.views)) (eq: en.par = en.lvl) => Nat::lt_irrefl(en.lvl, omega((inv.chain(en, mem)).left, eq));
+    // The view written back is on no chain after.
+    let cfree = λ (en: VEnt) (mem: Mem(en, s.views)) (lz: en.lvl = wi.lv) (oc: s2.on_chain(en.lvl) = True) => match onc(en.lvl, oc) {
+        ⟨x0, px⟩ => {
+            let no: False = match px.right.right {
+                Inl(xz) => match after(x0, px.left, px.right.left) {
+                    Inl(xl) => bf.nlv(trans(sym(trans(xz, lz)), xl)),
+                    Inr(xp) => {
+                        let x0e: (x0 = ce) = s.ent_only(wi.lv, ce, bf.he, x0, px.left, trans(xz, lz));
+                        let cbt: (ce.back = False) = (match ce.back as λ b => ((ce.mode.writes() && !b) = True) → b = False { True => λ h2 => absurd(trans(sym(h2), ce.mode.writes().and_false_r())), False => λ _ => refl })(j(x0e, λ q _ => (q.mode.writes() && !q.back) = True, xp));
+                        // ce pending but written back: `fk` backs it.
+                        let bb: (ce.backed(wi.lv) = VEnt(ce.lvl, ce.obj, ce.reg, ce.mode, ce.par, ce.at, True)) = j(sym(trans(cong_fn(λ (q: Nat) => q.same(wi.lv), cm.right), wi.lv.same_self())), λ c _ => (match c as λ _ => VEnt { True => VEnt(ce.lvl, ce.obj, ce.reg, ce.mode, ce.par, ce.at, True), False => ce }) = VEnt(ce.lvl, ce.obj, ce.reg, ce.mode, ce.par, ce.at, True), refl);
+                        let sl0: (ce.lvl.same(wi.l) = False) = Nat::same_false(ce.lvl, wi.l, λ eq => bf.nlv(trans(sym(cm.right), eq)));
+                        let ub: ((ce.backed(wi.lv)).unbacked(wi.l) = VEnt(ce.lvl, ce.obj, ce.reg, ce.mode, ce.par, ce.at, True)) = j(sym(bb), λ q _ => q.unbacked(wi.l) = VEnt(ce.lvl, ce.obj, ce.reg, ce.mode, ce.par, ce.at, True), j(sym(sl0), λ c _ => (match c as λ _ => VEnt { True => VEnt(ce.lvl, ce.obj, ce.reg, ce.mode, ce.par, ce.at, False), False => VEnt(ce.lvl, ce.obj, ce.reg, ce.mode, ce.par, ce.at, True) }) = VEnt(ce.lvl, ce.obj, ce.reg, ce.mode, ce.par, ce.at, True), refl));
+                        let p2: ((ce.mode.writes() && !True) = True) = j(ub, λ q _ => (q.mode.writes() && !q.back) = True, j(x0e, λ q _ => ((fk(q)).mode.writes() && !(fk(q)).back) = True, px.right.left));
+                        absurd(trans(sym(p2), ce.mode.writes().and_false_r()))
+                    },
+                },
+                Inr(mz) => {
+                    let xw: (x0.mode.writes() = True) = match after(x0, px.left, px.right.left) {
+                        Inl(_) => trans(cong_fn(λ (q: Mode) => q.writes(), sym((kf(x0)).mode)), (Bool::and_true_parts((fk(x0)).mode.writes(), !(fk(x0)).back, px.right.left)).left),
+                        Inr(xp) => (Bool::and_true_parts(x0.mode.writes(), !x0.back, xp)).left,
+                    };
+                    match CSt::anc_child(nl, s, tr, x0, px.left, xw, en.lvl, mz) {
+                        ⟨w, pw⟩ => nk(w, pw.left, pw.right.left, trans(pw.right.right, lz)),
+                    }
+                },
+            };
+            no
+        },
+    };
+    let lv2 = Like::rekin_write(tys, strs, lk, p.root, wi.l, wi.hl, f, lx, Bool::false_of_not((s.role(wi.l)).plain(), λ t => ro.left(Role::plain_is(s.role(wi.l), t))), ea, el, fk, kf, tl, wds, npl,
+        λ en mem w oc y z hy hz => (match s.pending() as λ b => s.pending() = b → Dyn::Like(tys, strs, Env::get(tys, e, z), Dyn::read(tys, strs, Env::ixs(tys, e), s.unsteps(en.at), Env::get(tys, e, y))) {
+            False => λ none => match onc(en.lvl, oc) {
+                ⟨x0, px⟩ => {
+                    let xl: (x0.lvl = wi.l) = match after(x0, px.left, px.right.left) { Inl(q) => q, Inr(xp) => absurd(trans(sym(xp), s.not_pending(none, x0, px.left))) };
+                    let rv: (s.role(wi.l) = KView) = j(xl, λ q _ => s.role(q) = KView, (inv.vents(x0, px.left)).right.right);
+                    match inv.wpar(ce, cm.left, bf.cw)(trans(cong_fn(λ (q: Nat) => s.role(q), bf.cpar), rv)) {
+                        ⟨pe, ppe⟩ => {
+                            let hpe: (s.ents(wi.l) = [pe]) = j(bf.cpar, λ q _ => s.ents(q) = [pe], ppe.left);
+                            let x0e: (x0 = pe) = s.ent_only(wi.l, pe, hpe, x0, px.left, xl);
+                            let h2: (wi.l = en.lvl) ∨ (en.lvl.member(s.anc_of(pe, nl)) = True) = match px.right.right {
+                                Inl(lz) => Inl(trans(sym(xl), lz)),
+                                Inr(mz) => Inr(j(x0e, λ q _ => en.lvl.member(s.anc_of(q, nl)) = True, mz)),
+                            };
+                            let ce2 = s.chain_ent(tr, wi.l, pe, hpe, ppe.right, en.lvl, h2, en, mem, refl);
+                            Inv::back_like(tys, strs, inv, none, en.lvl, en, ce2.left, w, y, z, hy, hz)
+                        },
+                    }
+                },
+            },
+            True => λ pend => {
+                let cb: (ce.back = False) = Stmt::back_pend(tys, strs, wi, bf, wb, pend);
+                let cpw: ((ce.mode.writes() && !ce.back) = True) = j(sym(cb), λ b _ => (ce.mode.writes() && !b) = True, j(sym(bf.cw), λ b _ => (b && True) = True, refl));
+                let oc0: (s.on_chain(en.lvl) = True) = match onc(en.lvl, oc) {
+                    ⟨x0, px⟩ => match after(x0, px.left, px.right.left) {
+                        Inr(xp) => s.views.any_bit_mem(λ x => x.mode.writes() && !x.back && (x.lvl.same(en.lvl) || en.lvl.member(s.anc_of(x, nl))), x0, px.left,
+                            j(sym(xp), λ b _ => (b && (x0.lvl.same(en.lvl) || en.lvl.member(s.anc_of(x0, nl)))) = True,
+                                match px.right.right {
+                                    Inl(lz) => j(sym(trans(cong_fn(λ (q: Nat) => q.same(en.lvl), lz), en.lvl.same_self())), λ b _ => (True && (b || en.lvl.member(s.anc_of(x0, nl)))) = True, refl),
+                                    Inr(mz) => j(sym(mz), λ b _ => (True && (x0.lvl.same(en.lvl) || b)) = True, Bool::or_true_right(x0.lvl.same(en.lvl))),
+                                })),
+                        Inl(xl) => {
+                            // The parent's entry: its chain is the pending view's.
+                            let cl: (ce.lvl < nl) = omega((inv.vents(ce, cm.left)).right.left);
+                            let inanc: (en.lvl.member(s.anc_of(ce, nl)) = True) = match px.right.right {
+                                Inl(lz) => j(trans(bf.cpar, trans(sym(xl), lz)), λ q _ => q.member(s.anc_of(ce, nl)) = True, s.anc_par(ce, tr.lt(ce, cm.left), cl)),
+                                Inr(mz) => s.anc_up(tr.lt, ce, cm.left, cl, x0, px.left, trans(xl, sym(bf.cpar)), en.lvl, mz),
+                            };
+                            s.views.any_bit_mem(λ x => x.mode.writes() && !x.back && (x.lvl.same(en.lvl) || en.lvl.member(s.anc_of(x, nl))), ce, cm.left,
+                                j(sym(cpw), λ b _ => (b && (ce.lvl.same(en.lvl) || en.lvl.member(s.anc_of(ce, nl)))) = True,
+                                    j(sym(inanc), λ b _ => (True && (ce.lvl.same(en.lvl) || b)) = True, Bool::or_true_right(ce.lvl.same(en.lvl)))))
+                        },
+                    },
+                };
+                lk.pend(en, mem, w, oc0, y, z, hy, hz)
+            },
+        })(refl),
+        λ en mem w oc pl => match Nat::eq_or_ne(en.lvl, wi.lv) {
+            Inl(lz) => false_elim(cfree(en, mem, lz, oc)),
+            Inr(nz) => {
+                let ap0 = inv.sib(en, ce, mem, cm.left, w, trans(pl, sym(bf.cpar)), λ eq => nz(trans(eq, cm.right)));
+                let ap: Sel::Apart(tys, strs, Steps::sels(s.unsteps(en.at), Env::ixs(tys, e)), Steps::sels(p.steps, Env::ixs(tys, e))) =
+                    j(Inv::at_sels(tys, strs, inv, en, mem), λ q _ => Sel::Apart(tys, strs, q, Steps::sels(p.steps, Env::ixs(tys, e))),
+                        j(trans(Inv::at_sels(tys, strs, inv, ce, cm.left), cong_fn(λ (xs: List<Step>) => Steps::sels(xs, Env::ixs(tys, e)), unst)), λ q _ => Sel::Apart(tys, strs, Steps::sels(s.unsteps(en.at), Mach::ixs(tys, strs, m)), q), ap0));
+                let ra = Steps::sels(s.unsteps(en.at), Env::ixs(tys, e));
+                trans(Steps::read_sels(tys, strs, Env::ixs(tys, e), s.unsteps(en.at), f(old)),
+                    trans(cong_fn(λ (q: Dyn(tys)) => Sel::read_at(tys, strs, ra, q), Steps::write_sels(tys, strs, Env::ixs(tys, e), p.steps, g, old)),
+                        trans(ap.reads.left_after_right(g, old), sym(Steps::read_sels(tys, strs, Env::ixs(tys, e), s.unsteps(en.at), old)))))
+            },
+        });
+    j(sym(trans(bf.nst, s.back_state(wi.lv, wi.l, ro.left))), λ q _ => Like(tys, strs, ps, ds, q, e2), lv2)
 }
 
 // The frame at a block lent to nothing: its whole object reads as before.
