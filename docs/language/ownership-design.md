@@ -2814,6 +2814,52 @@ from the guard's test by `RoomLaw` at depth and a call reached raising the
 peak by one. These are the existing inductions with a wider goal, not new
 ones.
 
+**The coordinating session's ruling on how the stop composes** (2026-11-26).
+The stop is not a plain disjunct of a claim's goal: at a going stop the
+claim's lower bound is the fuel's count, and a guard can fire after fewer
+counted steps (`down` from two, one table frame short: one CALL counted
+before the guard fires, at fuel three). Nor is it a disjunction outside the
+claim (`Performs(goal, least) ∨ Performs(spent, 0)`): which side holds can
+depend on the kernel's answer, so it does not compose across a system call.
+So the claim gains an escape: `Site::PerformsOr(writes, kernel, goal, esc,
+calls, least)` reaches `(least <= n ∧ goal(t)) ∨ esc(t)`, the escape under
+no step bound, and the bind passes an escaped state through unchanged.
+The exited stop and the spent stop are both escapes, with different facts
+about the exit state.
+
+**Step 3, part 1: the root generalised** (`x86_64_stack_runs`). Built as
+ruled, and nothing else moved:
+
+- `Site::PerformsOr` and `Site::ClaimsOr` (the escape after the goal), with
+  `Site::EntersClaimOr` and `Site::ReturnsClaimOr`. Every lemma is proved
+  once over the escape: `performs_or_less/up/more/weaken/prefix/after/
+  steps/bind/then_steps/none`, `performs_or_escape` (an escape reached by
+  steps is a claim at any count and bound; the bind needs it), and
+  `claims_or_of_moves/trans/weaken/carry/loosen/absurd/jump_item/call_by/
+  call/then/after_moves/resumes/test_by/branch_by`,
+  `returns_claim_or_of`, `returns_by_claim_or`. `reach_or_map` moves both
+  sides of a reach at once; `weaken` maps the escape too.
+- `Site::Performs`, `Claims`, `EntersClaim` and `ReturnsClaim` are the
+  instances at `esc = λ _ => False` under their names, and each old lemma
+  is a one-line instance of its general one, with its statement unchanged.
+- The instance changes the reach's shape (`(least <= n ∧ goal) ∨ False`),
+  so the proofs that took a `Performs` apart read the goal through
+  `reach_goal` or build an `Inl`: the contract's `linux_performs_grows`,
+  `linux_performs_exact`, `performs_reaches` and `performs_meet`,
+  `bytes_level_whole`'s `linux_performs_suffix` and `linux_runs_as`, two
+  readings in `bytes_level_lower` (`call_heap_stops`, `plain_passes_stops`)
+  and two in `bytes_level_routines` (`program_stops`, `program_tracks`),
+  and the root's own `moves_of_claims`, `moves_of_quiet` and
+  `returns_of_quiet`. FunctionIR and its lowering, and the generated
+  certificates, cite only the lemmas by name and needed nothing.
+- The exact-count lemmas (`linux_performs_exact`, `claims_exact`,
+  `claims_stop_exact`) hold as stated at the instance. With an escape they
+  are exact where the escape is not taken: the count is read off the goal's
+  world, and an escaped run's world is not pinned by it (a run that stops
+  spent after one write has made fewer calls than the goal's world
+  records). Step 3 states their escape form only where a reading of the
+  stop needs one.
+
 ## 18. The world, termination, and level 2 fixed (2026-11-25)
 
 Round six of the design review. Where this section and §15.4, §15.5 or §17

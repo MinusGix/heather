@@ -43,9 +43,11 @@ theorem Site::linux_performs_suffix<M>(self site: Site<M>, stack: Stack<M>(site.
     (least: Nat) → (from: Running<M, Io>) → site.LinuxPerforms(stack, goal, calls, least, from) →
     Exists<List<Exchange>>(λ xs => o.past = xs ++ from.io.past) {
     match calls {
-        Zero => λ least from p => Exists(Nil, sym(cong_fn<Io, List<Exchange>>(λ w => w.past, pins(Running(p.witness, from.io), p.proof.proof.right.right)))),
+        Zero => λ least from p => Exists(Nil, sym(cong_fn<Io, List<Exchange>>(λ w => w.past, pins(Running(p.witness, from.io),
+            reach_goal<M, Io>(goal, least, p.proof.witness, Running(p.witness, from.io), p.proof.proof.right).right)))),
         Succ(more) => λ least from p => match p.proof.proof.right {
-            Inl(reached) => Exists(Nil, sym(cong_fn<Io, List<Exchange>>(λ w => w.past, pins(Running(p.witness, from.io), reached.right)))),
+            Inl(reach) => Exists(Nil, sym(cong_fn<Io, List<Exchange>>(λ w => w.past, pins(Running(p.witness, from.io),
+                reach_goal<M, Io>(goal, least, p.proof.witness, Running(p.witness, from.io), reach).right)))),
             Inr(called) => {
                 let c = called.witness;
                 let a = from.io.answer(c);
@@ -79,9 +81,11 @@ theorem Site::linux_runs_as<M>(self site: Site<M>, stack: Stack<M>(site.fetch, s
                 ends(Running(t, from.io), reached)))
     };
     match calls {
-        Zero => λ least from p => at_goal(from, p.witness, p.proof.witness, p.proof.proof.left, p.proof.proof.right.right),
+        Zero => λ least from p => at_goal(from, p.witness, p.proof.witness, p.proof.proof.left,
+            reach_goal<M, Io>(goal, least, p.proof.witness, Running(p.witness, from.io), p.proof.proof.right).right),
         Succ(more) => λ least from p => match p.proof.proof.right {
-            Inl(reached) => at_goal(from, p.witness, p.proof.witness, p.proof.proof.left, reached.right),
+            Inl(reach) => at_goal(from, p.witness, p.proof.witness, p.proof.proof.left,
+                reach_goal<M, Io>(goal, least, p.proof.witness, Running(p.witness, from.io), reach).right),
             Inr(called) => {
                 let t = p.witness;
                 let n = p.proof.witness;

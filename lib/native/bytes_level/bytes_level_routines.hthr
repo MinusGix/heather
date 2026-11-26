@@ -1500,7 +1500,7 @@ theorem program_stops<M>(site: Site<M>, stack: Stack<M>(site.fetch, site.data), 
                 omega
             };
             j(sym(none), λ c _ => site.Performs(stack.writes, site.linux_kernel(stack), x.Reached(site, stack), c, x.least(0), s),
-                Exists(s.state, Exists(0, ⟨refl, ⟨x.least_le(0), x.reached_zero(site, stack, Running<M, Io>(s.state, s.io), zero)⟩⟩)))
+                Exists(s.state, Exists(0, ⟨refl, Inl(⟨x.least_le(0), x.reached_zero(site, stack, Running<M, Io>(s.state, s.io), zero)⟩)⟩)))
         },
         Succ(n) => λ cap f below args heap io stopped => {
             let calls = program_calls(routines, blocks, n);
@@ -1585,7 +1585,7 @@ theorem program_tracks<M>(site: Site<M>, stack: Stack<M>(site.fetch, site.data),
                     k, Running<M, Io>(s, io)), program_stops<M>(site, stack, spans, room, top, blocks, p.routines, valid, scoped, law, all, x, n, peak, f,
                     below, args, heap, io, ⟨stopped, (peak + 1).le_refl()⟩)(Running<M, Io>(s, io), here, resident, i, rsp, inside, entry, ret, saved)))
             },
-            Stuck(_) => λ ran => Exists(0, Exists(s, Exists(0, ⟨refl, ⟨trivial, trivial⟩⟩))),
+            Stuck(_) => λ ran => Exists(0, Exists(s, Exists(0, ⟨refl, Inl(⟨trivial, trivial⟩)⟩))),
         })(refl)
     }
 }

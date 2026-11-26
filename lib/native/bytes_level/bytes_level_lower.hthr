@@ -3518,9 +3518,12 @@ theorem call_heap_stops<M>(x: Stop, saves, slots: Nat, site: Site<M>, laid: site
         Some(out) => λ emits => ⟨emits.left, λ within r here resident held => {
             let p = emits.right(within)(r, here, resident, ⟨held.left, ⟨refl, held.right⟩⟩);
             match p.proof.proof.right {
-                Inl(arrived) => {
-                    let never: (None<Now> = Some(before)) = arrived.right.right.right.left;
-                    absurd(never)
+                Inl(reach) => match reach {
+                    Inl(arrived) => {
+                        let never: (None<Now> = Some(before)) = arrived.right.right.right.left;
+                        absurd(never)
+                    },
+                    Inr(never) => false_elim(never),
                 },
                 Inr(handed) => site.performs_after(stack.writes, linux, x.Reached(site, stack), count, 1 + least, r, p.witness,
                     Exists(p.proof.witness, p.proof.proof.left), handed),
@@ -3692,8 +3695,8 @@ theorem plain_passes_stops<M>(x: Stop, saves: Nat, site: Site<M>, laid: site.pro
             LaterStop(Pass, PassStops, parameters, exit, next, x.ZeroAt(), 0), 0,
             λ st at zero => site.claims_stop_exact(stack, x, 0, 0, prog_len(At(prog, 0, Block(code))),
                 PlainAtNow<M>(saves, site, stack, spans, w, s0, registers, st, at), at, λ r held => held.right.left,
-                λ r here resident held => Exists(r.state, Exists(0, ⟨refl, ⟨trivial,
-                    x.reached_zero(site, stack, Running<M, Io>(r.state, r.io), j(sym(held.right.left), λ io _ => x.Zero(io), zero))⟩⟩))),
+                λ r here resident held => Exists(r.state, Exists(0, ⟨refl, Inl(⟨trivial,
+                    x.reached_zero(site, stack, Running<M, Io>(r.state, r.io), j(sym(held.right.left), λ io _ => x.Zero(io), zero))⟩)⟩))),
             { let low = x.least_le(0); omega }, capped, state, now, ran),
         Succ(rest) => λ capped state now ran => plain_pass_stops<M>(x, saves, site, laid, stack, spans, Pass, PassStops, w, s0, prog, code, head, registers, parameters,
             exit, next, names, short, pass, test, moves, labels, head_ok, pass_emits, cap, pass_stops, pass_in, next_file, moved, selects, into, Succ(rest),

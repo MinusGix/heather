@@ -183,10 +183,12 @@ theorem Site::linux_performs_grows<M>(self site: Site<M>, stack: Stack<M>(site.f
     pins: (t: Running<M, Io>) → goal(t) → t.io = o, calls: Nat):
     (least: Nat) → (from: Running<M, Io>) → site.LinuxPerforms(stack, goal, calls, least, from) → from.io.past.len() <= o.past.len() {
     match calls {
-        Zero => λ least from p => j(pins(Running(p.witness, from.io), p.proof.proof.right.right), λ w _ => from.io.past.len() <= w.past.len(),
+        Zero => λ least from p => j(pins(Running(p.witness, from.io),
+            reach_goal<M, Io>(goal, least, p.proof.witness, Running(p.witness, from.io), p.proof.proof.right).right), λ w _ => from.io.past.len() <= w.past.len(),
             from.io.past.len().le_refl()),
         Succ(more) => λ least from p => match p.proof.proof.right {
-            Inl(reached) => j(pins(Running(p.witness, from.io), reached.right), λ w _ => from.io.past.len() <= w.past.len(), from.io.past.len().le_refl()),
+            Inl(reach) => j(pins(Running(p.witness, from.io), reach_goal<M, Io>(goal, least, p.proof.witness, Running(p.witness, from.io), reach).right),
+                λ w _ => from.io.past.len() <= w.past.len(), from.io.past.len().le_refl()),
             Inr(called) => {
                 let c = called.witness;
                 let a = from.io.answer(c);
@@ -210,7 +212,8 @@ theorem Site::linux_performs_exact<M>(self site: Site<M>, stack: Stack<M>(site.f
     site.LinuxPerforms(stack, goal, k, least, from) {
     match calls {
         Zero => λ least from k e p => {
-            let same: (from.io = o) = pins(Running(p.witness, from.io), p.proof.proof.right.right);
+            let same: (from.io = o) = pins(Running(p.witness, from.io),
+                reach_goal<M, Io>(goal, least, p.proof.witness, Running(p.witness, from.io), p.proof.proof.right).right);
             let lens: (from.io.past.len() = o.past.len()) = cong_fn<Io, Nat>(λ w => w.past.len(), same);
             (match k as λ k2 => o.past.len() = k2 + from.io.past.len() → site.LinuxPerforms(stack, goal, k2, least, from) {
                 Zero => λ _ => p,
@@ -222,7 +225,7 @@ theorem Site::linux_performs_exact<M>(self site: Site<M>, stack: Stack<M>(site.f
             let n = p.proof.witness;
             match p.proof.proof.right {
                 Inl(reached) => {
-                    let same: (from.io = o) = pins(Running(t, from.io), reached.right);
+                    let same: (from.io = o) = pins(Running(t, from.io), reach_goal<M, Io>(goal, least, n, Running(t, from.io), reached).right);
                     let lens: (from.io.past.len() = o.past.len()) = cong_fn<Io, Nat>(λ w => w.past.len(), same);
                     (match k as λ k2 => o.past.len() = k2 + from.io.past.len() → site.LinuxPerforms(stack, goal, k2, least, from) {
                         Zero => λ _ => Exists(t, Exists(n, ⟨p.proof.proof.left, reached⟩)),
@@ -584,9 +587,11 @@ theorem Site::performs_reaches<M>(self site: Site<M>, stack: Stack<M>(site.fetch
     (least: Nat) → (x: Running<M, Io>) → site.LinuxPerforms(stack, goal, calls, least, x) →
     Exists<Running<M, Io>>(λ g => goal(g) ∧ Extends(g.io.past, x.io.past)) {
     match calls {
-        Zero => λ least x p => Exists(Running<M, Io>(p.witness, x.io), ⟨p.proof.proof.right.right, extends_refl(x.io.past)⟩),
+        Zero => λ least x p => Exists(Running<M, Io>(p.witness, x.io),
+            ⟨reach_goal<M, Io>(goal, least, p.proof.witness, Running(p.witness, x.io), p.proof.proof.right).right, extends_refl(x.io.past)⟩),
         Succ(more) => λ least x p => match p.proof.proof.right {
-            Inl(reached) => Exists(Running<M, Io>(p.witness, x.io), ⟨reached.right, extends_refl(x.io.past)⟩),
+            Inl(reach) => Exists(Running<M, Io>(p.witness, x.io),
+                ⟨reach_goal<M, Io>(goal, least, p.proof.witness, Running(p.witness, x.io), reach).right, extends_refl(x.io.past)⟩),
             Inr(called) => {
                 let c = called.witness;
                 let a = x.io.answer(c);
@@ -631,14 +636,18 @@ theorem Site::performs_meet<M>(self site: Site<M>, stack: Stack<M>(site.fetch, s
     ((least < k) ∧ Exists<Running<M, Io>>(λ g => Exists<Running<M, Io>>(λ mid => Exists<Nat>(λ k2 => goal(g) ∧
         ((g.state ≈ mid.state) ∧ StarN(site.Onward(stack, i, ret), k2 + 1, mid, r)))))) {
     match calls {
-        Zero => λ least k x start r same world p path =>
-            site.goal_meets(stack, i, ret, goal, least, k, p.proof.witness, x, start, r, p.witness, same, world, p.proof.proof.left, p.proof.proof.right.left, path,
-                p.proof.proof.right.right),
+        Zero => λ least k x start r same world p path => {
+            let at = reach_goal<M, Io>(goal, least, p.proof.witness, Running(p.witness, x.io), p.proof.proof.right);
+            site.goal_meets(stack, i, ret, goal, least, k, p.proof.witness, x, start, r, p.witness, same, world, p.proof.proof.left, at.left, path, at.right)
+        },
         Succ(more) => λ least k x start r same world p path => {
             let t = p.witness;
             let n = p.proof.witness;
             match p.proof.proof.right {
-                Inl(at) => site.goal_meets(stack, i, ret, goal, least, k, n, x, start, r, t, same, world, p.proof.proof.left, at.left, path, at.right),
+                Inl(reach) => {
+                    let at = reach_goal<M, Io>(goal, least, n, Running(t, x.io), reach);
+                    site.goal_meets(stack, i, ret, goal, least, k, n, x, start, r, t, same, world, p.proof.proof.left, at.left, path, at.right)
+                },
                 Inr(called) => {
                     let c = called.witness;
                     let asks = called.proof.left;
