@@ -31,6 +31,7 @@ import verdict;
 import checker;
 import placement;
 import placement_seam;
+import placement_inject;
 import bytes_memory;
 import bytes_level;
 import bytes_level_routines;
@@ -472,6 +473,13 @@ fn narrow_index_r() → Func {
 theorem refusals_sorted(): [word_view_r(), word_write_r(), word_back_r(), narrow_index_r()].map(λ (f: Func) => Pair(why([f], 0), placed([f]).is_some()))
     = [Pair(Some(WCodes), False), Pair(None, False), Pair(Some(WOwn), True), Pair(None, True)] { refl }
 
+// Codes compared (§25.8): `1u64 + 2u8` reads the u8 as zero on level 2
+// (`Dyn::words`) and adds it on the bytes level, so `place` refuses it; the
+// checker refuses it by its codes too.
+fn mixed_r() → Func { Func(Sig(Nil, [word_r()]), seq([Stmt::Lit(WBits(64), 1), Stmt::Lit(WBits(8), 2), Op(PAdd, Loc(1), Loc(0))], Ret([Loc(0)]))) }
+
+theorem codes_compared(): Pair(why([mixed_r()], 0), placed([mixed_r()]).is_some()) = Pair(Some(WCodes), False) { refl }
+
 fn in_fragment(fs: List<Func>) → List<Bool> { fs.map(λ (f: Func) => f.fragment(tys(), strs(), sigs_of(fs), no_prim())) }
 
 // The three programs are in the fragment; so is the written word variable,
@@ -503,3 +511,13 @@ fn packed_sizes() → List<Nat> { [packed_size(1), packed_size(2), packed_size(3
 
 // Four nodes a join, two to start and end: 2 + 4k.
 theorem packed_linear(): packed_sizes() = [6, 10, 14, 18, 34] { refl }
+
+// ---------------------------------------------------------------------------
+// The injection's lemmas at a closed value (placement_inject.hthr, §25.8):
+// a window of the text from 1, four long, then its element 2, is located at
+// byte 3, the byte 10, and the encoding's byte there is that byte.
+
+theorem located_in_window(): Sel::locate(tys(), strs(), buf(text()), [win_sel(INat(1), INat(4)), el_sel(IWord(64, BitVec::ofNat(2)))], 0)
+    = Some(Pair(3, Dyn(u8_s(), BitVec::ofNat(10)))) { refl }
+
+theorem located_bytes(): (Dyn::encode(tys(), strs(), buf(text()))).map(λ (bs: List<u8>) => bs.window(3, 4)) = Some([BitVec::ofNat(10)]) { refl }

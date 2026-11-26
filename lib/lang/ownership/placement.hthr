@@ -58,6 +58,14 @@
 //   the bytes level one at each turn back: the same count (§25 on fuel).
 // - **A `Ret`** moves its values into the routine's result ids, fixed for
 //   the routine, so every path binds the same ones.
+// - **Codes are compared where level 2 reads two things at one code**
+//   (§25.8): an operation's and a test's second operand at the first's, a
+//   stored word at the element's, a call's argument at the parameter's, a
+//   `Ret`'s values at the results' and written parameters', a `Jump`'s at
+//   the parameters', a shared join's second arm at the first's. Level 2
+//   reads a word of another code as zero (`Dyn::words`) and ignores a store
+//   of one (`Dyn::back`), which no node does: refused. This is typing, not
+//   an ownership rule; the checker refuses the same programs by their codes.
 //
 // Ids are numbered once per routine from one counter, so no id is bound
 // twice along any path (`Body::fresh`).
@@ -354,14 +362,14 @@ fn PEnv::call_args(self e: PEnv, ps: List<Param>, xs: List<Var>) → Option<List
             Nil => None,
             Cons(x, xr) => match e.get(x) {
                 None => None,
-                Some(s) => match p.code.word_size() {
+                Some(s) => match !s.code.same(p.code) { True => None, False => match p.code.word_size() {
                     Some(_) => match s.word() { None => None, Some(t) => e.call_args(pr, xr).map(λ rest => Cons(t, rest)) },
                     None => match p.mode {
                         ByTake => None,
                         ByRead => e.call_args(pr, xr).map(λ rest => s.ids ++ rest),
                         ByWrite => e.call_args(pr, xr).map(λ rest => s.ids ++ rest),
                     },
-                },
+                } },
             },
         },
     }
@@ -446,7 +454,8 @@ fn Stmt::place(self st: Stmt, tys: Nat → Type, cx: PCx(tys), e: PEnv, next: Na
                         None => None,
                         Some(ta) => match sb.word() {
                             None => None,
-                            Some(tb) => match op.node(w.bits(), next, ta.id, tb.id) {
+                            // Level 2 reads the second at the first's code.
+                            Some(tb) => match !sb.code.same(sa.code) { True => None, False => match op.node(w.bits(), next, ta.id, tb.id) {
                                 None => None,
                                 Some(nd) => match w.size() {
                                     // Narrow arithmetic would leave a word not
@@ -457,7 +466,7 @@ fn Stmt::place(self st: Stmt, tys: Nat → Type, cx: PCx(tys), e: PEnv, next: Na
                                     },
                                     None => None,
                                 },
-                            },
+                            } },
                         },
                     },
                 },
@@ -486,9 +495,13 @@ fn Stmt::place(self st: Stmt, tys: Nat → Type, cx: PCx(tys), e: PEnv, next: Na
                           False => None,
                           True => match e.locate(tys, strs, p, next) {
                             None => None,
+                            // Level 2 stores only a value of the element's code.
                             Some(at) => match at.code.word_size() {
                                 None => None,
-                                Some(size) => Some(SOut(leaf(at.instrs ++ [bytes_level::Store(size, 64, at.place, tv.id)]), e, at.next)),
+                                Some(size) => match sv.code.same(at.code) {
+                                    False => None,
+                                    True => Some(SOut(leaf(at.instrs ++ [bytes_level::Store(size, 64, at.place, tv.id)]), e, at.next)),
+                                },
                             },
                           },
                         },
@@ -559,6 +572,15 @@ fn copies(dsts, srcs: List<Typed>, zero: Nat) → Option<List<Instr>> {
 // How a path leaves the routine: into its result ids, or (a loop's pass)
 // into the next state with the exit flag, a word one where the loop ends.
 inductive Leave { TRet(results: List<Typed>), TLoop(params: List<Typed>, results: List<Typed>, next: List<Typed>, flag: Nat) }
+
+fn shapes_same(xs, ys: List<Shape>) → Bool {
+    match xs { Nil => match ys { Nil => True, Cons(_, _) => False }, Cons(a, xr) => match ys { Nil => False, Cons(b, yr) => a.same(b) && shapes_same(xr, yr) } }
+}
+
+fn PSlot::codes(ss: List<PSlot>) → List<Shape> { ss.map(λ (s: PSlot) => s.code) }
+
+// The codes a `Ret` answers at: the results', then the written parameters'.
+fn Sig::ret_codes(self s: Sig) → List<Shape> { s.results.map(λ r => r.code) ++ s.written().map(λ i => s.params.nth(i).map(λ p => p.code).unwrap_or(SWord(WNat))) }
 
 // A `Ret`'s values as the routine answers them: the results' slots, then
 // each written word (a written sequence is the argument itself).
@@ -657,7 +679,10 @@ fn PEnv::less(self e: PEnv, a, b: Var, swap: Bool, next: Nat) → Option<Pair<Li
                 SNamed(_) => None,
                 SWord(w) => match sa.word() {
                     None => None,
-                    Some(ta) => match sb.word() { None => None, Some(tb) => Some(Pair([Compute(UnsignedLessThan(64, next, ta.id, tb.id))], swap)) },
+                    Some(ta) => match sb.word() {
+                        None => None,
+                        Some(tb) => match sb.code.same(sa.code) { False => None, True => Some(Pair([Compute(UnsignedLessThan(64, next, ta.id, tb.id))], swap)) },
+                    },
                 },
             },
         },
@@ -685,7 +710,11 @@ fn PSlot::fresh_like(tys: Nat → Type, strs: Strs(tys), ss: List<PSlot>, next: 
 fn share(tys: Nat → Type, strs: Strs(tys), outs: Option<List<PSlot>>, ss: List<PSlot>, next: Nat) → Option<Pair<bytes_level::Body, Pair<List<PSlot>, Nat>>> {
     let zero = next;
     let target: Option<Pair<List<PSlot>, Nat>> = match outs {
-        Some(ts) => Some(Pair(ts.zip(ss).map(λ (q: Pair<PSlot, PSlot>) => PSlot(q.fst.code, q.fst.ids, PNone, q.fst.w && q.snd.w)), next + 1)),
+        // The second arm's outputs of the first's codes.
+        Some(ts) => match shapes_same(PSlot::codes(ss), PSlot::codes(ts)) {
+            False => None,
+            True => Some(Pair(ts.zip(ss).map(λ (q: Pair<PSlot, PSlot>) => PSlot(q.fst.code, q.fst.ids, PNone, q.fst.w && q.snd.w)), next + 1)),
+        },
         None => PSlot::fresh_like(tys, strs, ss, next + 1),
     };
     match target {
@@ -704,16 +733,18 @@ fn place_go(fuel: Nat, b: body::Body, tys: Nat → Type, cx: PCx(tys), sig: Sig,
     match fuel {
         Zero => None,
         Succ(f) => match b {
+            // A `Ret`'s values at the codes it answers, a `Jump`'s at the
+            // parameters'.
             Ret(rs) => match e.gets(rs) {
                 None => None,
-                Some(ss) => match e.keeps(sig.params, sig.written(), ss.drop(sig.results.len())) {
+                Some(ss) => match shapes_same(PSlot::codes(ss), sig.ret_codes()) && e.keeps(sig.params, sig.written(), ss.drop(sig.results.len())) {
                     False => None,
                     True => tail.ret(ret_values(ss, sig.results.len()), next).map(λ c => BOut(c, next + 1, frames)),
                 },
             },
             Jump(xs) => match e.gets(xs) {
                 None => None,
-                Some(ss) => match e.jump_keeps(sig.params, sig.written(), ss) { False => None, True => tail.jump(PSlot::ids_of(ss), next).map(λ c => BOut(c, next + 1, frames)) },
+                Some(ss) => match shapes_same(PSlot::codes(ss), sig.params.map(λ p => p.code)) && e.jump_keeps(sig.params, sig.written(), ss) { False => None, True => tail.jump(PSlot::ids_of(ss), next).map(λ c => BOut(c, next + 1, frames)) },
             },
             Yield(os) => match frames {
                 Nil => None,
