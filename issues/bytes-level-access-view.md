@@ -132,3 +132,7 @@ Beside it:
   - Per continuing pass, the old code runs 6 loop-control instructions (`TEST; JE`, `CMP; JNE`, `ADD`, `JMP`) and the new 7 (`CMP; JNE`, `ADD`, `MOV flag, 1`, `CMP; JE`, `JMP`). That is the old count plus the translation's `MOV flag, 1`. Both take one jump per pass.
   - Checked on every loop of every row and gate by the tail's instruction shape (`ADD; MOV; CMP; JE; JMP`), against the old `ADD; JMP`.
   - `ownership-design.md` §17.8 and the translation issue's stage-3 list are updated with these numbers.
+- 2026-11-26: Verification of c2d7b8c (`scope_reads`) and the final tree:
+  - `scripts/fmt --check` and `scripts/lib-closures` are clean.
+  - `scripts/linked --check` is unchanged (20 of 20).
+  - `HEATHER_PR_NATIVE=all scripts/test --pr`: `== suite: 4139 passed, 0 failed, 3 ignored ==`.
