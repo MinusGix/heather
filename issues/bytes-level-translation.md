@@ -185,3 +185,24 @@ The translation and its theorem pass the library gate; the comparison runs over 
     6. **Levels and the `Fixed` span** (recursion, native_program's `LEVELS`, native_recursion). Levels have no counterpart at the bytes level (item 1), so this is a stage-3 language question, not a proof.
     7. **No decider for `ProgramFits`.** It is a `Type` whose premises quantify over the translation's intermediate results. Applying the theorem to a row by `refl` needs a `Bool` check and its soundness. Without that, the coverage above is read off the forms, not checked per row.
   - Verification: the module checks in the library gate; `scripts/linked --check` unchanged.
+- 2026-11-26, item 5: **what stage 3 still needs** (§17.8). Ordered by what blocks the most rows.
+  1. **The four-byte register kind** in `bytes_level_lower`. It blocks sha256_compress, _init, _update, _finish and scan_tokens. `Load(4)` must answer, and `Store(4)` take, the `Narrow(32)` kind FunctionIR's wide forms use; the smallest programs are item 4's cause 3. This is the one change to the lowering the comparison asks for, and it was reported, not made.
+  2. **The theorem's remaining forms** (item 3's list).
+     - Bounded loops and lends cover every memory export.
+     - Wide accesses and guarded loads cover sha256 and scan_token.
+     - `also` and ref results cover the gates.
+     - A `Bool` decider for `ProgramFits`, so that a certificate can cite the theorem for its row by `refl`.
+
+     Stage 3's certificates state the bytes-level program's contract. They reach the source function's meaning only through this theorem.
+  3. **The bounded loop's cost**: +8 bytes per loop routine, +12 with REX prefixes (item 4, cause 1). The choice is between two options:
+     - a counted loop at the bytes level, with a counter the meaning hides, as FunctionIR's has;
+     - accepting the bytes, with `scripts/linked` rewriting the loop routines' assembly in the stage-3 change.
+
+     The language owns the choice ([[bytes-level-language]]).
+  4. **Levels and the out-of-room exit 139.** The bytes level has no levels (recursion, native_program's `LEVELS`, native_recursion). The gates need either levels translated to recursion with a depth bound the meaning states, or the old meaning's zero-past-the-last-level dropped ([[bytes-level-lowering-recursion]]).
+  5. **The optimizer and the planner on the new layer.** The comparison translates the old planner's placement and lowers the optimizer's FunctionIR output (`translate_placement`). Stage 3 deletes the buffer nodes, so the passes ([[bytes-level-passes]]) and the planner must run on the bytes level, or on FunctionIR's word half before the translation.
+  6. **A refusal report.** `Program::lower` answers `None`. `compile-x86`'s refusal names the node, its place and the registers (`function_ir_refusal`); the bytes level has nothing like it. Every finding of this round needed a hand-made `refused`/`invalid_path` diagnosis (`bytes_level_compare`).
+  7. **Read-only views.** The old `Lend` puts back only a view marked `written`, so a callee's store into an unwritten view is lost. At the bytes level it lands. The translation is exact only where no callee stores through an unwritten view. Stage 3 needs that as a premise the translation checks, or the view lent as the bytes level's unwritten block.
+  8. **A reference `Move`.** The optimizer's dead `Move` of a reference becomes an `Offset` of zero, an `ADD r, 0` (sort). It is small, but it is the only non-loop byte difference.
+  9. **Not needed by any row:** two-byte accesses and the typed copy ([[bytes-level-copy-and-halfwords]]); a past-the-end store (refused by both); `TableRead` (refused by both).
+  10. **Not on this pipeline:** native_cat and native_tools compile through the program compiler, so stage 3 does not move them (stage 7).

@@ -2337,6 +2337,62 @@ What stands between this and `Sim` for a whole image is in
 `issues/call-contract-whole-program.md`: the image's `_start`, the meaning
 as an itree, and `LinuxValid`.
 
+### 17.8 Stage 2's test (2026-11-26)
+
+The question: can the bytes level replace FunctionIR's memory half in one
+move? To test it, every FunctionIR program was translated
+(`bytes_level_from_function_ir`), and each row of `crates/linked`'s exports,
+and each native gate's program, was compiled both ways
+(`scripts/bytes-level-compare`). The log is
+`issues/bytes-level-translation.md`.
+
+**The survey.** The forms each row's lowered program uses:
+
+| Rows | Forms |
+|---|---|
+| sha512 and sha256 rounds | word nodes, calls (no buffers) |
+| sha256_compress, _init, _update, _finish | byte and four-byte loads and stores, byte swaps, lent calls, bounded loops |
+| count_newlines, raise_span, list_raise_letters, copy_span, copy_window | byte loads and stores, one bounded loop; copy_window the exports' only `Lend` |
+| scan_token, scan_tokens | byte loads, hundreds of conditionals, lent calls, loops; scan_tokens a four-byte store |
+| gates | `also` (two_words, enum_fields), a `Fixed` span (three_words), levels (recursion), loops (binary_search, sort, utf8) |
+
+No export uses levels, `also`, a `Fixed` span, `TableRead`, or a wide access
+at any width but four.
+
+**The comparison.** The results:
+- Same bytes: every routine without a bounded loop in every row that lowers,
+  call displacements aside. That covers six export rows and four gate
+  programs entirely, and every non-loop routine of the rest (scan_token's 38
+  of 39, for one).
+- Bigger: each loop routine grows by 8 bytes, 12 with REX prefixes. The bytes
+  level has only the plain loop, so the counter and the exhausted flag become
+  state, and the head's `TEST; JE` becomes a tail branch and a `CMP; JNE`.
+- One further byte difference: a dead reference `Move` becomes `ADD r, 0`.
+- Refused: five rows by the lowering, because a four-byte access's result and
+  value are held as `Word`, not `Narrow(32)`; and the levels gate by the
+  translation.
+
+**The theorem** (`translated_runs_as_old`). Over programs, every `Done` of
+the translation at any fuel is the old run, with the buffers read back from
+the heap. It is proved for leaves, sequences, conditionals and one-result
+calls, which is the word-only rows. Bounded loops, lends, wide accesses,
+guarded loads, `also` and levels remain.
+
+**What stage 3 still needs**, from the comparison and the proof:
+1. the four-byte register kind in the lowering;
+2. the theorem's remaining forms, and a decider for its premise;
+3. a counted loop at the bytes level, or the loop bytes accepted;
+4. levels, or the gates' recursion restated;
+5. the optimizer and the planner on the new layer;
+6. a refusal report from `Program::lower`;
+7. read-only views: the old lend drops a callee's store into an unwritten
+   view, and the bytes level keeps it;
+8. a reference move.
+
+So the answer is: not yet in one move. The memory half translates exactly
+where proved, and its code is the same outside loops. The four-byte kind is
+the one finding that blocks rows outright.
+
 ## 18. The world, termination, and level 2 fixed (2026-11-25)
 
 Round six of the design review. Where this section and §15.4, §15.5 or §17
