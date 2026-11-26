@@ -15689,3 +15689,66 @@ theorem Inv::call_after(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(tys, cx.st
     let st: Heap::Stays(tys, hK, ah) = Heap::stays_trans(tys, hK, m.heap, ah, stK, kp.right, omega(kl));
     Inv::heap_rest(tys, strs, iL, noneL, ah, io2, lf, omega(kl, kp.left), st, eK, sim2, λ _ _ => refl)
 }
+
+// ---------------------------------------------------------------------------
+// P5, the results bound, one builder per kind: a plain value is
+// `Inv::push_plain`; a fresh object the callee made is `Inv::bind_fresh` at
+// its block, or, passed by value, a holder of a new object with no root
+// (`Inv::bind_fresh_plain`); a moved argument answered back is a holder of
+// its object again (`Inv::bind_moved`, the moved holder being gone and the
+// checker refusing a second, `CSt::holds`); a read view is `Inv::push_view`.
+
+// No level holds an object the state says no level holds.
+theorem CSt::holds_none(self s: CSt, o: Nat, h: s.holds(o) = False, l: Nat, a: Acc, hr: s.role(l) = KHold(o, a)): False {
+    let hb: ((cs: List<CVar>) → (k: Nat) → (cs.nth(k).unwrap_or(CVar::none())).role = KHold(o, a) → cs.any_bit(λ c => c.holds(o)) = True) = λ cs k e =>
+        (match cs.nth(k) as λ z => cs.nth(k) = z → (z.unwrap_or(CVar::none())).role = KHold(o, a) → cs.any_bit(λ c => c.holds(o)) = True {
+            None => λ _ e2 => absurd(e2),
+            Some(c) => λ ez e2 => cs.any_bit_mem(λ c2 => c2.holds(o), c, cs.nth_mem(k, c, ez),
+                j(sym(e2), λ rr _ => (match rr { KHold(o2, _) => o2.same(o), KPlain => False, KView => False, KGone => False }) = True, o.same_self())),
+        })(refl, e);
+    (match (l + 1).leb(s.na) as λ b => (match b { True => s.args.nth(l).unwrap_or(CVar::none()), False => s.locs.nth(s.na + s.nd - 1 - l).unwrap_or(CVar::none()) }).role = KHold(o, a) → False {
+        True => λ e => absurd(trans(sym(h), j(sym(hb(s.args, l, e)), λ b _ => (b || s.locs.any_bit(λ c => c.holds(o))) = True, refl))),
+        False => λ e => absurd(trans(sym(h), j(sym(hb(s.locs, s.na + s.nd - 1 - l, e)), λ b _ => (s.args.any_bit(λ c => c.holds(o)) || b) = True, Bool::or_true_right(s.args.any_bit(λ c => c.holds(o)))))),
+    })(hr)
+}
+
+// A fresh result of an object's code passed by value: a holder of a new
+// object with no root.
+theorem Inv::bind_fresh_plain(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>}, {root: Nat → Option<Ref>}, inv: Inv(tys, strs, s, e, m, h0, lent, root),
+    none: s.pending() = False, code: Shape, c: Cell(tys), d: Dyn(tys), rd: Value::Reads(tys, strs, m.heap, c.v, d), okc: d.code = code,
+    np: (r: Ref) → c.v = Refer(r) → False, cown: c.own = False):
+    Inv(tys, strs, s.push(CVar(code, KHold(s.nobj, AcOwn))).fresh_obj(), Env::push(tys, e, d), Mach::push(tys, m, c), h0, lent, root)
+{
+    let yg: (root(s.nobj) = None<Ref>()) = inv.young(s.nobj, omega());
+    Inv::push_hold(tys, strs, Inv::bump(tys, strs, inv), none, code, s.nobj, AcOwn, c, d, rd, okc,
+        λ r cr => false_elim(np(r, cr)),
+        λ r hr => absurd(trans(sym(yg), hr)),
+        λ co => absurd(trans(sym(cown), co)),
+        λ l a2 lb hr => Nat::lt_irrefl(s.nobj, inv.held(l, s.nobj, a2, lb, hr)),
+        omega(),
+        λ _ => ⟨λ r hr => absurd(trans(sym(yg), hr)), λ o2 ne r1 r2 h1 h2 => absurd(trans(sym(yg), h1))⟩)
+}
+
+// A moved argument answered back: a holder of its object again, owned, its
+// root the argument's whole block (`own` before the call), no level holding
+// it (the checker's `CSt::holds`).
+theorem Inv::bind_moved(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>}, {root: Nat → Option<Ref>}, inv: Inv(tys, strs, s, e, m, h0, lent, root),
+    none: s.pending() = False, code: Shape, o: Nat, r: Ref, d: Dyn(tys), rd: Value::Reads(tys, strs, m.heap, Refer(r), d), okc: d.code = code,
+    ro: root(o) = Some(r), rn: r.sels = Nil, alone: (o2: Nat) → ¬(o2 = o) → (r2: Ref) → root(o2) = Some(r2) → ¬(r2.b = r.b),
+    nh: s.holds(o) = False, ho: o < s.nobj, lo: Mem(r, lent) ∨ (h0.len() <= r.b),
+    ap: (o2: Nat) → ¬(o2 = o) → (r1, r2: Ref) → root(o) = Some(r1) → root(o2) = Some(r2) → Ref::Apart(tys, strs, r1, r2)):
+    Inv(tys, strs, s.push(CVar(code, KHold(o, AcOwn))), Env::push(tys, e, d), Mach::push(tys, m, Cell(Refer(r), True)), h0, lent, root)
+{
+    let cl: Cell(tys) = Cell(Refer(r), True);
+    let inj = λ (r2: Ref) (cr: cl.v = Refer(r2)) => {
+        let q: (r = r2) = cong_fn(λ (v: Value(tys)) => match v { Refer(z) => z, Plain(_) => r }, cr);
+        q
+    };
+    Inv::push_hold(tys, strs, inv, none, code, o, AcOwn, Cell(Refer(r), True), d, rd, okc,
+        λ r2 cr => trans(ro, cong_fn(λ (z: Ref) => Some(z), inj(r2, cr))),
+        λ r2 h => cong_fn(λ (z: Ref) => Refer(z), Option::some_inj(r, r2, trans(sym(ro), h))),
+        λ _ r2 cr => j(inj(r2, cr), λ z _ => (AcOwn = AcOwn) ∧ ((z.sels = Nil) ∧ ((o2: Nat) → ¬(o2 = o) → (r3: Ref) → root(o2) = Some(r3) → ¬(r3.b = z.b))), ⟨refl, ⟨rn, alone⟩⟩),
+        λ l a2 lb hr => s.holds_none(o, nh, l, a2, hr),
+        ho,
+        λ _ => ⟨λ r2 h => j(Option::some_inj(r, r2, trans(sym(ro), h)), λ z _ => Mem(z, lent) ∨ (h0.len() <= z.b), lo), ap⟩)
+}
