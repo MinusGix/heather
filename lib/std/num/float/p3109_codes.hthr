@@ -808,3 +808,48 @@ theorem P3109Layout::decode_datum({F: Format}, self L: P3109Layout(F), n: Nat): 
             j(sym(L.decode_u(e, n)), λ v _ => v.Unsigned(), L.half_dec_unsigned(n))),
     }(refl)
 }
+
+// ---------------------------------------------------------------------------
+// Every valid P3109 format has a layout (issues/float-p3109-layout-generic.md).
+
+// The report's constraints on a format's parameters (§3.1): `K > 2`, `P > 0`,
+// and `P < K` when signed, `P <= K` when unsigned.
+fn Format::P3109Params(K, P: Nat, s: Signedness) → Type { 3 <= K ∧ 1 <= P ∧ (match s as λ _ => Type { Signed => P + 1 <= K, Unsigned => P <= K }) }
+
+// `2^(K-1) = 2^(K-2) · 2` and `2^(K-2) >= 2` from `K >= 3`.
+theorem Format::pow_km1(K: Nat, k3: 3 <= K): Nat::pow(2, K - 1) = Nat::pow(2, K - 2) * 2 ∧ 2 <= Nat::pow(2, K - 2) {
+    let d = Format::pow_two_dbl(K - 1, omega(k3));
+    let e: (K - 1 - 1 = K - 2) = omega(k3);
+    let d2: (Nat::pow(2, K - 1) = Nat::pow(2, K - 2) * 2) = j(e, λ v _ => Nat::pow(2, K - 1) = Nat::pow(2, v) * 2, d);
+    And(d2, Nat::le_pow_self(2, K - 2, trivial, omega(k3)))
+}
+
+// The largest finite code of a valid format is normal.
+theorem Format::p3109_valid(K, P: Nat, s: Signedness, d: Domain, v: Format::P3109Params(K, P, s)): Nat::pow(2, P - 1) <= Format::p3109_top_code(K, s, d) {
+    let k3: (3 <= K) = v.left;
+    let pk = Format::pow_km1(K, k3);
+    let kd = Format::pow_two_dbl(K, omega(k3));
+    match s as λ ss => Format::P3109Params(K, P, ss) → Nat::pow(2, P - 1) <= Format::p3109_top_code(K, ss, d) {
+        Signed => λ (vs: Format::P3109Params(K, P, Signed)) => {
+            let pl: (Nat::pow(2, P - 1) <= Nat::pow(2, K - 2)) = Nat::pow_le_pow_r(2, P - 1, K - 2, trivial, { let a: (P + 1 <= K) = vs.right.right; omega });
+            match d as λ dd => Nat::pow(2, P - 1) <= Format::p3109_top_code(K, Signed, dd) {
+                FiniteDomain => { let e: (Format::p3109_top_code(K, Signed, FiniteDomain) = Nat::pow(2, K - 1) - 1 - 0) = refl; omega },
+                ExtendedDomain => { let e: (Format::p3109_top_code(K, Signed, ExtendedDomain) = Nat::pow(2, K - 1) - 1 - 1) = refl; omega },
+            }
+        },
+        Unsigned => λ (vu: Format::P3109Params(K, P, Unsigned)) => {
+            let pl: (Nat::pow(2, P - 1) <= Nat::pow(2, K - 1)) = Nat::pow_le_pow_r(2, P - 1, K - 1, trivial, { let a: (P <= K) = vu.right.right; omega });
+            match d as λ dd => Nat::pow(2, P - 1) <= Format::p3109_top_code(K, Unsigned, dd) {
+                FiniteDomain => { let e: (Format::p3109_top_code(K, Unsigned, FiniteDomain) = Nat::pow(2, K) - 1 - 1) = refl; omega },
+                ExtendedDomain => { let e: (Format::p3109_top_code(K, Unsigned, ExtendedDomain) = Nat::pow(2, K) - 1 - 2) = refl; omega },
+            }
+        },
+    }(v)
+}
+
+// The layout of every valid P3109 format: with `encode_decode`,
+// `decode_encode` and `decode_datum`, decoding is a bijection from the
+// `2^K` codes onto the data of every format the report allows.
+fn Format::p3109_layout_of(K, P: Nat, s: Signedness, d: Domain, v: Format::P3109Params(K, P, s)) → P3109Layout(Format::p3109(K, P, s, d)) {
+    Format::p3109_layout(K, P, s, d, Format::p3109_valid(K, P, s, d, v), { let k3: (3 <= K) = v.left; omega })
+}
