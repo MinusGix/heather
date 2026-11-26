@@ -27,7 +27,7 @@
 // - **The conclusions** (`Prog::verdict_b`): the run not stuck; a measured
 //   run done from its need; where done, `ReadAll` of the answer against the
 //   meaning, `Value::Written`, `Heap::Frame`, `Heap::Kept`, `Value::Views`,
-//   `Value::FreshApart`. The `Going` clause's histories are the program's
+//   `Value::OwnedApart`, the results coded. The `Going` clause's histories are the program's
 //   own (`Prog.reaches`), which a counterexample may choose, so it is not
 //   decided. The first clause broken is answered (`Clause`).
 import logic;
@@ -280,16 +280,16 @@ fn Value::views_b(tys: Nat → Type, strs: Strs(tys), n: Nat, h: Heap(tys), vs: 
     }
 }
 
-fn Value::not_fresh_b(tys: Nat → Type, b: Nat, rs: List<Result>, outs: List<Value(tys)>) → Bool {
-    match rs { Nil => True, Cons(r, rest) => match outs { Nil => True, Cons(o, orest) => !Option::same_by(Nat::same, Value::fresh_b(tys, r.origin, o), Some(b)) && Value::not_fresh_b(tys, b, rest, orest) } }
+fn Value::not_owned_b(tys: Nat → Type, b: Nat, rs: List<Result>, outs: List<Value(tys)>) → Bool {
+    match rs { Nil => True, Cons(r, rest) => match outs { Nil => True, Cons(o, orest) => !Option::same_by(Nat::same, Value::owned_b(tys, r.origin, o), Some(b)) && Value::not_owned_b(tys, b, rest, orest) } }
 }
 
-fn Value::fresh_apart_b(tys: Nat → Type, rs: List<Result>, outs: List<Value(tys)>) → Bool {
+fn Value::owned_apart_b(tys: Nat → Type, rs: List<Result>, outs: List<Value(tys)>) → Bool {
     match rs {
         Nil => True,
         Cons(r, rest) => match outs {
             Nil => True,
-            Cons(o, orest) => (match Value::fresh_b(tys, r.origin, o) { Some(b) => Value::not_fresh_b(tys, b, rest, orest), None => True }) && Value::fresh_apart_b(tys, rest, orest),
+            Cons(o, orest) => (match Value::owned_b(tys, r.origin, o) { Some(b) => Value::not_owned_b(tys, b, rest, orest), None => True }) && Value::owned_apart_b(tys, rest, orest),
         },
     }
 }
@@ -298,9 +298,9 @@ fn Value::fresh_apart_b(tys: Nat → Type, rs: List<Result>, outs: List<Value(ty
 // One instance: a program, a function, a fuel, the inputs
 
 // Which clause an instance breaks.
-inductive Clause { CStuck, CNeed, CReadAll, CWritten, CFrame, CKept, CViews, CFreshApart }
+inductive Clause { CStuck, CNeed, CReadAll, CWritten, CFrame, CKept, CViews, COwnedApart, CCoded }
 
-fn Clause::tag(self c: Clause) → Nat { match c { CStuck => 1, CNeed => 2, CReadAll => 3, CWritten => 4, CFrame => 5, CKept => 6, CViews => 7, CFreshApart => 8 } }
+fn Clause::tag(self c: Clause) → Nat { match c { CStuck => 1, CNeed => 2, CReadAll => 3, CWritten => 4, CFrame => 5, CKept => 6, CViews => 7, COwnedApart => 8, CCoded => 9 } }
 
 // The first of a list of checks that fails.
 fn Clause::first(cs: List<Pair<Clause, Bool>>) → Option<Clause> { match cs { Nil => None, Cons(c, rest) => match c.snd { True => Clause::first(rest), False => Some(c.fst) } } }
@@ -321,7 +321,8 @@ fn Prog::done_b(tys: Nat → Type, eq: Dyn(tys) → Dyn(tys) → Bool, p: Prog(t
         Pair(CFrame, Heap::frame_b(tys, eq, p.strs, h, a.heap, Value::lent(tys, sg.params, vs))),
         Pair(CKept, Heap::kept_b(tys, h, a.heap)),
         Pair(CViews, Value::views_b(tys, p.strs, h.len(), a.heap, vs, Dyn::ixs(tys, ds ++ mean), sg.results, a.results)),
-        Pair(CFreshApart, Value::fresh_apart_b(tys, sg.results, a.results)),
+        Pair(COwnedApart, Value::owned_apart_b(tys, sg.results, a.results)),
+        Pair(CCoded, Dyn::coded(tys, mean.take(sg.results.len()), sg.res_params())),
     ])
 }
 

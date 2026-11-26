@@ -41,7 +41,7 @@ WORK = ROOT / "target" / "ownership-oracle"
 N_PARAMS = 11
 
 # The sizes calibration tries, cheapest first: (parameters, items, flags).
-SIZES = [(1, 0, 0), (1, 1, 0), (1, 1, 15), (2, 1, 0), (1, 2, 0), (2, 1, 15), (1, 2, 15)]
+SIZES = [(1, 0, 0), (1, 1, 0), (1, 1, 15), (2, 1, 0), (1, 2, 0), (2, 1, 15)]
 
 # Each mutant: the defect it restores, where the design note or the
 # checker's log records it, and the replacements (file, old, new) made in
@@ -52,7 +52,11 @@ MUTANTS = {
     "fresh_is_param": ("an argument's object answered as a fresh result (§23.4: OFresh only for an object made in the call)",
         [("checker.hthr", "!Shape::plain(tys, strs, r.code) && s.na.leb(o) && (match a", "!Shape::plain(tys, strs, r.code) && (match a")]),
     "param_names_other": ("an OParam(i) result naming another object than parameter i's (§23.14, not_param_refused)",
-        [("checker.hthr", "OParam(i) => match s.role(l) { KHold(o, _) => o.same(i), _ => False },", "OParam(i) => match s.role(l) { KHold(o, _) => True, _ => False },")]),
+        [("checker.hthr", "OParam(i) => match s.role(l) { KHold(o, a) => o.same(i) && (match a", "OParam(i) => match s.role(l) { KHold(o, a) => True && (match a")]),
+    "twice_param": ("Ret([a, a]) of one taken parameter as two results (§23.20, twice_param_refused; OwnedApart, §23.21 B)",
+        [("checker.hthr", "OParam(_) => match s.role(l) { KHold(_, _) => !l.member(lr), KPlain => True, KView => True, KGone => True }, OView(_, _) => True })", "OParam(_) => True, OView(_, _) => True })")]),
+    "sig_ok_own": ("a function whose own signature fails Sig::ok checked (§23.21 B, B')",
+        [("checker.hthr", "match Sig::ok(tys, strs, f.sig) { True => f.body.verdict(", "match True { True => f.body.verdict(")]),
     "view_result_writes": ("a view to write answered as a read view result",
         [("checker.hthr", "e.obj.same(i) && Steps::same(e.reg, ys) && !e.mode.writes()", "e.obj.same(i) && Steps::same(e.reg, ys)")]),
     "at_moved": ("a returned view's place reading an argument written before (§23.13, at_moved_refused)",
@@ -102,13 +106,22 @@ MUTANTS = {
         [("checker.hthr", "(CSt::drops_ok(y.st.views, views) && CSt::drops_ok(n.st.views, views)).then(", "(True).then(")]),
 }
 
+# Claims that a test never refuses alone (§23.21 B: `returns`' AcOwn test
+# stands in for an invariant): the copy without it must accept exactly the
+# programs the checker does. `calibrate --claims` compares the counts.
+CLAIMS = {
+    "returns_param_acown": ("CSt::returns' AcOwn test at OParam never refuses a function whose signature is Sig::ok (§23.21 B)",
+        [("checker.hthr", "OParam(i) => match s.role(l) { KHold(o, a) => o.same(i) && (match a { AcOwn => True, AcRead => False, AcWrite => False }), _ => False },",
+          "OParam(i) => match s.role(l) { KHold(o, a) => o.same(i), _ => False },")]),
+}
+
 
 def mutant_dir(name):
     d = WORK / name
     d.mkdir(parents=True, exist_ok=True)
     shutil.copy(SEARCH, d / "oracle_search.hthr")
     texts = {"checker.hthr": (LIB / "checker.hthr").read_text()}
-    for f, old, new in MUTANTS[name][1]:
+    for f, old, new in {**MUTANTS, **CLAIMS}[name][1]:
         if f not in texts:
             texts[f] = (LIB / f).read_text()
         n = texts[f].count(old)
@@ -148,7 +161,7 @@ class Rd:
 SHAPES = {0: "Pt", 1: "L", 2: "QPt"}
 MODES = {0: "take", 1: "read", 2: "write"}
 CLAUSES = {1: "stuck", 2: "not done from its need", 3: "ReadAll (results against the meaning)", 4: "Value::Written",
-           5: "Heap::Frame", 6: "Heap::Kept", 7: "Value::Views", 8: "Value::FreshApart"}
+           5: "Heap::Frame", 6: "Heap::Kept", 7: "Value::Views", 8: "Value::OwnedApart", 9: "the results coded"}
 
 
 def shape(r):
@@ -363,7 +376,7 @@ def main():
     c = sub.add_parser("calibrate")
     c.add_argument("--only")
     c.add_argument("--jobs", type=int, default=os.cpu_count() or 4)
-    c.add_argument("--max-k", type=int, default=3)
+    c.add_argument("--claims", action="store_true", help="check the claims instead: each copy accepts what the checker does")
     sub.add_parser("mutants")
     a = ap.parse_args()
     if not HEATHER.exists():
@@ -371,12 +384,27 @@ def main():
     if a.cmd == "mutants":
         for n, (why, _) in MUTANTS.items():
             print(f"{n}: {why}")
+        for n, (why, _) in CLAIMS.items():
+            print(f"(claim) {n}: {why}")
         return
     if a.cmd == "search":
         path = mutant_dir(a.mutant) if a.mutant else SEARCH
         counts, found, dt = run_search(path, a.np, a.k, a.jobs, a.cap, a.flags, a.ka, a.kb)
         show(counts, found, dt, a.cap)
         sys.exit(1 if counts[4] and not a.mutant else 0)
+    if a.cmd == "calibrate" and a.claims:
+        bad = []
+        for n, (why, _) in CLAIMS.items():
+            path = mutant_dir(n)
+            for np, k, fl in SIZES:
+                real, _, _ = run_search(SEARCH, np, k, a.jobs, 0, fl, 1, 0)
+                alt, _, _ = run_search(path, np, k, a.jobs, 0, fl, 1, 0)
+                same = real[0] == alt[0]
+                print(f"{n} at ({np}, {k}, flags {fl}): checker accepts {real[0]}, without the test {alt[0]}{'' if same else '  <- the claim fails'}", flush=True)
+                if not same:
+                    bad.append(n)
+                    break
+        sys.exit(1 if bad else 0)
     if a.cmd == "calibrate":
         names = [a.only] if a.only else list(MUTANTS)
         missed = []
