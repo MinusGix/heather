@@ -14523,3 +14523,92 @@ theorem Inv::put_arg(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(tys, cx.strs)
         } },
     }
 }
+
+// ---------------------------------------------------------------------------
+// P4, the written values put in turn: the run's heap and the meaning after
+// each written argument's value is put, in the written list's order.
+
+fn Nat::Incr(is: List<Nat>) → Type { match is { Nil => True, Cons(i, rest) => ((i2: Nat) → Mem(i2, rest) → i < i2) ∧ Nat::Incr(rest) } }
+
+// The written list from `k`: indices from `k` on, increasing, each a written
+// parameter's.
+theorem Param::written_in(ps: List<Param>): (k, i: Nat) → Mem(i, Param::written_from(ps)(k)) → (k <= i) ∧ Exists<Param>(λ p => (ps.nth(i - k) = Some(p)) ∧ (p.mode = ByWrite)) {
+    match ps {
+        Nil => λ k i no => false_elim(no),
+        Cons(q, rest) => λ k i => {
+            let tl: (Mem(i, Param::written_from(rest)(k + 1)) → (k <= i) ∧ Exists<Param>(λ p => ((Cons(q, rest)).nth(i - k) = Some(p)) ∧ (p.mode = ByWrite))) = λ m => {
+                let ih = Param::written_in(rest, k + 1, i, m);
+                let ee: (i - k = Succ(i - (k + 1))) = omega(ih.left);
+                ⟨omega(ih.left), j(sym(ee), λ z _ => Exists<Param>(λ p => ((Cons(q, rest)).nth(z) = Some(p)) ∧ (p.mode = ByWrite)), ih.right)⟩
+            };
+            (match q.mode as λ md => q.mode = md → Mem(i, match md { ByWrite => Cons(k, Param::written_from(rest)(k + 1)), ByRead => Param::written_from(rest)(k + 1), ByTake => Param::written_from(rest)(k + 1) }) →
+                    (k <= i) ∧ Exists<Param>(λ p => ((Cons(q, rest)).nth(i - k) = Some(p)) ∧ (p.mode = ByWrite)) {
+                ByWrite => λ hq m => match m {
+                    Inl(e) => {
+                        let ee: (i - k = 0) = omega(e);
+                        ⟨omega(e), j(sym(ee), λ z _ => Exists<Param>(λ p => ((Cons(q, rest)).nth(z) = Some(p)) ∧ (p.mode = ByWrite)), Exists(q, ⟨refl, hq⟩))⟩
+                    },
+                    Inr(m2) => tl(m2),
+                },
+                ByRead => λ _ m => tl(m),
+                ByTake => λ _ m => tl(m),
+            })(refl)
+        },
+    }
+}
+
+theorem Param::written_incr(ps: List<Param>): (k: Nat) → Nat::Incr(Param::written_from(ps)(k)) {
+    match ps {
+        Nil => λ k => trivial,
+        Cons(q, rest) => λ k => (match q.mode as λ md => Nat::Incr(match md { ByWrite => Cons(k, Param::written_from(rest)(k + 1)), ByRead => Param::written_from(rest)(k + 1), ByTake => Param::written_from(rest)(k + 1) }) {
+            ByWrite => ⟨λ i2 m => omega((Param::written_in(rest, k + 1, i2, m)).left), Param::written_incr(rest, k + 1)⟩,
+            ByRead => Param::written_incr(rest, k + 1),
+            ByTake => Param::written_incr(rest, k + 1),
+        }),
+    }
+}
+
+// One written value put, where the argument passed refers.
+fn Heap::put_opt(tys: Nat → Type, strs: Strs(tys), h: Heap(tys), ov: Option<Value(tys)>, o: Dyn(tys)) → Heap(tys) {
+    match ov { Some(v) => match v { Refer(k) => Heap::put_at(tys, strs, h, k, o), Plain(_) => h }, None => h }
+}
+
+fn Heap::puts(tys: Nat → Type, strs: Strs(tys), h: Heap(tys), vs: List<Value(tys)>, is: List<Nat>, outs: List<Dyn(tys)>) → Heap(tys) {
+    match is { Nil => h, Cons(i, rest) => match outs { Nil => h, Cons(o, orest) => Heap::puts(tys, strs, Heap::put_opt(tys, strs, h, vs.nth(i), o), vs, rest, orest) } }
+}
+
+fn CSt::put_mean_opt(self s: CSt, tys: Nat → Type, strs: Strs(tys), e: Env(tys), ov: Option<Value(tys)>, ox: Option<Var>, o: Dyn(tys)) → Env(tys) {
+    match ov {
+        Some(v) => match v { Refer(_) => match ox { Some(x) => match s.lvl(x) { Some(l) => s.put_mean(tys, strs, e, x, l, o), None => e }, None => e }, Plain(_) => e },
+        None => e,
+    }
+}
+
+fn CSt::puts_mean(self s: CSt, tys: Nat → Type, strs: Strs(tys), vs: List<Value(tys)>, xs: List<Var>, e: Env(tys), is: List<Nat>, outs: List<Dyn(tys)>) → Env(tys) {
+    match is { Nil => e, Cons(i, rest) => match outs { Nil => e, Cons(o, orest) => s.puts_mean(tys, strs, vs, xs, s.put_mean_opt(tys, strs, e, vs.nth(i), xs.nth(i), o), rest, orest) } }
+}
+
+// A put at a reference keeps every reference apart from it reading as it did,
+// and every block's holes.
+theorem Heap::put_at_apart(tys: Nat → Type, strs: Strs(tys), h: Heap(tys), k: Ref, o: Dyn(tys), q: Ref, ap: Ref::Apart(tys, strs, k, q),
+    hk: (ob: Obj(tys)) → Heap::obj(tys, h, k.b) = Some(ob) → ob.holes = Nil, hq: (ob: Obj(tys)) → Heap::obj(tys, h, q.b) = Some(ob) → ob.holes = Nil):
+    Value::get(tys, strs, Heap::put_at(tys, strs, h, k, o), Refer(q), Nil) = Value::get(tys, strs, h, Refer(q), Nil)
+{
+    (match Heap::val(tys, strs, h, k.b) as λ z => Heap::val(tys, strs, h, k.b) = z →
+            Value::get(tys, strs, match z as λ _ => Heap(tys) { Some(d) => Heap::store(tys, h, k.b, Sel::write_at(tys, strs, k.sels ++ Nil<Sel>(), λ _ => o, d)), None => h }, Refer(q), Nil) =
+                Value::get(tys, strs, h, Refer(q), Nil) {
+        None => λ _ => refl,
+        Some(d) => λ hv => Value::get_store(tys, strs, h, k.b, d, Sel::write_at(tys, strs, k.sels ++ Nil<Sel>(), λ _ => o, d), hv, hk, q, hq,
+            λ eb => Sel::get_apart(tys, strs, k.sels ++ Nil<Sel>(), q.sels, Sel::apart_ext_l(tys, strs, k.sels, Nil<Sel>(), q.sels, ap(sym(eb))), λ _ => o, d)),
+    })(refl)
+}
+
+theorem Heap::put_at_holes(tys: Nat → Type, strs: Strs(tys), h: Heap(tys), k: Ref, o: Dyn(tys), b: Nat, ob: Obj(tys), ho: Heap::obj(tys, Heap::put_at(tys, strs, h, k, o), b) = Some(ob)):
+    Exists<Obj(tys)>(λ o0 => (Heap::obj(tys, h, b) = Some(o0)) ∧ (ob.holes = o0.holes))
+{
+    (match Heap::val(tys, strs, h, k.b) as λ z => Heap::obj(tys, match z as λ _ => Heap(tys) { Some(d) => Heap::store(tys, h, k.b, Sel::write_at(tys, strs, k.sels ++ Nil<Sel>(), λ _ => o, d)), None => h }, b) = Some(ob) →
+            Exists<Obj(tys)>(λ o0 => (Heap::obj(tys, h, b) = Some(o0)) ∧ (ob.holes = o0.holes)) {
+        None => λ hz => Exists(ob, ⟨hz, refl⟩),
+        Some(d) => λ hz => Heap::obj_store_holes(tys, h, k.b, b, Sel::write_at(tys, strs, k.sels ++ Nil<Sel>(), λ _ => o, d), ob, hz),
+    })(ho)
+}
