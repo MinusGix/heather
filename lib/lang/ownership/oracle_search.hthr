@@ -512,3 +512,12 @@ fn search_stream(fl, np, k, ka, kb, lo, n: Nat) → List<Nat> {
         },
     }))
 }
+
+// The findings of a search, counted: what the library gate checks at the
+// smallest size (`oracle_tests.hthr`), by the kernel's own evaluation.
+fn search_found(fl, np, k, ka, kb, lo, n: Nat) → Nat {
+    (((gen_param_lists(np)).drop(lo)).take(n)).foldl(λ (c: Nat) (ps: List<Param>) => (gen_funcs(fl, ps, k, ka, kb)).foldl(λ (c2: Nat) (f: Func) => c2 + match verdict_of(f, 0) {
+        None => 0,
+        Some(_) => (gen_sum(gen_args(f.sig.params), λ vs => gen_try(f, vs))).found.len(),
+    }, c), 0)
+}

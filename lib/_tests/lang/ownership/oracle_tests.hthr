@@ -54,3 +54,30 @@ theorem moved_param_safe(): Prog::verdict_b(tys(), deq, gen_prog(moved_param()),
 theorem alias_not_owed(): Lendable::b(tys(), strs(), [Param(ns_s(), ByWrite), Param(ns_s(), ByRead)], heap0(), [at(2, Nil), at(2, [OnSeq(SeqRun(INat(1), INat(1)))])]) = False { refl }
 
 theorem apart_owed(): Lendable::b(tys(), strs(), [Param(ns_s(), ByWrite), Param(ns_s(), ByRead)], heap0(), [at(2, Nil), at(3, Nil)]) = True { refl }
+
+// The search at its smallest size, by the kernel, one parameter list a
+// theorem: every function of at most one parameter and a `Ret` alone (the PR lane's share; the deeper search is
+// `scripts/ownership-oracle`).
+theorem search_none_at_ret_0(): search_found(0, 1, 0, 0, 0, 0, 1) = 0 { refl }
+
+theorem search_none_at_ret_1(): search_found(0, 1, 0, 0, 0, 1, 1) = 0 { refl }
+
+theorem search_none_at_ret_2(): search_found(0, 1, 0, 0, 0, 2, 1) = 0 { refl }
+
+theorem search_none_at_ret_3(): search_found(0, 1, 0, 0, 0, 3, 1) = 0 { refl }
+
+theorem search_none_at_ret_4(): search_found(0, 1, 0, 0, 0, 4, 1) = 0 { refl }
+
+theorem search_none_at_ret_5(): search_found(0, 1, 0, 0, 0, 5, 1) = 0 { refl }
+
+theorem search_none_at_ret_6(): search_found(0, 1, 0, 0, 0, 6, 1) = 0 { refl }
+
+theorem search_none_at_ret_7(): search_found(0, 1, 0, 0, 0, 7, 1) = 0 { refl }
+
+theorem search_none_at_ret_8(): search_found(0, 1, 0, 0, 0, 8, 1) = 0 { refl }
+
+theorem search_none_at_ret_9(): search_found(0, 1, 0, 0, 0, 9, 1) = 0 { refl }
+
+theorem search_none_at_ret_10(): search_found(0, 1, 0, 0, 0, 10, 1) = 0 { refl }
+
+theorem search_none_at_ret_11(): search_found(0, 1, 0, 0, 0, 11, 1) = 0 { refl }
