@@ -662,3 +662,51 @@ theorem scaled_shifts(): Pair(scaled(Word1(Nil, 5, 9), 8), scaled(Word1(Nil, 5, 
 // The node shifts 7 to 56.
 theorem scaled_value(): ((Compute(ShiftLeft(64, 9, 5, 3))).step(Blocks(λ _ => False), Config(Locals(Valuation::set(Valuation::zero(), 5, λ (w: Nat) => BitVec::ofNat(7)), λ _ => None),
         x86_64_memory_contract::Heap(Nil, Nil, Nil), io0()))).map(λ (c: Config) => c.locals.word(9).toNat()) = Some(56) { refl }
+
+// F8 (§25.10): a word slot over a cell that refers to a dead block holds
+// whatever word, as F7's ruling has it, while an index atom reads such a
+// variable through `Mach::ixs`, which never sticks: as the number zero.
+// Arguments: the text (slots 0, 1) and an index variable whose cell refers
+// to block 1, past the heap (slot 2, holding 1). `text[x]` reads element 0
+// at level 2 (97), and its placed leaf loads element 1 (10).
+fn f8_env() → PEnv { PEnv(2, [PSlot(buf_s(), [ref_id(0), word_id(1)]), PSlot(u64_s(), [word_id(2)])]) }
+
+fn f8_mach() → Mach(tys()) { Mach(heap1(text()), REnv([Cell(obj(0), False), Cell(obj(1), False)], Nil), io0()) }
+
+fn f8_config() → Config {
+    Config(Locals(Valuation::set(Valuation::set(Valuation::zero(), 1, λ (w: Nat) => BitVec::ofNat(6)), 2, λ (w: Nat) => BitVec::ofNat(1)),
+        λ (i: Nat) => match i { Zero => Some(Loc(0, 0)), Succ(_) => None }), bheap(heap1(text())), io0())
+}
+
+fn f8_read() → Stmt { Stmt::Read(el(Arg(0), Var(1))) }
+
+// Level 2's read: the pushed cell's value.
+fn f8_level2() → Option<Nat> {
+    match f8_read().run(tys(), strs(), funcs_at(Nil), λ _ _ _ _ => level2::Stuck, Act(Nil, 1), f8_mach(),
+            λ m2 => Done(Answer(match m2.env.locs { Cons(cl, _) => [cl.v], Nil => Nil }, m2.heap, m2.io))) {
+        Done(a) => match a.results { Cons(v, _) => match v { Plain(d) => Some(Dyn::index(tys(), d)), Refer(_) => None }, Nil => None },
+        Exited(_, _) => None, Going(_) => None, Stuck => None,
+    }
+}
+
+// The bytes level's leaf: the word the new slot holds.
+fn f8_bytes() → Option<Nat> {
+    match f8_read().place(tys(), PCx(strs(), sigs_of(Nil), no_prim()), f8_env(), 3) {
+        Some(o) => match o.code {
+            Leaf(is) => match run_instrs(Blocks(none_written()), is, f8_config()) {
+                Some(c2) => match o.env.vars.nth(2) { Some(s) => match s.word() { Some(t) => Some(c2.locals.word(t.id).toNat()), None => None }, None => None },
+                None => None,
+            },
+            _ => None,
+        },
+        None => None,
+    }
+}
+
+// The relation's parts at the arguments: the text's slot reads its
+// lowering at its code, and the index's cell is over no live block (its
+// slot unconstrained); level 2 reads 97, the leaf 10.
+theorem f8_atom_dead(): Pair(Pair(read_values([ref_id(0), word_id(1)], f8_config().locals), value_lower(tys(), strs(), ident(), heap1(text()), obj(0))),
+        Pair(value_live(tys(), heap1(text()), obj(1)), Pair(f8_level2(), f8_bytes())))
+    = Pair(Pair(Some([x86_64_call_contract::Ref(Loc(0, 0)), x86_64_call_contract::Word(BitVec::ofNat(6))]), Some([x86_64_call_contract::Ref(Loc(0, 0)), x86_64_call_contract::Word(BitVec::ofNat(6))])),
+        Pair(False, Pair(Some(97), Some(10)))) { refl }
