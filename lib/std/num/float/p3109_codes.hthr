@@ -41,10 +41,26 @@ import p3109;
 // ---------------------------------------------------------------------------
 // The nonnegative codes.
 
-// A code's significand and exponent field, through one division by `half`.
-fn Format::code_mag(self F: Format, n: Nat) → Nat { match n.div(F.half()) { Zero => n.mod(F.half()), Succ(_) => F.half() + n.mod(F.half()) } }
+// A code's quotient and remainder by `half = 2^frac`, by a shift: `Nat::div`
+// counts its quotient out in units and runs out of fuel on 16-bit codes
+// (issues/float-code-decode-shift.md).
+fn Format::code_q(self F: Format, n: Nat) → Nat { n.shr(F.frac) }
 
-fn Format::code_bexp(self F: Format, n: Nat) → Nat { match n.div(F.half()) { Zero => 0, Succ(p) => p } }
+fn Format::code_r(self F: Format, n: Nat) → Nat { n - F.code_q(n) * F.half() }
+
+// They are the quotient and remainder.
+theorem Format::code_qr(self F: Format, n: Nat): F.code_q(n) = n.div(F.half()) ∧ F.code_r(n) = n.mod(F.half()) {
+    let q: (F.code_q(n) = n.div(F.half())) = F.frac.shr_eq_div(n);
+    let dm: (n.div(F.half()) * F.half() + n.mod(F.half()) = n) = n.div_mul_add_mod(F.half());
+    let qh: (F.code_q(n) * F.half() = n.div(F.half()) * F.half()) = Nat::cong(λ (w: Nat) => w * F.half(), q);
+    let rd: (F.code_r(n) = n - F.code_q(n) * F.half()) = refl;
+    And(q, omega)
+}
+
+// A code's significand and exponent field.
+fn Format::code_mag(self F: Format, n: Nat) → Nat { match F.code_q(n) { Zero => F.code_r(n), Succ(_) => F.half() + F.code_r(n) } }
+
+fn Format::code_bexp(self F: Format, n: Nat) → Nat { match F.code_q(n) { Zero => 0, Succ(p) => p } }
 
 // A nonnegative float's code.
 fn Finite::code({F: Format}, self f: Finite(F)) → Nat { f.bexp * F.half() + f.mag }
@@ -53,25 +69,31 @@ fn Finite::code({F: Format}, self f: Finite(F)) → Nat { f.bexp * F.half() + f.
 theorem Format::code_parts(self F: Format, n, q, r: Nat, eq: n.div(F.half()) = q, er: n.mod(F.half()) = r):
     F.code_mag(n) = (match q { Zero => r, Succ(_) => F.half() + r }) ∧ F.code_bexp(n) = (match q { Zero => 0, Succ(p) => p })
 {
-    let m1: (F.code_mag(n) = (match q { Zero => n.mod(F.half()), Succ(_) => F.half() + n.mod(F.half()) })) =
-        j(eq, λ v _ => F.code_mag(n) = (match v { Zero => n.mod(F.half()), Succ(_) => F.half() + n.mod(F.half()) }), refl);
+    let qr = F.code_qr(n);
+    let eq2: (F.code_q(n) = q) = trans(qr.left, eq);
+    let er2: (F.code_r(n) = r) = trans(qr.right, er);
+    let m1: (F.code_mag(n) = (match q { Zero => F.code_r(n), Succ(_) => F.half() + F.code_r(n) })) =
+        j(eq2, λ v _ => F.code_mag(n) = (match v { Zero => F.code_r(n), Succ(_) => F.half() + F.code_r(n) }), refl);
     let m2: (F.code_mag(n) = (match q { Zero => r, Succ(_) => F.half() + r })) =
-        j(er, λ v _ => F.code_mag(n) = (match q { Zero => v, Succ(_) => F.half() + v }), m1);
+        j(er2, λ v _ => F.code_mag(n) = (match q { Zero => v, Succ(_) => F.half() + v }), m1);
     let b1: (F.code_bexp(n) = (match q { Zero => 0, Succ(p) => p })) =
-        j(eq, λ v _ => F.code_bexp(n) = (match v { Zero => 0, Succ(p) => p }), refl);
+        j(eq2, λ v _ => F.code_bexp(n) = (match v { Zero => 0, Succ(p) => p }), refl);
     And(m2, b1)
 }
 
 // Encoding a decoded code gives it back, for any code.
 theorem Format::code_of_decode(self F: Format, n: Nat): F.code_bexp(n) * F.half() + F.code_mag(n) = n {
     let h = F.half();
-    let dm: (n.div(h) * h + n.mod(h) = n) = n.div_mul_add_mod(h);
-    match n.div(h) as λ qq => n.div(h) = qq → (match qq { Zero => 0, Succ(p) => p }) * h + (match qq { Zero => n.mod(h), Succ(_) => h + n.mod(h) }) = n {
-        Zero => λ e => { let e2: (n.div(h) * h = 0 * h) = Nat::cong(λ (w: Nat) => w * h, e); let r: (0 * h + n.mod(h) = n) = omega; r },
+    let qr = F.code_qr(n);
+    let dm0: (n.div(h) * h + n.mod(h) = n) = n.div_mul_add_mod(h);
+    let qh: (F.code_q(n) * h = n.div(h) * h) = Nat::cong(λ (w: Nat) => w * h, qr.left);
+    let dm: (F.code_q(n) * h + F.code_r(n) = n) = omega;
+    match F.code_q(n) as λ qq => F.code_q(n) = qq → (match qq { Zero => 0, Succ(p) => p }) * h + (match qq { Zero => F.code_r(n), Succ(_) => h + F.code_r(n) }) = n {
+        Zero => λ e => { let e2: (F.code_q(n) * h = 0 * h) = Nat::cong(λ (w: Nat) => w * h, e); let r: (0 * h + F.code_r(n) = n) = omega; r },
         Succ(p) => λ e => {
-            let e2: (n.div(h) * h = (p + 1) * h) = Nat::cong(λ (w: Nat) => w * h, e);
+            let e2: (F.code_q(n) * h = (p + 1) * h) = Nat::cong(λ (w: Nat) => w * h, e);
             let ms: ((p + 1) * h = h + p * h) = p.mul_succ_left(h);
-            let r: (p * h + (h + n.mod(h)) = n) = omega;
+            let r: (p * h + (h + F.code_r(n)) = n) = omega;
             r
         },
     }(refl)
@@ -85,14 +107,19 @@ theorem Format::code_ok(self F: Format, N: Nat, hs: F.span = N.div(F.half()) - 1
     let h = F.half();
     let one = F.one_le_half();
     let t: (F.top() = h * 2) = F.top_double();
-    let dm: (n.div(h) * h + n.mod(h) = n) = n.div_mul_add_mod(h);
-    let rl: (n.mod(h) < h) = n.mod_lt(h);
+    let qr = F.code_qr(n);
+    let dm0: (n.div(h) * h + n.mod(h) = n) = n.div_mul_add_mod(h);
+    let rl0: (n.mod(h) < h) = n.mod_lt(h);
+    let qh: (F.code_q(n) * h = n.div(h) * h) = Nat::cong(λ (w: Nat) => w * h, qr.left);
+    let rr: (F.code_r(n) = n.mod(h)) = qr.right;
+    let dm: (F.code_q(n) * h + F.code_r(n) = n) = omega;
+    let rl: (F.code_r(n) < h) = omega;
     let dM: (N.div(h) * h + N.mod(h) = N) = N.div_mul_add_mod(h);
     let rL: (N.mod(h) < h) = N.mod_lt(h);
-    match n.div(h) as λ qq => n.div(h) = qq → F.canonical((match qq { Zero => n.mod(h), Succ(_) => h + n.mod(h) }), (match qq { Zero => 0, Succ(p) => p })).IsTrue() {
-        Zero => λ e => F.canonical_intro(n.mod(h), 0, omega, trivial, Inl(refl), λ _ => omega),
+    match F.code_q(n) as λ qq => F.code_q(n) = qq → F.canonical((match qq { Zero => F.code_r(n), Succ(_) => h + F.code_r(n) }), (match qq { Zero => 0, Succ(p) => p })).IsTrue() {
+        Zero => λ e => F.canonical_intro(F.code_r(n), 0, omega, trivial, Inl(refl), λ _ => omega),
         Succ(p) => λ e => {
-            let e2: (n.div(h) * h = (p + 1) * h) = Nat::cong(λ (w: Nat) => w * h, e);
+            let e2: (F.code_q(n) * h = (p + 1) * h) = Nat::cong(λ (w: Nat) => w * h, e);
             let ms: ((p + 1) * h = h + p * h) = p.mul_succ_left(h);
             let qQ: (p + 1 <= N.div(h)) = match (N.div(h) + 1).le_dec(p + 1) {
                 Inl(big) => {
@@ -102,7 +129,7 @@ theorem Format::code_ok(self F: Format, N: Nat, hs: F.span = N.div(F.half()) - 1
                 },
                 Inr(nb) => omega(nb),
             };
-            F.canonical_intro(h + n.mod(h), p, omega, omega, Inr(omega), λ sp => {
+            F.canonical_intro(h + F.code_r(n), p, omega, omega, Inr(omega), λ sp => {
                 let qe: (N.div(h) = p + 1) = omega;
                 let e3: (N.div(h) * h = (p + 1) * h) = Nat::cong(λ (w: Nat) => w * h, qe);
                 omega

@@ -427,13 +427,15 @@ sameness, for every layout. `Format::p3109_layout(K, P, s, d, valid, k1)`
 builds the layout of every P3109 format from two facts a literal format
 closes by evaluation.
 
-**The tables.** Every code point of nineteen formats decodes to the value
+**The tables.** Every code point of twenty-one formats decodes to the value
 the working group's tables give and encodes back: all ten three-bit formats
-(precisions one to three, every signedness and domain) and nine eight-bit
-ones (`Binary8p1se`, `p1uf`, `p2se`, `p3se`, `p3sf`, `p3ue`, `p4se`, `p4sf`,
-`p5se`). The eight-bit tables are stage theorems of 16 codes, and 8 for
-`Binary8p3ue`, whose top codes cost the most: one 256-code theorem is past
-the kernel's budget.
+(precisions one to three, every signedness and domain), nine eight-bit ones
+(`Binary8p1se`, `p1uf`, `p2se`, `p3se`, `p3sf`, `p3ue`, `p4se`, `p4sf`,
+`p5se`), `Binary10p5se` and the report's own example `Binary12p7se`. Codes
+decode by a shift (`code_q`, `code_r`, bridged to `div`/`mod` by
+`code_qr`): `Nat::div` counts its quotient out in units, and with it the
+eight-bit tables needed 16-code stage theorems; with the shift a stage is
+256 codes, one eight-bit table (issues/float-code-decode-shift.md).
 
 **Codes are naturals below `2^K`, not `BitVec(K)`.** The bijection is about
 the numbers. Reading them as bit vectors, and the IEEE interchange
