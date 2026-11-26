@@ -1,0 +1,745 @@
+// Placement, its translation half (docs/language/ownership-design.md §25,
+// §15.5, §17.3, §19; issues/ownership-end-to-end-slice.md): a checked
+// function's body (`body.hthr`) as a bytes-level routine (`bytes_level`),
+// each object's layout read from its code through the structures (`Strs`).
+// The seam's statement over it is `placement_seam.hthr`; nothing is proved
+// over `place` here.
+//
+// The fragment: words of 8, 16, 32 and 64 bits; sequences of such words in
+// blocks (an instance whose element is a word), with their windows; a
+// record of words reached through a reference (its fields at offsets, in
+// order, packed). No holes, no `Fresh` (the allocator is later), no
+// primitive (a world entry has no code to place), no `WNat` (a number has
+// no layout), no multiply (the bytes level has no such node).
+//
+// - **A variable is slots.** A word is one word id. A sequence held by
+//   reference is two: the reference and its length as a word (§17.3: "a
+//   length is a word beside a reference"), so a window is a reference moved
+//   forward and its length. The environment mirrors the meaning's by level:
+//   the arguments, then the locals in the order they were bound
+//   (`PEnv`), so a `Var` and an atom read the same slot at every point.
+// - **A place is code.** A root's reference walked by its steps: an element
+//   `Offset`s by the index scaled to the element's size, a window by its
+//   start scaled and takes its length word, a field by its offset. A read
+//   of a word place is a `Load`, a write a `Store`, of the element's size.
+// - **A view is its reference**, and remembers where it was opened
+//   (`Prov`: the root's level and the steps, their atoms by level). A write
+//   of a view onto the place it was opened at is the eager write-back
+//   (§15.2): level 2 stores what it reads there back where it read it, and
+//   the bytes level does nothing. Any other write of a sequence would be a
+//   typed copy, which the bytes level does not lower: refused.
+// - **A call** passes each word, and each sequence lent to read or write as
+//   its two slots; it binds the results (a word, or a returned view's two
+//   slots) then each written word. **A written sequence comes back as the
+//   argument itself and is not returned**: the slot is bound to the
+//   argument's own slots. That is `SafeAt`'s `Value::Written` clause ("a
+//   referring argument's slot is the argument itself") read as a calling
+//   convention, and `placement_sound` needs it of every callee (§25).
+// - **A join** copies what follows it into each arm that reaches its
+//   `Yield` (the surface's own reading of an early return, §22 items 5 and
+//   8), so the bytes level's branch has no join point and every path ends
+//   at a `Ret` or a `Jump`. A test is an unsigned comparison at its words'
+//   width.
+// - **A `Jump` makes the routine a loop**: the routine's body is one plain
+//   loop whose state is the parameters' slots then the results' slots. A
+//   `Jump` sets the next state to its arguments (the results' slots zero)
+//   and clears the exit bit; a `Ret` keeps the parameters, sets the
+//   results and sets it. Level 2 spends a fuel at each `Jump` (a call), and
+//   the bytes level one at each turn back: the same count (§25 on fuel).
+// - **A `Ret`** moves its values into the routine's result ids, fixed for
+//   the routine, so every path binds the same ones.
+//
+// Ids are numbered once per routine from one counter, so no id is bound
+// twice along any path (`Body::fresh`).
+import logic;
+import bool;
+import pair;
+import nat;
+import option;
+import list;
+import bitvec;
+import span_set;
+import store;
+import atom;
+import steps;
+import shape;
+import body;
+import function_ir;
+import bytes_level;
+
+// ---------------------------------------------------------------------------
+// Layout, read from codes through the structures
+
+// A word's size in bytes; a number has none.
+fn Width::size(self w: Width) → Option<Nat> {
+    match w {
+        WNat => None,
+        WBits(n) => match n.same(8) { True => Some(1), False => match n.same(16) { True => Some(2), False => match n.same(32) { True => Some(4),
+            False => match n.same(64) { True => Some(8), False => None } } } },
+    }
+}
+
+fn Width::bits(self w: Width) → Nat { match w { WNat => 0, WBits(n) => n } }
+
+// The shift that scales an index to an element of `size` bytes.
+fn size_shift(size: Nat) → Nat { match size.same(1) { True => 0, False => match size.same(2) { True => 1, False => match size.same(4) { True => 2, False => 3 } } } }
+
+// A code's word size, where it is a word with one.
+fn Shape::word_size(self c: Shape) → Option<Nat> { match c { SWord(w) => w.size(), SNamed(_) => None } }
+
+// The layout of a named code: a sequence of words (its element's size,
+// and its windows' code where it has them), a record of words (its fields'
+// codes, packed in order), or none in this fragment.
+inductive Layout { LSeq(elem: Shape, size: Nat, win: Option<Shape>), LRecord(fields: List<Shape>), LNone }
+
+fn Shape::layout(tys: Nat → Type, strs: Strs(tys), c: Shape) → Layout {
+    match c {
+        SWord(_) => LNone,
+        SNamed(k) => match strs(k).kind {
+            Opaque => LNone,
+            Sequence(q) => match q.elem.word_size() { Some(s) => LSeq(q.elem, s, match q.win { Some(w) => Some(w.shape), None => None }), None => LNone },
+            Record(fs) => match fs.all_bit(λ (f: Field(tys, tys(k))) => f.shape.word_size().is_some()) {
+                True => LRecord(fs.map(λ (f: Field(tys, tys(k))) => f.shape)),
+                False => LNone,
+            },
+        },
+    }
+}
+
+// A field's offset: the sizes of the fields before it.
+fn fields_offset(fs: List<Shape>, i: Nat) → Option<Nat> {
+    match fs {
+        Nil => None,
+        Cons(f, rest) => match i {
+            Zero => Some(0),
+            Succ(j) => match f.word_size() { None => None, Some(s) => fields_offset(rest, j).map(λ o => s + o) },
+        },
+    }
+}
+
+fn fields_nth(fs: List<Shape>, i: Nat) → Option<Shape> { fs.nth(i) }
+
+// ---------------------------------------------------------------------------
+// Slots
+
+// Where a view was opened: its root's level and the steps, atoms by level.
+inductive Prov { PNone, PView(root: Nat, steps: List<Step>) }
+
+// A variable's slots: its code, its ids, where it was opened, and whether
+// a store may go through it (it reaches what a parameter lent to write or
+// gave reaches).
+record PSlot { code: Shape, ids: List<Typed>, prov: Prov, w: Bool }
+
+// The environment by level: the arguments, then the locals as bound.
+record PEnv { na: Nat, vars: List<PSlot> }
+
+fn PEnv::level(self e: PEnv, v: Var) → Option<Nat> {
+    match v {
+        Arg(i) => match (i + 1).leb(e.na) { True => Some(i), False => None },
+        Loc(j) => match (e.na + j + 1).leb(e.vars.len()) { True => Some(e.vars.len() - 1 - j), False => None },
+    }
+}
+
+fn PEnv::get(self e: PEnv, v: Var) → Option<PSlot> { e.level(v).and_then(λ l => e.vars.nth(l)) }
+
+// A store may go through the variable.
+fn PEnv::writes_through(self e: PEnv, v: Var) → Bool { match e.get(v) { None => False, Some(s) => s.w } }
+
+fn PEnv::push(self e: PEnv, s: PSlot) → PEnv { PEnv(e.na, e.vars ++ [s]) }
+
+fn PEnv::push_all(self e: PEnv, ss: List<PSlot>) → PEnv { match ss { Nil => e, Cons(s, rest) => e.push(s).push_all(rest) } }
+
+// An atom's word by level: the arguments', then the locals newest first
+// (`Env::ixs`).
+fn PEnv::atom_level(self e: PEnv, a: Atom) → Atom {
+    match a {
+        Lit(n) => Lit(n),
+        Var(w) => match (w + 1).leb(e.na) { True => Var(w), False => Var(e.vars.len() - 1 - (w - e.na)) },
+    }
+}
+
+fn PEnv::step_level(self e: PEnv, s: Step) → Step {
+    match s {
+        SField(i) => SField(i),
+        SElem(a) => SElem(e.atom_level(a)),
+        SWindow(lo, n) => SWindow(e.atom_level(lo), e.atom_level(n)),
+        SKey(i, g) => SKey(e.atom_level(i), e.atom_level(g)),
+        SVariant(c) => SVariant(c),
+    }
+}
+
+fn Atom::eqb(self a, b: Atom) → Bool { match a { Lit(n) => match b { Lit(m) => n.same(m), Var(_) => False }, Var(n) => match b { Var(m) => n.same(m), Lit(_) => False } } }
+
+fn Step::eqb(self a, b: Step) → Bool {
+    match a {
+        SField(i) => match b { SField(j) => i.same(j), _ => False },
+        SElem(x) => match b { SElem(y) => x.eqb(y), _ => False },
+        SWindow(l, n) => match b { SWindow(l2, n2) => l.eqb(l2) && n.eqb(n2), _ => False },
+        SKey(i, g) => match b { SKey(i2, g2) => i.eqb(i2) && g.eqb(g2), _ => False },
+        SVariant(c) => match b { SVariant(d) => c.same(d), _ => False },
+    }
+}
+
+fn Steps::eqb(xs, ys: List<Step>) → Bool {
+    match xs { Nil => match ys { Nil => True, Cons(_, _) => False }, Cons(a, xr) => match ys { Nil => False, Cons(b, yr) => a.eqb(b) && Steps::eqb(xr, yr) } }
+}
+
+// A fresh slot of a code: a word one id, a sequence by reference two.
+record Ids { ids: List<Typed>, next: Nat }
+
+fn PSlot::fresh(tys: Nat → Type, strs: Strs(tys), c: Shape, next: Nat) → Option<Ids> {
+    match c.word_size() {
+        Some(_) => Some(Ids([word_id(next)], next + 1)),
+        None => match Shape::layout(tys, strs, c) {
+            LSeq(_, _, _) => Some(Ids([ref_id(next), word_id(next + 1)], next + 2)),
+            LRecord(_) => Some(Ids([ref_id(next)], next + 1)),
+            LNone => None,
+        },
+    }
+}
+
+fn PSlot::fresh_all(tys: Nat → Type, strs: Strs(tys), cs: List<Shape>, next: Nat) → Option<Ids> {
+    match cs {
+        Nil => Some(Ids(Nil, next)),
+        Cons(c, rest) => match PSlot::fresh(tys, strs, c, next) {
+            None => None,
+            Some(a) => PSlot::fresh_all(tys, strs, rest, a.next).map(λ b => Ids(a.ids ++ b.ids, b.next)),
+        },
+    }
+}
+
+// The slots of codes, one per code, over fresh ids.
+// The parameters' slots: a store may go through one lent to write or
+// given.
+fn PSlot::many(tys: Nat → Type, strs: Strs(tys), cs: List<Param>, next: Nat) → Option<Pair<List<PSlot>, Nat>> {
+    match cs {
+        Nil => Some(Pair(Nil, next)),
+        Cons(c, rest) => match PSlot::fresh(tys, strs, c.code, next) {
+            None => None,
+            Some(a) => PSlot::many(tys, strs, rest, a.next).map(λ b => Pair(Cons(PSlot(c.code, a.ids, PNone, match c.mode { ByRead => False, ByWrite => True, ByTake => True }), b.fst), b.snd)),
+        },
+    }
+}
+
+fn PSlot::ids_of(ss: List<PSlot>) → List<Typed> { match ss { Nil => Nil, Cons(s, rest) => s.ids ++ PSlot::ids_of(rest) } }
+
+fn PSlot::word(self s: PSlot) → Option<Typed> { match s.ids { Cons(t, rest) => match rest { Nil => match t.kind { WordKind => Some(t), RefKind => None }, Cons(_, _) => None }, Nil => None } }
+
+fn PSlot::reference(self s: PSlot) → Option<Typed> { match s.ids { Cons(t, _) => match t.kind { RefKind => Some(t), WordKind => None }, Nil => None } }
+
+// ---------------------------------------------------------------------------
+// Code for places
+
+// What a walk leaves: the code, the reference and (for a sequence) its
+// length word, the code reached, the next id.
+record Walk { instrs: List<Instr>, place: Nat, len: Option<Nat>, code: Shape, next: Nat }
+
+// An atom's word id: a literal is a constant, a variable its word.
+record Word1 { instrs: List<Instr>, id: Nat, next: Nat }
+
+fn PEnv::atom(self e: PEnv, a: Atom, next: Nat) → Option<Word1> {
+    match a {
+        Lit(n) => Some(Word1([Compute(Const(64, next, n))], next, next + 1)),
+        Var(w) => {
+            let v = match (w + 1).leb(e.na) { True => Arg(w), False => Loc(w - e.na) };
+            match e.get(v) {
+                None => None,
+                Some(s) => match s.code { SWord(wd) => match wd.bits().same(64) { True => s.word().map(λ t => Word1(Nil, t.id, next)), False => None }, SNamed(_) => None },
+            }
+        },
+    }
+}
+
+// An index scaled to bytes.
+fn scaled(i: Word1, size: Nat) → Word1 {
+    match size.same(1) {
+        True => i,
+        False => Word1(i.instrs ++ [Compute(Const(64, i.next, size_shift(size))), Compute(ShiftLeft(64, i.next + 1, i.id, i.next))], i.next + 1, i.next + 2),
+    }
+}
+
+fn PEnv::walk(tys: Nat → Type, strs: Strs(tys), self e: PEnv, xs: List<Step>, at: Walk) → Option<Walk> {
+    match xs {
+        Nil => Some(at),
+        Cons(x, rest) => match x {
+            SElem(a) => match Shape::layout(tys, strs, at.code) {
+                LSeq(el, size, _) => match e.atom(a, at.next) {
+                    None => None,
+                    Some(i) => {
+                        let s = scaled(i, size);
+                        e.walk(tys, strs, rest, Walk(at.instrs ++ s.instrs ++ [bytes_level::Offset(s.next, at.place, s.id)], s.next, None, el, s.next + 1))
+                    },
+                },
+                _ => None,
+            },
+            SWindow(lo, n) => match Shape::layout(tys, strs, at.code) {
+                LSeq(_, size, win) => match win {
+                    None => None,
+                    Some(wc) => match e.atom(lo, at.next) {
+                        None => None,
+                        Some(l) => match e.atom(n, l.next) {
+                            None => None,
+                            Some(k) => {
+                                let s = scaled(Word1(l.instrs ++ k.instrs, l.id, k.next), size);
+                                e.walk(tys, strs, rest, Walk(at.instrs ++ s.instrs ++ [bytes_level::Offset(s.next, at.place, s.id)], s.next, Some(k.id), wc, s.next + 1))
+                            },
+                        },
+                    },
+                },
+                _ => None,
+            },
+            SField(i) => match Shape::layout(tys, strs, at.code) {
+                LRecord(fs) => match fields_offset(fs, i) {
+                    None => None,
+                    Some(off) => match fields_nth(fs, i) {
+                        None => None,
+                        Some(fc) => e.walk(tys, strs, rest,
+                            Walk(at.instrs ++ [Compute(Const(64, at.next, off)), bytes_level::Offset(at.next + 1, at.place, at.next)], at.next + 1, None, fc, at.next + 2)),
+                    },
+                },
+                _ => None,
+            },
+            SKey(_, _) => None,
+            SVariant(_) => None,
+        },
+    }
+}
+
+// A place's code, from a root that holds a reference.
+fn PEnv::locate(tys: Nat → Type, strs: Strs(tys), self e: PEnv, p: Place, next: Nat) → Option<Walk> {
+    match e.get(p.root) {
+        None => None,
+        Some(s) => match s.reference() {
+            None => None,
+            Some(r) => {
+                let len: Option<Nat> = match s.ids { Cons(_, rest) => match rest { Cons(l, _) => Some(l.id), Nil => None }, Nil => None };
+                e.walk(tys, strs, p.steps, Walk(Nil, r.id, len, s.code, next))
+            },
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Statements
+
+fn Prim::node(self op: Prim, width, out, a, b: Nat) → Option<Node> {
+    match op { PAdd => Some(Add(width, out, a, b)), PSub => Some(Sub(width, out, a, b)), PMul => None }
+}
+
+// What a statement leaves: its code (a region, since a call is one), the
+// environment after, the next id.
+record SOut { code: bytes_level::Body, env: PEnv, next: Nat }
+
+record PCx(tys: Nat → Type) { strs: Strs(tys), sigs: Nat → Sig, prim: Nat → Bool }
+
+fn leaf(instrs: List<Instr>) → bytes_level::Body { Leaf(instrs) }
+
+// A call's arguments, by the callee's parameters: a word its id, a sequence
+// lent to read or write its two slots; a taken object is refused.
+fn PEnv::call_args(self e: PEnv, ps: List<Param>, xs: List<Var>) → Option<List<Typed>> {
+    match ps {
+        Nil => match xs { Nil => Some(Nil), Cons(_, _) => None },
+        Cons(p, pr) => match xs {
+            Nil => None,
+            Cons(x, xr) => match e.get(x) {
+                None => None,
+                Some(s) => match p.code.word_size() {
+                    Some(_) => match s.word() { None => None, Some(t) => e.call_args(pr, xr).map(λ rest => Cons(t, rest)) },
+                    None => match p.mode {
+                        ByTake => None,
+                        ByRead => e.call_args(pr, xr).map(λ rest => s.ids ++ rest),
+                        ByWrite => e.call_args(pr, xr).map(λ rest => s.ids ++ rest),
+                    },
+                },
+            },
+        },
+    }
+}
+
+// A callee's results' slots: a word fresh, a returned view fresh (its
+// reference and length come back), a fresh object refused.
+fn Result::slots(tys: Nat → Type, strs: Strs(tys), rs: List<Result>, next: Nat) → Option<Pair<List<PSlot>, Nat>> {
+    match rs {
+        Nil => Some(Pair(Nil, next)),
+        Cons(r, rest) => match r.origin {
+            OFresh => match r.code.word_size() {
+                None => None,
+                Some(_) => Result::slots(tys, strs, rest, next + 1).map(λ b => Pair(Cons(PSlot(r.code, [word_id(next)], PNone, False), b.fst), b.snd)),
+            },
+            OParam(_) => None,
+            OView(_, _) => match PSlot::fresh(tys, strs, r.code, next) {
+                None => None,
+                Some(a) => Result::slots(tys, strs, rest, a.next).map(λ b => Pair(Cons(PSlot(r.code, a.ids, PNone, False), b.fst), b.snd)),
+            },
+        },
+    }
+}
+
+// The written parameters' slots after a call: a word fresh (returned), a
+// sequence the argument's own slots (not returned: §25).
+fn PEnv::written_slots(self e: PEnv, ps: List<Param>, xs: List<Var>, is: List<Nat>, next: Nat) → Option<Pair<List<PSlot>, Nat>> {
+    match is {
+        Nil => Some(Pair(Nil, next)),
+        Cons(i, rest) => match ps.nth(i) {
+            None => None,
+            Some(p) => match xs.nth(i) {
+                None => None,
+                Some(x) => match p.code.word_size() {
+                    Some(_) => e.written_slots(ps, xs, rest, next + 1).map(λ b => Pair(Cons(PSlot(p.code, [word_id(next)], PNone, False), b.fst), b.snd)),
+                    None => match e.get(x) {
+                        None => None,
+                        Some(s) => match e.level(x) {
+                            None => None,
+                            Some(l) => e.written_slots(ps, xs, rest, next).map(λ b => Pair(Cons(PSlot(s.code, s.ids, PView(l, Nil), s.w), b.fst), b.snd)),
+                        },
+                    },
+                },
+            },
+        },
+    }
+}
+
+// The ids a call binds: its results' slots, then the written words.
+fn PSlot::returned(ss: List<PSlot>, ws: List<PSlot>) → List<Typed> { PSlot::ids_of(ss) ++ PSlot::ids_of(ws.filter(λ s => s.code.word_size().is_some())) }
+
+// A read of a word place: a word variable is its own slot (a copy), a
+// place through a reference a load of the element's size.
+fn PEnv::read_place(tys: Nat → Type, strs: Strs(tys), self e: PEnv, p: Place, next: Nat) → Option<SOut> {
+    match p.steps {
+        Nil => match e.get(p.root) { None => None, Some(s) => match s.word() { None => None, Some(_) => Some(SOut(leaf(Nil), e.push(PSlot(s.code, s.ids, PNone, False)), next)) } },
+        Cons(_, _) => match e.locate(tys, strs, p, next) {
+            None => None,
+            Some(at) => match at.code.word_size() {
+                None => None,
+                Some(size) => Some(SOut(leaf(at.instrs ++ [bytes_level::Load(size, 64, at.next, at.place)]), e.push(PSlot(at.code, [word_id(at.next)], PNone, False)), at.next + 1)),
+            },
+        },
+    }
+}
+
+fn Stmt::place(self st: Stmt, tys: Nat → Type, cx: PCx(tys), e: PEnv, next: Nat) → Option<SOut> {
+    let strs = cx.strs;
+    match st {
+        Op(op, a, b) => match e.get(a) {
+            None => None,
+            Some(sa) => match e.get(b) {
+                None => None,
+                Some(sb) => match sa.code {
+                    SNamed(_) => None,
+                    SWord(w) => match sa.word() {
+                        None => None,
+                        Some(ta) => match sb.word() {
+                            None => None,
+                            Some(tb) => match op.node(w.bits(), next, ta.id, tb.id) {
+                                None => None,
+                                Some(nd) => match w.size() {
+                                    None => None,
+                                    Some(_) => Some(SOut(leaf([Compute(nd)]), e.push(PSlot(SWord(w), [word_id(next)], PNone, False)), next + 1)),
+                                },
+                            },
+                        },
+                    },
+                },
+            },
+        },
+        Stmt::Lit(w, n) => match w.size() {
+            None => None,
+            Some(_) => Some(SOut(leaf([Compute(Const(w.bits(), next, n))]), e.push(PSlot(SWord(w), [word_id(next)], PNone, False)), next + 1)),
+        },
+        Stmt::Read(p) => e.read_place(tys, strs, p, next),
+        Stmt::Write(p, v) => match e.get(v) {
+            None => None,
+            Some(sv) => match sv.prov {
+                PView(root, steps) => match e.level(p.root) {
+                    None => None,
+                    Some(l) => match l.same(root) && Steps::eqb(p.steps.map(λ s => e.step_level(s)), steps) {
+                        True => Some(SOut(leaf(Nil), e, next)),
+                        False => None,
+                    },
+                },
+                PNone => match sv.word() {
+                    None => None,
+                    Some(tv) => match p.steps {
+                        Nil => None,
+                        Cons(_, _) => match e.writes_through(p.root) {
+                          False => None,
+                          True => match e.locate(tys, strs, p, next) {
+                            None => None,
+                            Some(at) => match at.code.word_size() {
+                                None => None,
+                                Some(size) => Some(SOut(leaf(at.instrs ++ [bytes_level::Store(size, 64, at.place, tv.id)]), e, at.next)),
+                            },
+                          },
+                        },
+                    },
+                },
+            },
+        },
+        View(p, m) => match e.level(p.root) {
+            None => None,
+            Some(l) => match e.locate(tys, strs, p, next) {
+                None => None,
+                Some(at) => match Shape::layout(tys, strs, at.code) {
+                    LSeq(_, _, _) => match at.len {
+                        None => None,
+                        Some(len) => Some(SOut(leaf(at.instrs), e.push(PSlot(at.code, [ref_id(at.place), word_id(len)], PView(l, p.steps.map(λ s => e.step_level(s))), e.writes_through(p.root) && match m { Reading => False, Writing => True })), at.next)),
+                    },
+                    _ => None,
+                },
+            },
+        },
+        Take(p) => match p.steps {
+            Nil => match e.get(p.root) { None => None, Some(s) => Some(SOut(leaf(Nil), e.push(s), next)) },
+            Cons(_, _) => e.read_place(tys, strs, p, next),
+        },
+        Stmt::Fresh(_, _, _) => None,
+        Stmt::Call(g, args, n) => match cx.prim(g) {
+            True => None,
+            False => {
+                let sg = cx.sigs(g);
+                match e.call_args(sg.params, args) {
+                    None => None,
+                    Some(passed) => match Result::slots(tys, strs, sg.results, next) {
+                        None => None,
+                        Some(rs) => match e.written_slots(sg.params, args, sg.written(), rs.snd) {
+                            None => None,
+                            Some(ws) => match n.same(rs.fst.len() + ws.fst.len()) {
+                                False => None,
+                                True => Some(SOut(bytes_level::Call(g, passed, PSlot::returned(rs.fst, ws.fst)), e.push_all(rs.fst ++ ws.fst), ws.snd)),
+                            },
+                        },
+                    },
+                }
+            },
+        },
+        Death(_) => Some(SOut(leaf(Nil), e, next)),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Bodies
+
+// A copy of a value into a fixed id: a word moved, a reference offset by a
+// zero word.
+fn copy_into(dst, src: Typed, zero: Nat) → Instr {
+    match dst.kind { WordKind => Compute(Move(64, dst.id, src.id)), RefKind => bytes_level::Offset(dst.id, src.id, zero) }
+}
+
+fn copies(dsts, srcs: List<Typed>, zero: Nat) → Option<List<Instr>> {
+    match dsts {
+        Nil => match srcs { Nil => Some(Nil), Cons(_, _) => None },
+        Cons(d, dr) => match srcs {
+            Nil => None,
+            Cons(s, sr) => match d.kind.same(s.kind) { False => None, True => copies(dr, sr, zero).map(λ rest => Cons(copy_into(d, s, zero), rest)) },
+        },
+    }
+}
+
+// How a path leaves the routine: into its result ids, or (a loop's pass)
+// into the next state with the exit bit.
+inductive Leave { TRet(results: List<Typed>), TLoop(params: List<Typed>, results: List<Typed>, next: List<Typed>, exit: Nat) }
+
+// A `Ret`'s values as the routine answers them: the results' slots, then
+// each written word (a written sequence is the argument itself).
+fn ret_values(rs: List<PSlot>, nres: Nat) → List<Typed> {
+    PSlot::ids_of(rs.take(nres)) ++ PSlot::ids_of(rs.drop(nres).filter(λ s => s.code.word_size().is_some()))
+}
+
+fn PEnv::gets(self e: PEnv, xs: List<Var>) → Option<List<PSlot>> {
+    match xs { Nil => Some(Nil), Cons(x, rest) => e.get(x).and_then(λ s => e.gets(rest).map(λ ss => Cons(s, ss))) }
+}
+
+fn zeros(ts: List<Typed>) → Option<List<Instr>> {
+    match ts {
+        Nil => Some(Nil),
+        Cons(t, rest) => match t.kind { WordKind => zeros(rest).map(λ is => Cons(Compute(Const(64, t.id, 0)), is)), RefKind => None },
+    }
+}
+
+fn Leave::ret(self t: Leave, vals: List<Typed>, next: Nat) → Option<bytes_level::Body> {
+    match t {
+        TRet(res) => copies(res, vals, next).map(λ is => leaf(Cons(Compute(Const(64, next, 0)), is))),
+        TLoop(ps, res, nx, exit) => copies(nx, ps ++ vals, next).map(λ is => leaf(Cons(Compute(Const(64, next, 0)), is ++ [Compute(Const(1, exit, 1))]))),
+    }
+}
+
+fn Leave::jump(self t: Leave, vals: List<Typed>, next: Nat) → Option<bytes_level::Body> {
+    match t {
+        TRet(_) => None,
+        TLoop(ps, res, nx, exit) => match copies(nx.take(ps.len()), vals, next) {
+            None => None,
+            Some(is) => zeros(nx.drop(ps.len())).map(λ zs => leaf(Cons(Compute(Const(64, next, 0)), is ++ zs ++ [Compute(Const(1, exit, 0))]))),
+        },
+    }
+}
+
+fn Typed::same(self a, b: Typed) → Bool { a.id.same(b.id) && a.kind.same(b.kind) }
+
+fn Typed::all_same(xs, ys: List<Typed>) → Bool {
+    match xs { Nil => match ys { Nil => True, Cons(_, _) => False }, Cons(a, xr) => match ys { Nil => False, Cons(b, yr) => a.same(b) && Typed::all_same(xr, yr) } }
+}
+
+// A written sequence comes back as the parameter itself: its slot is the
+// parameter's own (`Value::Written`'s first clause, checked here, so the
+// routine need not return it). `ss` are the written values in `is`'s order.
+fn PEnv::keeps(self e: PEnv, ps: List<Param>, is: List<Nat>, ss: List<PSlot>) → Bool {
+    match is {
+        Nil => True,
+        Cons(i, rest) => match ss {
+            Nil => False,
+            Cons(s, sr) => (match ps.nth(i) {
+                None => False,
+                Some(p) => match p.code.word_size() { Some(_) => True, None => match e.get(Arg(i)) { None => False, Some(a) => Typed::all_same(s.ids, a.ids) } },
+            }) && e.keeps(ps, rest, sr),
+        },
+    }
+}
+
+// A `Jump` passes each written sequence on as itself.
+fn PEnv::jump_keeps(self e: PEnv, ps: List<Param>, is: List<Nat>, ss: List<PSlot>) → Bool {
+    is.all_bit(λ i => match ps.nth(i) {
+        None => False,
+        Some(p) => match p.code.word_size() {
+            Some(_) => True,
+            None => match ss.nth(i) { None => False, Some(s) => match e.get(Arg(i)) { None => False, Some(a) => Typed::all_same(s.ids, a.ids) } },
+        },
+    })
+}
+
+// What follows a join, and the environment it starts from.
+record JoinRest { rest: body::Body, env: PEnv }
+
+record BOut { code: bytes_level::Body, next: Nat }
+
+// A comparison of two words at the first's width: its one-bit word at
+// `next`, and whether the arms swap (`a <= b` is `!(b < a)`).
+fn PEnv::less(self e: PEnv, a, b: Var, swap: Bool, next: Nat) → Option<Pair<List<Instr>, Bool>> {
+    match e.get(a) {
+        None => None,
+        Some(sa) => match e.get(b) {
+            None => None,
+            Some(sb) => match sa.code {
+                SNamed(_) => None,
+                SWord(w) => match sa.word() {
+                    None => None,
+                    Some(ta) => match sb.word() { None => None, Some(tb) => Some(Pair([Compute(UnsignedLessThan(w.bits(), next, ta.id, tb.id))], swap)) },
+                },
+            },
+        },
+    }
+}
+
+fn Test::place(self t: Test, e: PEnv, next: Nat) → Option<Pair<List<Instr>, Bool>> {
+    match t { TLt(a, b) => e.less(a, b, False, next), TLe(a, b) => e.less(b, a, True, next) }
+}
+
+// A body's code, at a fuel that bounds the copies of what follows a join.
+fn place_go(fuel: Nat, b: body::Body, tys: Nat → Type, cx: PCx(tys), sig: Sig, tail: Leave, frames: List<JoinRest>, e: PEnv, next: Nat) → Option<BOut> {
+    match fuel {
+        Zero => None,
+        Succ(f) => match b {
+            Ret(rs) => match e.gets(rs) {
+                None => None,
+                Some(ss) => match e.keeps(sig.params, sig.written(), ss.drop(sig.results.len())) {
+                    False => None,
+                    True => tail.ret(ret_values(ss, sig.results.len()), next).map(λ c => BOut(c, next + 1)),
+                },
+            },
+            Jump(xs) => match e.gets(xs) {
+                None => None,
+                Some(ss) => match e.jump_keeps(sig.params, sig.written(), ss) { False => None, True => tail.jump(PSlot::ids_of(ss), next).map(λ c => BOut(c, next + 1)) },
+            },
+            Yield(os) => match frames {
+                Nil => None,
+                Cons(fr, outer) => match e.gets(os) {
+                    None => None,
+                    Some(ss) => place_go(f, fr.rest, tys, cx, sig, tail, outer, fr.env.push_all(ss.map(λ s => PSlot(s.code, s.ids, PNone, s.w))), next),
+                },
+            },
+            Do(s, rest) => match s.place(tys, cx, e, next) {
+                None => None,
+                Some(o) => place_go(f, rest, tys, cx, sig, tail, frames, o.env, o.next).map(λ r => BOut(bytes_level::Seq(o.code, r.code), r.next)),
+            },
+            Join(t, yes, no, rest) => match t.place(e, next) {
+                None => None,
+                Some(tested) => {
+                    let fs = Cons(JoinRest(rest, e), frames);
+                    match place_go(f, yes, tys, cx, sig, tail, fs, e, next + 1) {
+                        None => None,
+                        Some(y) => place_go(f, no, tys, cx, sig, tail, fs, e, y.next).map(λ n => {
+                            let br = match tested.snd { False => Branch(next, y.code, n.code), True => Branch(next, n.code, y.code) };
+                            BOut(bytes_level::Seq(leaf(tested.fst), br), n.next)
+                        }),
+                    }
+                },
+            },
+        },
+    }
+}
+
+fn body_size(b: body::Body) → Nat {
+    match b { Ret(_) => 1, Yield(_) => 1, Jump(_) => 1, Do(_, rest) => body_size(rest) + 1, Join(_, y, n, rest) => body_size(y) + body_size(n) + body_size(rest) + 1 }
+}
+
+fn body_jumps(b: body::Body) → Bool {
+    match b { Ret(_) => False, Yield(_) => False, Jump(_) => True, Do(_, rest) => body_jumps(rest), Join(_, y, n, rest) => body_jumps(y) || body_jumps(n) || body_jumps(rest) }
+}
+
+// The codes a routine answers: its results', then its written words'.
+fn Sig::placed_codes(self s: Sig) → List<Shape> {
+    s.results.map(λ r => r.code) ++ s.written().map(λ i => s.params.nth(i).map(λ p => p.code).unwrap_or(SWord(WNat))).filter(λ c => c.word_size().is_some())
+}
+
+// A function as a routine.
+fn Func::place(self f: Func, tys: Nat → Type, cx: PCx(tys)) → Option<Routine> {
+    let strs = cx.strs;
+    let fuel = body_size(f.body) * body_size(f.body) + 1;
+    match PSlot::many(tys, strs, f.sig.params, 0) {
+        None => None,
+        Some(ps) => {
+            let pids = PSlot::ids_of(ps.fst);
+            match PSlot::fresh_all(tys, strs, f.sig.placed_codes(), ps.snd) {
+                None => None,
+                Some(rs) => match body_jumps(f.body) {
+                    False => place_go(fuel, f.body, tys, cx, f.sig, TRet(rs.ids), Nil, PEnv(f.sig.params.len(), ps.fst), rs.next)
+                        .map(λ o => Routine(pids, o.code, rs.ids)),
+                    // The loop: inputs the parameters and zero results; a
+                    // pass from its own parameters; the next state; the
+                    // outputs, whose results part the routine answers.
+                    True => match zeros(rs.ids) {
+                        None => None,
+                        Some(zs) => match PSlot::many(tys, strs, f.sig.params, rs.next) {
+                            None => None,
+                            Some(qs) => match PSlot::fresh_all(tys, strs, f.sig.placed_codes(), qs.snd) {
+                                None => None,
+                                Some(qr) => match PSlot::fresh_all(tys, strs, f.sig.params.map(λ p => p.code) ++ f.sig.placed_codes(), qr.next) {
+                                    None => None,
+                                    Some(nx) => match PSlot::fresh_all(tys, strs, f.sig.params.map(λ p => p.code) ++ f.sig.placed_codes(), nx.next + 1) {
+                                        None => None,
+                                        Some(outs) => {
+                                            let qids = PSlot::ids_of(qs.fst);
+                                            let tail = TLoop(qids, qr.ids, nx.ids, nx.next);
+                                            place_go(fuel, f.body, tys, cx, f.sig, tail, Nil, PEnv(f.sig.params.len(), qs.fst), outs.next).map(λ o =>
+                                                Routine(pids,
+                                                    bytes_level::Seq(leaf(zs), bytes_level::Loop(pids ++ rs.ids, qids ++ qr.ids, o.code, nx.next, nx.ids, outs.ids)),
+                                                    outs.ids.drop(pids.len())))
+                                        },
+                                    },
+                                },
+                            },
+                        },
+                    },
+                },
+            }
+        },
+    }
+}
+
+// A program: each function a routine, by its index.
+fn place_all(tys: Nat → Type, cx: PCx(tys), fs: List<Func>) → Option<List<Routine>> {
+    match fs { Nil => Some(Nil), Cons(f, rest) => f.place(tys, cx).and_then(λ r => place_all(tys, cx, rest).map(λ rs => Cons(r, rs))) }
+}
+
+fn place(tys: Nat → Type, strs: Strs(tys), prim: Nat → Bool, fs: List<Func>) → Option<Program> {
+    place_all(tys, PCx(strs, λ g => (fs.nth(g).unwrap_or(Func(Sig(Nil, Nil), Ret(Nil)))).sig, prim), fs).map(λ rs => Program(rs))
+}

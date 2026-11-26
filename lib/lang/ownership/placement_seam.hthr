@@ -1,0 +1,264 @@
+// The seam between level 2 and the bytes level, stated
+// (docs/language/ownership-design.md §25, §16 package 6, §15.5;
+// issues/ownership-end-to-end-slice.md). Definitions and types only:
+// nothing is proved over `place` until the statement is ruled on.
+//
+// - **The injection** (`HeapInjects`): a map `inj` from level 2's blocks to the
+//   bytes level's. Each live level-2 block, which has no holes in this
+//   fragment, is at `inj(b)` as its value's bytes, read through its code's
+//   layout (`Dyn::encode`): a sequence's elements one after another at their
+//   size, a record's fields packed in order; every byte there defined, and
+//   no reference there. Live blocks go to distinct blocks. A dead level-2
+//   block constrains nothing (the bytes level has no `dead`: §15.10's code
+//   is later).
+// - **Values lowered** (`value_lower`): a plain word is its word; a
+//   reference is the bytes level's reference to `inj` of its block at the
+//   offset its selections reach, and for a sequence its length beside it,
+//   as `place` lays out a variable's slots.
+// - **`PlacementSound`**: for a program `place` answers, at every fuel `n`,
+//   function, and arguments related under an injection, with the bytes
+//   level allowed to write every block a parameter lent to change reaches:
+//   where level 2's run is done, the bytes level's at `n + 1` is done, its
+//   heap injected under an injection agreeing with `inj` on the blocks that
+//   were live, its words the lowering of level 2's results (results, then
+//   written words; a written sequence is not returned), and the same world;
+//   where level 2's exits, the bytes level's exits alike; where level 2's is
+//   going, the bytes level's history at `n + 1` extends it. One fuel more on
+//   the bytes level is its entry (`program_calls` spends one to enter
+//   a routine, level 2's `Run::of` none). The bytes level may be further on
+//   than level 2 at those fuels, never behind (§25 on fuel), so the going
+//   clause is an extension and not an equality.
+// - **The composed statement** (`EndToEnd`): `Site::Entering` of the code
+//   `Program::lower` gives for the placed program, with the clause: at
+//   every level-2 input related to the entry's arguments and heap, meeting
+//   `SafeAt`'s premises, at a fuel past the function's measure, the code
+//   returns (`Site::Tracked` at `Done`) with an answer whose words lower
+//   values that read as the source function's (`ReadAll` of `p.w(g, ds)`,
+//   the pin's world) and whose heap injects the level-2 heap after.
+//   `end_to_end` states it from `PlacementSound` and `CheckSound`.
+import logic;
+import bool;
+import nat;
+import option;
+import list;
+import pair;
+import bitvec;
+import span_set;
+import store;
+import atom;
+import steps;
+import shape;
+import body;
+import level2;
+import run;
+import verdict;
+import checker;
+import placement;
+import bytes_memory;
+import bytes_level;
+import bytes_level_routines;
+import x86_64_memory_contract;
+import x86_64_call_contract;
+import x86_64_asm;
+import x86_64_asm_runs;
+import x86_64_stack;
+import x86_64_fetch;
+import x86_64_data_read;
+import x86_64;
+import function_ir_lower;
+import linux_world;
+
+// ---------------------------------------------------------------------------
+// A level-2 value's bytes
+
+// A word's bytes at a size, the first the least significant.
+fn word_bytes_at(size, x: Nat) → List<BitVec(8)> { low_bytes(size, BitVec::ofNat(x)) }
+
+// A sequence's elements from index `i`, `k` of them, each at its size. The
+// index is a 64-bit word, as the bytes level indexes.
+fn Dyn::encode_elems(tys: Nat → Type, strs: Strs(tys), d: Dyn(tys), size, i, k: Nat) → List<BitVec(8)> {
+    match k {
+        Zero => Nil,
+        Succ(k1) => word_bytes_at(size, Dyn::index(tys, Dyn::at(tys, strs, OnSeq(SeqOne(IWord(64, BitVec::ofNat(i)))), d)))
+            ++ Dyn::encode_elems(tys, strs, d, size, i + 1, k1),
+    }
+}
+
+// A record's fields from field `i` on.
+fn Dyn::encode_fields(tys: Nat → Type, strs: Strs(tys), d: Dyn(tys), fs: List<Shape>, i: Nat) → Option<List<BitVec(8)>> {
+    match fs {
+        Nil => Some(Nil),
+        Cons(f, rest) => match f.word_size() {
+            None => None,
+            Some(size) => Dyn::encode_fields(tys, strs, d, rest, i + 1).map(λ more => word_bytes_at(size, Dyn::index(tys, Dyn::at(tys, strs, OnField(i), d))) ++ more),
+        },
+    }
+}
+
+// A value's bytes, by its code's layout; none for a code with no layout.
+fn Dyn::encode(tys: Nat → Type, strs: Strs(tys), d: Dyn(tys)) → Option<List<BitVec(8)>> {
+    match Shape::layout(tys, strs, d.code) {
+        LSeq(_, size, _) => Some(Dyn::encode_elems(tys, strs, d, size, 0, Dyn::len(tys, strs, d))),
+        LRecord(fs) => Dyn::encode_fields(tys, strs, d, fs, 0),
+        LNone => None,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The injection
+
+// No reference lies in block `c`.
+fn Heap::NoPointerIn(hb: x86_64_memory_contract::Heap, c: Nat) → Type { (e: Pointer) → Mem(e, hb.shadow) → ¬(e.block = c) }
+
+// Level 2's heap in the bytes level's under `inj`: each live block's value's
+// bytes at its image, all defined, no reference among them; live blocks to
+// distinct images.
+fn HeapInjects(tys: Nat → Type, strs: Strs(tys), inj: Nat → Nat, h: level2::Heap(tys), hb: x86_64_memory_contract::Heap) → Type {
+    ((b: Nat) → (o: Obj(tys)) → level2::Heap::obj(tys, h, b) = Some(o) →
+        (o.holes = Nil) ∧ ((Dyn::encode(tys, strs, o.val) = Some(hb.bytes(inj(b)))) ∧ (((j: Nat) → hb.undefined(inj(b), j) = False) ∧ Heap::NoPointerIn(hb, inj(b))))) ∧
+    ((b, c: Nat) → (o, o2: Obj(tys)) → level2::Heap::obj(tys, h, b) = Some(o) → level2::Heap::obj(tys, h, c) = Some(o2) → inj(b) = inj(c) → b = c)
+}
+
+// `inj2` agrees with `inj` on the blocks live in `h`.
+fn inj_extends(tys: Nat → Type, inj2, inj: Nat → Nat, h: level2::Heap(tys)) → Type { (b: Nat) → (o: Obj(tys)) → level2::Heap::obj(tys, h, b) = Some(o) → inj2(b) = inj(b) }
+
+// Where selections reach in a value: the byte offset, and the value there.
+fn Sel::locate(tys: Nat → Type, strs: Strs(tys), d: Dyn(tys), ss: List<Sel>, off: Nat) → Option<Pair<Nat, Dyn(tys)>> {
+    match ss {
+        Nil => Some(Pair(off, d)),
+        Cons(s, rest) => match Shape::layout(tys, strs, d.code) {
+            LSeq(_, size, _) => match s {
+                OnSeq(a) => match a {
+                    SeqOne(i) => Sel::locate(tys, strs, Dyn::at(tys, strs, s, d), rest, off + i.toNat() * size),
+                    SeqRun(lo, _) => Sel::locate(tys, strs, Dyn::at(tys, strs, s, d), rest, off + lo.toNat() * size),
+                },
+                _ => None,
+            },
+            LRecord(fs) => match s {
+                OnField(i) => match fields_offset(fs, i) { None => None, Some(fo) => Sel::locate(tys, strs, Dyn::at(tys, strs, s, d), rest, off + fo) },
+                _ => None,
+            },
+            LNone => None,
+        },
+    }
+}
+
+// A level-2 value as the bytes level's values, as `place` lays a variable
+// out: a word its word; a reference to a sequence the reference and its
+// length; to a record the reference.
+fn value_lower(tys: Nat → Type, strs: Strs(tys), inj: Nat → Nat, h: level2::Heap(tys), v: level2::Value(tys)) → Option<List<x86_64_call_contract::Value>> {
+    match v {
+        Plain(d) => match d.code.word_size() { Some(_) => Some([x86_64_call_contract::Word(BitVec::ofNat(Dyn::index(tys, d)))]), None => None },
+        Refer(r) => match level2::Heap::obj(tys, h, r.b) {
+            None => None,
+            Some(o) => match Sel::locate(tys, strs, o.val, r.sels, 0) {
+                None => None,
+                Some(at) => match Shape::layout(tys, strs, at.snd.code) {
+                    LSeq(_, _, _) => Some([x86_64_call_contract::Ref(Loc(inj(r.b), at.fst)), x86_64_call_contract::Word(BitVec::ofNat(Dyn::len(tys, strs, at.snd)))]),
+                    LRecord(_) => Some([x86_64_call_contract::Ref(Loc(inj(r.b), at.fst))]),
+                    LNone => None,
+                },
+            },
+        },
+    }
+}
+
+fn values_lower(tys: Nat → Type, strs: Strs(tys), inj: Nat → Nat, h: level2::Heap(tys), vs: List<level2::Value(tys)>) → Option<List<x86_64_call_contract::Value>> {
+    match vs { Nil => Some(Nil), Cons(v, rest) => match value_lower(tys, strs, inj, h, v) { None => None, Some(a) => values_lower(tys, strs, inj, h, rest).map(λ b => a ++ b) } }
+}
+
+// What a routine answers of a level-2 answer: the results, then each
+// written word (a written sequence is the argument itself, not returned).
+fn Sig::returned(tys: Nat → Type, self s: Sig, rs: List<level2::Value(tys)>) → List<level2::Value(tys)> {
+    rs.take(s.results.len()) ++ s.written().zip(rs.drop(s.results.len())).filter(λ (q: Pair<Nat, level2::Value(tys)>) =>
+        s.params.nth(q.fst).map(λ (p: Param) => p.code.word_size().is_some()).unwrap_or(False)).map(λ (q: Pair<Nat, level2::Value(tys)>) => q.snd)
+}
+
+// The bytes level may write every block a parameter lent to change reaches.
+fn WritesLent(tys: Nat → Type, inj: Nat → Nat, blocks: Blocks, ps: List<Param>, vs: List<level2::Value(tys)>) → Type {
+    (i: Nat) → (p: Param) → ps.nth(i) = Some(p) → p.mode.changes() = True → (r: level2::Ref) → vs.nth(i) = Some(Refer(r)) → blocks.written(inj(r.b)) = True
+}
+
+// ---------------------------------------------------------------------------
+// `placement_sound`
+
+fn funcs_at(fs: List<Func>) → Nat → Func { λ g => fs.nth(g).unwrap_or(Func(Sig(Nil, Nil), Ret(Nil))) }
+
+// The answers related: level 2's done answer and the bytes level's, under
+// an injection agreeing with `inj` where `h` was live.
+fn AnswerLowers(tys: Nat → Type, strs: Strs(tys), sig: Sig, inj: Nat → Nat, h: level2::Heap(tys), a: level2::Answer(tys), a2: x86_64_call_contract::Answer) → Type {
+    Exists<Nat → Nat>(λ inj2 => inj_extends(tys, inj2, inj, h) ∧ (HeapInjects(tys, strs, inj2, a.heap, a2.heap) ∧
+        ((values_lower(tys, strs, inj2, a.heap, sig.returned(tys, a.results)) = Some(a2.words)) ∧ (a2.io = a.io))))
+}
+
+// The bytes level's outcome at its fuel against level 2's at its own.
+fn ran_lowers(tys: Nat → Type, strs: Strs(tys), sig: Sig, inj: Nat → Nat, h: level2::Heap(tys), r: level2::Ran(tys), r2: x86_64_call_contract::Ran<x86_64_call_contract::Answer>) → Type {
+    match r {
+        Done(a) => Exists<x86_64_call_contract::Answer>(λ a2 => (r2 = x86_64_call_contract::Done(a2)) ∧ AnswerLowers(tys, strs, sig, inj, h, a, a2)),
+        Exited(st, o) => r2 = x86_64_call_contract::Exited(st, o),
+        Going(o) => Extends(r2.past(), o.past),
+        Stuck => True,
+    }
+}
+
+// `placement_sound`'s type: a placed program's run tracks level 2's, from
+// related inputs, at one fuel more.
+fn PlacementSound(tys: Nat → Type, strs: Strs(tys), fs: List<Func>, w: Callees(tys), prim: Nat → Bool, placed: Program) → Type {
+    (n, g: Nat) → g < fs.len() → (vs: List<level2::Value(tys)>) → (h: level2::Heap(tys)) → (io: Io) → (inj: Nat → Nat) → (hb: x86_64_memory_contract::Heap) →
+        (args: List<x86_64_call_contract::Value>) → (blocks: Blocks) →
+        HeapInjects(tys, strs, inj, h, hb) → values_lower(tys, strs, inj, h, vs) = Some(args) → WritesLent(tys, inj, blocks, (funcs_at(fs)(g)).sig.params, vs) →
+        ran_lowers(tys, strs, (funcs_at(fs)(g)).sig, inj, h, Run::of(tys, strs, funcs_at(fs), w, prim, n, g, vs, h, io), bytes_level::run(placed, blocks, n + 1, g, args, hb, io))
+}
+
+// The theorem's statement: `place`'s every answer is placement-sound.
+fn PlacementSoundAll(tys: Nat → Type, strs: Strs(tys), w: Callees(tys), prim: Nat → Bool) → Type {
+    (fs: List<Func>) → (placed: Program) → place(tys, strs, prim, fs) = Some(placed) → PlacementSound(tys, strs, fs, w, prim, placed)
+}
+
+// ---------------------------------------------------------------------------
+// The composed statement
+
+// A program of listed functions, each checked and owing what it owes: the
+// premises of `CheckSound` for every function at once.
+fn prog_checked(tys: Nat → Type, p: verdict::Prog(tys), fs: List<Func>) → Type {
+    ((g: Nat) → p.fns(g) = funcs_at(fs)(g)) ∧ (Prog::Pinned(tys, p) ∧ ((g: Nat) → g < fs.len() → p.prim(g) = False → Exists<Owes>(λ d =>
+        (check(tys)(p.strs, λ g2 => (p.fns(g2)).sig, p.prim, λ g2 => p.measured(tys, g2), g, p.fns(g)) = Some(d)) ∧
+        ((args: List<Dyn(tys)>) → Dyn::Coded(tys, args, (p.fns(g)).sig.params) → p.pres(g, args) → d.Due(tys, Prog::ctx(tys, p, g, args), p.fns(g))))))
+}
+
+// What the code performs from an entry, at bytes fuel `m`, for every
+// level-2 input it stands for: where `m` is one past a fuel at which the
+// function's measure is met, the code returns an answer whose words lower
+// values reading as the source function's and whose heap injects level 2's.
+fn EndClause<M>(tys: Nat → Type, p: verdict::Prog(tys), site: Site<M>, stack: Stack<M>(site.fetch, site.data), spans: Spans, blocks: Blocks) →
+    Nat → Nat → List<x86_64_call_contract::Value> → x86_64_memory_contract::Heap → Io → MachineState<M> → Nat → BitVec(64) → Type {
+    λ m g args hb io s i ret => io.Answerable() →
+        (n: Nat) → m = n + 1 → (vs: List<level2::Value(tys)>) → (h: level2::Heap(tys)) → (ds: List<Dyn(tys)>) → (inj: Nat → Nat) →
+        Value::ReadAll(tys, p.strs, h, h.len(), vs, ds) → Dyn::Coded(tys, ds, (p.fns(g)).sig.params) → p.pres(g, ds) → Lendable(tys, p.strs, (p.fns(g)).sig.params, h, vs) →
+        HeapInjects(tys, p.strs, inj, h, hb) → values_lower(tys, p.strs, inj, h, vs) = Some(args) → WritesLent(tys, inj, blocks, (p.fns(g)).sig.params, vs) →
+        (need: Need(tys)) → p.need(g) = Some(need) → need(g, ds) <= n →
+        Exists<level2::Answer(tys)>(λ a => Exists<x86_64_call_contract::Answer>(λ a2 =>
+            Value::ReadAll(tys, p.strs, a.heap, a.heap.len(), a.results, p.w(g, ds)) ∧
+            (AnswerLowers(tys, p.strs, (p.fns(g)).sig, inj, h, a, a2) ∧ site.Tracked(stack, spans, s, i, ret, io, m, x86_64_call_contract::Done(a2)))))
+}
+
+// The composed statement for a placed program's code, at the room table by
+// depth: entered as the contract enters a routine, under one lending.
+fn EndToEnd<M>(tys: Nat → Type, p: verdict::Prog(tys), placed: Program, site: Site<M>, stack: Stack<M>(site.fetch, site.data), top: Nat, spans: Spans, blocks: Blocks) → Type {
+    site.Entering(stack, spans, top, blocks.Lent(spans), depth_rooms(placed.routines),
+        λ (n: Nat) (f: Nat) (args: List<x86_64_call_contract::Value>) (heap: x86_64_memory_contract::Heap) (io: Io) => run_peak(placed, blocks, n, f, args, heap, io),
+        placed.routines.len(), EndClause(tys, p, site, stack, spans, blocks))
+}
+
+// The composed theorem's type: from `placement_sound` (the seam) and
+// `check_sound` (proved on its own branch), for a checked program of
+// measured functions that `place` answers and `Program::lower` lowers, the
+// code meets `EndToEnd` at every site, stack, lending and writable blocks.
+fn EndToEndAll(tys: Nat → Type) → Type<1> {
+    (p: verdict::Prog(tys)) → PlacementSoundAll(tys, p.strs, p.w, p.prim) → CheckSound(tys, check(tys)) →
+    (fs: List<Func>) → prog_checked(tys, p, fs) → (placed: Program) → place(tys, p.strs, p.prim, fs) = Some(placed) →
+    (placement: List<function_ir_lower::Place>) → (program: x86_64_asm::Prog) → placed.lower(placement) = Some(program) →
+    (M: Type) → (fetch: FetchAccess<M>) → (data: ByteReadAccess<M>) → (last: List<BitVec(8)>) → (origin: BitVec(64)) → (stack: Stack<M>(fetch, data)) →
+    (top: Nat) → (spans: Spans) → (blocks: Blocks) →
+    EndToEnd<M>(tys, p, placed, Site<M>(fetch, data, program, last, origin), stack, top, spans, blocks)
+}
