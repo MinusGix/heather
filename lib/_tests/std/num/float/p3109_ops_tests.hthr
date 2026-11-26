@@ -1,0 +1,88 @@
+// Probes of `lib/std/num/float/p3109_ops.hthr`: P3109 operations across
+// formats, the report's special-value tables (interim report §4.10), and the
+// saturation of infinite inputs (§4.7.5). Tests, not library: nothing outside
+// lib/_tests imports this module (docs/test-value-audit.md §4.5).
+import logic; import bool; import nat; import option; import int; import omega; import rat;
+import dyadic; import float; import round; import p3109; import project; import p3109_codes; import p3109_ops;
+fn val_or({F: Format}, r: Float(F), d: Rat) → Rat { match r { Fin(f) => f.val(), Inf(_, _) => d, NaN(_) => d } }
+fn inf_bit({F: Format}, r: Float(F), n: Bool) → Bool { match r { Fin(_) => False, Inf(m, _) => match n { True => m, False => !m }, NaN(_) => False } }
+
+// Operands by rounding exact values into their formats.
+fn p8(x: Rat) → Float(binary8p3se()) { binary8p3se().round_rat(NearestEven, x) }
+fn h16(x: Rat) → Float(binary16()) { binary16().round_rat(NearestEven, x) }
+fn b32() → Format { binary32() }
+fn ne() → Rnd { RMode(NearestEven) }
+
+// ---------------------------------------------------------------------------
+// Mixed formats: the exact value does not care which formats it came from.
+
+// Binary8p3se's 1.5 plus binary16's 0.25, into binary32: exactly 1.75.
+theorem mixed_add(): Rat::Same(val_or(b32().op_add(Signed, trivial, ne(), SatNone, p8(Rat(3, 2)), h16(Rat(1, 4))), 99), Rat(7, 4)) { refl }
+// An FP8 product accumulated into binary32 with one rounding: 1.5 · 1.25 + 1/1024.
+theorem fp8_fma(): Rat::Same(val_or(b32().op_fma(Signed, trivial, ne(), SatNone, p8(Rat(3, 2)), p8(Rat(5, 4)), h16(Rat(1, 1024))), 99), Rat(1921, 1024)) { refl }
+// The same product rounded into the 8-bit format instead: 1.875 is a tie
+// between 1.75 (0x43, odd) and 2 (even code), so it goes to 2.
+theorem fp8_mul_narrow(): Rat::Same(val_or(binary8p3se().op_mul(Signed, trivial, ne(), SatNone, p8(Rat(3, 2)), p8(Rat(5, 4))), 99), 2) { refl }
+// Conversion is a projection: binary16's 0.3 into Binary8p3se rounds to 0.3125.
+theorem convert_down(): Rat::Same(val_or(binary8p3se().op_convert(Signed, trivial, ne(), SatNone, h16(Rat(3, 10))), 99), Rat(5, 16)) { refl }
+
+// ---------------------------------------------------------------------------
+// The special-value tables.
+
+fn pinf() → Float(binary8p3se()) { Float::Inf(False, trivial) }
+fn ninf() → Float(binary8p3se()) { Float::Inf(True, trivial) }
+fn zero8() → Float(binary8p3se()) { p8(0) }
+
+theorem inf_minus_inf(): (binary8p3se().op_sub(Signed, trivial, ne(), SatNone, pinf(), pinf())).is_nan() = True { refl }
+theorem inf_plus_inf(): inf_bit(binary8p3se().op_add(Signed, trivial, ne(), SatNone, pinf(), pinf()), False) = True { refl }
+theorem zero_times_inf(): (binary8p3se().op_mul(Signed, trivial, ne(), SatNone, zero8(), pinf())).is_nan() = True { refl }
+theorem neg_times_inf(): inf_bit(binary8p3se().op_mul(Signed, trivial, ne(), SatNone, p8(-2), pinf()), True) = True { refl }
+// Division by zero is NaN in P3109, not an infinity.
+theorem div_zero(): (binary8p3se().op_div(Signed, trivial, ne(), SatNone, p8(1), zero8())).is_nan() = True { refl }
+theorem div_by_inf(): Rat::Same(val_or(binary8p3se().op_div(Signed, trivial, ne(), SatNone, p8(3), ninf()), 99), 0) { refl }
+theorem inf_div_inf(): (binary8p3se().op_div(Signed, trivial, ne(), SatNone, pinf(), ninf())).is_nan() = True { refl }
+theorem div_exact(): Rat::Same(val_or(binary8p3se().op_div(Signed, trivial, ne(), SatNone, p8(3), p8(-2)), 99), Rat(-3, 2)) { refl }
+theorem fma_inf_conflict(): (binary8p3se().op_fma(Signed, trivial, ne(), SatNone, pinf(), p8(1), ninf())).is_nan() = True { refl }
+theorem neg_inf(): inf_bit(binary8p3se().op_neg(Signed, trivial, ne(), SatNone, pinf()), True) = True { refl }
+theorem abs_ninf(): inf_bit(binary8p3se().op_abs(Signed, trivial, ne(), SatNone, ninf()), False) = True { refl }
+
+// ---------------------------------------------------------------------------
+// Infinite inputs per saturation mode: SatPropagate keeps an infinity the
+// format has; SatFinite clamps; SatNone keeps it or is NaN.
+
+fn h16inf() → Float(binary16()) { Float::Inf(False, trivial) }
+theorem inf_se_prop(): inf_bit(binary8p3se().op_convert(Signed, trivial, ne(), SatPropagate, h16inf()), False) = True { refl }
+theorem inf_se_fin(): Rat::Same(val_or(binary8p3se().op_convert(Signed, trivial, ne(), SatFinite, h16inf()), 99), 49152) { refl }
+theorem inf_sf_prop(): Rat::Same(val_or(binary8p3sf().op_convert(Signed, trivial, ne(), SatPropagate, h16inf()), 99), 57344) { refl }
+theorem inf_sf_none(): (binary8p3sf().op_convert(Signed, trivial, ne(), SatNone, h16inf())).is_nan() = True { refl }
+
+// Unsigned: `-∞` is NaN under SatNone even rounding toward zero, where a
+// finite negative value gives 0.
+fn h16ninf() → Float(binary16()) { Float::Inf(True, trivial) }
+theorem u_ninf_tz(): (binary8p3ue().op_convert(Unsigned, trivial, RMode(TowardZero), SatNone, h16ninf())).is_nan() = True { refl }
+theorem u_neg_tz(): Rat::Same(val_or(binary8p3ue().op_convert(Unsigned, trivial, RMode(TowardZero), SatNone, h16(-1)), 99), 0) { refl }
+theorem u_ninf_fin(): Rat::Same(val_or(binary8p3ue().op_convert(Unsigned, trivial, ne(), SatFinite, h16ninf()), 99), 0) { refl }
+theorem u_sub_neg(): (binary8p3ue().op_sub(Unsigned, trivial, ne(), SatNone, h16(1), h16(2))).is_nan() = True { refl }
+
+// ---------------------------------------------------------------------------
+// Every rounding through one argument.
+
+// Binary8p3se's 1.25 (code 0x41, odd) and 1.5 (0x42) around 1.375.
+theorem rnd_odd(): Rat::Same(val_or(binary8p3se().op_convert(Signed, trivial, RToOdd, SatNone, h16(Rat(11, 8))), 99), Rat(5, 4)) { refl }
+theorem rnd_sr_low(): Rat::Same(val_or(binary8p3se().op_convert(Signed, trivial, RStochA(2, 1), SatNone, h16(Rat(11, 8))), 99), Rat(5, 4)) { refl }
+theorem rnd_sr_high(): Rat::Same(val_or(binary8p3se().op_convert(Signed, trivial, RStochA(2, 2), SatNone, h16(Rat(11, 8))), 99), Rat(3, 2)) { refl }
+theorem rnd_up(): Rat::Same(val_or(binary8p3se().op_convert(Signed, trivial, RMode(TowardPos), SatNone, h16(Rat(11, 8))), 99), Rat(3, 2)) { refl }
+theorem rnd_even(): Rat::Same(val_or(binary8p3se().op_convert(Signed, trivial, ne(), SatNone, h16(Rat(11, 8))), 99), Rat(3, 2)) { refl }
+
+// The theorems on open values.
+theorem add_open(m: Mode, a: Finite(binary16()), b: Finite(binary8p3se())):
+    binary32().Projects(m, SatNone, a.val() + b.val(), binary32().op_add(Signed, trivial, RMode(m), SatNone, Float::Fin(a), Float::Fin(b)))
+{
+    binary32().op_add_correct(trivial, m, SatNone, a, b)
+}
+theorem u_datum_open(rnd: Rnd, sat: Sat, x: Float(binary16()), y: Float(binary8p3se())): (binary8p3ue().op_add(Unsigned, trivial, rnd, sat, x, y)).DatumOf(Unsigned) {
+    binary8p3ue().op_add_datum(Unsigned, trivial, rnd, sat, x, y)
+}
+theorem faithful_open(rnd: Rnd, sat: Sat, x: Rat, g: Finite(e2m1()), h: e2m1().project_rnd(rnd, sat, x) = Float::Fin(g)): Finite::Below(x, g) ∨ Finite::Above(x, g) {
+    e2m1().project_rnd_faithful(rnd, sat, x, g, h)
+}

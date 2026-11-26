@@ -1,0 +1,309 @@
+// P3109 operations (interim report §4.9, §4.10; docs/library/float-p3109-design.md
+// §8; issues/float-p3109-operations.md).
+//
+// An operation `Op<fx, fy, fr, ρ>` decodes its operands to the closed
+// extended reals, computes there (the `ω` operations, with the report's
+// tables for NaN and the infinities), and projects the result into `fr`
+// with the projection specification `ρ = (rounding, saturation)`. The
+// operand formats are any formats, IEEE ones included, since a finite
+// operand's value is exact whatever its format; the result format is given
+// with its signedness and its NaN.
+//
+// - `XReal` is the closed extended reals, `Float::xval` the decoding.
+// - `XReal::add`, `sub`, `mul`, `div`, `fma`, `neg`, `abs` follow the
+//   report's tables. Division by zero is NaN, and a finite value over an
+//   infinity is 0 (§4.10.5); `fma` is `add(mul(x, y), z)`, which the report
+//   states as equivalent (§4.10.6).
+// - `Rnd` is one rounding argument for every P3109 rounding: the IEEE modes,
+//   round to odd and the three stochastic variants, each the truncation or
+//   the step away (`project_rnd`, faithful by `project_rnd_faithful`).
+// - `project_x` projects an extended real: finite values through
+//   `project_rnd` (and the unsigned rule below `Mlo = 0`), infinities by the
+//   saturation table (§4.7.5; this is where `SatPropagate` differs from
+//   `SatFinite`), NaN to NaN.
+//
+// Every operation's result is a datum of the result format
+// (`project_x_datum`), and on finite operands an IEEE-mode result is the
+// projection of the exact value (`op_add_correct` and the others).
+
+import logic;
+import bool;
+import nat;
+import int;
+import omega;
+import ring;
+import linarith;
+import option;
+import relation_props;
+import algebra;
+import algebra_rel;
+import order;
+import ordered_field;
+import semiring;
+import rat;
+import dyadic;
+import float;
+import round;
+import p3109;
+import project;
+import p3109_codes;
+
+// ---------------------------------------------------------------------------
+// The closed extended reals and the ω operations.
+
+inductive XReal { XFin(x: Rat), XPosInf, XNegInf, XNaN }
+
+fn XReal::inf(neg: Bool) → XReal { match neg { False => XPosInf, True => XNegInf } }
+
+// A float as an extended real (report §4.7.2's `ωDecode`, by value).
+fn Float::xval({F: Format}, self r: Float(F)) → XReal { match r { Fin(f) => XFin(f.val()), Inf(n, _) => XReal::inf(n), NaN(_) => XNaN } }
+
+inductive Sign3 { Neg3, Zero3, Pos3 }
+
+fn Rat::sign3(self x: Rat) → Sign3 {
+    match x.le_dec(0) { Inl(_) => match Rat::le_dec(0, x) { Inl(_) => Zero3, Inr(_) => Neg3 }, Inr(_) => Pos3 }
+}
+
+fn XReal::neg(self a: XReal) → XReal { match a { XFin(x) => XFin(-x), XPosInf => XNegInf, XNegInf => XPosInf, XNaN => XNaN } }
+
+fn XReal::abs(self a: XReal) → XReal { match a { XFin(x) => XFin(x.abs()), XPosInf => XPosInf, XNegInf => XPosInf, XNaN => XNaN } }
+
+// §4.10.3: opposite infinities are NaN; an infinity absorbs a finite value.
+fn XReal::add(self a, b: XReal) → XReal {
+    match a {
+        XNaN => XNaN,
+        XPosInf => match b { XNaN => XNaN, XNegInf => XNaN, XPosInf => XPosInf, XFin(_) => XPosInf },
+        XNegInf => match b { XNaN => XNaN, XPosInf => XNaN, XNegInf => XNegInf, XFin(_) => XNegInf },
+        XFin(x) => match b { XFin(y) => XFin(x + y), XPosInf => XPosInf, XNegInf => XNegInf, XNaN => XNaN },
+    }
+}
+
+fn XReal::sub(self a, b: XReal) → XReal { a.add(b.neg()) }
+
+// An infinity of sign `n` times a finite value of sign `s`.
+fn XReal::inf_times(n: Bool, s: Sign3) → XReal { match s { Zero3 => XNaN, Pos3 => XReal::inf(n), Neg3 => XReal::inf(!n) } }
+
+// §4.10.4: signs multiply, and an infinity times zero is NaN.
+fn XReal::mul(self a, b: XReal) → XReal {
+    match a {
+        XNaN => XNaN,
+        XPosInf => match b { XNaN => XNaN, XPosInf => XPosInf, XNegInf => XNegInf, XFin(y) => XReal::inf_times(False, y.sign3()) },
+        XNegInf => match b { XNaN => XNaN, XPosInf => XNegInf, XNegInf => XPosInf, XFin(y) => XReal::inf_times(True, y.sign3()) },
+        XFin(x) => match b { XNaN => XNaN, XPosInf => XReal::inf_times(False, x.sign3()), XNegInf => XReal::inf_times(True, x.sign3()), XFin(y) => XFin(x * y) },
+    }
+}
+
+// §4.10.5: anything over zero is NaN (unlike IEEE), infinities over each
+// other are NaN, and a finite value over an infinity is 0.
+fn XReal::div(self a, b: XReal) → XReal {
+    match b {
+        XNaN => XNaN,
+        XPosInf => match a { XNaN => XNaN, XPosInf => XNaN, XNegInf => XNaN, XFin(_) => XFin(0) },
+        XNegInf => match a { XNaN => XNaN, XPosInf => XNaN, XNegInf => XNaN, XFin(_) => XFin(0) },
+        XFin(y) => match y.sign3() {
+            Zero3 => XNaN,
+            Pos3 => match a { XNaN => XNaN, XPosInf => XPosInf, XNegInf => XNegInf, XFin(x) => XFin(x * y.recip()) },
+            Neg3 => match a { XNaN => XNaN, XPosInf => XNegInf, XNegInf => XPosInf, XFin(x) => XFin(x * y.recip()) },
+        },
+    }
+}
+
+// §4.10.6: equivalent to an addition after the product, both exact.
+fn XReal::fma(self a, b, c: XReal) → XReal { (a.mul(b)).add(c) }
+
+// ---------------------------------------------------------------------------
+// One rounding argument for every P3109 rounding.
+
+inductive Rnd { RMode(m: Mode), RToOdd, RStochA(n: Nat, r: Nat), RStochB(n: Nat, r: Nat), RStochC(n: Nat, r: Nat) }
+
+fn Format::project_rnd(self F: Format, rnd: Rnd, sat: Sat, x: Rat) → Float(F) {
+    match rnd {
+        RMode(m) => F.project(m, sat, x),
+        RToOdd => F.project_odd(sat, x),
+        RStochA(n, r) => F.project_sr_a(sat, x, n, r),
+        RStochB(n, r) => F.project_sr_b(sat, x, n, r),
+        RStochC(n, r) => F.project_sr_c(sat, x, n, r),
+    }
+}
+
+// Every rounding is faithful, its saturated ends included.
+theorem Format::project_rnd_faithful(self F: Format, rnd: Rnd, sat: Sat, x: Rat, g: Finite(F), h: F.project_rnd(rnd, sat, x) = Fin(g)):
+    Finite::Below(x, g) ∨ Finite::Above(x, g)
+{
+    match rnd as λ rr => F.project_rnd(rr, sat, x) = Float::Fin(g) → Finite::Below(x, g) ∨ Finite::Above(x, g) {
+        RMode(m) => λ e => F.project_faithful(m, sat, x, g, e),
+        RToOdd => λ e => F.project_odd_faithful(sat, x, g, e),
+        RStochA(n, r) => λ e => F.project_sr_a_faithful(sat, x, n, r, g, e),
+        RStochB(n, r) => λ e => F.project_sr_b_faithful(sat, x, n, r, g, e),
+        RStochC(n, r) => λ e => F.project_sr_c_faithful(sat, x, n, r, g, e),
+    }(h)
+}
+
+// The direction the report's unsigned rule reads (`SatNone` below `Mlo`
+// is finite toward zero and upward, NaN otherwise).
+fn Rnd::low_mode(self rnd: Rnd) → Mode { match rnd { RMode(m) => m, RToOdd => NearestEven, RStochA(_, _) => NearestEven, RStochB(_, _) => NearestEven, RStochC(_, _) => NearestEven } }
+
+// ---------------------------------------------------------------------------
+// Projecting an extended real (report §4.7.3, §4.7.5).
+
+// An infinite input: kept under `SatPropagate` and `SatNone` where the format
+// has that infinity, else the extreme finite value (`SatFinite`,
+// `SatPropagate`) or NaN (`SatNone`, `sat_up`).
+fn Format::sat_inf_up(self F: Format, sat: Sat) → Float(F) {
+    match sat {
+        SatFinite => Fin(Finite::max_finite(F)),
+        SatPropagate => match F.specials.has_inf().is_true_dec() { Inl(h) => Inf(False, h), Inr(_) => Fin(Finite::max_finite(F)) },
+        SatNone => F.sat_up(SatNone),
+    }
+}
+
+fn Format::sat_inf_down(self F: Format, sat: Sat) → Float(F) {
+    match sat {
+        SatFinite => Fin(-Finite::max_finite(F)),
+        SatPropagate => match F.specials.has_inf().is_true_dec() { Inl(h) => Inf(True, h), Inr(_) => Fin(-Finite::max_finite(F)) },
+        SatNone => F.sat_down(SatNone),
+    }
+}
+
+// The projection of an extended real into a format of signedness `s` with
+// NaN. An unsigned format's `-∞` is NaN under `SatNone` even toward zero or
+// upward (the report's `X ≠ -∞` exception) and 0 otherwise.
+fn Format::project_x(self F: Format, s: Signedness, hn: F.specials.has_nan().IsTrue(), rnd: Rnd, sat: Sat, a: XReal) → Float(F) {
+    match a {
+        XNaN => NaN(hn),
+        XFin(x) => match s { Signed => F.project_rnd(rnd, sat, x), Unsigned => F.unsigned_of(rnd.low_mode(), sat, F.project_rnd(rnd, sat, x)) },
+        XPosInf => F.sat_inf_up(sat),
+        XNegInf => match s {
+            Signed => F.sat_inf_down(sat),
+            Unsigned => match sat { SatNone => NaN(hn), SatFinite => Fin(Finite::zero(F, False)), SatPropagate => Fin(Finite::zero(F, False)) },
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The operations.
+
+fn Format::op_convert(self F: Format, s: Signedness, hn: F.specials.has_nan().IsTrue(), rnd: Rnd, sat: Sat, {Fx: Format}, x: Float(Fx)) → Float(F) {
+    F.project_x(s, hn, rnd, sat, x.xval())
+}
+
+fn Format::op_add(self F: Format, s: Signedness, hn: F.specials.has_nan().IsTrue(), rnd: Rnd, sat: Sat, {Fx, Fy: Format}, x: Float(Fx), y: Float(Fy)) → Float(F) {
+    F.project_x(s, hn, rnd, sat, (x.xval()).add(y.xval()))
+}
+
+fn Format::op_sub(self F: Format, s: Signedness, hn: F.specials.has_nan().IsTrue(), rnd: Rnd, sat: Sat, {Fx, Fy: Format}, x: Float(Fx), y: Float(Fy)) → Float(F) {
+    F.project_x(s, hn, rnd, sat, (x.xval()).sub(y.xval()))
+}
+
+fn Format::op_mul(self F: Format, s: Signedness, hn: F.specials.has_nan().IsTrue(), rnd: Rnd, sat: Sat, {Fx, Fy: Format}, x: Float(Fx), y: Float(Fy)) → Float(F) {
+    F.project_x(s, hn, rnd, sat, (x.xval()).mul(y.xval()))
+}
+
+fn Format::op_div(self F: Format, s: Signedness, hn: F.specials.has_nan().IsTrue(), rnd: Rnd, sat: Sat, {Fx, Fy: Format}, x: Float(Fx), y: Float(Fy)) → Float(F) {
+    F.project_x(s, hn, rnd, sat, (x.xval()).div(y.xval()))
+}
+
+fn Format::op_fma(self F: Format, s: Signedness, hn: F.specials.has_nan().IsTrue(), rnd: Rnd, sat: Sat, {Fx, Fy, Fz: Format}, x: Float(Fx), y: Float(Fy), z: Float(Fz)) → Float(F) {
+    F.project_x(s, hn, rnd, sat, (x.xval()).fma(y.xval(), z.xval()))
+}
+
+fn Format::op_neg(self F: Format, s: Signedness, hn: F.specials.has_nan().IsTrue(), rnd: Rnd, sat: Sat, {Fx: Format}, x: Float(Fx)) → Float(F) {
+    F.project_x(s, hn, rnd, sat, (x.xval()).neg())
+}
+
+fn Format::op_abs(self F: Format, s: Signedness, hn: F.specials.has_nan().IsTrue(), rnd: Rnd, sat: Sat, {Fx: Format}, x: Float(Fx)) → Float(F) {
+    F.project_x(s, hn, rnd, sat, (x.xval()).abs())
+}
+
+// ---------------------------------------------------------------------------
+// What the operations satisfy.
+
+// On finite operands a signed result in an IEEE mode is the projection of
+// the exact value: the operands' formats do not matter.
+theorem Format::op_add_correct(self F: Format, hn: F.specials.has_nan().IsTrue(), m: Mode, sat: Sat, {Fx, Fy: Format}, a: Finite(Fx), b: Finite(Fy)):
+    F.Projects(m, sat, a.val() + b.val(), F.op_add(Signed, hn, RMode(m), sat, Float::Fin(a), Float::Fin(b)))
+{
+    F.project_correct(m, sat, a.val() + b.val())
+}
+
+theorem Format::op_mul_correct(self F: Format, hn: F.specials.has_nan().IsTrue(), m: Mode, sat: Sat, {Fx, Fy: Format}, a: Finite(Fx), b: Finite(Fy)):
+    F.Projects(m, sat, a.val() * b.val(), F.op_mul(Signed, hn, RMode(m), sat, Float::Fin(a), Float::Fin(b)))
+{
+    F.project_correct(m, sat, a.val() * b.val())
+}
+
+theorem Format::op_fma_correct(self F: Format, hn: F.specials.has_nan().IsTrue(), m: Mode, sat: Sat, {Fx, Fy, Fz: Format}, a: Finite(Fx), b: Finite(Fy), c: Finite(Fz)):
+    F.Projects(m, sat, a.val() * b.val() + c.val(), F.op_fma(Signed, hn, RMode(m), sat, Float::Fin(a), Float::Fin(b), Float::Fin(c)))
+{
+    F.project_correct(m, sat, a.val() * b.val() + c.val())
+}
+
+theorem Format::op_convert_correct(self F: Format, hn: F.specials.has_nan().IsTrue(), m: Mode, sat: Sat, {Fx: Format}, a: Finite(Fx)):
+    F.Projects(m, sat, a.val(), F.op_convert(Signed, hn, RMode(m), sat, Float::Fin(a)))
+{
+    F.project_correct(m, sat, a.val())
+}
+
+// A datum of a format of signedness `s` (`P3109Layout::Datum`'s cases).
+fn Float::DatumOf({F: Format}, self r: Float(F), s: Signedness) → Type { match s { Signed => True, Unsigned => r.Unsigned() } }
+
+// A nonnegative float is an unsigned datum: a negative sign bit with a
+// nonnegative value is `-0`.
+theorem Float::unsigned_of_nonneg({F: Format}, r: Float(F), h: r.NonNeg()): r.Unsigned() {
+    match r as λ rr => rr.NonNeg() → rr.Unsigned() {
+        Fin(f) => λ (nn: 0 <= f.val()) => match f.neg as λ b => f.neg = b → f.neg = False ∨ f.mag = 0 {
+            False => λ p => Inl(p),
+            True => λ ng => {
+                let hn = Finite::H_neg(f, ng);
+                let z = Finite::zero(F, False);
+                let zh: (z.H() = 0) = refl;
+                let le: (z.H() <= f.H()) = Finite::H_le_of_le(z, f, Rat::le_respects(Rat::same_sym(Finite::zero_val(F)), f.val().same_refl(), nn));
+                let P = Nat::pow(2, f.bexp);
+                let pp: (1 <= P) = Nat::pow_pos(a := 2, n := f.bexp);
+                let mono: (f.mag * 1 <= f.mag * P) = Nat::mul_le_mono_l(f.mag, 1, P, pp);
+                let u: (f.units() = f.mag * P) = refl;
+                Inr(omega)
+            },
+        }(refl),
+        Inf(n, _) => λ e => e,
+        NaN(_) => λ _ => trivial,
+    }(h)
+}
+
+theorem Format::sat_inf_up_unsigned(self F: Format, sat: Sat): (F.sat_inf_up(sat)).Unsigned() {
+    match sat {
+        SatFinite => Inl(refl),
+        SatPropagate => match F.specials.has_inf().is_true_dec() { Inl(_) => refl, Inr(_) => Inl(refl) },
+        SatNone => match F.specials.has_inf().is_true_dec() {
+            Inl(_) => refl,
+            Inr(_) => match F.specials.has_nan().is_true_dec() { Inl(_) => trivial, Inr(_) => Inl(refl) },
+        },
+    }
+}
+
+// Every projection, so every operation's result, is a datum of the result
+// format: an unsigned format never gets a negative value or `-∞`.
+theorem Format::project_x_datum(self F: Format, s: Signedness, hn: F.specials.has_nan().IsTrue(), rnd: Rnd, sat: Sat, a: XReal):
+    (F.project_x(s, hn, rnd, sat, a)).DatumOf(s)
+{
+    match s as λ ss => (F.project_x(ss, hn, rnd, sat, a)).DatumOf(ss) {
+        Signed => trivial,
+        Unsigned => match a as λ aa => (F.project_x(Unsigned, hn, rnd, sat, aa)).Unsigned() {
+            XNaN => trivial,
+            XFin(x) => Float::unsigned_of_nonneg(F.unsigned_of(rnd.low_mode(), sat, F.project_rnd(rnd, sat, x)),
+                F.unsigned_of_nonneg(rnd.low_mode(), sat, F.project_rnd(rnd, sat, x))),
+            XPosInf => F.sat_inf_up_unsigned(sat),
+            XNegInf => match sat as λ st => (match st { SatNone => Float::NaN(hn), SatFinite => Float::Fin(Finite::zero(F, False)), SatPropagate => Float::Fin(Finite::zero(F, False)) }).Unsigned() {
+                SatNone => trivial,
+                SatFinite => Inl(refl),
+                SatPropagate => Inl(refl),
+            },
+        },
+    }
+}
+
+theorem Format::op_add_datum(self F: Format, s: Signedness, hn: F.specials.has_nan().IsTrue(), rnd: Rnd, sat: Sat, {Fx, Fy: Format}, x: Float(Fx), y: Float(Fy)):
+    (F.op_add(s, hn, rnd, sat, x, y)).DatumOf(s)
+{
+    F.project_x_datum(s, hn, rnd, sat, (x.xval()).add(y.xval()))
+}
