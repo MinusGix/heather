@@ -56,11 +56,11 @@ fn cells_body() → Body { Leaf([StoreRef(0, 1), LoadRef(2, 0), Load(1, 3, 2)]) 
 theorem cells_lowers(): lowers(cells_body(), into([Rax, Rax, Rcx])) = True { refl }
 
 theorem cells_code<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data), top: Nat, spans: Spans,
-    loan: Loan<M>(site.fetch, site.data, stack, top, spans), blocks: Blocks, lent: blocks.Lent(spans), ends: EmptyEnds<M>(stack.writes, spans), values: Valuation(), d: Nat,
+    loan: Loan<M>(site.fetch, site.data, stack, top, spans), blocks: Blocks, lent: blocks.Lent(spans), values: Valuation(), d: Nat,
     s0: MachineState<M>, before, after: Now):
     MayEmitNow<M>(0, site, stack, spans, values, d, s0, Start, two_in(), cells_body().Holds(spans, blocks, values, no_answers(), 0, before, after), before, after,
         lowered(cells_body(), into([Rax, Rax, Rcx]))) {
-    cells_body().emit_emits<M>(0, 0, site, laid, stack, top, spans, loan, blocks, lent, ends, λ (_: Nat) => 0, 0, 0, no_answers(),
+    cells_body().emit_emits<M>(0, 0, site, laid, stack, top, spans, loan, blocks, lent, λ (_: Nat) => 0, 0, 0, no_answers(),
         no_callees<M>(site, stack, spans, top), values, 0, d, d, s0, λ c => false_elim(c), [], trivial, Start, two_in(), into([Rax, Rax, Rcx]), 0,
         before, after)
 }
@@ -84,11 +84,11 @@ fn fill_body() → Body {
 theorem fill_lowers(): lowers(fill_body(), into([Rax, Rax, Rcx, Rdx, R8, R8])) = True { refl }
 
 theorem fill_code<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data), top: Nat, spans: Spans,
-    loan: Loan<M>(site.fetch, site.data, stack, top, spans), blocks: Blocks, lent: blocks.Lent(spans), ends: EmptyEnds<M>(stack.writes, spans), values: Valuation(), d: Nat,
+    loan: Loan<M>(site.fetch, site.data, stack, top, spans), blocks: Blocks, lent: blocks.Lent(spans), values: Valuation(), d: Nat,
     s0: MachineState<M>, before, after: Now):
     MayEmitNow<M>(0, site, stack, spans, values, d, s0, Start, two_in(), fill_body().Holds(spans, blocks, values, no_answers(), 0, before, after), before, after,
         lowered(fill_body(), into([Rax, Rax, Rcx, Rdx, R8, R8]))) {
-    fill_body().emit_emits<M>(0, 0, site, laid, stack, top, spans, loan, blocks, lent, ends, λ (_: Nat) => 0, 0, 0, no_answers(),
+    fill_body().emit_emits<M>(0, 0, site, laid, stack, top, spans, loan, blocks, lent, λ (_: Nat) => 0, 0, 0, no_answers(),
         no_callees<M>(site, stack, spans, top), values, 0, d, d, s0, λ c => false_elim(c), [], trivial, Start, two_in(),
         into([Rax, Rax, Rcx, Rdx, R8, R8]), 0, before, after)
 }
@@ -118,11 +118,11 @@ fn larger_body() → Body {
 theorem larger_lowers(): lowers(larger_body(), into([Rax, Rcx, Rdx, Rax, Rax])) = True { refl }
 
 theorem larger_code<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data), top: Nat, spans: Spans,
-    loan: Loan<M>(site.fetch, site.data, stack, top, spans), blocks: Blocks, lent: blocks.Lent(spans), ends: EmptyEnds<M>(stack.writes, spans), values: Valuation(), d: Nat,
+    loan: Loan<M>(site.fetch, site.data, stack, top, spans), blocks: Blocks, lent: blocks.Lent(spans), values: Valuation(), d: Nat,
     s0: MachineState<M>, before, after: Now):
     MayEmitNow<M>(0, site, stack, spans, values, d, s0, Start, two_in(), larger_body().Holds(spans, blocks, values, no_answers(), 0, before, after), before, after,
         lowered(larger_body(), into([Rax, Rcx, Rdx, Rax, Rax]))) {
-    larger_body().emit_emits<M>(0, 0, site, laid, stack, top, spans, loan, blocks, lent, ends, λ (_: Nat) => 0, 0, 0, no_answers(),
+    larger_body().emit_emits<M>(0, 0, site, laid, stack, top, spans, loan, blocks, lent, λ (_: Nat) => 0, 0, 0, no_answers(),
         no_callees<M>(site, stack, spans, top), values, 0, d, d, s0, λ c => false_elim(c), [], ⟨trivial, ⟨trivial, trivial⟩⟩, Start, two_in(),
         into([Rax, Rcx, Rdx, Rax, Rax]), 0, before, after)
 }
@@ -182,20 +182,18 @@ fn after_slots(o: Option<Emitted>) → Option<List<Option<Held>>> {
 theorem write_forgets(): after_slots(lowered(write_body(), [])) = Some([Some(Held(2, Word)), None, None]) { refl }
 
 theorem write_code<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data), top: Nat, spans: Spans,
-    loan: Loan<M>(site.fetch, site.data, stack, top, spans), blocks: Blocks, lent: blocks.Lent(spans), ends: EmptyEnds<M>(stack.writes, spans),
-    values: Valuation(), d: Nat, s0: MachineState<M>, before, after: Now):
+    loan: Loan<M>(site.fetch, site.data, stack, top, spans), blocks: Blocks, lent: blocks.Lent(spans),     values: Valuation(), d: Nat, s0: MachineState<M>, before, after: Now):
     MayEmitNow<M>(0, site, stack, spans, values, d, s0, Start, two_in(), write_body().Holds(spans, blocks, values, no_answers(), 0, before, after), before, after,
         lowered(write_body(), [])) {
-    write_body().emit_emits<M>(0, 0, site, laid, stack, top, spans, loan, blocks, lent, ends, λ (_: Nat) => 0, 0, 0, no_answers(),
+    write_body().emit_emits<M>(0, 0, site, laid, stack, top, spans, loan, blocks, lent, λ (_: Nat) => 0, 0, 0, no_answers(),
         no_callees<M>(site, stack, spans, top), values, 0, d, d, s0, λ c => false_elim(c), [], trivial, Start, two_in(), [], 0, before, after)
 }
 
 theorem read_code<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data), top: Nat, spans: Spans,
-    loan: Loan<M>(site.fetch, site.data, stack, top, spans), blocks: Blocks, lent: blocks.Lent(spans), ends: EmptyEnds<M>(stack.writes, spans),
-    values: Valuation(), d: Nat, s0: MachineState<M>, before, after: Now):
+    loan: Loan<M>(site.fetch, site.data, stack, top, spans), blocks: Blocks, lent: blocks.Lent(spans),     values: Valuation(), d: Nat, s0: MachineState<M>, before, after: Now):
     MayEmitNow<M>(0, site, stack, spans, values, d, s0, Start, two_in(), read_body().Holds(spans, blocks, values, no_answers(), 0, before, after), before, after,
         lowered(read_body(), [])) {
-    read_body().emit_emits<M>(0, 0, site, laid, stack, top, spans, loan, blocks, lent, ends, λ (_: Nat) => 0, 0, 0, no_answers(),
+    read_body().emit_emits<M>(0, 0, site, laid, stack, top, spans, loan, blocks, lent, λ (_: Nat) => 0, 0, 0, no_answers(),
         no_callees<M>(site, stack, spans, top), values, 0, d, d, s0, λ c => false_elim(c), [], trivial, Start, two_in(), [], 0, before, after)
 }
 

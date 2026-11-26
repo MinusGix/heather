@@ -2354,11 +2354,12 @@ clobber. `Body::fresh` accepts it, binding its result word.
     (`injected_undefining`). Whatever junk Linux left is then read instead
     by `Injected::undefined_change`. No law was added to `ClauseStable`.
 - A read of no bytes at its block's end is allowed by the language, but no
-  loan law reaches it (every law asks `k < size`). It is one named
-  hypothesis, `EmptyEnds(stack.writes, spans)`: a store of no bytes changes
-  nothing and needs no room at each span's end. The memory law that will
-  discharge it is `issues/byte-writes-empty-range.md`. With it,
-  `injected_placed_nothing` keeps the clause.
+  loan law reaches that address (every one asks `k < size`). It was a named
+  hypothesis for a while. Now the stack's writes' own law covers it
+  (`stack.empty`, `ByteWrites::EmptyRange`: a store of no bytes changes
+  nothing and needs no room, `issues/byte-writes-empty-range.md`), and
+  `injected_placed_nothing` keeps the clause there. The probe is
+  `empty_read_meets`.
 - `io.Answerable()` travels in the world relation: `NowWorld` is now the
   machine's world being the state's, every answer one Linux may give. The
   same holds for the routine's pre and post (`RoutinePreNow`,
@@ -2368,7 +2369,7 @@ clobber. `Body::fresh` accepts it, binding its result word.
 
 **Tracks with the world, and `RunsAs` (same round, items 4 and 5).**
 `lower_program_tracks` and `lower_program_meets` cover every program the
-lowering returns, system calls included, under `EmptyEnds`.
+lowering returns, system calls included, with no premise.
 
 The probes found one completeness gap in the emission: the call's
 `MOV RAX, n` and Linux's clobbers lost a value the file still held in RAX,
