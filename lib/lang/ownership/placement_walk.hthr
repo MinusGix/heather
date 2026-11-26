@@ -376,3 +376,133 @@ theorem scaled_ran(blocks: Blocks, i: Word1, size: Nat, cwa: Config, cs: (size =
         },
     }
 }
+
+// ---------------------------------------------------------------------------
+// The walk's invariant
+
+fn LenBelow(len: Option<Nat>, n: Nat) → Type { match len { Some(l) => l < n, None => True } }
+
+fn LenAt(tys: Nat → Type, strs: Strs(tys), len: Option<Nat>, l: Locals, x: Dyn(tys)) → Type {
+    match len { Some(id) => l.word(id) = BitVec::ofNat(Dyn::len(tys, strs, x)), None => True }
+}
+
+// The walk so far, from `c0`: its code ran to `cw`, writing only ids at or
+// past `next0`; its reference is to `inj(b)` where `Sel::locate` reaches
+// through the selections `ss` in the block's value `d`, of the code the
+// walk reached, its length word beside it for a sequence.
+record WalkAt(tys: Nat → Type, strs: Strs(tys), inj: Nat → Nat, blocks: Blocks, b: Nat, d: Dyn(tys), ss: List<Sel>, at: Walk, c0: Config, next0: Nat, cw: Config) {
+    ran: run_instrs(blocks, at.instrs, c0) = Some(cw),
+    mem: cw.memory = c0.memory,
+    io: cw.io = c0.io,
+    kept: Locals::Agree(c0.locals, cw.locals, next0),
+    ge: next0 <= at.next,
+    place_lt: at.place < at.next,
+    len_lt: LenBelow(at.len, at.next),
+    off: Nat,
+    x: Dyn(tys),
+    located: Sel::locate(tys, strs, d, ss, 0) = Some(Pair(off, x)),
+    code: x.code = at.code,
+    refers: cw.locals.refs(at.place) = Some(x86_64_memory_contract::Loc(inj(b), off)),
+    len: LenAt(tys, strs, at.len, cw.locals, x),
+}
+
+theorem below_of_mul(n, s, p: Nat, cs: (s = 1) ∨ ((s = 2) ∨ ((s = 4) ∨ (s = 8))), h: n * s < p): n < p {
+    match cs {
+        Inl(e1) => { let h1 = j(e1, λ z _ => n * z < p, h); omega(h1) },
+        Inr(c2) => match c2 {
+            Inl(e2) => { let h1 = j(e2, λ z _ => n * z < p, h); omega(h1) },
+            Inr(c4) => match c4 {
+                Inl(e4) => { let h1 = j(e4, λ z _ => n * z < p, h); omega(h1) },
+                Inr(e8) => { let h1 = j(e8, λ z _ => n * z < p, h); omega(h1) },
+            },
+        },
+    }
+}
+
+// One selection more, at the layout the walk reached: where `locate` goes.
+theorem locate_one(tys: Nat → Type, strs: Strs(tys), d, x: Dyn(tys), ss: List<Sel>, off: Nat, at: Sel::locate(tys, strs, d, ss, 0) = Some(Pair(off, x)), s: Sel, k: Nat,
+    step: Sel::step_off(tys, strs, x, s) = Some(k)): Sel::locate(tys, strs, d, ss ++ [s], 0) = Some(Pair(off + k, Dyn::at(tys, strs, s, x)))
+{
+    trans(locate_append(tys, strs, ss, [s], d, 0), trans(cong_fn(λ (o: Option<Pair<Nat, Dyn(tys)>>) => o.and_then(λ (p: Pair<Nat, Dyn(tys)>) => Sel::locate(tys, strs, p.snd, [s], p.fst)), at),
+        trans(locate_cons(tys, strs, x, s, Nil, off), cong_fn(λ (o: Option<Nat>) => o.and_then(λ (k2: Nat) => Sel::locate(tys, strs, Dyn::at(tys, strs, s, x), Nil, off + k2)), step))))
+}
+
+// Located in a value encoded in fewer than 2^64 bytes, an offset is below
+// 2^64.
+theorem located_small(tys: Nat → Type, strs: Strs(tys), laid: Strs::Laid(tys, strs), d: Dyn(tys), bs: List<BitVec(8)>, enc: Dyn::encode(tys, strs, d) = Some(bs),
+    short: bs.len() < Nat::pow(2, 64), ss: List<Sel>, fit: Sel::fit(tys, strs, ss, d) = True, q: Pair<Nat, Dyn(tys)>, at: Sel::locate(tys, strs, d, ss, 0) = Some(q)): q.fst < Nat::pow(2, 64)
+{
+    let lc = locate_image(tys, strs, laid, ss, d, bs, enc, short, fit, 0, q, at);
+    let e0 = lc.proof.left;
+    let fr = lc.proof.right.proof.right.left;
+    omega(e0, fr, short)
+}
+
+// The offset node's run, from a reference known at `place`.
+theorem offset_ran(blocks: Blocks, c: Config, out, place, amount: Nat, loc: x86_64_memory_contract::Loc, at: c.locals.refs(place) = Some(loc)):
+    run_instrs(blocks, [bytes_level::Offset(out, place, amount)], c) =
+        Some(Config(c.locals.set_ref(out, x86_64_memory_contract::Loc(loc.block, loc.offset + (c.locals.word(amount)).toNat())), c.memory, c.io))
+{
+    cong_fn(λ (o: Option<x86_64_memory_contract::Loc>) => o.and_then(λ (lc: x86_64_memory_contract::Loc) =>
+        Some(Config(c.locals.set_ref(out, x86_64_memory_contract::Loc(lc.block, lc.offset + (c.locals.word(amount)).toNat())), c.memory, c.io))).and_then(λ (after: Config) => run_instrs(blocks, Nil, after)), at)
+}
+
+theorem set_ref_here(l: Locals, id: Nat, loc: x86_64_memory_contract::Loc): (l.set_ref(id, loc)).refs(id) = Some(loc) {
+    cong_fn(λ (bb: Bool) => match bb as λ _ => Option<x86_64_memory_contract::Loc> { True => Some(loc), False => l.refs(id) }, Nat::same_self(id))
+}
+
+// ---------------------------------------------------------------------------
+// An element
+
+theorem elem_walk_goal(tys: Nat → Type, strs: Strs(tys), inj: Nat → Nat, blocks: Blocks, act: Act, e: PEnv, m: Mach(tys), c0: Config, next0: Nat,
+    rel: StageRel(tys, strs, inj, blocks, act, e, m, c0, next0), laid: Strs::Laid(tys, strs), b: Nat, d: Dyn(tys), bs: List<BitVec(8)>, enc: Dyn::encode(tys, strs, d) = Some(bs),
+    short: bs.len() < Nat::pow(2, 64), ss: List<Sel>, at: Walk, cw: Config, wa: WalkAt(tys, strs, inj, blocks, b, d, ss, at, c0, next0, cw), a: Atom,
+    el: Shape, size: Nat, wc: Option<Shape>, lay: Shape::layout(tys, strs, at.code) = LSeq(el, size, wc), i: Word1, ea: e.atom(a, at.next) = Some(i),
+    fit: Sel::fit(tys, strs, ss ++ [el_sel(a.ix(Mach::ixs(tys, strs, m)))], d) = True):
+    Exists<Config>(λ cw2 => WalkAt(tys, strs, inj, blocks, b, d, ss ++ [el_sel(a.ix(Mach::ixs(tys, strs, m)))], elem_walk(at, el, size, i), c0, next0, cw2))
+{
+    let ix = a.ix(Mach::ixs(tys, strs, m));
+    let x = wa.x;
+    let off = wa.off;
+    let layx: (Shape::layout(tys, strs, x.code) = LSeq(el, size, wc)) = trans(cong_fn(λ (c: Shape) => Shape::layout(tys, strs, c), wa.code), lay);
+    let sl = (laid.left(x.code, el, size, wc, layx)).left;
+    let cs = size_cases(el, size, sl.el_size);
+    let loc2 = locate_one(tys, strs, d, x, ss, off, wa.located, el_sel(ix), ix.toNat() * size, cong_fn(λ (l: Layout) => Sel::step_at(l, el_sel(ix)), layx));
+    let big = located_small(tys, strs, laid, d, bs, enc, short, ss ++ [el_sel(ix)], fit, Pair(off + ix.toNat() * size, Dyn::at(tys, strs, el_sel(ix), x)), loc2);
+    let prod: (ix.toNat() * size < Nat::pow(2, 64)) = omega(big);
+    let ar = atom_sound(tys, strs, inj, blocks, act, e, m, c0, next0, rel, cw, wa.kept, a, at.next, wa.ge, i, ea);
+    let cwa = ar.witness;
+    let af = ar.proof;
+    let wix: ((cwa.locals.word(i.id)).toNat() = ix.toNat()) = trans(af.right.right.right.right.right.right, Nat::mod_of_lt(ix.toNat(), Nat::pow(2, 64), below_of_mul(ix.toNat(), size, Nat::pow(2, 64), cs, prod)));
+    let sr = scaled_ran(blocks, i, size, cwa, cs, af.right.right.right.right.right.left, j(sym(wix), λ z _ => z * size < Nat::pow(2, 64), prod));
+    let sc = scaled(i, size);
+    let extra = sr.witness;
+    let cws = sr.proof.right.witness;
+    let sf = sr.proof.right.proof;
+    let rr: (cws.locals.refs(at.place) = Some(x86_64_memory_contract::Loc(inj(b), off))) =
+        trans(agree_ref(cwa.locals, cws.locals, i.next, sf.right.right.right.left, at.place, { let p = wa.place_lt; let q = af.right.right.right.right.left; omega(p, q) }),
+            trans(agree_ref(cw.locals, cwa.locals, at.next, af.right.right.right.left, at.place, wa.place_lt), wa.refers));
+    let cw2 = Config(cws.locals.set_ref(sc.next, x86_64_memory_contract::Loc(inj(b), off + (cws.locals.word(sc.id)).toNat())), cws.memory, cws.io);
+    let r_off = offset_ran(blocks, cws, sc.next, at.place, sc.id, x86_64_memory_contract::Loc(inj(b), off), rr);
+    let r_sc: (run_instrs(blocks, sc.instrs ++ [bytes_level::Offset(sc.next, at.place, sc.id)], cw) = Some(cw2)) =
+        trans(cong_fn(λ (is: List<Instr>) => run_instrs(blocks, is ++ [bytes_level::Offset(sc.next, at.place, sc.id)], cw), sr.proof.left),
+            trans(cong_fn(λ (is: List<Instr>) => run_instrs(blocks, is, cw), List::append_assoc(i.instrs, extra, [bytes_level::Offset(sc.next, at.place, sc.id)])),
+                trans(run_app_some(blocks, i.instrs, extra ++ [bytes_level::Offset(sc.next, at.place, sc.id)], cw, cwa, af.left),
+                    trans(run_app_some(blocks, extra, [bytes_level::Offset(sc.next, at.place, sc.id)], cwa, cws, sf.left), r_off))));
+    let ran: (run_instrs(blocks, (elem_walk(at, el, size, i)).instrs, c0) = Some(cw2)) = trans(run_app_some(blocks, at.instrs, sc.instrs ++ [bytes_level::Offset(sc.next, at.place, sc.id)], c0, cw, wa.ran), r_sc);
+    let lt1 = af.right.right.right.right.left;
+    let lt2 = sf.right.right.right.right.left;
+    let ge0 = wa.ge;
+    let kept: Locals::Agree(c0.locals, cw2.locals, next0) =
+        Locals::agree_trans(c0.locals, cws.locals, cw2.locals, next0,
+            Locals::agree_trans(c0.locals, cwa.locals, cws.locals, next0,
+                Locals::agree_trans(c0.locals, cw.locals, cwa.locals, next0, wa.kept, agree_weaken(cw.locals, cwa.locals, next0, at.next, af.right.right.right.left, ge0)),
+                agree_weaken(cwa.locals, cws.locals, next0, i.next, sf.right.right.right.left, omega(ge0, lt1))),
+            Locals::agree_set_ref(cws.locals, sc.next, x86_64_memory_contract::Loc(inj(b), off + (cws.locals.word(sc.id)).toNat()), next0, omega(ge0, lt1, lt2)));
+    let wsc: ((cws.locals.word(sc.id)).toNat() = ix.toNat() * size) = trans(sf.right.right.right.right.right.right, cong_fn(λ (z: Nat) => z * size, wix));
+    let refers: (cw2.locals.refs(sc.next) = Some(x86_64_memory_contract::Loc(inj(b), off + ix.toNat() * size))) =
+        trans(set_ref_here(cws.locals, sc.next, x86_64_memory_contract::Loc(inj(b), off + (cws.locals.word(sc.id)).toNat())),
+            cong_fn(λ (z: Nat) => Some(x86_64_memory_contract::Loc(inj(b), off + z)), wsc));
+    Exists(cw2, WalkAt(ran, trans(sf.right.left, trans(af.right.left, wa.mem)), trans(sf.right.right.left, trans(af.right.right.left, wa.io)), kept,
+        omega(ge0, lt1, lt2), omega(), trivial, off + ix.toNat() * size, Dyn::at(tys, strs, el_sel(ix), x), loc2, sl.elem_code(x.val, ix), refers, trivial))
+}
