@@ -1138,3 +1138,26 @@ fn between_after() → Func {
 }
 
 theorem between_after_checked(): verdict([between_after()], 0).is_some() = True { refl }
+
+// ---------------------------------------------------------------------------
+// Several pending chains (§23.15): two written arguments that are views
+// under one view `A` of `x[0]`. After `b`'s chain reaches `A`, `A` and
+// `a`'s slot are pending together, `A`'s region a prefix of the slot's: the
+// pending entries are not apart, and no order of write-backs avoids it.
+fn two_nat_w() → Func { Func(Sig([Param(nat_s(), ByWrite), Param(nat_s(), ByWrite)], Nil), Ret([Arg(0), Arg(1)])) }
+
+fn nested_two(late: Bool) → Func {
+    let pre: List<Stmt> = [View(el(Arg(0), Lit(0)), Writing), View(Place(Loc(0), [SField(0)]), Writing), View(Place(Loc(1), [SField(1)]), Writing), Call(0, [Loc(1), Loc(0)], 2),
+        Write(whole(Loc(2)), Loc(0)), Death(whole(Loc(0))), Write(Place(Loc(4), [SField(1)]), Loc(2))];
+    let mid: List<Stmt> = match late { True => [Write(el(Arg(0), Lit(0)), Loc(4))], False => Nil };
+    let post: List<Stmt> = [Write(whole(Loc(3)), Loc(1)), Death(whole(Loc(1))), Write(Place(Loc(4), [SField(0)]), Loc(3)), Death(whole(Loc(2))), Death(whole(Loc(3))),
+        Write(el(Arg(0), Lit(0)), Loc(4)), Death(whole(Loc(4)))];
+    Func(Sig([Param(pts_s(), ByWrite)], Nil), seq(pre ++ mid ++ post, Ret([Arg(0)])))
+}
+
+theorem nested_two_checked(): verdict([two_nat_w(), nested_two(False)], 1).is_some() = True { refl }
+
+// Writing `A` back while `a`'s slot is pending is refused: the write-back
+// reads `A`, which meets its live child `a`, a view to write. So a view
+// written back has no pending descendant, which `CSt::patched_back` uses.
+theorem nested_two_late_refused(): verdict([two_nat_w(), nested_two(True)], 1) = None { refl }
