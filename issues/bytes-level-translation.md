@@ -254,3 +254,9 @@ The translation and its theorem pass the library gate; the comparison runs over 
     - One refused control: a four-byte store from a view the value is not held at.
   - **Then** re-run `scripts/bytes-level-compare` and `--gates`.
   - **An open question**, unverified: whether `Typed`'s word kinds should carry a width instead. The per-access statement looks sufficient, since a load binds every width and a store's view is a lookup at a kind. But calls' and answers' kinds were not checked against it.
+- 2026-11-26, the round's final verification:
+  - `scripts/fmt --check` and `scripts/lib-closures` clean;
+  - `scripts/linked --check` unchanged;
+  - `HEATHER_PR_NATIVE=all scripts/test --pr`: `== suite: 4139 passed, 0 failed, 3 ignored ==`.
+
+  The run was over item 3's theorem in the library. Later commits changed only the docs and this log.
