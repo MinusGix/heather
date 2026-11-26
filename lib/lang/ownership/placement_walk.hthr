@@ -671,3 +671,87 @@ theorem field_walk_goal(tys: Nat → Type, strs: Strs(tys), inj: Nat → Nat, bl
             cong_fn(λ (z: Nat) => Some(x86_64_memory_contract::Loc(inj(b), off + z)), wcc));
     Exists(cw2, WalkAt(ran, wa.mem, wa.io, kept, omega(ge0), omega(), trivial, off + off2, Dyn::at(tys, strs, OnField(i), x), loc2, rl.field_code(x.val, i, fc, ef), refers, trivial))
 }
+
+// ---------------------------------------------------------------------------
+// A step, by its kind, and the whole walk
+
+fn WalkGoal(tys: Nat → Type, strs: Strs(tys), inj: Nat → Nat, blocks: Blocks, b: Nat, d: Dyn(tys), ss: List<Sel>, at: Walk, c0: Config, next0: Nat) → Type {
+    Exists<Config>(λ cw => WalkAt(tys, strs, inj, blocks, b, d, ss, at, c0, next0, cw))
+}
+
+theorem walk_step_sound(tys: Nat → Type, strs: Strs(tys), inj: Nat → Nat, blocks: Blocks, act: Act, e: PEnv, m: Mach(tys), c0: Config, next0: Nat,
+    rel: StageRel(tys, strs, inj, blocks, act, e, m, c0, next0), laid: Strs::Laid(tys, strs), b: Nat, d: Dyn(tys), bs: List<BitVec(8)>, enc: Dyn::encode(tys, strs, d) = Some(bs),
+    short: bs.len() < Nat::pow(2, 64), ss: List<Sel>, at: Walk, cw: Config, wa: WalkAt(tys, strs, inj, blocks, b, d, ss, at, c0, next0, cw), x: Step, at1: Walk,
+    h: e.walk_step(tys, strs, x, at) = Some(at1), fit: Sel::fit(tys, strs, ss ++ [x.sel(Mach::ixs(tys, strs, m))], d) = True):
+    WalkGoal(tys, strs, inj, blocks, b, d, ss ++ [x.sel(Mach::ixs(tys, strs, m))], at1, c0, next0)
+{
+    let ixs = Mach::ixs(tys, strs, m);
+    let lay0 = Shape::layout(tys, strs, at.code);
+    (match x as λ x2 => e.walk_step(tys, strs, x2, at) = Some(at1) → Sel::fit(tys, strs, ss ++ [x2.sel(ixs)], d) = True → WalkGoal(tys, strs, inj, blocks, b, d, ss ++ [x2.sel(ixs)], at1, c0, next0) {
+        SElem(a) => λ h2 f2 => (match lay0 as λ l => lay0 = l → e.elem_at(a, at, l) = Some(at1) → WalkGoal(tys, strs, inj, blocks, b, d, ss ++ [el_sel(a.ix(ixs))], at1, c0, next0) {
+            LSeq(el, size, wc) => λ lay h3 => {
+                let ms = map_some(e.atom(a, at.next), λ i => elem_walk(at, el, size, i), at1, h3);
+                j(ms.proof.right, λ a2 _ => WalkGoal(tys, strs, inj, blocks, b, d, ss ++ [el_sel(a.ix(ixs))], a2, c0, next0),
+                    elem_walk_goal(tys, strs, inj, blocks, act, e, m, c0, next0, rel, laid, b, d, bs, enc, short, ss, at, cw, wa, a, el, size, wc, lay, ms.witness, ms.proof.left, f2))
+            },
+            LRecord(_) => λ _ no => absurd(no),
+            LNone => λ _ no => absurd(no),
+        })(refl, h2),
+        SWindow(lo, n) => λ h2 f2 => (match lay0 as λ l => lay0 = l → e.win_at(lo, n, at, l) = Some(at1) →
+                WalkGoal(tys, strs, inj, blocks, b, d, ss ++ [win_sel(lo.ix(ixs), n.ix(ixs))], at1, c0, next0) {
+            LSeq(el, size, win) => λ lay => (match win as λ w2 => lay0 = LSeq(el, size, w2) → e.win_at(lo, n, at, LSeq(el, size, w2)) = Some(at1) →
+                    WalkGoal(tys, strs, inj, blocks, b, d, ss ++ [win_sel(lo.ix(ixs), n.ix(ixs))], at1, c0, next0) {
+                None => λ _ no => absurd(no),
+                Some(wc) => λ lay2 h3 => match Option::bind_some(h3) as λ _ => WalkGoal(tys, strs, inj, blocks, b, d, ss ++ [win_sel(lo.ix(ixs), n.ix(ixs))], at1, c0, next0) {
+                    Exists(la, p) => {
+                        let ms = map_some(e.atom(n, la.next), λ ka => win_walk(at, size, wc, la, ka), at1, p.right);
+                        j(ms.proof.right, λ a2 _ => WalkGoal(tys, strs, inj, blocks, b, d, ss ++ [win_sel(lo.ix(ixs), n.ix(ixs))], a2, c0, next0),
+                            win_walk_goal(tys, strs, inj, blocks, act, e, m, c0, next0, rel, laid, b, d, bs, enc, short, ss, at, cw, wa, lo, n, el, size, wc, lay2,
+                                la, ms.witness, p.left, ms.proof.left, f2))
+                    },
+                },
+            })(lay),
+            LRecord(_) => λ _ no => absurd(no),
+            LNone => λ _ no => absurd(no),
+        })(refl, h2),
+        SField(i) => λ h2 f2 => (match lay0 as λ l => lay0 = l → field_at(i, at, l) = Some(at1) → WalkGoal(tys, strs, inj, blocks, b, d, ss ++ [OnField(i)], at1, c0, next0) {
+            LRecord(fs) => λ lay h3 => match Option::bind_some(h3) as λ _ => WalkGoal(tys, strs, inj, blocks, b, d, ss ++ [OnField(i)], at1, c0, next0) {
+                Exists(off2, p) => {
+                    let ms = map_some(fields_nth(fs, i), λ fc => field_walk(at, off2, fc), at1, p.right);
+                    j(ms.proof.right, λ a2 _ => WalkGoal(tys, strs, inj, blocks, b, d, ss ++ [OnField(i)], a2, c0, next0),
+                        field_walk_goal(tys, strs, inj, blocks, laid, b, d, bs, enc, short, ss, at, c0, next0, cw, wa, i, fs, lay, off2, p.left, ms.witness, ms.proof.left, f2))
+                },
+            },
+            LSeq(_, _, _) => λ _ no => absurd(no),
+            LNone => λ _ no => absurd(no),
+        })(refl, h2),
+        SKey(_, _) => λ no _ => absurd(no),
+        SVariant(_) => λ no _ => absurd(no),
+    })(h, fit)
+}
+
+theorem walk_sound(tys: Nat → Type, strs: Strs(tys), inj: Nat → Nat, blocks: Blocks, act: Act, e: PEnv, m: Mach(tys), c0: Config, next0: Nat,
+    rel: StageRel(tys, strs, inj, blocks, act, e, m, c0, next0), laid: Strs::Laid(tys, strs), b: Nat, d: Dyn(tys), bs: List<BitVec(8)>, enc: Dyn::encode(tys, strs, d) = Some(bs),
+    short: bs.len() < Nat::pow(2, 64), xs: List<Step>): (ss: List<Sel>) → (at: Walk) → (cw: Config) → WalkAt(tys, strs, inj, blocks, b, d, ss, at, c0, next0, cw) →
+    (at2: Walk) → e.walk(tys, strs, xs, at) = Some(at2) → Sel::fit(tys, strs, ss ++ Steps::sels(xs, Mach::ixs(tys, strs, m)), d) = True →
+    WalkGoal(tys, strs, inj, blocks, b, d, ss ++ Steps::sels(xs, Mach::ixs(tys, strs, m)), at2, c0, next0)
+{
+    let ixs = Mach::ixs(tys, strs, m);
+    match xs {
+        Nil => λ ss at cw wa at2 h f => j(Option::some_inj(at, at2, h), λ a2 _ => WalkGoal(tys, strs, inj, blocks, b, d, ss ++ Nil, a2, c0, next0),
+            j(sym(List::append_nil(ss)), λ s2 _ => WalkGoal(tys, strs, inj, blocks, b, d, s2, at, c0, next0), Exists(cw, wa))),
+        Cons(x, rest) => λ ss at cw wa at2 h f => match Option::bind_some(h) as λ _ => WalkGoal(tys, strs, inj, blocks, b, d, ss ++ Steps::sels(Cons(x, rest), ixs), at2, c0, next0) {
+            Exists(at1, p) => {
+                let sel = x.sel(ixs);
+                let tail = Steps::sels(rest, ixs);
+                let assoc: (ss ++ Cons(sel, tail) = (ss ++ [sel]) ++ tail) = sym(List::append_assoc(ss, [sel], tail));
+                let f2 = j(assoc, λ l _ => Sel::fit(tys, strs, l, d) = True, f);
+                let f1 = (Bool::and_true_parts(Sel::fit(tys, strs, ss ++ [sel], d), Sel::fit(tys, strs, tail, Sel::read_at(tys, strs, ss ++ [sel], d)),
+                    trans(sym(fit_app(tys, strs, ss ++ [sel], tail, d)), f2))).left;
+                let st = walk_step_sound(tys, strs, inj, blocks, act, e, m, c0, next0, rel, laid, b, d, bs, enc, short, ss, at, cw, wa, x, at1, p.left, f1);
+                let ih = walk_sound(tys, strs, inj, blocks, act, e, m, c0, next0, rel, laid, b, d, bs, enc, short, rest, ss ++ [sel], at1, st.witness, st.proof, at2, p.right, f2);
+                j(sym(assoc), λ l _ => WalkGoal(tys, strs, inj, blocks, b, d, l, at2, c0, next0), ih)
+            },
+        },
+    }
+}
