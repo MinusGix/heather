@@ -233,6 +233,10 @@ record Stack<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>) {
     size: Nat,
     canonical: (i: Nat) → i + 8 <= size → WordCanonical(next_rip(low, i)),
     writable: (memory: M) → (i: Nat) → i + 8 <= size → writes.writable(memory, next_rip(low, i), 8),
+    // A store of no bytes needs no room and changes nothing, anywhere
+    // (`ByteWrites::EmptyRange`): the writes' own law, carried here so that
+    // every `Loan` over the stack reaches it with no premise.
+    empty: writes.EmptyRange(),
     // A word stored reads back, and the others read as they did.
     stored: (memory: M) → (i: Nat) → i + 8 <= size → (word: BitVec(64)) →
         read_word(data, writes.store(memory, next_rip(low, i), word_bytes(word)), next_rip(low, i)) = Some(word),

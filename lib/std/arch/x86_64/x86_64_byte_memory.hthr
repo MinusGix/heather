@@ -93,6 +93,19 @@ fn X86Profile::writes(self x: X86Profile) → ByteWrites<X86Memory(x)> {
         λ (m: X86Memory(x)) (a: BitVec(64)) (bytes: List<BitVec(8)>) => x.store(m, a, bytes))
 }
 
+// No bytes need no permission: `Allows` asks of each address below zero.
+theorem X86Profile::writable_none(self x: X86Profile, m: X86Memory(x), a: BitVec(64)): x.writes().writable(m, a, 0) {
+    λ p below => false_elim(omega(below))
+}
+
+// A store of no bytes is the memory: `put_from` of an empty vector is the
+// cells, and the memory is its cells, permissions and proof again.
+theorem X86Profile::store_none(self x: X86Profile, m: X86Memory(x), a: BitVec(64)): x.writes().store(m, a, []) = m { refl }
+
+theorem X86Profile::writes_empty(self x: X86Profile): x.writes().EmptyRange() {
+    λ m a => ⟨x.writable_none(m, a), x.store_none(m, a)⟩
+}
+
 // ---------------------------------------------------------------------------
 // Reads
 
@@ -266,6 +279,7 @@ fn DataRegion::stack(self r: DataRegion) → Stack<X86Memory(r.profile)>(r.profi
             omega(value, fits, r.canonical)
         },
         writable := λ m i fits => r.allows(Perm::writes, refl, m, i, 8, fits),
+        empty := r.profile.writes_empty(),
         stored := λ m i fits word => {
             let a = next_rip(r.low, i);
             let after = r.profile.store(m, a, word_bytes(word));

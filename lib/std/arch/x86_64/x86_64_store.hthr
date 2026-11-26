@@ -93,6 +93,15 @@ record ByteWrites<M> {
     store: M → BitVec(64) → List<BitVec(8)> → M,
 }
 
+// The one law of writes that is about memory and nothing else: a store of
+// no bytes needs no room and changes nothing, at every address. The bytes
+// language accepts an empty window at its block's end, and Linux is asked to
+// write zero bytes there (issues/byte-writes-empty-range.md). A `Stack`
+// carries it of its `writes` (x86_64_stack), so every `Loan` reaches it.
+fn ByteWrites::EmptyRange<M>(self writes: ByteWrites<M>) → Type {
+    (memory: M) → (a: BitVec(64)) → writes.writable(memory, a, 0) ∧ (writes.store(memory, a, []) = memory)
+}
+
 fn memory_store_after<M>(writes: ByteWrites<M>, store: MemoryStore, before: MachineState<M>) → MachineState<M> {
     MachineState(before.gprs, before.flags, next_rip(before.rip, 3),
         writes.store(before.memory, read_gpr(memory_store_base(store), before.gprs), memory_store_data(store, before.gprs)))
