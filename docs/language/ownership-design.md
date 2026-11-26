@@ -3539,3 +3539,48 @@ fresh results of one call must be distinct blocks; and three checker defects,
 each a refusal to add (a join over a read-lent holder binding an owned
 output; an arm yielding one holder twice; a returned view's region reading a
 non-plain level in the caller).
+
+### 23.9 The stages proved so far (2026-11-26)
+
+Each stage concludes the whole invariant at the checker's next state and
+the meaning's next environment (`Stepped`): `Lit`, `Op`, `Read`, `Fresh`, a
+`Take` of a part, of a plain variable and of a holder, a `Death` of a part,
+of a plain variable and of a holder (the block killed only when its cell owns
+it: `Inv::kill`), and a `View` of a plain variable, and to read and to write of
+a holder and of a view. Each statement kind's stage is a lemma over neutral
+states; what they share is stated once: a binding of a plain value
+(`Inv::push_plain`), of a holder (`Inv::push_hold`), of a view with its new
+entries (`Inv::push_view`), a level set gone (`Inv::gone`).
+
+**The invariant gained** `young`, `held`, `vents` (objects so far are below
+`nobj`, none past it has a root, every live entry is a view variable's below
+the next level), `bare` (a root's block has no holes, so its read does not
+depend on the rest of the heap), `chain` (a live entry's parent is live, at a
+lower level, and its region extends the parent's by the place it was opened
+at) and `excl` (a live view to write is apart from every live entry of its
+object that is neither its ancestor nor its descendant). `excl` is the fact the
+licence relies on when a view's access meets only its descendants; the view
+stages prove it of every new entry from the licence's residuals.
+
+**The licence's soundness** (`CSt::license_sound`): the decider run on regions
+at levels is the decider on the same regions at indices
+(`CSt::unsteps_apart`, the levels being in range so that the index map is
+injective), so the residuals the checker owes for its obligations, holding at
+the site, give the regions' selections apart (`Steps::apart_sound`). At the
+run's words they are the same selections, the region's levels being plain
+(`Inv::lic_apart`).
+
+**Two checker changes for provability, no verdict changed**: the ancestry
+`CSt::anc_of` takes the level count as fuel (a parent is at a lower level)
+instead of the number of live entries, so it is stable as entries come and go;
+and it follows every entry of a parent, not the first only (a read view chosen
+by a join has entries opened on different parents, and each is an ancestor;
+following the first only made a view derived through a later entry no
+descendant of its real ancestor, which a write through that ancestor would not
+meet). `CSt::set` updates only the list that holds the level, with the other
+fields its own, so a state after it has the same counts and entries by
+conversion.
+
+**`CSt::Changes`** (the invariant's "something live may change this object") is
+a proposition over levels and entries, not a Boolean over the lists: a stage
+reasons about it level by level.
