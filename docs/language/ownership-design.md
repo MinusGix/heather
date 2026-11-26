@@ -5543,3 +5543,19 @@ A definition spelled as a Π inside a nested match arm crashed the
 elaborator while it reported a kernel error
 ([elab-kernel-error-report-panics-subst](../../issues/elab-kernel-error-report-panics-subst.md));
 `CSt::SyncedW` lifts that arm into a function of its own.
+
+**The rulings** (the coordinating session, on the above). The coordinating session accepted 1, 2, 4, 5, 6 and 7. It asked for a `¬` probe of the old `uni` at `join_read`. On 3 it accepted `Likes` as the invariant's clause, but ruled `bag_set` a finding against the checker. A block's value has a fixed extent in this fragment, so a checked store must not grow it. **`RFits` is to owe the deep shape:**
+- `DShape { DWord(w), DNamed(k, len, parts) }`, with `Dyn::shape` as a function. Its fuel comes from a new stratification law of `Strs`: a kind's field and element codes are words or names below it.
+- `Dyn::Fits(old, new)` becomes the code the same and the shapes equal. It is owed at every `Write` and `Back` of a non-word, and `Dyn::shape_flat` keeps today's discharges one line.
+- A sequence's elements are read at `INat(i)`. That is exact for numbered instances (`SeqNum`), which the deep lemma will take as a premise.
+- The lemma "a checked write keeps the deep shape" is restricted at windows to word elements. The missing window law is named as owed.
+
+This is to be built after item 3's libraries.
+
+**`CSt::Wf`'s transitions** (item 3, begun). `StWf` gained `lens` (`s.args.len() = s.na`, `s.locs.len() = s.nd`): a role set at a level reads back as set only then (`CSt::role_set_here`), and no other state-alone clause says it. Proved so far:
+- `StWf::pushed`: a push of a non-view role; a holder only of an existing object no level holds.
+- `StWf::fresh_obj`.
+- `StWf::fresh`.
+- `StWf::reset`: a role set under `SetOk`, which says the holder's object exists and is held once, a region's level stays plain, a view's level stays a view, and a parent keeps its role.
+
+The views' transitions and the meet are next (the issue's handoff).

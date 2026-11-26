@@ -29,123 +29,38 @@ Items 1 and 2 are definitions and evaluation; item 3 waits for the coordinating 
 
 `CheckSound` has an inhabitant for the fragment, the experiments' programs are probes or theorems of the real modules, and the experiment modules are gone.
 
-## Handoff (2026-11-26, end of the twelfth session: the run as the machine's reading, `Back`, `Len`, `Sig::ok`, the split)
+## Handoff (2026-11-26, end of the thirteenth session: the restatement as definitions, evaluated; `CSt::Wf`'s first transitions)
 
-Continue on branch `claude/ownership-checker-sound`. **The plan changed**
-(the repository owner's decision, through the coordinating session): the
-proof is to be made compositional now, as restated in §26 of the design note
-on the coordinating branch (`origin/claude/focused-darwin-it31c1`, read it
-with `git show`, do not merge): agreement per variable outside the places of
-its live write views plus a sync clause for a written-back view, instead of
-`Sim` of the patched environment; one disjointness clause over footprints;
-shape-stability as one invariant. Under it a written argument's slot is a
-write view of the argument at the whole place, so the call's P4–P6 as built
-are not needed. §26.5 (the run stuck wherever the meaning takes a fallback)
-belongs with the restated stages. P5 on the present invariant was dropped:
-`Inv::bind_param_result`, `Inv::bind_view_result`, `MovedArg`, `ViewArg`
-are in history at `0e42cd2`, `f3925c5` (reverted by `1a47948`, `320b40f`).
+Continue on branch `claude/ownership-checker-sound`. The plan is §26 of the design note (on the coordinating branch `origin/claude/focused-darwin-it31c1`, read with `git show`, do not merge). This branch's copy carries §26.6 at the end of the file: what was defined, every departure from §26.2, and the coordinating session's rulings on them. **Do not prove a stage over the restated invariant yet**: a search session (on its own branch, from `2c170ed`) is evaluating `InvLocal::holds_b` after every statement of every small checked program. Its findings come through the coordinating session. The present `Inv`, its builders and stages stay until the new ones cover them (§26.4).
 
-**Done this session** (design §23.22, §23.23):
-- The run as the machine's reading (`b4becf9`): a written parameter's slot
-  after a call is the argument where it refers (`Value::slots`); a store is
-  stuck outside the activation's `Act` (`lent` of the entry's arguments,
-  `h0` its heap length; `Act::may`), the write stages meeting it from
-  `Inv.owned` (`Act::may_owned`); `Stepped.runs` at `Act(lent, h0.len())`.
-- `Back(p, x)`, the write-back as its own statement (`5070b13`): meaning a
-  write; checker `CSt::back_of` (`Write` refused where it would be a
-  write-back, `Back` where not; `writes_back` names `Back`); run the identity
-  where `x`'s cell refers, `Stmt::write_run` where it is a copy. The run's
-  reference test of `b4becf9` is gone.
-- `Len(p, w)` (`c512fee`): a place's length as a word, checked as `Read` of
-  a sequence, owing `RLen(p, w)` (a new residual kind, `Width::Holds`) at a
-  bounded width; `Stmt::stage_len`.
-- `Sig::ok`: `Sig::once` (no parameter answered twice) and `OParam` only of a
-  taken parameter whose code moves (`c512fee`, `fc573b0`).
-- `Inv.cfit` over views to write only (`65d5c1a`, a proof-side gap).
-- `sound.hthr` split mechanically (`c583fcd`), no statement changed:
-  `sound_paths` (1364 lines), `sound_state` (1565), `sound_heap` (2818),
-  `sound_inv` (3844), `sound_write` (2055), `sound_stages` (1340),
-  `sound_like` (864), `sound_ret` (533), `sound_call` (1941); `sound.hthr`
-  is the map and imports them all. With `--cache`, an edit to a module's last
-  declaration checks in one to two seconds for each module. A declaration
-  sits in the earliest module its kind and its dependencies allow (the
-  splitter is a script; regenerate nothing by hand: edit the modules now).
-  Where std declares the same name (`Bool::or_false_parts`, …) the uses are
-  qualified by their sound module (`sound_paths::Bool::…`); `Slot` is
-  `sound_heap::Slot` past `sound_heap` (store.hthr has an `inductive Slot`).
+**Done this session:**
+- `sound_wf.hthr`: `CSt::Wf` (record `StWf`) holds the state-alone clauses `one`, `words`, `held`, `vents`, `chain`, `wpar`, `nbase`, plus a new `lens` (the lists hold the counts: a role set at a level reads back only then). Each has a decider, and `wf_b` combines them. Transitions proved: `StWf::pushed` (any push of a non-view role, a holder only of an existing object held nowhere else), `StWf::fresh_obj`, `StWf::fresh`, `StWf::reset` (a role set at one level under `SetOk`: deaths, takes, access changes), with `CSt::role_set_here`/`CSt::role_set` and `StWf::parent_keep`.
+- `sound_local.hthr`: `InvLocal` (wf, `Agree`, `CSt::Synced`, `Cells`, `Foot::AllApart`, `Likes`, `Heaped`) as definitions with deciders. The entry is `InvLocal::holds_b(tys, strs, eqn, s, e, m, h0, lent, root)` (`eqn: DEq(tys)`, an equality per named type), per group `InvLocal::check_b`.
+- `sound_trace.hthr`: the checker, the meaning and the run stepped together (`Stmt::step3`), and `Body::trace_with`/`Func::trace_with` recording any `Tri → V` at every state, joins included.
+- `lib/_tests/lang/ownership/sound_local_tests.hthr`: 20 traces (a loan, a call lending a view to write, a view chain, two pending chains, a recursive callee, joins with views, a made object through a call, a nested-length write), each by reference and by copy where allowed. Every group holds at every state, one `refl` per group and trace (seven groups would not fit one kernel budget). The negative controls all fail as they should. The present `Inv.uni` is false after `join_read`'s join (`uni_fails_*`, a Bool control).
+- Issue `elab-kernel-error-report-panics-subst` (the elaborator panicked while reporting a kernel error on a Π spelled in a nested match arm).
 
-**Probes whose bodies changed from `Write` to `Back`** (for the seam's
-session, to find its own write-backs): in `checker_tests.hthr` the functions
-`after_call`, `back_under` (its two write-backs onto parents; its first
-write stays a `Write`), `between`, `between_after`, `calls_wprim`,
-`copy_caller`, `lend_plain_back`, `lend_under`, `lends_one`, `loan`,
-`moved`, `nested_two`, `one_window`, `outer`, `outer2`, `peek`,
-`unreturned`, `written`, `zero_caller` (and the new `back_one`,
-`back_not_back`); in `run_tests.hthr` the new `back_read_r`,
-`back_copy_read_r`, `back_copy_plain_r`. Rule: a write whose value variable is a view to write
-opened on the written root at the written steps is a `Back`.
-
-**The invariant's clauses sorted** (for the restatement; `Inv` in
-`sound_inv.hthr`, with the statement kind that first needed each):
-- *The checker's state alone*: `one` (a holder per object: `Take`, the
-  call's moved result), `words` (region levels plain and bound: `View`'s
-  atoms), `held` (holders' objects exist: `Fresh`), `vents` (entries at live
-  view levels: `View`), `chain` (an entry's parent below it and its region
-  the parent's extended: `View`), `wpar` (a view to write's parent view is a
-  view to write: the writes through views), `nbase` (`Ret`).
-- *The roots index against the state* (no heap, no cells): `apart` (objects
-  that change are apart: writes), `owned` (a changing object's root lent or
-  made: `Ret`'s frame, and now `Act::may`), `young` (`Fresh`), `made` (made
-  objects whole and past `h0`: `Ret`).
-- *The heap*: `inheap` (roots in the heap: `Fresh`), `bare` (roots' blocks
-  have no holes: `Fresh`, writes), `frame` (`LentFrame`, the lens equation
-  against `h0`: writes, `Ret`), `grows`, `stays` (the call).
-- *The cells*: `refs` (a cell's reference is its root narrowed: `View`,
-  writes), `own` (an owned cell's block is its object's alone: `Death`,
-  `Take`), `uni` (a view refers iff its parent does: the write-back), `excl`
-  and `sib` (live views to write apart from the rest at the run's words: the
-  writes, the write-back), `cfit` (a view to write over a copy fits it: the
-  write-back of a copy), `args` (`Ret`'s arguments as passed), `href` and
-  `hown` (a holder's cell refers to and owns its root: the call's moved
-  results, P5).
-- *Only for the patched meaning*: `sim` (`Sim` of `s.patched(e, m)`: a
-  pending chain's ancestors read as if written up, D2 §23.15), with `Like`
-  (a separate record, §23.16) carrying what the meaning keeps of a view to
-  write on a pending chain. The restatement replaces both with agreement
-  outside live write views and a sync clause.
-
-**Verification base:** `HEATHER_PR_BASE=4bf882b scripts/test --pr` (the
-coordinating session's full gate passed 4bf882b on its own); quote the base
-with the suite line. Do not merge the coordinating branch (the slice's
-`placement*.hthr` match on statement kinds; the slice session merges this
-branch and adapts).
-
-**Next, in order** (the coordinating session's list; ask it for the order
-of the restatement's pieces): with the restated stages, **the run stuck
-wherever the meaning takes a fallback** (§26.5 on the coordinating branch: an
-operation or test on words of different codes, a store whose value's code is
-not the place's, an argument, result or `Jump` argument of the wrong code, a
-join's arm yielding a different code; the coordinating session has the exact
-list of fallbacks), each stage gaining "not stuck by codes" from the code
-check; the restatement of §26 on the split modules,
-starting from the clauses above; the body induction; joins, `Jump`, fuel,
-`CheckSound`; the experiments retired.
+**Next, in order:**
+1. **Item 3's rest** (the coordinating session's list):
+   - `CSt::Wf` transitions still to prove: a view opened (push with its entry: `CSt::view`'s three cases, entries `VEnt(next, o, reg, md, par, at, True)`); `backed`/`unback` (the views mapped with fields kept but `back`; a generic lemma over a map `f` with every field but `back` kept, through `ents` = the old `ents` mapped and `in_regions` unchanged); a view's death (`views.filter(¬lvl = l)` then `set(l, KGone)`, no child of `l`); `Back`/`Write` (`wrote_to`: `written` then `unback`); a take; a call's results and slots; `Ret`'s checks; **the join's meet (`CSt::meet`), explicitly asked for**: `join_read` shows the meet is where the old clauses were untested.
+   - The **like-ness** library in its own module: `Dyn::Like` and the present `Sel::LikeAt`, `write_keeps`, `CFitAt` as consequences.
+   - The **footprints** library: `CSt::foot` from the state and roots, and the one frame lemma's statement (a store at a footprint leaves `val` of every level whose footprint is apart from it), proved from the lens laws in `sound_paths`/`sound_heap`.
+2. **The deep `RFits`** (ruled, build after item 3):
+   - `inductive DShape { DWord(w), DNamed(k, len, parts) }` and `Dyn::shape`. A record's parts are its fields' shapes; a sequence's are its elements' at `INat(i)`, or `Nil` where the element code is a word. The comment must say that this is exact for a *numbered* instance (`SeqNum` on the coordinating branch), which the deep lemma takes as a premise once the branches meet. Do not add `Seq.nth`.
+   - Fuel comes from the code: a new law of `Strs` says every field or element code of the kind at `k` is a word or a name below `k` (windows name their own type and are not parts). Check the in-tree environments satisfy it (`checker_tests`' and `run_tests`' do: Point 0, List<Point> 1, List<Nat> 2; `sound_local_tests`' Bag 3 has a List<Nat> field). If one does not and reordering is not trivial, use a depth in `Ctx` and report.
+   - `Dyn::Fits(old, new)` becomes the code the same and the shapes equal. `RFits` keeps its name and constructor, and is owed at every `Write` and every `Back` whose value's code is not a word. `Dyn::shape_flat` keeps existing discharges one line. Pin `bag_set` both ways.
+   - The lemma "a checked write keeps the block's deep shape", restricted at windows to word elements. Name the missing window law (an element inside a window after a window write) in the like-ness library's header as owed when typed copies of nested data are placed.
+3. A `¬` probe of the old `uni` at `join_read`'s post-join state (asked for by the coordinating session; the Bool control exists, the `¬ CSt::Uni(…)` theorem does not yet).
+4. Then the stages over the restated invariant, after the search has run (§26.4 step 3).
 
 **Traps found this session:**
-- An imported name that std also declares is ambiguous across modules (a
-  local one used to win): qualify by module, or drop an identical duplicate.
-- A bare `Slot`/type name may silently resolve to std's type when two
-  imports define it: qualify by module.
-- `let G = λ (st: CSt) => Exists<…>(λ root2 => …)` needs the inner binder
-  annotated and the `let` typed (`let G: CSt → Type = …`).
-- `absurd` sees only an outer constructor clash: `Some(Plain x) = Some(Refer
-  r)` needs `Option::some_inj` first.
-- A run lemma that mirrors the run's match by `j` must mirror its exact
-  shape (factor the run's arms into a `fn`, as `Stmt::write_run`, so the
-  mirror is one call).
-- `scripts/test --pr` with no merge base runs every file and the native
-  gates get killed (`signal: 9`): use `HEATHER_PR_BASE=4edbd21` (the
-  coordinating branch's `47939344` is cherry-picked here).
+- A member namespace must be an existing type (`Lv::`, `Foots::` are refused): use `CSt::…`, `Foot::…`.
+- Inside a lemma whose name is `X::push`/`X::set`, a receiver call `s.push(…)` is ambiguous: write `CSt::push(s, …)`.
+- A `let` read inside a recursive function's `match` must be bound inside the arm.
+- A whole trace's seven-group verdict exceeds the kernel's budget for one `refl` (it reported "checks only with up to 8 times the budget"); one `refl` per group fits.
+- `heather eval` refuses a file with errors; comment out failing theorems to evaluate.
+
+**Verification base:** `HEATHER_PR_BASE=4bf882b scripts/test --pr` (the coordinating session's last fully gated commit of this branch).
 
 ## Log
 
