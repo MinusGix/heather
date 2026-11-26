@@ -1,0 +1,90 @@
+// sound_wf: the checker's state well formed (docs/language/ownership-design.md
+// §26.2, §26.6; issues/ownership-sound-consolidate.md): the clauses of the
+// soundness proof's invariant that mention the checker's state alone, as one
+// record (`CSt::Wf`), with a decider at closed states beside it.
+//
+// No machine, heap or meaning appears in a statement here. The clauses, as
+// the present invariant (`sound_inv`'s `Inv`) carries them and with the
+// statement kind that first needed each:
+//
+// - `one`: an object has at most one holder (`Take`, the call's moved
+//   result).
+// - `words`: every level a live region or place reads is a plain variable
+//   below the next level (`View`'s atoms).
+// - `held`: a holder's object exists (`Fresh`).
+// - `vents`: a live entry is of an existing object, at a live view's level
+//   (`View`).
+// - `chain`: a live entry's parent is below it, and its region is its
+//   parent's extended by its place (`View`).
+// - `wpar`: a view to write whose parent is a view has that parent as its
+//   only entry, itself to write (the writes through views).
+// - `nbase`: the arguments' objects are counted (`Ret`).
+import logic;
+import bool;
+import nat;
+import option;
+import list;
+import bitvec;
+import span_set;
+import store;
+import atom;
+import steps;
+import shape;
+import body;
+import level2;
+import run;
+import verdict;
+import checker;
+import linux_world;
+import sound_paths;
+import sound_state;
+
+record StWf(s: CSt) {
+    one: (l1, l2, o: Nat) → (a1, a2: Acc) → l1 < s.na + s.nd → l2 < s.na + s.nd → ¬(l1 = l2) → s.role(l1) = KHold(o, a1) → s.role(l2) = KHold(o, a2) → False,
+    words: (l: Nat) → s.in_regions(l) = True → (l < s.na + s.nd) ∧ ((s.role(l)).plain() = True),
+    held: (l, o: Nat) → (a: Acc) → l < s.na + s.nd → s.role(l) = KHold(o, a) → o < s.nobj,
+    vents: (en: VEnt) → Mem(en, s.views) → (en.obj < s.nobj) ∧ ((en.lvl < s.na + s.nd) ∧ (s.role(en.lvl) = KView)),
+    chain: (en: VEnt) → Mem(en, s.views) → (en.par < en.lvl) ∧ s.Parent(en),
+    wpar: (en: VEnt) → Mem(en, s.views) → en.mode.writes() = True → s.WPar(en),
+    nbase: s.na <= s.nobj,
+}
+
+fn CSt::Wf(self s: CSt) → Type { StWf(s) }
+
+// ---------------------------------------------------------------------------
+// The decider, clause by clause (for evaluation at closed states; not proved)
+
+fn CSt::count(self s: CSt) → Nat { s.na + s.nd }
+
+fn Role::obj_of(self r: Role) → Option<Nat> { match r { KHold(o, _) => Some(o), KPlain => None, KView => None, KGone => None } }
+
+fn Nat::opt_same(a, b: Option<Nat>) → Bool { match a { Some(x) => match b { Some(y) => x.same(y), None => False }, None => False } }
+
+fn CSt::one_b(self s: CSt) → Bool {
+    (List::range(s.count())).all_bit(λ l1 => (List::range(s.count())).all_bit(λ l2 => l1.same(l2) || !Nat::opt_same((s.role(l1)).obj_of(), (s.role(l2)).obj_of())))
+}
+
+fn CSt::words_b(self s: CSt) → Bool { s.views.all_bit(λ en => (Steps::lvls(en.reg) ++ Steps::lvls(en.at)).all_bit(λ l => (l + 1).leb(s.count()) && (s.role(l)).plain())) }
+
+fn CSt::held_b(self s: CSt) → Bool { (List::range(s.count())).all_bit(λ l => match (s.role(l)).obj_of() { Some(o) => (o + 1).leb(s.nobj), None => True }) }
+
+fn CSt::vents_b(self s: CSt) → Bool { s.views.all_bit(λ en => (en.obj + 1).leb(s.nobj) && (en.lvl + 1).leb(s.count()) && (s.role(en.lvl)).same(KView)) }
+
+fn CSt::parent_b(self s: CSt, en: VEnt) → Bool {
+    match s.role(en.par) {
+        KHold(o, _) => o.same(en.obj) && Steps::same(en.reg, en.at),
+        KView => (s.ents(en.par)).any_bit(λ pe => pe.obj.same(en.obj) && Steps::same(en.reg, pe.reg ++ en.at)),
+        KPlain => False,
+        KGone => False,
+    }
+}
+
+fn CSt::chain_b(self s: CSt) → Bool { s.views.all_bit(λ en => (en.par + 1).leb(en.lvl) && s.parent_b(en)) }
+
+fn VEnt::only_write(es: List<VEnt>) → Bool { match es { Nil => False, Cons(pe, rest) => pe.mode.writes() && match rest { Nil => True, Cons(_, _) => False } } }
+
+fn CSt::wpar_b(self s: CSt) → Bool {
+    s.views.all_bit(λ en => !en.mode.writes() || match s.role(en.par) { KView => VEnt::only_write(s.ents(en.par)), KHold(_, _) => True, KPlain => True, KGone => True })
+}
+
+fn CSt::wf_b(self s: CSt) → Bool { s.one_b() && s.words_b() && s.held_b() && s.vents_b() && s.chain_b() && s.wpar_b() && s.na.leb(s.nobj) }

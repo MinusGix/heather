@@ -53,6 +53,17 @@
 // - `sound_ret`: the return (`Body::stage_ret`).
 // - `sound_call`: the call, in parts (P1–P4).
 //
+// The restatement (design §26), beside the present invariant until it covers
+// what that covers:
+//
+// - `sound_wf`: the checker's state well formed (`CSt::Wf`), the clauses
+//   that read the state alone.
+// - `sound_local`: the restated invariant (`InvLocal`: agreement outside
+//   write children, sync, where cells live, footprints, like-ness, the heap
+//   group) as definitions, with deciders (`InvLocal::holds_b`).
+// - `sound_trace`: the checker, the meaning and the run stepped together and
+//   a decider evaluated at every state (`Body::trace_with`).
+//
 // This module imports them all; it holds no declarations of its own.
 import logic;
 import bool;
@@ -81,3 +92,6 @@ import sound_stages;
 import sound_like;
 import sound_ret;
 import sound_call;
+import sound_wf;
+import sound_local;
+import sound_trace;

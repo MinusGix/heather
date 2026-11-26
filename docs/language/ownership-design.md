@@ -5409,3 +5409,137 @@ Three rules of working follow from what went wrong in practice:
 
 Every branch is merged into the coordinating branch only through the gated
 verification, as before.
+
+### 26.6 The restatement as definitions, evaluated (2026-11-26, the thirteenth session)
+
+(§26.1–§26.5 are on the coordinating branch; this section continues them.)
+The restated invariant is `InvLocal` in `lib/lang/ownership/sound_local.hthr`,
+the state-alone clauses `CSt::Wf` (record `StWf`) in `sound_wf.hthr`, and
+the driver that evaluates them along runs in `sound_trace.hthr`. Nothing is
+proved over them; the present `Inv`, its builders and its stages are
+untouched. The groups, as written against the real types:
+
+- **Levels.** `val(l)` is `CSt::val_at` (`Value::get` of the level's cell at
+  no selections), `d(l)` is `CSt::mean_at`, a level is live where it is
+  below the next one and not gone (`CSt::live`), its write children are the
+  live entries to write whose parent is it (`CSt::wkids`), and an entry's
+  place is its `at` read at the run's words (`VEnt::place`; the `words`
+  clause makes them the meaning's).
+- **Agreement** (`Agree`): the environments' lengths, every level's meaning
+  at its recorded code, and for every live level
+  `val(l) = puts(slots, val(l), d(l))` where the slots are the write
+  children's places as references into one block and `puts` is the
+  frame's `Sel::put_lent`, no second fold.
+- **Sync** (`CSt::Synced`, `VEnt::Sync`): an entry's view's meaning is its
+  parent's meaning at its place, and where the parent's cell is a copy, its
+  value is the parent's value read there. Asked of every entry to write that
+  is written back, and of *one* entry of a view to read.
+- **Where a cell lives** (`Cells`, `CSt::Lives`): a holder's cell refers
+  exactly to its object's root (`ref_of(cell) = root(o)`, so a holder of an
+  object held by value is a copy and its object has no root); it is owned
+  exactly where the holder owns and refers, and an owned root has no
+  selections; a view's cell is, at *one* of its entries, its parent's
+  narrowed at its place (`ref_of(cell) = ref_of(parent).map(narrow)`, so a
+  view of a copy is a copy); a plain variable's is a copy, not owned; and
+  `args` as before. This one clause says what `refs`, `uni`, `href`, `hown`,
+  `own`'s first part and `args` said.
+- **Footprints** (`Foot`, `CSt::foot`, `Foot::AllApart`): `FHeap(r)` or
+  `FCopy(l, sels)`. A holder's is its root, or `FCopy(itself, Nil)` where
+  its object has none; a plain variable's `FCopy(itself, Nil)`; a view's,
+  each entry's parent's footprint narrowed at the entry's place. Two live
+  levels, unrelated by the checker's ancestry (`CSt::related`), one of which
+  may write (`CSt::may_write`: a holder lent to write or owning, a view with
+  an entry to write, a plain variable), have every pair of footprints apart
+  (`Ref::Apart`; for two copies from one level, `Sel::Apart` of their
+  selections; a copy and a block, or two copies of different levels,
+  always). This replaces `apart`, `excl`, `sib`, `own`'s block clause and the
+  writing half of `one`.
+- **Like-ness** (`Likes`): every live level's value has its meaning's code
+  and length (`Dyn::Like`), and every live view to write fits its parent's
+  value at its place, its value and its meaning like what its parent's read
+  there. This replaces `cfit`, `Like` and `LentFrame`'s use of it inside a
+  function.
+- **The heap group** (`Heaped`): `inheap`, `owned`, `frame` (the present
+  `LentFrame`, its like-ness at entry included), `grows`, `young`, `bare`,
+  `made`, `stays`, as they are; `apart` (roots) is gone.
+- **The state** (`StWf`): `one`, `words`, `held`, `vents`, `chain`, `wpar`,
+  `nbase`, as they are.
+
+**Departures from §26.2, each with the program that forces it** (all in
+`lib/_tests/lang/ownership/sound_local_tests.hthr`):
+
+1. *A copy's footprint is not its own cell.* Two views opened on one copy
+   (`loan` with `x` passed by value: `t` to read and `w` to write, both
+   copies of windows of `x`'s copy) meet where their places do: writing `w`
+   back stores into `x`'s copy at `w`'s window, and `t`'s sync needs that
+   window apart from `t`'s. So a copy's footprint is the level its chain of
+   copies starts at with the selections from there (`FCopy(l, sels)`);
+   `meet_fails_copy` is the control (a state with `t` moved onto `w`'s
+   window fails `Foot::AllApart`). With this, `sib` is the footprints'
+   clause for copies.
+2. *A view to read is synced, and its cell lives, at one entry, not each.*
+   After a join that chose it, a read view has one entry per arm
+   (`join_read`: a view of `a[0]` in one arm, of `b[1]` in the other). The
+   run took one arm, so the view's meaning is its parent's at that entry's
+   place only (`sync_every_fails`), and its cell is narrowed from that
+   entry's parent only. **The present invariant's `uni` is false there**
+   (`uni_fails_yes`, `uni_fails_no`: `a` refers, `b` is passed by value, so
+   the view refers in one arm and is a copy in the other, while `uni` asks
+   every entry's parent to refer as the view does). No present stage
+   reaches a join, so no proof is wrong; the restatement takes `Any` as the
+   present `refs` already does.
+3. *Like-ness is the top code and length, not the deep shape.* A checked
+   write changes nested lengths: `bag_set` writes a whole record holding a
+   list with one whose list is longer (no `RFits` is owed: it is owed only
+   at a write of a sequence, and asks only its top length). So "every
+   block's value keeps the shape it had when made or lent", with the shape
+   the code and every nested length, is false of a checked program
+   (`deep_changes`). What the stages use is the top code and length (a
+   fit reads only the lengths along its path, `fits_len`; a write keeps each
+   owner's length, `len_set`; a live view's place is never under a write,
+   by the licence), so that is what is kept. `Dyn::shape` is not defined.
+4. *"Kept since made or lent" is not a state clause.* For a lent block it is
+   `LentFrame.like` (against `h0`); for a made block nothing in the state
+   records what it was made with, so it would need a ghost record. It is
+   dropped: per-level like-ness and the like-ness of each view to write
+   against its parent are what a write-back and a later fit need, and a
+   store keeping like-ness is a lemma (item 3), not a clause.
+5. *The roots' `apart` is dropped.* Footprints are over live levels; an
+   object with a root and no live level (its holder taken into a call, or
+   dead) is never read or written through again, and the frame speaks of the
+   heap outside every lent reference anyway.
+6. *Equality of values is the caller's.* The structures carry no equality,
+   so the deciders take a `DEq(tys)` (an equality at each named type) beside
+   the indices `Inv` takes: `InvLocal::holds_b(tys, strs, eqn, s, e, m, h0,
+   lent, root)`. `young` is decided at the next object only.
+7. *An entry with no parent below it* (`par = lvl`) is not a write child and
+   has no footprint through itself; `chain` says none is live.
+
+**Evaluated.** `sound_trace.hthr` steps the checker (`Stmt::verdict` under
+`Body::verdict`'s conditions), the meaning (`Stmt::eval`) and the run
+(`Stmt::run`, its machine handed back encoded in an `Answer`) together, a
+made object's root taken from its holder's cell; a join traces both arms
+and continues from the arm the run's test picks, the checker at the meet.
+`Body::trace_with` records any function of the state at each state. The
+probes, each with its object passed by reference and, where the parameter
+allows, by value (a copy chain): `loan` (a read view beside a loan, writes
+through the loan each written back, the owner read beside it, the loan's
+death), `written` (a call that lends a view to write; its slot written back
+onto the view, the view onto the owner), `back_under` (a view of a view
+written whole, written back up the chain), `lend_plain_back`, `lend_under`
+(a call lending a part), `copy_caller` (a call of a recursive callee that
+`Jump`s), `nested_two` (two pending chains under one view), `join_two`
+(both tests), `join_read` (both tests), `made` (a callee's fresh object, a
+take of it, a view of it written and written back, its death), `bag_set`.
+Every group holds at every state of each (one `refl` per group and trace:
+the kernel's budget fits one group, not seven); the negative controls
+(`whole_fails_ref`, `sync_all_fails`, `meet_fails`, `meet_fails_copy`,
+`rootless_fails`, `other_fails`, `short_fails`, `selfish_fails`,
+`grown_fails`, `sync_every_fails`) each fail at some state, so each group's
+decider can fail. `whole_holds_copy`: along copies `val = d` holds whole,
+as expected (nothing is shared).
+
+A definition spelled as a Π inside a nested match arm crashed the
+elaborator while it reported a kernel error
+([elab-kernel-error-report-panics-subst](../../issues/elab-kernel-error-report-panics-subst.md));
+`CSt::SyncedW` lifts that arm into a function of its own.

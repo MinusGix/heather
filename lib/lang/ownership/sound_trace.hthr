@@ -1,0 +1,222 @@
+// sound_trace: the restated invariant evaluated along a body
+// (docs/language/ownership-design.md §24, §26.6;
+// issues/ownership-soundness-oracle.md): the checker, the meaning and the run
+// stepped together one statement at a time, and `sound_local`'s decider
+// evaluated at every state they pass through.
+//
+// - **One statement** of each reading: the checker's `Stmt::verdict` under
+//   the same conditions `Body::verdict` puts on it (codes, measure, a pending
+//   write-back), the meaning's `Stmt::eval` with the identity continuation,
+//   and the run's `Stmt::run` with a continuation that hands back its machine
+//   (encoded as an `Answer`, the only thing a `Ran` carries: each cell's value
+//   and whether it is owned, after the argument count). The objects the step
+//   made get their roots from their holders' cells (`Tri::roots_after`).
+// - **A body**: each statement's state checked before it, each leaf's at the
+//   leaf; a join traces both arms from its state (each is a run the checker
+//   accepted) and continues after it from the arm the run's test picks, the
+//   checker at the meet of both arms' yields.
+// - **What it answers**: the verdict at each state, in order, and how it
+//   ended (`TEnd`). `Bad::first` is the first state some group fails at.
+import logic;
+import bool;
+import nat;
+import option;
+import list;
+import bitvec;
+import span_set;
+import store;
+import atom;
+import steps;
+import shape;
+import body;
+import level2;
+import run;
+import verdict;
+import checker;
+import linux_world;
+import sound_paths;
+import sound_state;
+import sound_heap;
+import sound_inv;
+import sound_wf;
+import sound_local;
+
+// The three readings' states, and the objects' roots.
+record Tri(tys: Nat → Type) { s: CSt, e: Env(tys), m: Mach(tys), root: Nat → Option<Ref> }
+
+// What a trace is evaluated against: the program, the world, the run's calls
+// and activation, the entry heap and what was lent.
+record TCx(tys: Nat → Type) {
+    strs: Strs(tys),
+    eqn: DEq(tys),
+    fns: Nat → Func,
+    prim: Nat → Bool,
+    meas: Nat → Bool,
+    me: Nat,
+    w: Callees(tys),
+    call: Caller(tys),
+    act: Act,
+    h0: Heap(tys),
+    lent: List<Ref>,
+}
+
+fn TCx::sigs(tys: Nat → Type, cx: TCx(tys)) → Nat → Sig { λ g => (cx.fns(g)).sig }
+
+// ---------------------------------------------------------------------------
+// The run's machine after one statement
+
+fn Tri::word(tys: Nat → Type, n: Nat) → Value(tys) { Plain(Dyn(SWord(WNat), n)) }
+
+fn Cell::enc(tys: Nat → Type, cs: List<Cell(tys)>) → List<Value(tys)> {
+    match cs { Nil => Nil, Cons(c, rest) => Cons(c.v, Cons(Tri::word(tys, match c.own { True => 1, False => 0 }), Cell::enc(tys, rest))) }
+}
+
+fn Mach::enc(tys: Nat → Type, m: Mach(tys)) → Answer(tys) { Answer(Cons(Tri::word(tys, (m.env).args.len()), Cell::enc(tys, (m.env).args ++ (m.env).locs)), m.heap, m.io) }
+
+fn Value::flag(tys: Nat → Type, v: Value(tys)) → Bool { match v { Plain(d) => !(Dyn::index(tys, d)).same(0), Refer(_) => False } }
+
+fn Cell::dec(tys: Nat → Type, vs: List<Value(tys)>) → List<Cell(tys)> {
+    match vs { Nil => Nil, Cons(v, rest) => match rest { Nil => Nil, Cons(o, more) => Cons(Cell(v, Value::flag(tys, o)), Cell::dec(tys, more)) } }
+}
+
+fn Mach::dec(tys: Nat → Type, a: Answer(tys)) → Option<Mach(tys)> {
+    match a.results {
+        Nil => None,
+        Cons(n, rest) => match n {
+            Plain(d) => {
+                let cs = Cell::dec(tys, rest);
+                Some(Mach(a.heap, REnv(cs.take(Dyn::index(tys, d)), cs.drop(Dyn::index(tys, d))), a.io))
+            },
+            Refer(_) => None,
+        },
+    }
+}
+
+fn Stmt::run_m(self st: Stmt, tys: Nat → Type, strs: Strs(tys), fns: Nat → Func, call: Caller(tys), act: Act, m: Mach(tys)) → Option<Mach(tys)> {
+    match st.run(tys, strs, fns, call, act, m, λ m2 => Done(Mach::enc(tys, m2))) { Done(a) => Mach::dec(tys, a), Exited(_, _) => None, Going(_) => None, Stuck => None }
+}
+
+// ---------------------------------------------------------------------------
+// One statement of all three
+
+// The roots after a step: an object made by it is rooted where its holder's
+// cell refers.
+fn Tri::roots_after(tys: Nat → Type, n0: Nat, s2: CSt, m2: Mach(tys), root: Nat → Option<Ref>) → Nat → Option<Ref> {
+    λ o => match (o + 1).leb(n0) {
+        True => root(o),
+        False => match (s2.levels()).find(λ l => Nat::opt_same((s2.role(l)).obj_of(), Some(o))) {
+            Some(l) => Value::ref_of(tys, (CSt::cell_at(tys, s2, m2, l)).v),
+            None => None,
+        },
+    }
+}
+
+// Why a trace stopped short of a leaf.
+inductive Halt { HChecker, HRun, HJoin }
+
+inductive Stepd(tys: Nat → Type) { SNext(t: Tri(tys)), SHalt(h: Halt) }
+
+fn Stmt::checked(self st: Stmt, tys: Nat → Type, cx: TCx(tys), s: CSt) → Option<CSt> {
+    match st.code_ok(tys, cx.strs, TCx::sigs(tys, cx), s) && !st.unmeasured(cx.prim, cx.meas, cx.me) && (!s.pending() || s.writes_back(st)) {
+        True => (st.verdict(tys, cx.strs, TCx::sigs(tys, cx), cx.prim, cx.meas(cx.me), s)).map(λ nx => nx.st),
+        False => None,
+    }
+}
+
+fn Stmt::step3(self st: Stmt, tys: Nat → Type, cx: TCx(tys), t: Tri(tys)) → Stepd(tys) {
+    match st.checked(tys, cx, t.s) {
+        None => SHalt(HChecker),
+        Some(s2) => match st.run_m(tys, cx.strs, cx.fns, cx.call, cx.act, t.m) {
+            None => SHalt(HRun),
+            Some(m2) => SNext(Tri(s2, st.eval(Env(tys), tys, cx.strs, cx.w, t.e, λ e2 => e2), m2, Tri::roots_after(tys, (t.s).nobj, s2, m2, t.root))),
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// A body
+
+fn Tri::verdict(tys: Nat → Type, cx: TCx(tys), t: Tri(tys)) → LocalVerdict { InvLocal::check_b(tys, cx.strs, cx.eqn, t.s, t.e, t.m, cx.h0, cx.lent, t.root) }
+
+// How a trace ended: at a `Ret` or a `Jump`, at a `Yield` with the arm's
+// state and its outputs, or halted.
+inductive TEnd(tys: Nat → Type) { TLeft, TYield(t: Tri(tys), outs: List<Var>), THalt(h: Halt) }
+
+// What was recorded at each state, in order, and how the trace ended.
+record TOut(tys: Nat → Type, V: Type) { log: List<V>, end: TEnd(tys) }
+
+// The state after a join, from the arm the run's test picks: its yield's
+// outputs pushed on the state from before the join; the checker at the meet.
+fn Tri::joined(tys: Nat → Type, cx: TCx(tys), t: Tri(tys), tst: Test, ey, en: TEnd(tys)) → Option<Tri(tys)> {
+    match ey {
+        TYield(ty, oy) => match en {
+            TYield(tn, on) => match CSt::joined(t.s, Some(Yd(ty.s, oy)), Some(Yd(tn.s, on))) {
+                None => None,
+                Some(s1) => match tst.run(tys, cx.strs, t.m) {
+                    None => None,
+                    Some(c) => {
+                        let ta = match c { True => ty, False => tn };
+                        let oa = match c { True => oy, False => on };
+                        let e1 = Env::push_all(tys, t.e, Body::joined(tys, tst.bit(tys, t.e), oy.map(λ x => Env::get(tys, ty.e, x)), on.map(λ x => Env::get(tys, tn.e, x))));
+                        let m1 = Mach((ta.m).heap, REnv::push_all(tys, (t.m).env, oa.map(λ x => REnv::get(tys, (ta.m).env, x))), (ta.m).io);
+                        Some(Tri(s1, e1, m1, Tri::roots_after(tys, (ta.s).nobj, s1, m1, ta.root)))
+                    },
+                },
+            },
+            TLeft => None,
+            THalt(_) => None,
+        },
+        TLeft => None,
+        THalt(_) => None,
+    }
+}
+
+// A body traced, `f` recorded at every state it passes through.
+fn Body::trace_with<V>(self b: Body, tys: Nat → Type, cx: TCx(tys), f: Tri(tys) → V, t: Tri(tys)) → TOut(tys, V) {
+    match b {
+        Ret(_) => TOut([f(t)], TLeft),
+        Jump(_) => TOut([f(t)], TLeft),
+        Yield(os) => TOut([f(t)], TYield(t, os)),
+        Do(st, rest) => match st.step3(tys, cx, t) {
+            SHalt(h) => TOut([f(t)], THalt(h)),
+            SNext(t2) => {
+                let o = rest.trace_with(tys, cx, f, t2);
+                TOut(Cons(f(t), o.log), o.end)
+            },
+        },
+        Join(tst, yes, no, rest) => {
+            let ty = yes.trace_with(tys, cx, f, Tri((t.s).arm(), t.e, t.m, t.root));
+            let tn = no.trace_with(tys, cx, f, Tri((t.s).arm(), t.e, t.m, t.root));
+            match Tri::joined(tys, cx, t, tst, ty.end, tn.end) {
+                None => TOut(Cons(f(t), ty.log ++ tn.log), THalt(HJoin)),
+                Some(t1) => {
+                    let o = rest.trace_with(tys, cx, f, t1);
+                    TOut(Cons(f(t), ty.log ++ tn.log ++ o.log), o.end)
+                },
+            }
+        },
+    }
+}
+
+fn Body::trace(self b: Body, tys: Nat → Type, cx: TCx(tys), t: Tri(tys)) → TOut(tys, LocalVerdict) { b.trace_with(tys, cx, λ u => Tri::verdict(tys, cx, u), t) }
+
+// The first state some group fails at: its position, and the verdict there.
+record Bad { at: Nat, v: LocalVerdict }
+
+fn Bad::from(vs: List<LocalVerdict>, i: Nat) → Option<Bad> {
+    match vs { Nil => None, Cons(v, rest) => match LocalVerdict::every(v) { True => Bad::from(rest, i + 1), False => Some(Bad(i, v)) } }
+}
+
+fn Bad::first(vs: List<LocalVerdict>) → Option<Bad> { Bad::from(vs, 0) }
+
+// A function traced from its start: the checker's start state, the meaning's
+// arguments, the run's arguments as its frame holds them.
+fn Func::start3(self f: Func, tys: Nat → Type, cx: TCx(tys), vs: List<Value(tys)>, ds: List<Dyn(tys)>, h: Heap(tys), io: Io) → Tri(tys) {
+    Tri(CSt::start(tys, cx.strs, f.sig), Env::start(tys, ds), Mach(h, REnv(Cell::args(tys, f.sig.params, vs), Nil), io), λ o => CSt::start_root(tys, vs, o))
+}
+
+fn Func::trace_with<V>(self f: Func, tys: Nat → Type, cx: TCx(tys), g: Tri(tys) → V, vs: List<Value(tys)>, ds: List<Dyn(tys)>, h: Heap(tys), io: Io) → TOut(tys, V) {
+    f.body.trace_with(tys, cx, g, f.start3(tys, cx, vs, ds, h, io))
+}
+
+fn Func::trace(self f: Func, tys: Nat → Type, cx: TCx(tys), vs: List<Value(tys)>, ds: List<Dyn(tys)>, h: Heap(tys), io: Io) → TOut(tys, LocalVerdict) { f.body.trace(tys, cx, f.start3(tys, cx, vs, ds, h, io)) }
