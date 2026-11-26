@@ -492,6 +492,20 @@ fn fresh_two() → Func {
 
 theorem fresh_two_checked(): refusal_in([fresh_two()], 0) = None { refl }
 
+// One owned object answered once as owner and once as a view under it:
+// refused. A returned view must be of a parameter (`CSt::returns` asks its
+// one entry's object to be the parameter `OView` names), and a fresh or
+// parameter result cannot be a view at all, so a view into a block the body
+// made has no origin to be answered as. (A take of `x[0]` is a plain copy.)
+fn fresh_and_view(o: Origin) → Func {
+    Func(Sig([Param(nx(), ByRead)], [Result(nx(), OFresh), Result(nx(), o)]),
+        seq([Lit(WNat, 2), Lit(WNat, 0), Fresh(nx(), Loc(1), Loc(0)), View(win(Loc(0), Lit(0), Lit(1)), Reading)], Ret([Loc(1), Loc(0)])))
+}
+
+theorem fresh_and_its_view_refused(): refusal_in([fresh_and_view(OView(0, [SWindow(Lit(0), Lit(1))]))], 0) = Some(WOwn) { refl }
+
+theorem fresh_and_its_view_fresh_refused(): refusal_in([fresh_and_view(OFresh)], 0) = Some(WOwn) { refl }
+
 fn plain_word(n: Nat) → Value(tys()) { Plain(Dyn(nat_s(), n)) }
 
 theorem at_by_value(): Value::ViewIs(tys(), strs(), 0, Nil, [plain_list([1, 2]), plain_word(1)], Nil, nx(), OView(0, [SWindow(Var(1), Lit(1))]), plain_list([2])) { refl }
