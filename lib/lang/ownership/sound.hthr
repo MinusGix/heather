@@ -1283,13 +1283,15 @@ theorem Heap::frame_whole(tys: Nat → Type, strs: Strs(tys), before, after: Hea
 
 // The frame as the invariant carries it (`Inv.frame`): the lens equation from
 // the entry heap; the lent references pairwise apart (`Lendable.apart` at
-// entry, constant); and each lent reference fitting the entry's value, what
-// it reads now of the entry's code and length there (a store under it keeps
-// both, and the equation's two puts at it are one by them).
+// entry, constant); and, at a block nothing was lent whole, each lent
+// reference fitting the entry's value, what it reads now of the entry's code
+// and length there (a store under it keeps both, and the equation's two puts
+// at it are one by them). A block lent whole is the callee's, as in the
+// equation: passed on by take, its length is not promised.
 record LentFrame(tys: Nat → Type, strs: Strs(tys), h0, h: Heap(tys), lent: List<Ref>) {
     eq: Heap::Frame(tys, strs, h0, h, lent),
     pw: Ref::Pairwise(tys, strs, lent),
-    like: (r: Ref) → Mem(r, lent) → (ob: Obj(tys)) → Heap::obj(tys, h0, r.b) = Some(ob) → (ob2: Obj(tys)) → Heap::obj(tys, h, r.b) = Some(ob2) →
+    like: (r: Ref) → Mem(r, lent) → ((r2: Ref) → Mem(r2, lent) → r2.b = r.b → ¬(r2.sels = Nil)) → (ob: Obj(tys)) → Heap::obj(tys, h0, r.b) = Some(ob) → (ob2: Obj(tys)) → Heap::obj(tys, h, r.b) = Some(ob2) →
         (Sel::fit(tys, strs, r.sels, ob.val) = True) ∧ Sel::LikeAt(tys, strs, r.sels, ob2.val, ob.val),
 }
 
@@ -1303,7 +1305,7 @@ theorem LentFrame::keep(tys: Nat → Type, strs: Strs(tys), {h0, h: Heap(tys)}, 
     LentFrame(
         λ b nn ob ho => match lf.eq(b, nn, ob, ho) { ⟨ob2, p2⟩ => Exists(ob2, ⟨trans(same(b, ob, ho, nn), p2.left), p2.right⟩) },
         lf.pw,
-        λ r mr ob ho ob2 ho2 => lf.like(r, mr, ob, ho, ob2, trans(sym(gone(r.b, ob, ho, ob2, ho2)), ho2)))
+        λ r mr nn ob ho ob2 ho2 => lf.like(r, mr, nn, ob, ho, ob2, trans(sym(gone(r.b, ob, ho, ob2, ho2)), ho2)))
 }
 
 // What was lent to change, by position: a lent reference is an argument's.
@@ -2142,7 +2144,7 @@ theorem Inv::start(tys: Nat → Type, strs: Strs(tys), sl: StrsLaws(tys, strs), 
         λ l no => absurd(no),
         LentFrame(λ b _ ob ho => Exists(ob, ⟨ho, sym(Sel::put_lent_self(tys, strs, sl, Value::lent(tys, sig.params, vs), b, ob.val))⟩),
             Value::lent_pairwise(tys, strs, vs, sig.params, ld.apart),
-            λ r mr ob ho ob2 ho2 => {
+            λ r mr _ ob ho ob2 ho2 => {
                 let e2: (ob2 = ob) = Option::some_inj(ob2, ob, trans(sym(ho2), ho));
                 match Value::lent_mem(tys, vs, sig.params, r, mr) {
                     ⟨i, pi⟩ => match ld.live(i, r, pi) {
@@ -6138,7 +6140,7 @@ theorem Inv::store_frame(tys: Nat → Type, strs: Strs(tys), sl: StrsLaws(tys, s
                     Inl(eq) => match inv.owned(o, ch, r, rt) {
                         Inl(mr) => {
                             let ho0r: (Heap::obj(tys, h0, r.b) = Some(ob0)) = j(eq, λ z _ => Heap::obj(tys, h0, z) = Some(ob0), ho0);
-                            let lk = inv.frame.like(r, mr, ob0, ho0r, ob1, p1);
+                            let lk = inv.frame.like(r, mr, λ r2 m2 e2 => nn(r2, m2, trans(e2, sym(eq))), ob0, ho0r, ob1, p1);
                             let lo: Sel::LikeAt(tys, strs, r.sels, old, ob0.val) = j(ov, λ z _ => Sel::LikeAt(tys, strs, r.sels, z, ob0.val), lk.right);
                             let eqo: (old = Sel::put_lent(tys, strs, lent, r.b, old, ob0.val)) =
                                 match inv.frame.eq(r.b, λ r2 m2 e2 => nn(r2, m2, trans(e2, sym(eq))), ob0, ho0r) {
@@ -6157,10 +6159,10 @@ theorem Inv::store_frame(tys: Nat → Type, strs: Strs(tys), sl: StrsLaws(tys, s
                     Inr(ne) => match inv.frame.eq(bb, nn, ob0, ho0) { ⟨ob3, p3⟩ => Exists(ob3, ⟨trans(Heap::obj_store_other(tys, m.heap, r.b, bb, nw, ne), p3.left), p3.right⟩) },
                 },
                 inv.frame.pw,
-                λ r2 m2 ob0 ho0 ob2 ho2 => match Nat::eq_or_ne(r2.b, r.b) {
-                    Inr(ne) => inv.frame.like(r2, m2, ob0, ho0, ob2, trans(sym(Heap::obj_store_other(tys, m.heap, r.b, r2.b, nw, ne)), ho2)),
+                λ r2 m2 nn ob0 ho0 ob2 ho2 => match Nat::eq_or_ne(r2.b, r.b) {
+                    Inr(ne) => inv.frame.like(r2, m2, nn, ob0, ho0, ob2, trans(sym(Heap::obj_store_other(tys, m.heap, r.b, r2.b, nw, ne)), ho2)),
                     Inl(eb) => {
-                        let lk = inv.frame.like(r2, m2, ob0, ho0, ob1, j(sym(eb), λ z _ => Heap::obj(tys, m.heap, z) = Some(ob1), p1));
+                        let lk = inv.frame.like(r2, m2, nn, ob0, ho0, ob1, j(sym(eb), λ z _ => Heap::obj(tys, m.heap, z) = Some(ob1), p1));
                         let o2e: (ob2 = Obj(nw, ob1.holes)) = Option::some_inj(ob2, Obj(nw, ob1.holes), trans(sym(ho2), j(sym(eb), λ z _ => Heap::obj(tys, h2, z) = Some(Obj(nw, ob1.holes)), here)));
                         let lo: Sel::LikeAt(tys, strs, r2.sels, old, ob0.val) = j(ov, λ z _ => Sel::LikeAt(tys, strs, r2.sels, z, ob0.val), lk.right);
                         let ln: Sel::LikeAt(tys, strs, r2.sels, nw, ob0.val) = match inv.owned(o, ch, r, rt) {
@@ -13403,4 +13405,346 @@ theorem Run::calls_prim(tys: Nat → Type, p: Prog(tys), f, g: Nat, ip: p.prim(g
     j(sym(ip), λ b _ => (match b as λ _ => Ran(tys) { True => Run::prim(tys, p.strs, p.w, g, vs, h, io), False => (p.fns(g)).run(tys, p.strs, p.fns, Run::calls(tys, p.strs, p.fns, p.w, p.prim, f), g, vs, h, io) }) =
         Done(Answer((p.w(g, ds)).map(λ d => level2::Plain(d)), h, io)),
         j(sym(ga), λ o _ => (match o as λ _ => Ran(tys) { Some(ds2) => Done(Answer((p.w(g, ds2)).map(λ d => level2::Plain(d)), h, io)), None => Stuck }) = Done(Answer((p.w(g, ds)).map(λ d => level2::Plain(d)), h, io)), refl))
+}
+
+// ---------------------------------------------------------------------------
+// P4's frame: the caller's lens equation composed with the callee's
+//
+// At a block the caller was lent part of, the callee's references lent to
+// change are under the caller's (an object something may change through has
+// its root in a block it was lent or made here, `Inv.owned`). The caller's
+// equation from the entry `d` to the heap before the call `mm`, and the
+// callee's from `mm` to the heap after `aa`, give the caller's from `d` to
+// `aa`: the callee's puts under a caller reference are absorbed by the
+// caller's put there (`Sel::put_lent_absorb`), and the caller's two puts at a
+// reference are one (`Sel::put_lent_twice`). Each needs what is put to keep
+// the code and length there, which the callee's `Value::Written` gives.
+
+theorem Sel::like_at_trans(tys: Nat → Type, strs: Strs(tys), p: List<Sel>, x, y, z: Dyn(tys), a: Sel::LikeAt(tys, strs, p, x, y), b: Sel::LikeAt(tys, strs, p, y, z)): Sel::LikeAt(tys, strs, p, x, z) {
+    ⟨trans(a.left, b.left), trans(a.right, b.right)⟩
+}
+
+theorem Sel::like_at_sym(tys: Nat → Type, strs: Strs(tys), p: List<Sel>, x, y: Dyn(tys), a: Sel::LikeAt(tys, strs, p, x, y)): Sel::LikeAt(tys, strs, p, y, x) { ⟨sym(a.left), sym(a.right)⟩ }
+
+// A write under a step keeps the code and length, whatever it writes.
+theorem Sel::write_keeps_cons(tys: Nat → Type, strs: Strs(tys), sl: StrsLaws(tys, strs), g: Dyn(tys) → Dyn(tys), b: Sel, r: List<Sel>, y: Dyn(tys)):
+    ((Sel::write_at(tys, strs, Cons(b, r), g, y)).code = y.code) ∧ (Dyn::len(tys, strs, Sel::write_at(tys, strs, Cons(b, r), g, y)) = Dyn::len(tys, strs, y))
+{
+    ⟨refl, Dyn::in_len(tys, strs, b, Dyn::len_at(tys, strs, y.code), Dyn::part(tys, strs, b, y.code), Dyn::part_ok(tys, strs, sl, b, y.code), λ x => Sel::write_at(tys, strs, r, g, x), y.val)⟩
+}
+
+// A write at `t` keeps the code and length of what it writes in, where at an
+// empty `t` the value written does.
+theorem Sel::write_like(tys: Nat → Type, strs: Strs(tys), sl: StrsLaws(tys, strs), t: List<Sel>, al, y: Dyn(tys),
+    nil: t = Nil → (al.code = y.code) ∧ (Dyn::len(tys, strs, al) = Dyn::len(tys, strs, y))):
+    ((Sel::write_at(tys, strs, t, λ _ => al, y)).code = y.code) ∧ (Dyn::len(tys, strs, Sel::write_at(tys, strs, t, λ _ => al, y)) = Dyn::len(tys, strs, y))
+{
+    (match t as λ u => (u = Nil → (al.code = y.code) ∧ (Dyn::len(tys, strs, al) = Dyn::len(tys, strs, y))) →
+            ((Sel::write_at(tys, strs, u, λ _ => al, y)).code = y.code) ∧ (Dyn::len(tys, strs, Sel::write_at(tys, strs, u, λ _ => al, y)) = Dyn::len(tys, strs, y)) {
+        Nil => λ h => h(refl),
+        Cons(b, r) => λ _ => Sel::write_keeps_cons(tys, strs, sl, λ _ => al, b, r, y),
+    })(nil)
+}
+
+// A reference of a pairwise list into the block fits after the fold where it
+// fit before.
+theorem Sel::put_lent_fit(tys: Nat → Type, strs: Strs(tys), sl: StrsLaws(tys, strs), c: Ref, b: Nat, cb: c.b = b, a: Dyn(tys), rs: List<Ref>):
+    Ref::Pairwise(tys, strs, rs) → Mem(c, rs) → (d: Dyn(tys)) → Sel::fit(tys, strs, c.sels, Sel::put_lent(tys, strs, rs, b, a, d)) = Sel::fit(tys, strs, c.sels, d)
+{
+    match rs {
+        Nil => λ _ no => false_elim(no),
+        Cons(q, rest) => λ pw mr d => match mr {
+            Inl(e) => {
+                let aps: Sel::ApartAll(tys, strs, rest, b, c.sels) = λ q2 m2 e2 =>
+                    Sel::apart_sym(tys, strs, c.sels, q2.sels, (j(sym(e), λ z _ => Ref::Apart(tys, strs, z, q2), pw.left(q2, m2)))(trans(cb, sym(e2))));
+                let one: (Sel::fit(tys, strs, c.sels, Sel::put_ref(tys, strs, q, b, a, d)) = Sel::fit(tys, strs, c.sels, d)) =
+                    j(e, λ z _ => Sel::fit(tys, strs, c.sels, Sel::put_ref(tys, strs, z, b, a, d)) = Sel::fit(tys, strs, c.sels, d),
+                        trans(cong_fn(λ (y: Dyn(tys)) => Sel::fit(tys, strs, c.sels, y), Sel::put_ref_in(tys, strs, c, b, a, d, cb)),
+                            Sel::fit_write_self(tys, strs, sl, c.sels, λ _ => Sel::read_at(tys, strs, c.sels, a), d)));
+                trans((Sel::put_lent_keeps(tys, strs, rest, b, c.sels, a, aps, Sel::put_ref(tys, strs, q, b, a, d))).right, one)
+            },
+            Inr(m) => {
+                let apq: Ref::Apart(tys, strs, q, c) = pw.left(c, m);
+                let kp = Sel::put_ref_keeps(tys, strs, q, b, c.sels, λ eb => apq(trans(eb, sym(cb))), a, d);
+                trans(Sel::put_lent_fit(tys, strs, sl, c, b, cb, a, rest, pw.right, m, Sel::put_ref(tys, strs, q, b, a, d)), kp.right)
+            },
+        },
+    }
+}
+
+// The caller's two puts at each reference are one: the outer overwrites the
+// inner, where each value put has the code and length `d` has there.
+theorem Sel::put_lent_twice(tys: Nat → Type, strs: Strs(tys), sl: StrsLaws(tys, strs), b: Nat, a, m: Dyn(tys), rs: List<Ref>): Ref::Pairwise(tys, strs, rs) → (d: Dyn(tys)) →
+    ((c: Ref) → Mem(c, rs) → c.b = b → (Sel::fit(tys, strs, c.sels, d) = True) ∧ (Sel::LikeAt(tys, strs, c.sels, a, d) ∧ Sel::LikeAt(tys, strs, c.sels, m, d))) →
+    Sel::put_lent(tys, strs, rs, b, a, Sel::put_lent(tys, strs, rs, b, m, d)) = Sel::put_lent(tys, strs, rs, b, a, d)
+{
+    match rs {
+        Nil => λ _ d _ => refl,
+        Cons(q, rest) => λ pw d h => match Nat::eq_or_ne(q.b, b) {
+            Inr(ne) => {
+                let ih = Sel::put_lent_twice(tys, strs, sl, b, a, m, rest, pw.right, d, λ c mc ec => h(c, Inr(mc), ec));
+                trans(cong_fn(λ (z: Dyn(tys)) => Sel::put_lent(tys, strs, rest, b, a, Sel::put_ref(tys, strs, q, b, a, z)), cong_fn(λ (z: Dyn(tys)) => Sel::put_lent(tys, strs, rest, b, m, z), Sel::put_ref_out(tys, strs, q, b, m, d, ne))),
+                    trans(cong_fn(λ (z: Dyn(tys)) => Sel::put_lent(tys, strs, rest, b, a, z), Sel::put_ref_out(tys, strs, q, b, a, Sel::put_lent(tys, strs, rest, b, m, d), ne)),
+                        trans(ih, cong_fn(λ (z: Dyn(tys)) => Sel::put_lent(tys, strs, rest, b, a, z), sym(Sel::put_ref_out(tys, strs, q, b, a, d, ne))))))
+            },
+            Inl(eq) => {
+                let aps: Sel::ApartAll(tys, strs, rest, b, q.sels) = λ q2 m2 e2 => Sel::apart_sym(tys, strs, q.sels, q2.sels, pw.left(q2, m2)(trans(eq, sym(e2))));
+                let ga = λ (_: Dyn(tys)) => Sel::read_at(tys, strs, q.sels, a);
+                let gm = λ (_: Dyn(tys)) => Sel::read_at(tys, strs, q.sels, m);
+                let hq = h(q, Inl(refl), eq);
+                let inner: (Sel::put_ref(tys, strs, q, b, a, Sel::put_lent(tys, strs, rest, b, m, Sel::put_ref(tys, strs, q, b, m, d))) =
+                        Sel::put_lent(tys, strs, rest, b, m, Sel::put_ref(tys, strs, q, b, a, d))) =
+                    trans(Sel::put_ref_in(tys, strs, q, b, a, Sel::put_lent(tys, strs, rest, b, m, Sel::put_ref(tys, strs, q, b, m, d)), eq),
+                        trans(sym(Sel::put_lent_write(tys, strs, rest, b, q.sels, ga, m, aps, Sel::put_ref(tys, strs, q, b, m, d))),
+                            cong_fn(λ (z: Dyn(tys)) => Sel::put_lent(tys, strs, rest, b, m, z),
+                                trans(cong_fn(λ (z: Dyn(tys)) => Sel::write_at(tys, strs, q.sels, ga, z), Sel::put_ref_in(tys, strs, q, b, m, d, eq)),
+                                    trans(Sel::write_write(tys, strs, sl, gm, ga, q.sels, d, hq.left, hq.right.right.left, hq.right.right.right, hq.right.left.left, hq.right.left.right),
+                                        sym(Sel::put_ref_in(tys, strs, q, b, a, d, eq)))))));
+                let d2 = Sel::put_ref(tys, strs, q, b, a, d);
+                let ih = Sel::put_lent_twice(tys, strs, sl, b, a, m, rest, pw.right, d2, λ c mc ec => {
+                    let hc = h(c, Inr(mc), ec);
+                    let kp = Sel::put_ref_keeps(tys, strs, q, b, c.sels, λ _ => pw.left(c, mc)(trans(eq, sym(ec))), a, d);
+                    ⟨trans(kp.right, hc.left), ⟨Sel::like_at_tr(tys, strs, c.sels, a, d, d2, kp.left, hc.right.left), Sel::like_at_tr(tys, strs, c.sels, m, d, d2, kp.left, hc.right.right)⟩⟩
+                });
+                trans(cong_fn(λ (z: Dyn(tys)) => Sel::put_lent(tys, strs, rest, b, a, z), inner), ih)
+            },
+        },
+    }
+}
+
+// What the callee's puts keep of the caller's references into block `b`:
+// each fits, and reads what `m` reads there in code and length.
+fn Sel::Keeps(tys: Nat → Type, strs: Strs(tys), cs: List<Ref>, b: Nat, m, x: Dyn(tys)) → Type {
+    (c: Ref) → Mem(c, cs) → c.b = b → (Sel::fit(tys, strs, c.sels, x) = True) ∧ Sel::LikeAt(tys, strs, c.sels, x, m)
+}
+
+// Each of `ks` into block `b` extends one of `cs` there.
+fn Ref::Under(ks, cs: List<Ref>, b: Nat) → Type {
+    (k: Ref) → Mem(k, ks) → k.b = b → Exists<Ref>(λ c => (Mem(c, cs) ∧ (c.b = b)) ∧ Exists<List<Sel>>(λ t => k.sels = c.sels ++ t))
+}
+
+// One callee put under a caller reference `c0`, as a write at `c0`.
+theorem Sel::put_under(tys: Nat → Type, strs: Strs(tys), k, c0: Ref, t: List<Sel>, et: k.sels = c0.sels ++ t, a, x: Dyn(tys)):
+    Sel::write_at(tys, strs, k.sels, λ _ => Sel::read_at(tys, strs, k.sels, a), x) = Sel::write_at(tys, strs, c0.sels, λ z => Sel::write_at(tys, strs, t, λ _ => Sel::read_at(tys, strs, k.sels, a), z), x)
+{
+    trans(cong_fn(λ (p: List<Sel>) => Sel::write_at(tys, strs, p, λ _ => Sel::read_at(tys, strs, k.sels, a), x), et),
+        Sel::write_append(tys, strs, c0.sels, t, λ _ => Sel::read_at(tys, strs, k.sels, a), x))
+}
+
+// The like-ness one put under `c0` needs where it writes at `c0` itself.
+theorem Sel::under_like(tys: Nat → Type, strs: Strs(tys), sl: StrsLaws(tys, strs), k, c0: Ref, t: List<Sel>, et: k.sels = c0.sels ++ t, a, m, x: Dyn(tys),
+    lk: Sel::LikeAt(tys, strs, k.sels, a, m), lx: Sel::LikeAt(tys, strs, c0.sels, x, m)):
+    ((Sel::write_at(tys, strs, t, λ _ => Sel::read_at(tys, strs, k.sels, a), Sel::read_at(tys, strs, c0.sels, x))).code = (Sel::read_at(tys, strs, c0.sels, x)).code) ∧
+    (Dyn::len(tys, strs, Sel::write_at(tys, strs, t, λ _ => Sel::read_at(tys, strs, k.sels, a), Sel::read_at(tys, strs, c0.sels, x))) = Dyn::len(tys, strs, Sel::read_at(tys, strs, c0.sels, x)))
+{
+    Sel::write_like(tys, strs, sl, t, Sel::read_at(tys, strs, k.sels, a), Sel::read_at(tys, strs, c0.sels, x), λ tn => {
+        let kc: (k.sels = c0.sels) = trans(et, trans(cong_fn(λ (u: List<Sel>) => c0.sels ++ u, tn), List::append_nil(c0.sels)));
+        let l2: Sel::LikeAt(tys, strs, c0.sels, a, m) = j(kc, λ p _ => Sel::LikeAt(tys, strs, p, a, m), lk);
+        let l3 = Sel::like_at_trans(tys, strs, c0.sels, a, m, x, l2, Sel::like_at_sym(tys, strs, c0.sels, x, m, lx));
+        ⟨trans(cong_fn(λ (p: List<Sel>) => (Sel::read_at(tys, strs, p, a)).code, kc), l3.left), trans(cong_fn(λ (p: List<Sel>) => Dyn::len(tys, strs, Sel::read_at(tys, strs, p, a)), kc), l3.right)⟩
+    })
+}
+
+// One callee put keeps `Sel::Keeps`.
+theorem Sel::keeps_put(tys: Nat → Type, strs: Strs(tys), sl: StrsLaws(tys, strs), cs: List<Ref>, pw: Ref::Pairwise(tys, strs, cs), b: Nat, a, m, x: Dyn(tys),
+    kx: Sel::Keeps(tys, strs, cs, b, m, x), k: Ref, uk: k.b = b → Exists<Ref>(λ c => (Mem(c, cs) ∧ (c.b = b)) ∧ Exists<List<Sel>>(λ t => k.sels = c.sels ++ t)),
+    lk: k.b = b → Sel::LikeAt(tys, strs, k.sels, a, m)):
+    Sel::Keeps(tys, strs, cs, b, m, Sel::put_ref(tys, strs, k, b, a, x))
+{
+    match Nat::eq_or_ne(k.b, b) {
+        Inr(ne) => j(sym(Sel::put_ref_out(tys, strs, k, b, a, x, ne)), λ z _ => Sel::Keeps(tys, strs, cs, b, m, z), kx),
+        Inl(eq) => match uk(eq) {
+            ⟨c0, pc⟩ => match pc.right {
+                ⟨t, et⟩ => {
+                    let al = Sel::read_at(tys, strs, k.sels, a);
+                    let ff = λ (z: Dyn(tys)) => Sel::write_at(tys, strs, t, λ _ => al, z);
+                    let pk: (Sel::put_ref(tys, strs, k, b, a, x) = Sel::write_at(tys, strs, c0.sels, ff, x)) =
+                        trans(Sel::put_ref_in(tys, strs, k, b, a, x, eq), Sel::put_under(tys, strs, k, c0, t, et, a, x));
+                    j(sym(pk), λ z _ => Sel::Keeps(tys, strs, cs, b, m, z), λ c mc ec => {
+                        let kc = kx(c, mc, ec);
+                        match Ref::pairwise_mem(tys, strs, cs, pw, c0, c, pc.left.left, mc) {
+                            Inl(e0) => j(e0, λ z _ => (Sel::fit(tys, strs, z.sels, Sel::write_at(tys, strs, c0.sels, ff, x)) = True) ∧ Sel::LikeAt(tys, strs, z.sels, Sel::write_at(tys, strs, c0.sels, ff, x), m), {
+                                let k0 = kx(c0, pc.left.left, pc.left.right);
+                                let ul = Sel::under_like(tys, strs, sl, k, c0, t, et, a, m, x, lk(eq), k0.right);
+                                let wg = Sel::write_get(tys, strs, sl, ff, c0.sels, x, k0.left, ul.left, ul.right);
+                                ⟨wg.left, ⟨trans(cong_fn(λ (z: Dyn(tys)) => z.code, wg.right), trans(ul.left, k0.right.left)),
+                                    trans(cong_fn(λ (z: Dyn(tys)) => Dyn::len(tys, strs, z), wg.right), trans(ul.right, k0.right.right))⟩⟩
+                            }),
+                            Inr(ap) => {
+                                let sa: Sel::Apart(tys, strs, c0.sels, c.sels) = ap(trans(pc.left.right, sym(ec)));
+                                let rd: (Sel::read_at(tys, strs, c.sels, Sel::write_at(tys, strs, c0.sels, ff, x)) = Sel::read_at(tys, strs, c.sels, x)) = sa.reads.right_after_left(ff, x);
+                                ⟨trans(sa.fit2(ff, x), kc.left), ⟨trans(cong_fn(λ (z: Dyn(tys)) => z.code, rd), kc.right.left), trans(cong_fn(λ (z: Dyn(tys)) => Dyn::len(tys, strs, z), rd), kc.right.right)⟩⟩
+                            },
+                        }
+                    })
+                },
+            },
+        },
+    }
+}
+
+// The callee's fold keeps `Sel::Keeps`.
+theorem Sel::keeps_fold(tys: Nat → Type, strs: Strs(tys), sl: StrsLaws(tys, strs), cs: List<Ref>, pw: Ref::Pairwise(tys, strs, cs), b: Nat, a, m: Dyn(tys), ks: List<Ref>):
+    Ref::Under(ks, cs, b) → ((k: Ref) → Mem(k, ks) → k.b = b → Sel::LikeAt(tys, strs, k.sels, a, m)) → (x: Dyn(tys)) → Sel::Keeps(tys, strs, cs, b, m, x) →
+    Sel::Keeps(tys, strs, cs, b, m, Sel::put_lent(tys, strs, ks, b, a, x))
+{
+    match ks {
+        Nil => λ _ _ x kx => kx,
+        Cons(k, rest) => λ un lk x kx => Sel::keeps_fold(tys, strs, sl, cs, pw, b, a, m, rest, λ k2 m2 e2 => un(k2, Inr(m2), e2), λ k2 m2 e2 => lk(k2, Inr(m2), e2),
+            Sel::put_ref(tys, strs, k, b, a, x), Sel::keeps_put(tys, strs, sl, cs, pw, b, a, m, x, kx, k, λ e => un(k, Inl(refl), e), λ e => lk(k, Inl(refl), e))),
+    }
+}
+
+// The caller's fold absorbs a write at one of its references: its put there
+// overwrites it, and its other puts are apart from it.
+theorem Sel::put_lent_absorb(tys: Nat → Type, strs: Strs(tys), sl: StrsLaws(tys, strs), c0: Ref, b: Nat, cb: c0.b = b, a: Dyn(tys), ff: Dyn(tys) → Dyn(tys), cs: List<Ref>):
+    Ref::Pairwise(tys, strs, cs) → Mem(c0, cs) → (x: Dyn(tys)) → Sel::fit(tys, strs, c0.sels, x) = True →
+    (ff(Sel::read_at(tys, strs, c0.sels, x))).code = (Sel::read_at(tys, strs, c0.sels, x)).code →
+    Dyn::len(tys, strs, ff(Sel::read_at(tys, strs, c0.sels, x))) = Dyn::len(tys, strs, Sel::read_at(tys, strs, c0.sels, x)) →
+    Sel::LikeAt(tys, strs, c0.sels, a, x) →
+    Sel::put_lent(tys, strs, cs, b, a, Sel::write_at(tys, strs, c0.sels, ff, x)) = Sel::put_lent(tys, strs, cs, b, a, x)
+{
+    match cs {
+        Nil => λ _ no => false_elim(no),
+        Cons(q, rest) => λ pw mc x fx fc fl la => match mc {
+            Inl(e) => {
+                let ga = λ (_: Dyn(tys)) => Sel::read_at(tys, strs, c0.sels, a);
+                let one: (Sel::put_ref(tys, strs, c0, b, a, Sel::write_at(tys, strs, c0.sels, ff, x)) = Sel::put_ref(tys, strs, c0, b, a, x)) =
+                    trans(Sel::put_ref_in(tys, strs, c0, b, a, Sel::write_at(tys, strs, c0.sels, ff, x), cb),
+                        trans(Sel::write_write(tys, strs, sl, ff, ga, c0.sels, x, fx, fc, fl, la.left, la.right), sym(Sel::put_ref_in(tys, strs, c0, b, a, x, cb))));
+                cong_fn(λ (z: Dyn(tys)) => Sel::put_lent(tys, strs, rest, b, a, z),
+                    j(e, λ z _ => Sel::put_ref(tys, strs, z, b, a, Sel::write_at(tys, strs, c0.sels, ff, x)) = Sel::put_ref(tys, strs, z, b, a, x), one))
+            },
+            Inr(m) => {
+                let apq: Ref::Apart(tys, strs, q, c0) = pw.left(c0, m);
+                let x2 = Sel::put_ref(tys, strs, q, b, a, x);
+                let kp = Sel::put_ref_keeps(tys, strs, q, b, c0.sels, λ eb => apq(trans(eb, sym(cb))), a, x);
+                let comm: (Sel::put_ref(tys, strs, q, b, a, Sel::write_at(tys, strs, c0.sels, ff, x)) = Sel::write_at(tys, strs, c0.sels, ff, x2)) = match Nat::eq_or_ne(q.b, b) {
+                    Inl(eq) => {
+                        let gq = λ (_: Dyn(tys)) => Sel::read_at(tys, strs, q.sels, a);
+                        trans(Sel::put_ref_in(tys, strs, q, b, a, Sel::write_at(tys, strs, c0.sels, ff, x), eq),
+                            trans((apq(trans(eq, sym(cb)))).reads.commute(gq, ff, x), cong_fn(λ (z: Dyn(tys)) => Sel::write_at(tys, strs, c0.sels, ff, z), sym(Sel::put_ref_in(tys, strs, q, b, a, x, eq)))))
+                    },
+                    Inr(ne) => trans(Sel::put_ref_out(tys, strs, q, b, a, Sel::write_at(tys, strs, c0.sels, ff, x), ne),
+                        cong_fn(λ (z: Dyn(tys)) => Sel::write_at(tys, strs, c0.sels, ff, z), sym(Sel::put_ref_out(tys, strs, q, b, a, x, ne)))),
+                };
+                let r2 = kp.left;
+                trans(cong_fn(λ (z: Dyn(tys)) => Sel::put_lent(tys, strs, rest, b, a, z), comm),
+                    Sel::put_lent_absorb(tys, strs, sl, c0, b, cb, a, ff, rest, pw.right, m, x2, trans(kp.right, fx),
+                        j(sym(r2), λ z _ => (ff(z)).code = z.code, fc), j(sym(r2), λ z _ => Dyn::len(tys, strs, ff(z)) = Dyn::len(tys, strs, z), fl),
+                        Sel::like_at_tr(tys, strs, c0.sels, a, x, x2, r2, la)))
+            },
+        },
+    }
+}
+
+// The caller's fold absorbs the callee's: every callee put is under a caller
+// reference, which the caller's put there overwrites.
+theorem Sel::put_lent_absorb_all(tys: Nat → Type, strs: Strs(tys), sl: StrsLaws(tys, strs), cs: List<Ref>, pw: Ref::Pairwise(tys, strs, cs), b: Nat, a, m: Dyn(tys),
+    ac: (c: Ref) → Mem(c, cs) → c.b = b → Sel::LikeAt(tys, strs, c.sels, a, m), ks: List<Ref>):
+    Ref::Under(ks, cs, b) → ((k: Ref) → Mem(k, ks) → k.b = b → Sel::LikeAt(tys, strs, k.sels, a, m)) → (x: Dyn(tys)) → Sel::Keeps(tys, strs, cs, b, m, x) →
+    Sel::put_lent(tys, strs, cs, b, a, Sel::put_lent(tys, strs, ks, b, a, x)) = Sel::put_lent(tys, strs, cs, b, a, x)
+{
+    match ks {
+        Nil => λ _ _ x _ => refl,
+        Cons(k, rest) => λ un lk x kx => {
+            let x2 = Sel::put_ref(tys, strs, k, b, a, x);
+            let ih = Sel::put_lent_absorb_all(tys, strs, sl, cs, pw, b, a, m, ac, rest, λ k2 m2 e2 => un(k2, Inr(m2), e2), λ k2 m2 e2 => lk(k2, Inr(m2), e2), x2,
+                Sel::keeps_put(tys, strs, sl, cs, pw, b, a, m, x, kx, k, λ e => un(k, Inl(refl), e), λ e => lk(k, Inl(refl), e)));
+            let one: (Sel::put_lent(tys, strs, cs, b, a, x2) = Sel::put_lent(tys, strs, cs, b, a, x)) = match Nat::eq_or_ne(k.b, b) {
+                Inr(ne) => cong_fn(λ (z: Dyn(tys)) => Sel::put_lent(tys, strs, cs, b, a, z), Sel::put_ref_out(tys, strs, k, b, a, x, ne)),
+                Inl(eq) => match un(k, Inl(refl), eq) {
+                    ⟨c0, pc⟩ => match pc.right {
+                        ⟨t, et⟩ => {
+                            let k0 = kx(c0, pc.left.left, pc.left.right);
+                            let ul = Sel::under_like(tys, strs, sl, k, c0, t, et, a, m, x, lk(k, Inl(refl), eq), k0.right);
+                            let la: Sel::LikeAt(tys, strs, c0.sels, a, x) = Sel::like_at_trans(tys, strs, c0.sels, a, m, x, ac(c0, pc.left.left, pc.left.right), Sel::like_at_sym(tys, strs, c0.sels, x, m, k0.right));
+                            trans(cong_fn(λ (z: Dyn(tys)) => Sel::put_lent(tys, strs, cs, b, a, z), trans(Sel::put_ref_in(tys, strs, k, b, a, x, eq), Sel::put_under(tys, strs, k, c0, t, et, a, x))),
+                                Sel::put_lent_absorb(tys, strs, sl, c0, b, pc.left.right, a, λ z => Sel::write_at(tys, strs, t, λ _ => Sel::read_at(tys, strs, k.sels, a), z), cs, pw, pc.left.left, x,
+                                    k0.left, ul.left, ul.right, la))
+                        },
+                    },
+                },
+            };
+            trans(ih, one)
+        },
+    }
+}
+
+// The composition at one block: the caller's equation from `d` to `mm`, the
+// callee's from `mm` to `aa` with its references under the caller's, give
+// the caller's from `d` to `aa`, and each caller reference reads in `aa` the
+// code and length it read in `d`.
+theorem Sel::put_lent_compose(tys: Nat → Type, strs: Strs(tys), sl: StrsLaws(tys, strs), b: Nat, cs, ks: List<Ref>, pw: Ref::Pairwise(tys, strs, cs), un: Ref::Under(ks, cs, b),
+    d, mm, aa: Dyn(tys), em: mm = Sel::put_lent(tys, strs, cs, b, mm, d), ea: aa = Sel::put_lent(tys, strs, ks, b, aa, mm),
+    lc: (c: Ref) → Mem(c, cs) → c.b = b → (Sel::fit(tys, strs, c.sels, d) = True) ∧ Sel::LikeAt(tys, strs, c.sels, mm, d),
+    lk: (k: Ref) → Mem(k, ks) → k.b = b → Sel::LikeAt(tys, strs, k.sels, aa, mm)):
+    (aa = Sel::put_lent(tys, strs, cs, b, aa, d)) ∧ ((c: Ref) → Mem(c, cs) → c.b = b → Sel::LikeAt(tys, strs, c.sels, aa, d))
+{
+    let k0: Sel::Keeps(tys, strs, cs, b, mm, mm) = λ c mc ec =>
+        ⟨trans(cong_fn(λ (z: Dyn(tys)) => Sel::fit(tys, strs, c.sels, z), em), trans(Sel::put_lent_fit(tys, strs, sl, c, b, ec, mm, cs, pw, mc, d), (lc(c, mc, ec)).left)), ⟨refl, refl⟩⟩;
+    let ka: Sel::Keeps(tys, strs, cs, b, mm, aa) = j(sym(ea), λ z _ => Sel::Keeps(tys, strs, cs, b, mm, z), Sel::keeps_fold(tys, strs, sl, cs, pw, b, aa, mm, ks, un, lk, mm, k0));
+    let ac: ((c: Ref) → Mem(c, cs) → c.b = b → Sel::LikeAt(tys, strs, c.sels, aa, mm)) = λ c mc ec => (ka(c, mc, ec)).right;
+    let ab = Sel::put_lent_absorb_all(tys, strs, sl, cs, pw, b, aa, mm, ac, ks, un, lk, mm, k0);
+    let am: (aa = Sel::put_lent(tys, strs, cs, b, aa, mm)) =
+        trans(sym(Sel::put_lent_self(tys, strs, sl, cs, b, aa)), trans(cong_fn(λ (z: Dyn(tys)) => Sel::put_lent(tys, strs, cs, b, aa, z), ea), ab));
+    let ad: ((c: Ref) → Mem(c, cs) → c.b = b → Sel::LikeAt(tys, strs, c.sels, aa, d)) = λ c mc ec => Sel::like_at_trans(tys, strs, c.sels, aa, mm, d, ac(c, mc, ec), (lc(c, mc, ec)).right);
+    let tw = Sel::put_lent_twice(tys, strs, sl, b, aa, mm, cs, pw, d, λ c mc ec => ⟨(lc(c, mc, ec)).left, ⟨ad(c, mc, ec), (lc(c, mc, ec)).right⟩⟩);
+    ⟨trans(am, trans(cong_fn(λ (z: Dyn(tys)) => Sel::put_lent(tys, strs, cs, b, aa, z), em), tw)), ad⟩
+}
+
+theorem List::app_nil_l<A>(self xs: List<A>, ys: List<A>): xs ++ ys = Nil → xs = Nil {
+    match xs { Nil => λ _ => refl, Cons(_, _) => λ no => absurd(no) }
+}
+
+// P4's frame at one block: the caller's equation and like-ness at the entry,
+// the callee's equation at the heap before the call, give the caller's at the
+// heap after. A callee reference lent to change into a block the caller was
+// lent part of extends a caller reference (`un`), so none is whole there.
+theorem LentFrame::call_at(tys: Nat → Type, strs: Strs(tys), sl: StrsLaws(tys, strs), {h0, mh: Heap(tys)}, {lent: List<Ref>}, lf: LentFrame(tys, strs, h0, mh, lent), ah: Heap(tys), ks: List<Ref>,
+    fr: Heap::Frame(tys, strs, mh, ah, ks),
+    un: (k: Ref) → Mem(k, ks) → (ob0: Obj(tys)) → Heap::obj(tys, h0, k.b) = Some(ob0) → Exists<Ref>(λ c => (Mem(c, lent) ∧ (c.b = k.b)) ∧ Exists<List<Sel>>(λ t => k.sels = c.sels ++ t)),
+    lk: (k: Ref) → Mem(k, ks) → (ob1: Obj(tys)) → Heap::obj(tys, mh, k.b) = Some(ob1) → (ob2: Obj(tys)) → Heap::obj(tys, ah, k.b) = Some(ob2) → Sel::LikeAt(tys, strs, k.sels, ob2.val, ob1.val),
+    b: Nat, nn: (r: Ref) → Mem(r, lent) → r.b = b → ¬(r.sels = Nil), ob0: Obj(tys), ho0: Heap::obj(tys, h0, b) = Some(ob0)):
+    Exists<Obj(tys)>(λ ob2 => (Heap::obj(tys, ah, b) = Some(ob2)) ∧ ((ob2.val = Sel::put_lent(tys, strs, lent, b, ob2.val, ob0.val)) ∧
+        ((c: Ref) → Mem(c, lent) → c.b = b → Sel::LikeAt(tys, strs, c.sels, ob2.val, ob0.val))))
+{
+    let at0 = λ (z: Nat) (ez: z = b) => j(sym(ez), λ y _ => Heap::obj(tys, h0, y) = Some(ob0), ho0);
+    match lf.eq(b, nn, ob0, ho0) {
+        ⟨ob1, p1⟩ => {
+            let nnk: ((k: Ref) → Mem(k, ks) → k.b = b → ¬(k.sels = Nil)) = λ k mk ek kn => match un(k, mk, ob0, at0(k.b, ek)) {
+                ⟨c, pc⟩ => match pc.right { ⟨t, et⟩ => nn(c, pc.left.left, trans(pc.left.right, ek), c.sels.app_nil_l(t, trans(sym(et), kn))) },
+            };
+            match fr(b, nnk, ob1, p1.left) {
+                ⟨ob2, p2⟩ => {
+                    let unb: Ref::Under(ks, lent, b) = λ k mk ek => match un(k, mk, ob0, at0(k.b, ek)) { ⟨c, pc⟩ => Exists(c, ⟨⟨pc.left.left, trans(pc.left.right, ek)⟩, pc.right⟩) };
+                    let lkb: ((k: Ref) → Mem(k, ks) → k.b = b → Sel::LikeAt(tys, strs, k.sels, ob2.val, ob1.val)) = λ k mk ek =>
+                        lk(k, mk, ob1, j(sym(ek), λ y _ => Heap::obj(tys, mh, y) = Some(ob1), p1.left), ob2, j(sym(ek), λ y _ => Heap::obj(tys, ah, y) = Some(ob2), p2.left));
+                    let lcb: ((c: Ref) → Mem(c, lent) → c.b = b → (Sel::fit(tys, strs, c.sels, ob0.val) = True) ∧ Sel::LikeAt(tys, strs, c.sels, ob1.val, ob0.val)) = λ c mc ec =>
+                        lf.like(c, mc, λ r2 m2 e2 => nn(r2, m2, trans(e2, ec)), ob0, at0(c.b, ec), ob1, j(sym(ec), λ y _ => Heap::obj(tys, mh, y) = Some(ob1), p1.left));
+                    Exists(ob2, ⟨p2.left, Sel::put_lent_compose(tys, strs, sl, b, lent, ks, lf.pw, unb, ob0.val, ob1.val, ob2.val, p1.right, p2.right, lcb, lkb)⟩)
+                },
+            }
+        },
+    }
+}
+
+// P4's frame: the caller's `LentFrame` after the call.
+theorem LentFrame::call(tys: Nat → Type, strs: Strs(tys), sl: StrsLaws(tys, strs), {h0, mh: Heap(tys)}, {lent: List<Ref>}, lf: LentFrame(tys, strs, h0, mh, lent), ah: Heap(tys), ks: List<Ref>,
+    fr: Heap::Frame(tys, strs, mh, ah, ks),
+    un: (k: Ref) → Mem(k, ks) → (ob0: Obj(tys)) → Heap::obj(tys, h0, k.b) = Some(ob0) → Exists<Ref>(λ c => (Mem(c, lent) ∧ (c.b = k.b)) ∧ Exists<List<Sel>>(λ t => k.sels = c.sels ++ t)),
+    lk: (k: Ref) → Mem(k, ks) → (ob1: Obj(tys)) → Heap::obj(tys, mh, k.b) = Some(ob1) → (ob2: Obj(tys)) → Heap::obj(tys, ah, k.b) = Some(ob2) → Sel::LikeAt(tys, strs, k.sels, ob2.val, ob1.val)):
+    LentFrame(tys, strs, h0, ah, lent)
+{
+    LentFrame(
+        λ b nn ob0 ho0 => match LentFrame::call_at(tys, strs, sl, lf, ah, ks, fr, un, lk, b, nn, ob0, ho0) { ⟨ob2, p2⟩ => Exists(ob2, ⟨p2.left, p2.right.left⟩) },
+        lf.pw,
+        λ r mr nn ob0 ho0 ob2 ho2 => match LentFrame::call_at(tys, strs, sl, lf, ah, ks, fr, un, lk, r.b, nn, ob0, ho0) {
+            ⟨ob3, p3⟩ => match lf.eq(r.b, nn, ob0, ho0) {
+                ⟨ob1, p1⟩ => {
+                    let e32: (ob3 = ob2) = Option::some_inj(ob3, ob2, trans(sym(p3.left), ho2));
+                    ⟨(lf.like(r, mr, nn, ob0, ho0, ob1, p1.left)).left, j(e32, λ z _ => Sel::LikeAt(tys, strs, r.sels, z.val, ob0.val), p3.right.right(r, mr, refl))⟩
+                },
+            },
+        })
 }
