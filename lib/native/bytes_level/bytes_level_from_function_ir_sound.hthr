@@ -26,6 +26,17 @@
 //   (`region_owes`), under premises that mirror its translation
 //   (`RegionFits`): no loop, no lend, no guarded load, no wide access, one
 //   result per call, and each part's ids old words where it reads them.
+// - A routine's entry: its parameters bound to arguments that agree with the
+//   old words (`entry_binds`), and its `Done` the old function's run
+//   (`function_owes`), for a function of no levels, no fixed span and one
+//   result (`FunctionFits`).
+// - The program: every `Done` of `translate_program(functions)`, at any
+//   fuel and any function, is `program_run(functions)`'s, its words the old
+//   words and its heap the buffers the old run left
+//   (`translated_runs_as_old`), where every function fits
+//   (`ProgramFits`). The induction is over the program's functions, not
+//   over fuel: a routine's calls go only below it, so the last function's
+//   are answered by the theorem for the rest (`program_calls_agree`).
 // What this does not cover yet is the issue's log.
 import bytes_level;
 import bytes_memory;
@@ -42,6 +53,7 @@ import function_ir_pass;
 import function_ir_lower::{Known};
 import function_ir_lower_reads;
 import function_ir_lower_calls;
+import function_ir_run;
 import linux_world;
 import list;
 import list_window;
@@ -1287,4 +1299,463 @@ theorem region_owes(blocks: Blocks, calls: Calls(), old: Writers(), fuel, bound:
         Loop(_, _, _, _, _, _, _, _, _) => λ s hs rs next reads made translated fits => false_elim(fits),
         Lend(_, _, _, _) => λ s hs rs next reads made translated fits => false_elim(fits),
     }
+}
+
+// ---------------------------------------------------------------------------
+// A routine's entry
+
+fn Distinct(ids: List<Nat>) → Type { match ids { Nil => True, Cons(x, rest) => (mem_nat(x, rest) = False) ∧ Distinct(rest) } }
+
+// Words that agree on every id holding no reference.
+fn Plain(refs: List<Nat>, words, values: Valuation()) → Type { (x: Nat) → mem_nat(x, refs) = False → (w: Nat) → words(w, x) = values(w, x) }
+
+theorem mem_nat_cons_false(p, q: Nat, rest: List<Nat>, absent: mem_nat(p, Cons(q, rest)) = False): (q ≠ p) ∧ (mem_nat(p, rest) = False) {
+    let parts = Bool::or_false_parts(q.same(p), mem_nat(p, rest), absent);
+    ⟨λ e => absurd(trans(sym(j(e, λ y _ => q.same(y) = True, q.same_self())), parts.left)), parts.right⟩
+}
+
+// Setting `p` before binding ids it is none of is setting it after.
+theorem bind_set_swap(v0: Valuation(), p: Nat, value: (w: Nat) → BitVec(w), rest: List<Nat>): (ws: List<BitVec(64)>) → mem_nat(p, rest) = False →
+    (w, x: Nat) → Valuation::bind(Valuation::set(v0, p, value), rest, ws)(w, x) = Valuation::set(Valuation::bind(v0, rest, ws), p, value)(w, x) {
+    match rest {
+        Nil => λ ws _ w x => refl,
+        Cons(q, more) => λ ws => match ws {
+            Nil => λ _ w x => refl,
+            Cons(u, us) => λ absent w x => {
+                let parts = mem_nat_cons_false(p, q, more, absent);
+                let inner = Valuation::bind(Valuation::set(v0, p, value), more, us);
+                let base = Valuation::bind(v0, more, us);
+                match x.eq_dec(q) as λ _ => Valuation::set(inner, q, word_value(u))(w, x) = Valuation::set(Valuation::set(base, q, word_value(u)), p, value)(w, x) {
+                    Inl(here) => j(sym(here), λ y _ => Valuation::set(inner, q, word_value(u))(w, y) = Valuation::set(Valuation::set(base, q, word_value(u)), p, value)(w, y),
+                        trans(Valuation::set_here(inner, q, word_value(u), w),
+                            trans(sym(Valuation::set_here(base, q, word_value(u), w)),
+                                sym(Valuation::set_other(Valuation::set(base, q, word_value(u)), p, value, w, q, parts.left))))),
+                    Inr(not_q) => trans(Valuation::set_other(inner, q, word_value(u), w, x, not_q),
+                        trans(bind_set_swap(v0, p, value, more, us, parts.right, w, x),
+                            match x.eq_dec(p) as λ _ => Valuation::set(base, p, value)(w, x) = Valuation::set(Valuation::set(base, q, word_value(u)), p, value)(w, x) {
+                                Inl(at_p) => j(sym(at_p), λ y _ => Valuation::set(base, p, value)(w, y) = Valuation::set(Valuation::set(base, q, word_value(u)), p, value)(w, y),
+                                    trans(Valuation::set_here(base, p, value, w), sym(Valuation::set_here(Valuation::set(base, q, word_value(u)), p, value, w)))),
+                                Inr(not_p) => trans(Valuation::set_other(base, p, value, w, x, not_p),
+                                    trans(sym(Valuation::set_other(base, q, word_value(u), w, x, not_q)),
+                                        sym(Valuation::set_other(Valuation::set(base, q, word_value(u)), p, value, w, x, not_p)))),
+                            })),
+                }
+            },
+        },
+    }
+}
+
+fn AllPlain(refs: List<Nat>, ids: List<Nat>) → Type { match ids { Nil => True, Cons(x, rest) => (mem_nat(x, refs) = False) ∧ AllPlain(refs, rest) } }
+
+// The parameters as the translation types them: for each buffer lent, a
+// reference then a length, then words.
+fn ParamKinds(refs: List<Nat>, count: Nat, params: List<Nat>) → Type {
+    match count {
+        Zero => AllPlain(refs, params),
+        Succ(m) => match params {
+            Nil => False,
+            Cons(b, more) => match more { Nil => False, Cons(len, rest) => ((mem_nat(b, refs) = True) ∧ (mem_nat(len, refs) = False)) ∧ ParamKinds(refs, m, rest) },
+        },
+    }
+}
+
+// A bind of ids none of which is `y` leaves `y`'s reference.
+theorem bind_keeps_ref(refs: List<Nat>, y: Nat, ids: List<Nat>): (args: List<Value>) → (l0, l: Locals) → mem_nat(y, ids) = False →
+    bind_values(Scope([], refs, []).typed_all(ids), args, l0) = Some(l) → l.refs(y) = l0.refs(y) {
+    match ids {
+        Nil => λ args l0 l _ bound => match args as λ a => bind_values([], a, l0) = Some(l) → l.refs(y) = l0.refs(y) {
+            Nil => λ h => cong_fn<Locals, Option<Loc>>(λ m => m.refs(y), sym(Option::some_inj(l0, l, h))),
+            Cons(_, _) => λ never => absurd(never),
+        }(bound),
+        Cons(p, rest) => λ args l0 l absent bound => {
+            let parts = mem_nat_cons_false(y, p, rest, absent);
+            let v = Scope([], refs, []).typed(p);
+            (match args as λ a => bind_values(Cons(v, Scope([], refs, []).typed_all(rest)), a, l0) = Some(l) → l.refs(y) = l0.refs(y) {
+                Nil => λ never => absurd(never),
+                Cons(x, xs) => λ h => (match l0.bind(v, x) as λ o => l0.bind(v, x) = o →
+                        o.and_then(λ (b: Locals) => bind_values(Scope([], refs, []).typed_all(rest), xs, b)) = Some(l) → l.refs(y) = l0.refs(y) {
+                    None => λ _ never => absurd(never),
+                    Some(l1) => λ one more => {
+                        let later = bind_keeps_ref(refs, y, rest, xs, l1, l, parts.right, more);
+                        let first: (l1.refs(y) = l0.refs(y)) = (match v.kind as λ k => (match k {
+                                    WordKind => match x { Word(w) => Some(l0.set_word(p, word_value(w))), Ref(_) => None },
+                                    RefKind => match x { Word(_) => None, Ref(loc) => Some(l0.set_ref(p, loc)) },
+                                }) = Some(l1) → l1.refs(y) = l0.refs(y) {
+                            WordKind => match x as λ z => (match z { Word(w) => Some(l0.set_word(p, word_value(w))), Ref(_) => None }) = Some(l1) →
+                                    l1.refs(y) = l0.refs(y) {
+                                Word(w) => λ e => cong_fn<Locals, Option<Loc>>(λ m => m.refs(y), sym(Option::some_inj(l0.set_word(p, word_value(w)), l1, e))),
+                                Ref(_) => λ never => absurd(never),
+                            },
+                            RefKind => match x as λ z => (match z { Word(_) => None, Ref(loc) => Some(l0.set_ref(p, loc)) }) = Some(l1) →
+                                    l1.refs(y) = l0.refs(y) {
+                                Word(_) => λ never => absurd(never),
+                                Ref(loc) => λ e => trans(cong_fn<Locals, Option<Loc>>(λ m => m.refs(y), sym(Option::some_inj(l0.set_ref(p, loc), l1, e))),
+                                    set_ref_other(l0, p, loc, y, λ same => parts.left(sym(same)))),
+                            },
+                        })(one);
+                        trans(later, first)
+                    },
+                })(refl, h),
+            })(bound)
+        },
+    }
+}
+
+// Words bound to ids holding no reference: the words agree with the old
+// valuation's bind of them.
+theorem bind_words(refs: List<Nat>, ids: List<Nat>): (words: List<BitVec(64)>) → (l0, l: Locals) → (v0: Valuation()) → Distinct(ids) → AllPlain(refs, ids) →
+    bind_values(Scope([], refs, []).typed_all(ids), words.map(λ (w: BitVec(64)) => x86_64_call_contract::Word(w)), l0) = Some(l) → Plain(refs, l0.words, v0) →
+    Plain(refs, l.words, Valuation::bind(v0, ids, words)) {
+    match ids {
+        Nil => λ words l0 l v0 _ _ bound plain => (match words as λ ws => bind_values([], ws.map(λ (w: BitVec(64)) => x86_64_call_contract::Word(w)), l0) = Some(l) →
+                Plain(refs, l.words, Valuation::bind(v0, [], ws)) {
+            Nil => λ h => j(Option::some_inj(l0, l, h), λ m _ => Plain(refs, m.words, v0), plain),
+            Cons(_, _) => λ never => absurd(never),
+        })(bound),
+        Cons(p, rest) => λ words l0 l v0 distinct kinds bound plain => (match words as λ ws =>
+                bind_values(Scope([], refs, []).typed_all(Cons(p, rest)), ws.map(λ (w: BitVec(64)) => x86_64_call_contract::Word(w)), l0) = Some(l) →
+                Plain(refs, l.words, Valuation::bind(v0, Cons(p, rest), ws)) {
+            Nil => λ never => absurd(never),
+            Cons(w, ws) => λ h => {
+                let typed: (Scope([], refs, []).typed(p) = word_id(p)) =
+                    j(sym(kinds.left), λ b _ => Typed(p, match b { True => RefKind, False => WordKind }) = word_id(p), refl);
+                let l1 = l0.set_word(p, word_value(w));
+                let rest_bound: (bind_values(Scope([], refs, []).typed_all(rest), ws.map(λ (x: BitVec(64)) => x86_64_call_contract::Word(x)), l1) = Some(l)) =
+                    j(typed, λ v _ => l0.bind(v, x86_64_call_contract::Word(w)).and_then(λ (b: Locals) => bind_values(Scope([], refs, []).typed_all(rest),
+                        ws.map(λ (x: BitVec(64)) => x86_64_call_contract::Word(x)), b)) = Some(l), h);
+                let v1 = Valuation::set(v0, p, word_value(w));
+                let plain1: Plain(refs, l1.words, v1) = λ x px wd => match x.eq_dec(p) as λ _ => l1.words(wd, x) = v1(wd, x) {
+                    Inl(here) => j(sym(here), λ y _ => l1.words(wd, y) = v1(wd, y),
+                        trans(Valuation::set_here(l0.words, p, word_value(w), wd), sym(Valuation::set_here(v0, p, word_value(w), wd)))),
+                    Inr(differs) => trans(Valuation::set_other(l0.words, p, word_value(w), wd, x, differs),
+                        trans(plain(x, px, wd), sym(Valuation::set_other(v0, p, word_value(w), wd, x, differs)))),
+                };
+                let inner = bind_words(refs, rest, ws, l1, l, v1, distinct.right, kinds.right, rest_bound, plain1);
+                λ x px wd => trans(inner(x, px, wd), bind_set_swap(v0, p, word_value(w), rest, ws, distinct.left, wd, x))
+            },
+        })(bound),
+    }
+}
+
+// The entry: parameters bound to arguments that agree with the old words,
+// each lent buffer a reference to its block from 0 and its length, then
+// words. The words agree with the old bind, and each home's reference is
+// its block's.
+fn Entered(refs: List<Nat>, homes: List<Lent>, l: Locals, values: Valuation()) → Type {
+    Plain(refs, l.words, values) ∧ ((h: Lent) → Mem(h, homes) → l.refs(h.base) = Some(Loc(h.buffer, 0)))
+}
+
+theorem entry_binds(refs: List<Nat>, count: Nat): (k: Nat) → (params: List<Nat>) → (args: List<Value>) → (words: List<BitVec(64)>) → (l0, l: Locals) →
+    (v0: Valuation()) → ArgsAgree(count, k, args, words) → Distinct(params) → ParamKinds(refs, count, params) →
+    bind_values(Scope([], refs, []).typed_all(params), args, l0) = Some(l) → Plain(refs, l0.words, v0) →
+    Entered(refs, lent_homes(params, count, k), l, Valuation::bind(v0, params, words)) {
+    match count {
+        Zero => λ k params args words l0 l v0 agree distinct kinds bound plain =>
+            ⟨bind_words(refs, params, words, l0, l, v0, distinct, kinds, j(agree, λ a _ => bind_values(Scope([], refs, []).typed_all(params), a, l0) = Some(l), bound),
+                plain), λ h never => false_elim(never)⟩,
+        Succ(m) => λ k params => match params {
+            Nil => λ args words l0 l v0 agree distinct kinds => false_elim(kinds),
+            Cons(b, more) => match more {
+                Nil => λ args words l0 l v0 agree distinct kinds => false_elim(kinds),
+                Cons(len, rest) => λ args => match args {
+                    Nil => λ words l0 l v0 agree => false_elim(agree),
+                    Cons(a, after_a) => match after_a {
+                        Nil => λ words l0 l v0 agree => false_elim(agree),
+                        Cons(lv, as) => λ words => match words {
+                            Nil => λ l0 l v0 agree => false_elim(agree),
+                            Cons(wb, after_wb) => match after_wb {
+                                Nil => λ l0 l v0 agree => false_elim(agree),
+                                Cons(lw, ws) => λ l0 l v0 agree distinct kinds bound plain => {
+                                    let s0 = Scope([], refs, []);
+                                    let base_typed: (s0.typed(b) = ref_id(b)) =
+                                        j(sym(kinds.left.left), λ x _ => Typed(b, match x { True => RefKind, False => WordKind }) = ref_id(b), refl);
+                                    let length_typed: (s0.typed(len) = word_id(len)) =
+                                        j(sym(kinds.left.right), λ x _ => Typed(len, match x { True => RefKind, False => WordKind }) = word_id(len), refl);
+                                    let l1 = l0.set_ref(b, Loc(k, 0));
+                                    let l2 = l1.set_word(len, word_value(lw));
+                                    let tail = λ (x: Value) (y: Value) (m0: Locals) => m0.bind(word_id(len), y).and_then(λ (m1: Locals) => bind_values(s0.typed_all(rest), as, m1));
+                                    let bound2: (bind_values(s0.typed_all(rest), as, l2) = Some(l)) =
+                                        j(agree.right.left, λ y _ => l1.bind(word_id(len), y).and_then(λ (m1: Locals) => bind_values(s0.typed_all(rest), as, m1)) = Some(l),
+                                            j(agree.left, λ x _ => l0.bind(ref_id(b), x).and_then(λ (m0: Locals) => m0.bind(word_id(len), lv).and_then(λ (m1: Locals) =>
+                                                    bind_values(s0.typed_all(rest), as, m1))) = Some(l),
+                                                j(length_typed, λ v _ => l0.bind(ref_id(b), a).and_then(λ (m0: Locals) => m0.bind(v, lv).and_then(λ (m1: Locals) =>
+                                                        bind_values(s0.typed_all(rest), as, m1))) = Some(l),
+                                                    j(base_typed, λ v _ => l0.bind(v, a).and_then(λ (m0: Locals) => m0.bind(s0.typed(len), lv).and_then(λ (m1: Locals) =>
+                                                            bind_values(s0.typed_all(rest), as, m1))) = Some(l), bound))));
+                                    let v2 = Valuation::set(Valuation::set(v0, b, word_value(wb)), len, word_value(lw));
+                                    let b_ref = kinds.left.left;
+                                    let plain2: Plain(refs, l2.words, v2) = λ x px wd => {
+                                        let not_b: (x ≠ b) = λ e => absurd(trans(sym(px), j(sym(e), λ y _ => mem_nat(y, refs) = True, b_ref)));
+                                        match x.eq_dec(len) as λ _ => l2.words(wd, x) = v2(wd, x) {
+                                            Inl(here) => j(sym(here), λ y _ => l2.words(wd, y) = v2(wd, y),
+                                                trans(Valuation::set_here(l1.words, len, word_value(lw), wd),
+                                                    sym(Valuation::set_here(Valuation::set(v0, b, word_value(wb)), len, word_value(lw), wd)))),
+                                            Inr(not_len) => trans(Valuation::set_other(l1.words, len, word_value(lw), wd, x, not_len),
+                                                trans(plain(x, px, wd), trans(sym(Valuation::set_other(v0, b, word_value(wb), wd, x, not_b)),
+                                                    sym(Valuation::set_other(Valuation::set(v0, b, word_value(wb)), len, word_value(lw), wd, x, not_len))))),
+                                        }
+                                    };
+                                    let b_out = mem_nat_cons_false(b, len, rest, distinct.left);
+                                    let len_out = distinct.right.left;
+                                    let inner = entry_binds(refs, m, k + 1, rest, as, ws, l2, l, v2, agree.right.right, distinct.right.right, kinds.right, bound2, plain2);
+                                    let base0 = Valuation::bind(v0, rest, ws);
+                                    ⟨λ x px wd => {
+                                        let not_b: (x ≠ b) = λ e => absurd(trans(sym(px), j(sym(e), λ y _ => mem_nat(y, refs) = True, b_ref)));
+                                        trans(inner.left(x, px, wd),
+                                            trans(bind_set_swap(Valuation::set(v0, b, word_value(wb)), len, word_value(lw), rest, ws, len_out, wd, x),
+                                                match x.eq_dec(len) as λ _ => Valuation::set(Valuation::bind(Valuation::set(v0, b, word_value(wb)), rest, ws), len, word_value(lw))(wd, x) =
+                                                        Valuation::set(Valuation::set(base0, len, word_value(lw)), b, word_value(wb))(wd, x) {
+                                                    Inl(here) => j(sym(here), λ y _ => Valuation::set(Valuation::bind(Valuation::set(v0, b, word_value(wb)), rest, ws), len, word_value(lw))(wd, y) =
+                                                            Valuation::set(Valuation::set(base0, len, word_value(lw)), b, word_value(wb))(wd, y),
+                                                        trans(Valuation::set_here(Valuation::bind(Valuation::set(v0, b, word_value(wb)), rest, ws), len, word_value(lw), wd),
+                                                            trans(sym(Valuation::set_here(base0, len, word_value(lw), wd)),
+                                                                sym(Valuation::set_other(Valuation::set(base0, len, word_value(lw)), b, word_value(wb), wd, len,
+                                                                    λ e => b_out.left(e)))))),
+                                                    Inr(not_len) => trans(Valuation::set_other(Valuation::bind(Valuation::set(v0, b, word_value(wb)), rest, ws), len, word_value(lw), wd, x, not_len),
+                                                        trans(bind_set_swap(v0, b, word_value(wb), rest, ws, b_out.right, wd, x),
+                                                            trans(Valuation::set_other(base0, b, word_value(wb), wd, x, not_b),
+                                                                trans(sym(Valuation::set_other(base0, len, word_value(lw), wd, x, not_len)),
+                                                                    sym(Valuation::set_other(Valuation::set(base0, len, word_value(lw)), b, word_value(wb), wd, x, not_b)))))),
+                                                }))
+                                    },
+                                    λ h m => match m {
+                                        Inl(is) => {
+                                            let kept = bind_keeps_ref(refs, b, rest, as, l2, l, b_out.right, bound2);
+                                            let here: (l2.refs(b) = Some(Loc(k, 0))) = j(sym(b.same_self()), λ x _ => (match x { True => Some(Loc(k, 0)), False => l0.refs(b) }) = Some(Loc(k, 0)), refl);
+                                            j(sym(is), λ g _ => l.refs(g.base) = Some(Loc(g.buffer, 0)), trans(kept, here))
+                                        },
+                                        Inr(later) => inner.right(h, later),
+                                    }⟩
+                                },
+                            },
+                        },
+                    },
+                },
+            },
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// A function
+
+// What a function asks: no levels, no fixed span, one result, its lent
+// count the program's, its parameters distinct and typed as the
+// translation types them, its scope's homes sound, its result an old word,
+// and its body of the forms the region theorem covers.
+fn FunctionFits(f: Function, k: Nat, lents: List<Nat>) → Type {
+    let homes = f.buffer_homes();
+    let refs = homes_bases(homes);
+    let bound = f.fresh_from();
+    ((f.levels = 0) ∧ ((f.fixed = None) ∧ ((f.also = []) ∧ (lent_count(lents, k) = f.lent)))) ∧
+        ((Distinct(f.parameters) ∧ ParamKinds(refs, f.lent, f.parameters)) ∧
+            (ScopeOk(bound, homes, refs) ∧ (((f.result < bound) ∧ (mem_nat(f.result, refs) = False)) ∧
+                RegionFits(bound, refs, Scope(homes, refs, []), f.body, bound, f.reads(), k, lents))))
+}
+
+// The words an old function answers, as values.
+fn Ending::values(self e: Ending) → List<Value> { Cons(x86_64_call_contract::Word(e.word), e.rest.map(λ (w: BitVec(64)) => x86_64_call_contract::Word(w))) }
+
+theorem function_owes(blocks: Blocks, calls: Calls(), old: Writers(), lents: List<Nat>, k: Nat, f: Function, fits: FunctionFits(f, k, lents),
+    answers: CallsAgree(calls, old, lents, k), r: Routine, translated: f.translate(k, lents) = Some(r), fuel: Nat, args: List<Value>, words: List<BitVec(64)>,
+    heap: Heap, buffers: Buffers(), io: Io, answer: Answer, agree: ArgsAgree(f.lent, 0, args, words), heap_is: (b: Nat) → heap.bytes(b) = buffer_bytes(buffers, b),
+    ran: r.call(blocks, calls, fuel, args, heap, io) = Done(answer)):
+    (answer.words = f.run(old, words, buffers).values()) ∧ ((b: Nat) → answer.heap.bytes(b) = buffer_bytes(f.run(old, words, buffers).buffers, b)) {
+    let homes = f.buffer_homes();
+    let refs = homes_bases(homes);
+    let bound = f.fresh_from();
+    let s = Scope(homes, refs, []);
+    let goal = (answer.words = f.run(old, words, buffers).values()) ∧ ((b: Nat) → answer.heap.bytes(b) = buffer_bytes(f.run(old, words, buffers).buffers, b));
+    let body_made = λ (o: Option<Made>) => match o as λ _ => Option<Routine> {
+        None => None,
+        Some(made) => Some(Routine(s.typed_all(f.parameters), made.body, made.scope.typed_all(Cons(f.result, f.also)))),
+    };
+    let translated2: (body_made(translate_region(s, f.body, bound, f.reads(), k, lents, 0)) = Some(r)) =
+        j(fits.left.left, λ n _ => (match n { Succ(_) => None, Zero => body_made(translate_region(s, f.body, bound, f.reads(), k, lents, 0)) }) = Some(r), translated);
+    (match translate_region(s, f.body, bound, f.reads(), k, lents, 0) as λ o => translate_region(s, f.body, bound, f.reads(), k, lents, 0) = o →
+            body_made(o) = Some(r) → goal {
+        None => λ _ never => absurd(never),
+        Some(made) => λ e_made some => {
+            let is = Option::some_inj(Routine(s.typed_all(f.parameters), made.body, made.scope.typed_all(Cons(f.result, f.also))), r, some);
+            let ran2: (Routine(s.typed_all(f.parameters), made.body, made.scope.typed_all(Cons(f.result, f.also))).call(blocks, calls, fuel, args, heap, io) = Done(answer)) =
+                j(sym(is), λ x _ => x.call(blocks, calls, fuel, args, heap, io) = Done(answer), ran);
+            let results = made.scope.typed_all(Cons(f.result, f.also));
+            let after_body = λ (l: Locals) => made.body.run(blocks, calls, fuel, Config(l, heap, io)).then(λ (after: Config) =>
+                Ran::of(read_values(results, after.locals), after.io).then(λ (ws: List<Value>) => Done(Answer(ws, after.memory, after.io))));
+            let first = Ran::then_done<Locals, Answer>(Ran::of(bind_values(s.typed_all(f.parameters), args, Locals::empty()), io), after_body, answer, ran2);
+            let l = first.witness;
+            let bound_l: (bind_values(s.typed_all(f.parameters), args, Locals::empty()) = Some(l)) =
+                Ran::of_done<Locals>(bind_values(s.typed_all(f.parameters), args, Locals::empty()), io, l, first.proof.left);
+            let read_back = λ (after: Config) => Ran::of(read_values(results, after.locals), after.io).then(λ (ws: List<Value>) => Done(Answer(ws, after.memory, after.io)));
+            let second = Ran::then_done<Config, Answer>(made.body.run(blocks, calls, fuel, Config(l, heap, io)), read_back, answer, first.proof.right);
+            let after = second.witness;
+            let third = Ran::then_done<List<Value>, Answer>(Ran::of(read_values(results, after.locals), after.io),
+                λ (ws: List<Value>) => Done(Answer(ws, after.memory, after.io)), answer, second.proof.right);
+            let ws = third.witness;
+            let read: (read_values(results, after.locals) = Some(ws)) = Ran::of_done<List<Value>>(read_values(results, after.locals), after.io, ws, third.proof.left);
+            let end: (Answer(ws, after.memory, after.io) = answer) = Ran::done_inj<Answer>(Answer(ws, after.memory, after.io), answer, third.proof.right);
+            // The entry.
+            let homes_are: (lent_homes(f.parameters, f.lent, 0) = homes) =
+                sym(j(sym(fits.left.right.left), λ x _ => (match x { None => lent_homes(f.parameters, f.lent, 0),
+                    Some(y) => match f.parameters { Nil => [], Cons(b, _) => [Lent(0, b, y.length)] } }) = lent_homes(f.parameters, f.lent, 0), refl));
+            let entered = entry_binds(refs, f.lent, 0, f.parameters, args, words, Locals::empty(), l, Valuation::zero(), agree, fits.right.left.left, fits.right.left.right,
+                bound_l, λ x px w => refl);
+            let values0 = Valuation::bind(Valuation::zero(), f.parameters, words);
+            let agree0: Agree(bound, refs, [], l.words, values0) = λ x below px pend w => entered.left(x, px, w);
+            let held0: HomesHeld(homes, Config(l, heap, io), buffers) = ⟨j(homes_are, λ hs _ => (h: Lent) → Mem(h, hs) → l.refs(h.base) = Some(Loc(h.buffer, 0)), entered.right),
+                heap_is⟩;
+            let owed = region_owes(blocks, calls, old, fuel, bound, homes, refs, k, lents, answers, fits.right.right.left, f.body, s, refl, refl, bound, f.reads(), made, e_made,
+                fits.right.right.right.right, Config(l, heap, io), after, second.proof.left, values0, buffers, agree0, held0);
+            let state = f.body.run(old, values0, buffers);
+            // The result read back.
+            let result_word = fits.right.right.right.left;
+            let kind: (made.scope.typed(f.result) = word_id(f.result)) =
+                j(sym(j(sym(owed.right.right), λ rs _ => mem_nat(f.result, rs) = False, result_word.right)),
+                    λ b _ => Typed(f.result, match b { True => RefKind, False => WordKind }) = word_id(f.result), refl);
+            let read2: (read_values(Cons(word_id(f.result), made.scope.typed_all(f.also)), after.locals) = Some(ws)) =
+                j(kind, λ v _ => read_values(Cons(v, made.scope.typed_all(f.also)), after.locals) = Some(ws), read);
+            let read3: (read_values([word_id(f.result)], after.locals) = Some(ws)) =
+                j(fits.left.right.right.left, λ a _ => read_values(Cons(word_id(f.result), made.scope.typed_all(a)), after.locals) = Some(ws), read2);
+            let ws_is: (ws = [x86_64_call_contract::Word(after.locals.word(f.result))]) = sym(Option::some_inj([x86_64_call_contract::Word(after.locals.word(f.result))], ws, read3));
+            let result_same: (after.locals.word(f.result) = state.values(64, f.result)) = owed.left.left(f.result, result_word.left, result_word.right, refl, 64);
+            let rest_none: (words_of(state.values, f.also).map(λ (w: BitVec(64)) => x86_64_call_contract::Word(w)) = []) =
+                j(sym(fits.left.right.right.left), λ a _ => words_of(state.values, a).map(λ (w: BitVec(64)) => x86_64_call_contract::Word(w)) = [], refl);
+            ⟨trans(cong_fn<Answer, List<Value>>(λ a => a.words, sym(end)), trans(ws_is,
+                    eq2(λ (x: BitVec(64)) (xs: List<Value>) => Cons(x86_64_call_contract::Word(x), xs), result_same, sym(rest_none)))),
+                λ b => trans(cong_fn<Answer, List<BitVec(8)>>(λ a => a.heap.bytes(b), sym(end)), owed.left.right.right(b))⟩
+        },
+    })(refl, translated2)
+}
+
+// ---------------------------------------------------------------------------
+// The program
+
+// The translation of a program, split at its last function.
+theorem translate_cons(last: Function, earlier: List<Function>, lents: List<Nat>, rs: List<Routine>, t: translate_last_first(Cons(last, earlier), lents) = Some(rs)):
+    Exists<List<Routine>>(λ re => (translate_last_first(earlier, lents) = Some(re)) ∧
+        Exists<Routine>(λ r => (last.translate(earlier.len(), lents) = Some(r)) ∧ (rs = re ++ [r]))) {
+    (match translate_last_first(earlier, lents) as λ o => translate_last_first(earlier, lents) = o →
+            (match o as λ _ => Option<List<Routine>> {
+                None => None,
+                Some(routines) => match last.translate(earlier.len(), lents) { None => None, Some(r) => Some(routines ++ [r]) },
+            }) = Some(rs) →
+            Exists<List<Routine>>(λ re => (translate_last_first(earlier, lents) = Some(re)) ∧
+                Exists<Routine>(λ r => (last.translate(earlier.len(), lents) = Some(r)) ∧ (rs = re ++ [r]))) {
+        None => λ _ h => absurd(h),
+        Some(re) => λ e h => (match last.translate(earlier.len(), lents) as λ o2 => last.translate(earlier.len(), lents) = o2 →
+                (match o2 as λ _ => Option<List<Routine>> { None => None, Some(r) => Some(re ++ [r]) }) = Some(rs) →
+                Exists<List<Routine>>(λ re2 => (translate_last_first(earlier, lents) = Some(re2)) ∧
+                    Exists<Routine>(λ r => (last.translate(earlier.len(), lents) = Some(r)) ∧ (rs = re2 ++ [r]))) {
+            None => λ _ h2 => absurd(h2),
+            Some(r) => λ e2 h2 => Exists(re, ⟨e, Exists(r, ⟨e2, sym(Option::some_inj(re ++ [r], rs, h2))⟩)⟩),
+        })(refl, h),
+    })(refl, t)
+}
+
+// One routine for each function.
+theorem translate_len(functions: List<Function>, lents: List<Nat>): (rs: List<Routine>) → translate_last_first(functions, lents) = Some(rs) →
+    rs.len() = functions.len() {
+    match functions {
+        Nil => λ rs h => j(Option::some_inj([], rs, h), λ x _ => x.len() = 0, refl),
+        Cons(last, earlier) => λ rs h => {
+            let parts = translate_cons(last, earlier, lents, rs, h);
+            let re = parts.witness;
+            let r = parts.proof.right.witness;
+            let ih = translate_len(earlier, lents, re, parts.proof.left);
+            j(sym(parts.proof.right.proof.right), λ x _ => x.len() = earlier.len() + 1,
+                trans(List::len_append(re, [r]), cong_fn<Nat, Nat>(λ n => n + 1, ih)))
+        },
+    }
+}
+
+// Every function of the program fits the theorem, at its number.
+fn ProgramFits(functions: List<Function>, lents: List<Nat>) → Type {
+    match functions { Nil => True, Cons(last, earlier) => FunctionFits(last, earlier.len(), lents) ∧ ProgramFits(earlier, lents) }
+}
+
+// The routines `all` begin with the translation of `functions`: each of
+// them, its calls answered by `all` at any fuel, does what the old program
+// does.
+theorem program_calls_agree(blocks: Blocks, lents: List<Nat>, functions: List<Function>): (all: List<Routine>) → (rs: List<Routine>) →
+    translate_last_first(functions, lents) = Some(rs) → ProgramFits(functions, lents) → ((i: Nat) → i < rs.len() → all.nth(i) = rs.nth(i)) →
+    (fuel: Nat) → CallsAgree(program_calls(all, blocks, fuel), program_run(functions), lents, functions.len()) {
+    match functions {
+        Nil => λ all rs t fits prefix fuel f below => false_elim(below),
+        Cons(last, earlier) => λ all rs t fits prefix fuel => {
+            let parts = translate_cons(last, earlier, lents, rs, t);
+            let re = parts.witness;
+            let r = parts.proof.right.witness;
+            let rs_is: (rs = re ++ [r]) = parts.proof.right.proof.right;
+            let re_len: (re.len() = earlier.len()) = translate_len(earlier, lents, re, parts.proof.left);
+            let rs_len: (rs.len() = earlier.len() + 1) = translate_len(Cons(last, earlier), lents, rs, t);
+            let prefix_e: ((i: Nat) → i < re.len() → (all.nth(i) = re.nth(i))) = λ i below =>
+                trans(prefix(i, j(sym(rs_len), λ n _ => (i < n), Nat::lt_trans(i, earlier.len(), earlier.len() + 1, j(re_len, λ n _ => (i < n), below), Nat::lt_succ_self(earlier.len())))),
+                    trans(cong_fn<List<Routine>, Option<Routine>>(λ xs => xs.nth(i), rs_is), List::nth_append_below(re, [r], i, below)));
+            let ih = program_calls_agree(blocks, lents, earlier, all, re, parts.proof.left, fits.right, prefix_e);
+            let last_fits: FunctionFits(last, earlier.len(), lents) = fits.left;
+            let levels0: (last.levels = 0) = last_fits.left.left;
+            let r_at: (all.nth(earlier.len()) = Some(r)) =
+                trans(prefix(earlier.len(), j(sym(rs_len), λ n _ => (earlier.len() < n), Nat::lt_succ_self(earlier.len()))),
+                    trans(cong_fn<List<Routine>, Option<Routine>>(λ xs => xs.nth(earlier.len()), rs_is), List::nth_append_at(re, [r], earlier.len(), re_len)));
+            λ f below args words heap buffers io answer agree heap_is ran =>
+                (match f.eq_dec(earlier.len()) as λ d =>
+                    (answer.words = Cons(x86_64_call_contract::Word((match d as λ _ => Ending {
+                            Inl(_) => last.run(last.writers_at(program_run(earlier), earlier.len(), last.levels), words, buffers),
+                            Inr(_) => program_run(earlier, buffers, f, words) }).word),
+                        (match d as λ _ => Ending {
+                            Inl(_) => last.run(last.writers_at(program_run(earlier), earlier.len(), last.levels), words, buffers),
+                            Inr(_) => program_run(earlier, buffers, f, words) }).rest.map(λ (w: BitVec(64)) => x86_64_call_contract::Word(w)))) ∧
+                    ((b: Nat) → answer.heap.bytes(b) = buffer_bytes((match d as λ _ => Ending {
+                            Inl(_) => last.run(last.writers_at(program_run(earlier), earlier.len(), last.levels), words, buffers),
+                            Inr(_) => program_run(earlier, buffers, f, words) }).buffers, b)) {
+                    Inl(at) => {
+                        let at_agree: ArgsAgree(lent_count(lents, earlier.len()), 0, args, words) = j(at, λ x _ => ArgsAgree(lent_count(lents, x), 0, args, words), agree);
+                        let own_agree: ArgsAgree(last.lent, 0, args, words) = j(last_fits.left.right.right.right, λ c _ => ArgsAgree(c, 0, args, words), at_agree);
+                        let ran_at: (program_calls(all, blocks, fuel, earlier.len(), args, heap, io) = Done(answer)) = j(at, λ x _ => program_calls(all, blocks, fuel, x, args, heap, io) = Done(answer), ran);
+                        let goal0 = (answer.words = last.run(program_run(earlier), words, buffers).values()) ∧
+                            ((b: Nat) → answer.heap.bytes(b) = buffer_bytes(last.run(program_run(earlier), words, buffers).buffers, b));
+                        let at0: goal0 = (match fuel as λ n => program_calls(all, blocks, n, earlier.len(), args, heap, io) = Done(answer) → goal0 {
+                            Zero => λ never => absurd(never),
+                            Succ(m) => λ ran_m => {
+                                let ran_r: (r.call(blocks, program_calls(all, blocks, m), m, args, heap, io) = Done(answer)) =
+                                    j(r_at, λ o _ => (match o as λ _ => Ran<Answer> { None => Stuck(io), Some(routine) => routine.call(blocks, program_calls(all, blocks, m), m, args, heap, io) }) = Done(answer),
+                                        ran_m);
+                                function_owes(blocks, program_calls(all, blocks, m), program_run(earlier), lents, earlier.len(), last, last_fits, ih(m), r,
+                                    parts.proof.right.proof.left, m, args, words, heap, buffers, io, answer, own_agree, heap_is, ran_r)
+                            },
+                        })(ran_at);
+                        j(sym(levels0), λ lv _ => (answer.words = last.run(last.writers_at(program_run(earlier), earlier.len(), lv), words, buffers).values()) ∧
+                            ((b: Nat) → answer.heap.bytes(b) = buffer_bytes(last.run(last.writers_at(program_run(earlier), earlier.len(), lv), words, buffers).buffers, b)), at0)
+                    },
+                    Inr(ne) => ih(fuel, f, Nat::lt_of_le_of_ne(f, earlier.len(), below, ne), args, words, heap, buffers, io, answer, agree, heap_is, ran),
+                })
+        },
+    }
+}
+
+// The theorem over programs: every `Done` of a translated program, at any
+// fuel, is the old program's run, its words the old words and its heap the
+// buffers the old run left, read back.
+theorem translated_runs_as_old(functions: List<Function>, p: Program, translated: translate_program(functions) = Some(p),
+    fits: ProgramFits(functions, program_counts(functions)), blocks: Blocks, fuel, f: Nat, below: f < functions.len(), args: List<Value>,
+    words: List<BitVec(64)>, heap: Heap, buffers: Buffers(), io: Io, answer: Answer,
+    agree: ArgsAgree(lent_count(program_counts(functions), f), 0, args, words), heap_is: (b: Nat) → heap.bytes(b) = buffer_bytes(buffers, b),
+    ran: run(p, blocks, fuel, f, args, heap, io) = Done(answer)):
+    (answer.words = Cons(x86_64_call_contract::Word(program_run(functions, buffers, f, words).word),
+        program_run(functions, buffers, f, words).rest.map(λ (w: BitVec(64)) => x86_64_call_contract::Word(w)))) ∧
+    ((b: Nat) → answer.heap.bytes(b) = buffer_bytes(program_run(functions, buffers, f, words).buffers, b)) {
+    let lents = program_counts(functions);
+    (match translate_last_first(functions, lents) as λ o => translate_last_first(functions, lents) = o →
+            (match o as λ _ => Option<Program> { None => None, Some(routines) => Some(Program(routines)) }) = Some(p) →
+            (answer.words = Cons(x86_64_call_contract::Word(program_run(functions, buffers, f, words).word),
+                program_run(functions, buffers, f, words).rest.map(λ (w: BitVec(64)) => x86_64_call_contract::Word(w)))) ∧
+            ((b: Nat) → answer.heap.bytes(b) = buffer_bytes(program_run(functions, buffers, f, words).buffers, b)) {
+        None => λ _ never => absurd(never),
+        Some(rs) => λ t some => {
+            let p_is: (Program(rs) = p) = Option::some_inj(Program(rs), p, some);
+            let ran_rs: (program_calls(rs, blocks, fuel, f, args, heap, io) = Done(answer)) =
+                j(sym(p_is), λ q _ => run(q, blocks, fuel, f, args, heap, io) = Done(answer), ran);
+            program_calls_agree(blocks, lents, functions, rs, rs, t, fits, λ i _ => refl, fuel, f, below, args, words, heap, buffers, io, answer, agree, heap_is, ran_rs)
+        },
+    })(refl, translated)
 }

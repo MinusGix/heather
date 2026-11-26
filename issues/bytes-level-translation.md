@@ -148,3 +148,40 @@ The translation and its theorem pass the library gate; the comparison runs over 
     - **A `Move` of a reference** copies the reference.
     - **A function's results typed by its scope**: the sret wrapper answers its reference.
     - **The bound-zero check skipped** where the bound is a known nonzero constant.
+- 2026-11-26, item 3: **the theorem** (`lib/native/bytes_level/bytes_level_from_function_ir_sound.hthr`). It is stated once, over programs, as `translated_runs_as_old`. The premises:
+  - `translate_program(functions) = Some(p)`;
+  - every function fits (`ProgramFits`);
+  - function `f` below the program's length;
+  - arguments that agree with the old words (`ArgsAgree`: buffer `k` is a reference to block `k` from 0 and its length, then words);
+  - a heap whose every block is its buffer.
+
+  Its conclusion: every `Done` of `run(p, blocks, fuel, f, args, heap, io)` at any fuel has the words of `program_run(functions, buffers, f, words)` (its word, then its rest), and a heap whose blocks are the buffers that run left.
+  - How it is proved, in stage lemmas:
+    - The memory nodes: `byte_load_runs`, `byte_store_runs`.
+    - A node keeps the relation and runs as the old node (`node_agrees`). The relation is `Agree` (old and new words equal on every non-reference id below the bound and not pending) and `HomesHeld` (each home's reference is its block from 0, and each block is its buffer).
+    - A leaf (`leaf_runs_as_old`).
+    - The bodies the translation joins (`seq_bodies_done`).
+    - A call (`call_agrees`) and a branch (`branch_agrees`).
+    - A region (`region_owes`).
+    - A routine's entry and its `Done` (`entry_binds`, `function_owes`).
+    - The program (`program_calls_agree`).
+  - The induction is over the program's functions, not over fuel. A routine calls only below itself, so the last function's calls are answered by the theorem for the rest, at the fuel the call has left. No fuel argument is needed beyond `program_calls`'s own.
+  - Not found from the design note:
+    - Pending ids. The translation drops a pure node rebound before it is read (`rebound`, item 2), so the relation must exempt those ids until their second write. A leaf's ids are all written by its end, so nothing is pending between leaves.
+    - A reference is never an old word. `Agree` holds only off the scope's references, and every premise that reads an id says it is a word id (`AllWords`, a condition's or a result's `mem_nat(id, refs) = False`).
+  - **What it covers** (`RegionFits`, `FunctionFits`):
+    - leaves of word nodes, byte loads known inside (no guard) and byte stores;
+    - sequences, compositions and conditionals;
+    - calls of one result to a function below, lent callees given the caller's homes;
+    - functions of no levels, no `Fixed` span and one result.
+
+    Of the exports, the six word-only rows fit: sha512_t1, _t2, _next and sha256_t1, _t2, _next. Of the gates, branches nested_true fits.
+  - **What remains**, by form:
+    1. **Bounded loops** (`RegionFits` is `False` at `Loop`). A pass runs at an id offset `d` of its own (item 4), so the relation needs a shifted `Agree` between the pass's valuation and the locals at `id + d`. It also needs an induction over passes matching `loop_pass_run` against the plain loop's fuel: the counter and flag elements, and the bound-zero branch. Every export with memory has a loop, so this is the next piece.
+    2. **Lends.** A view is an `Offset` into the lender's block, so "each block is its buffer" breaks inside the callee. The relation has to become "each home's reference is its buffer's view": a base and a length within a block.
+    3. **Wide accesses** (`is_wide` excluded). They need a wide `byte_load_runs`: the little-endian read of n bytes equals `Buffers`' wide read, at 1, 2, 4 and 8 bytes. Only `WideLoad(4)`/`WideStore(4)` are in exports, and those rows are refused by the lowering anyway (item 4, cause 3).
+    4. **Guarded loads.** The comparison-and-branch form is excluded (`LeafOk` asks for one leaf). It needs `branch_agrees` with the guard's condition read from the bound's comparison.
+    5. **`also` and ref results** (two_words, enum_fields, narrow_fields; three_words' sret).
+    6. **Levels and the `Fixed` span** (recursion, native_program's `LEVELS`, native_recursion). Levels have no counterpart at the bytes level (item 1), so this is a stage-3 language question, not a proof.
+    7. **No decider for `ProgramFits`.** It is a `Type` whose premises quantify over the translation's intermediate results. Applying the theorem to a row by `refl` needs a `Bool` check and its soundness. Without that, the coverage above is read off the forms, not checked per row.
+  - Verification: the module checks in the library gate; `scripts/linked --check` unchanged.
