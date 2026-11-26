@@ -870,7 +870,7 @@ theorem Residual::all_app(tys: Nat → Type, cx: Ctx(tys), env: Env(tys), tail: 
 {
     match xs {
         Nil => λ ys h => ⟨trivial, h⟩,
-        Cons(r, rest) => λ ys h => {
+        Cons(_, rest) => λ ys h => {
             let ih = Residual::all_app(tys, cx, env, tail, rest, ys, h.right);
             ⟨⟨h.left, ih.left⟩, ih.right⟩
         },
@@ -878,7 +878,7 @@ theorem Residual::all_app(tys: Nat → Type, cx: Ctx(tys), env: Env(tys), tail: 
 }
 
 theorem Residual::all_true(tys: Nat → Type, cx: Ctx(tys), env: Env(tys), tail: Type, xs: List<Residual>): Residual::All(xs, tys, cx, env, tail) → Residual::All(xs, tys, cx, env, True) {
-    match xs { Nil => λ _ => trivial, Cons(r, rest) => λ h => ⟨h.left, Residual::all_true(tys, cx, env, tail, rest, h.right)⟩ }
+    match xs { Nil => λ _ => trivial, Cons(_, rest) => λ h => ⟨h.left, Residual::all_true(tys, cx, env, tail, rest, h.right)⟩ }
 }
 
 // A place's code is what the checker's codes of its steps say, fit or not.
@@ -1043,17 +1043,23 @@ theorem Shape::same_eq(a, b: Shape, h: a.same(b) = True): a = b {
     (match Shape::dec(a, b) as λ o => (match o { Inl(_) => True, Inr(_) => False }) = True → a = b { Inl(e) => λ _ => e, Inr(_) => λ no => absurd(no) })(h)
 }
 
-// Two code lists the same hold one code at each index.
-theorem Shape::same_list_nth(xs: List<Shape>): (ys: List<Shape>) → Shape::same_list(xs, ys) = True → (i: Nat) → (a: Shape) → xs.nth(i) = Some(a) → ys.nth(i) = Some(a) {
-    match xs {
-        Nil => λ ys _ i a no => absurd(no),
-        Cons(x, xr) => λ ys => match ys {
+// Coded arguments hold their parameters' codes at each index.
+theorem Dyn::coded_nth(tys: Nat → Type, ds: List<Dyn(tys)>): (ps: List<Param>) → Dyn::Coded(tys, ds, ps) → (i: Nat) → (d: Dyn(tys)) → (p: Param) →
+    ds.nth(i) = Some(d) → ps.nth(i) = Some(p) → d.code = p.code
+{
+    match ds {
+        Nil => λ ps _ i d p no => absurd(no),
+        Cons(d0, dr) => λ ps => match ps {
             Nil => λ no => absurd(no),
-            Cons(y, yr) => λ h i a => {
-                let parts = Bool::and_true_parts(x.same(y), Shape::same_list(xr, yr), h);
+            Cons(q, pr) => λ h i => {
+                let parts = Bool::and_true_parts(d0.code.same(q.code), Dyn::coded(tys, dr, pr), h);
                 match i {
-                    Zero => λ e => trans(cong_fn(λ (c: Shape) => Some(c), sym(Shape::same_eq(x, y, parts.left))), e),
-                    Succ(k) => λ e => Shape::same_list_nth(xr, yr, parts.right, k, a, e),
+                    Zero => λ d p ed ep => {
+                        let a: (d0 = d) = Option::some_inj(d0, d, ed);
+                        let b: (q = p) = Option::some_inj(q, p, ep);
+                        j(b, λ r _ => d.code = r.code, j(a, λ r _ => r.code = q.code, Shape::same_eq(d0.code, q.code, parts.left)))
+                    },
+                    Succ(k) => λ d p ed ep => Dyn::coded_nth(tys, dr, pr, parts.right, k, d, p, ed, ep),
                 }
             },
         },
@@ -1088,18 +1094,18 @@ theorem CSt::params_nth(tys: Nat → Type, strs: Strs(tys), ps: List<Param>): (k
 theorem Cell::args_v(tys: Nat → Type, vs: List<Value(tys)>): (ps: List<Param>) → (i: Nat) → (Cell::args(tys, ps, vs)).nth(i).map(λ (c: Cell(tys)) => c.v) = vs.nth(i) {
     match vs {
         Nil => λ ps i => refl,
-        Cons(v, rest) => λ ps i => match i { Zero => refl, Succ(k) => Cell::args_v(tys, rest, ps.drop(1), k) },
+        Cons(_, rest) => λ ps i => match i { Zero => refl, Succ(k) => Cell::args_v(tys, rest, ps.drop(1), k) },
     }
 }
 
 theorem Cell::args_len(tys: Nat → Type, vs: List<Value(tys)>): (ps: List<Param>) → (Cell::args(tys, ps, vs)).len() = vs.len() {
-    match vs { Nil => λ ps => refl, Cons(v, rest) => λ ps => Nat::cong_succ(Cell::args_len(tys, rest, ps.drop(1))) }
+    match vs { Nil => λ ps => refl, Cons(_, rest) => λ ps => Nat::cong_succ(Cell::args_len(tys, rest, ps.drop(1))) }
 }
 
 theorem Value::read_all_len(tys: Nat → Type, strs: Strs(tys), h: Heap(tys), f: Nat, vs: List<Value(tys)>): (ds: List<Dyn(tys)>) → Value::ReadAll(tys, strs, h, f, vs, ds) → vs.len() = ds.len() {
     match vs {
         Nil => λ ds => match ds { Nil => λ _ => refl, Cons(_, _) => λ no => false_elim(no) },
-        Cons(v, vr) => λ ds => match ds { Nil => λ no => false_elim(no), Cons(d, dr) => λ h2 => Nat::cong_succ(Value::read_all_len(tys, strs, h, f, vr, dr, h2.right)) },
+        Cons(_, vr) => λ ds => match ds { Nil => λ no => false_elim(no), Cons(_, dr) => λ h2 => Nat::cong_succ(Value::read_all_len(tys, strs, h, f, vr, dr, h2.right)) },
     }
 }
 
@@ -1131,7 +1137,7 @@ theorem Value::get_of_read(tys: Nat → Type, strs: Strs(tys), h: Heap(tys), v: 
 {
     (match v as λ u => Value::read(tys, u, strs, h, h.len()) = Some(d) → ((r: Ref) → u = Refer(r) → Exists<Dyn(tys)>(λ d1 => (Heap::obj(tys, h, r.b) = Some(Obj(d1, Nil))) ∧ (Sel::fit(tys, strs, r.sels, d1) = True))) →
             Value::get(tys, strs, h, u, Nil) = Some(d) {
-        Plain(d0) => λ e _ => e,
+        Plain(_) => λ e _ => e,
         Refer(r) => λ e lv => match lv(r, refl) {
             ⟨d1, pr⟩ => {
                 let hv: (Heap::val(tys, strs, h, r.b) = Some(d1)) =
@@ -1192,4 +1198,230 @@ theorem Slot::at(tys: Nat → Type, ps: List<Param>, vs: List<Value(tys)>, ds: L
             },
         },
     }
+}
+
+// An argument's cell agrees with its meaning as its parameter's role says.
+theorem Cell::start_agrees(tys: Nat → Type, strs: Strs(tys), h: Heap(tys), p: Param, i: Nat, c: Cell(tys), v: Value(tys), d: Dyn(tys), cv: c.v = v,
+    rd: Value::read(tys, v, strs, h, h.len()) = Some(d),
+    live: (r: Ref) → v = Refer(r) → Exists<Dyn(tys)>(λ d1 => (Heap::obj(tys, h, r.b) = Some(Obj(d1, Nil))) ∧ (Sel::fit(tys, strs, r.sels, d1) = True)),
+    plain: p.mode = ByTake → Shape::plain(tys, strs, p.code) = True → (r: Ref) → ¬(v = Refer(r))):
+    Cell::Agrees(tys, strs, h, CSt::role_of(tys, strs, p, i), c, d)
+{
+    let reads: Value::Reads(tys, strs, h, c.v, d) = j(sym(cv), λ u _ => Value::get(tys, strs, h, u, Nil) = Some(d), Value::get_of_read(tys, strs, h, v, d, rd, live));
+    (match p.mode as λ md => p.mode = md → Cell::Agrees(tys, strs, h,
+            match md { ByTake => match Shape::plain(tys, strs, p.code) { True => KPlain, False => KHold(i, AcOwn) }, ByRead => KHold(i, AcRead), ByWrite => KHold(i, AcWrite) }, c, d) {
+        ByRead => λ _ => reads,
+        ByWrite => λ _ => reads,
+        ByTake => λ em => (match Shape::plain(tys, strs, p.code) as λ b => Shape::plain(tys, strs, p.code) = b →
+                Cell::Agrees(tys, strs, h, match b { True => KPlain, False => KHold(i, AcOwn) }, c, d) {
+            False => λ _ => reads,
+            True => λ ep => (match v as λ u => c.v = u → Value::read(tys, u, strs, h, h.len()) = Some(d) → ((r: Ref) → ¬(u = Refer(r))) → c.v = level2::Plain(d) {
+                Plain(d0) => λ cv2 rd2 _ => trans(cv2, cong_fn(λ (x: Dyn(tys)) => level2::Plain(x), Option::some_inj(d0, d, rd2))),
+                Refer(r) => λ _ _ no => false_elim(no(r, refl)),
+            })(cv, rd, plain(em, ep)),
+        })(refl),
+    })(refl)
+}
+
+// The invariant's first part at the start.
+theorem Sim::start(tys: Nat → Type, strs: Strs(tys), sig: Sig, vs: List<Value(tys)>, h: Heap(tys), io: Io, ds: List<Dyn(tys)>, ra: Value::ReadAll(tys, strs, h, h.len(), vs, ds),
+    coded: Dyn::Coded(tys, ds, sig.params), ld: Lendable(tys, strs, sig.params, h, vs)):
+    Sim(tys, strs, CSt::start(tys, strs, sig), Env::start(tys, ds), Mach(h, REnv(Cell::args(tys, sig.params, vs), Nil), io))
+{
+    let s = CSt::start(tys, strs, sig);
+    let e = Env::start(tys, ds);
+    let cs = Cell::args(tys, sig.params, vs);
+    let lv: (vs.len() = sig.params.len()) = ld.arity;
+    let ld2: (ds.len() = sig.params.len()) = trans(sym(Value::read_all_len(tys, strs, h, h.len(), vs, ds, ra)), lv);
+    Sim(ld2, trans(Cell::args_len(tys, vs, sig.params), lv), refl, refl,
+        λ x l hl => {
+            let st = CSt::start_lvl(tys, strs, sig, x, l, hl);
+            let sl = Slot::at(tys, sig.params, vs, ds, l, lv, ld2, st.right);
+            let var = CSt::start_var(tys, strs, sig, l, sl.p, sl.hp, st.right);
+            let ag = Cell::start_agrees(tys, strs, h, sl.p, l, sl.c, sl.v, sl.d, sl.cv, Value::read_all_nth(tys, strs, h, h.len(), vs, ds, ra, l, sl.v, sl.d, sl.hv, sl.hd),
+                λ r e2 => ld.live(l, r, trans(sl.hv, cong_fn(λ (u: Value(tys)) => Some(u), e2))),
+                λ em ep r e2 => ld.plain(l, sl.p, sl.hp, em, ep, r)(trans(sl.hv, cong_fn(λ (u: Value(tys)) => Some(u), e2))));
+            let a1 = j(sym(var), λ q _ => Cell::Agrees(tys, strs, h, q.role, sl.c, sl.d), ag);
+            let a2 = j(sym(sl.hc), λ o _ => Cell::Agrees(tys, strs, h, s.role(l), o.unwrap_or(Cell::none(tys)), sl.d), a1);
+            let a3 = j(sym(sl.hd), λ o _ => Cell::Agrees(tys, strs, h, s.role(l), cs.nth(l).unwrap_or(Cell::none(tys)), o.unwrap_or(Dyn::none(tys))), a2);
+            j(sym(st.left), λ y _ => Cell::Agrees(tys, strs, h, s.role(l), REnv::get(tys, REnv(cs, Nil), y), Env::get(tys, e, y)), a3)
+        },
+        λ x l hl => {
+            let st = CSt::start_lvl(tys, strs, sig, x, l, hl);
+            let sl = Slot::at(tys, sig.params, vs, ds, l, lv, ld2, st.right);
+            let var = CSt::start_var(tys, strs, sig, l, sl.p, sl.hp, st.right);
+            let pc: (sl.d.code = sl.p.code) = Dyn::coded_nth(tys, ds, sig.params, coded, l, sl.d, sl.p, sl.hd, sl.hp);
+            let c1: (sl.d.code = (s.var(l)).code) = trans(pc, cong_fn(λ (q: CVar) => q.code, sym(var)));
+            let c2 = j(sym(sl.hd), λ o _ => (o.unwrap_or(Dyn::none(tys))).code = (s.var(l)).code, c1);
+            j(sym(st.left), λ y _ => (Env::get(tys, e, y)).code = (s.var(l)).code, c2)
+        })
+}
+
+// The objects at the start are the arguments, by position.
+fn CSt::start_root(tys: Nat → Type, vs: List<Value(tys)>, o: Nat) → Ref {
+    match vs.nth(o) { Some(v) => match v { Refer(r) => r, Plain(_) => Ref(0, Nil) }, None => Ref(0, Nil) }
+}
+
+theorem CSt::start_root_at(tys: Nat → Type, vs: List<Value(tys)>, o: Nat, r: Ref, h: vs.nth(o) = Some(Refer(r))): CSt::start_root(tys, vs, o) = r {
+    j(sym(h), λ q _ => (match q { Some(v) => match v { Refer(r2) => r2, Plain(_) => Ref(0, Nil) }, None => Ref(0, Nil) }) = r, refl)
+}
+
+// What a start role says of a reference, as `CSt::RefOk` reads it.
+fn Role::RefAt(r0: Role, root: Nat → Ref, kv: Type, r: Ref) → Type { match r0 { KHold(o, _) => r = root(o), KView => kv, KPlain => False, KGone => True } }
+
+theorem CSt::start_ref(tys: Nat → Type, strs: Strs(tys), p: Param, l: Nat, root: Nat → Ref, kv: Type, r: Ref, at: root(l) = r,
+    plain: p.mode = ByTake → Shape::plain(tys, strs, p.code) = True → False): Role::RefAt(CSt::role_of(tys, strs, p, l), root, kv, r)
+{
+    (match p.mode as λ md => p.mode = md →
+            Role::RefAt(match md { ByTake => match Shape::plain(tys, strs, p.code) { True => KPlain, False => KHold(l, AcOwn) }, ByRead => KHold(l, AcRead), ByWrite => KHold(l, AcWrite) }, root, kv, r) {
+        ByRead => λ _ => sym(at),
+        ByWrite => λ _ => sym(at),
+        ByTake => λ em => (match Shape::plain(tys, strs, p.code) as λ b => Shape::plain(tys, strs, p.code) = b → Role::RefAt(match b { True => KPlain, False => KHold(l, AcOwn) }, root, kv, r) {
+            True => λ ep => plain(em, ep),
+            False => λ _ => sym(at),
+        })(refl),
+    })(refl)
+}
+
+// A start variable's object is its position.
+theorem CSt::start_obj(tys: Nat → Type, strs: Strs(tys), p: Param, l, o: Nat, ko: Option<Nat>,
+    h: (match CSt::role_of(tys, strs, p, l) { KHold(o2, _) => Some(o2), KView => ko, KPlain => None, KGone => None }) = Some(o)): o = l
+{
+    (match p.mode as λ md => (match (match md { ByTake => match Shape::plain(tys, strs, p.code) { True => KPlain, False => KHold(l, AcOwn) }, ByRead => KHold(l, AcRead), ByWrite => KHold(l, AcWrite) })
+            { KHold(o2, _) => Some(o2), KView => ko, KPlain => None, KGone => None }) = Some(o) → o = l {
+        ByRead => λ e => sym(Option::some_inj(l, o, e)),
+        ByWrite => λ e => sym(Option::some_inj(l, o, e)),
+        ByTake => match Shape::plain(tys, strs, p.code) {
+            True => λ no => absurd(no),
+            False => λ e => sym(Option::some_inj(l, o, e)),
+        },
+    })(h)
+}
+
+fn CVar::changes_obj(o: Nat, c: CVar) → Bool { match c.role { KHold(o2, a) => o2.same(o) && a.writes(), KPlain => False, KView => False, KGone => False } }
+
+theorem CSt::role_changes(tys: Nat → Type, strs: Strs(tys), q: Param, k, o: Nat, h: CVar::changes_obj(o, CVar(q.code, CSt::role_of(tys, strs, q, k))) = True):
+    (k = o) ∧ (q.mode.changes() = True)
+{
+    (match q.mode as λ md => (match (match md { ByTake => match Shape::plain(tys, strs, q.code) { True => KPlain, False => KHold(k, AcOwn) }, ByRead => KHold(k, AcRead), ByWrite => KHold(k, AcWrite) })
+            { KHold(o2, a) => o2.same(o) && a.writes(), KPlain => False, KView => False, KGone => False }) = True → (k = o) ∧ (md.changes() = True) {
+        ByRead => λ e => absurd(Bool::and_true_parts(k.same(o), False, e).right),
+        ByWrite => λ e => ⟨k.same_sound(o, Bool::and_true_parts(k.same(o), True, e).left), refl⟩,
+        ByTake => match Shape::plain(tys, strs, q.code) {
+            True => λ no => absurd(no),
+            False => λ e => ⟨k.same_sound(o, Bool::and_true_parts(k.same(o), True, e).left), refl⟩,
+        },
+    })(h)
+}
+
+theorem CSt::params_changes(tys: Nat → Type, strs: Strs(tys), ps: List<Param>): (k, o: Nat) → (CSt::params(tys, strs, ps, k)).any_bit(λ c => CVar::changes_obj(o, c)) = True →
+    Exists<Param>(λ p => (ps.nth(o - k) = Some(p)) ∧ ((p.mode.changes() = True) ∧ (k <= o)))
+{
+    match ps {
+        Nil => λ k o no => absurd(no),
+        Cons(q, rest) => λ k o h => match Bool::or_true_parts(CVar::changes_obj(o, CVar(q.code, CSt::role_of(tys, strs, q, k))), (CSt::params(tys, strs, rest, k + 1)).any_bit(λ c => CVar::changes_obj(o, c)), h) {
+            Inl(hd) => {
+                let rc = CSt::role_changes(tys, strs, q, k, o, hd);
+                let z: (0 = o - k) = omega(rc.left);
+                Exists(q, ⟨j(z, λ n _ => (Cons(q, rest)).nth(n) = Some(q), refl), ⟨rc.right, omega(rc.left)⟩⟩)
+            },
+            Inr(tl) => match CSt::params_changes(tys, strs, rest, k + 1, o, tl) {
+                ⟨p, pp⟩ => {
+                    let z: (Succ(o - (k + 1)) = o - k) = omega(pp.right.right);
+                    Exists(p, ⟨j(z, λ n _ => (Cons(q, rest)).nth(n) = Some(p), pp.left), ⟨pp.right.left, omega(pp.right.right)⟩⟩)
+                },
+            },
+        },
+    }
+}
+
+theorem Value::lends_nth(tys: Nat → Type, vs: List<Value(tys)>): (i: Nat) → (r: Ref) → vs.nth(i) = Some(Refer(r)) → Value::lends(tys, vs, r.b) = True {
+    match vs {
+        Nil => λ i r no => absurd(no),
+        Cons(v, rest) => λ i r => match i {
+            Zero => λ e => j(sym(Option::some_inj(v, Refer(r), e)), λ u _ => ((match u { Refer(r2) => r2.b.same(r.b), Plain(_) => False }) || Value::lends(tys, rest, r.b)) = True,
+                j(sym(r.b.same_self()), λ bb _ => (bb || Value::lends(tys, rest, r.b)) = True, refl)),
+            Succ(k) => λ e => {
+                let ih = Value::lends_nth(tys, rest, k, r, e);
+                match (match v { Refer(r2) => r2.b.same(r.b), Plain(_) => False }) { True => refl, False => ih }
+            },
+        },
+    }
+}
+
+// A start variable's argument, where its cell refers.
+theorem Slot::refers(tys: Nat → Type, strs: Strs(tys), sig: Sig, vs: List<Value(tys)>, ds: List<Dyn(tys)>, x: Var, l: Nat, r: Ref, st: (x = Arg(l)) ∧ (l < sig.params.len()),
+    sl: Slot(tys, sig.params, vs, ds, Cell::args(tys, sig.params, vs), l), cr: (REnv::get(tys, REnv(Cell::args(tys, sig.params, vs), Nil), x)).v = Refer(r)): vs.nth(l) = Some(Refer(r))
+{
+    let cs = Cell::args(tys, sig.params, vs);
+    let cr1: ((cs.nth(l).unwrap_or(Cell::none(tys))).v = Refer(r)) = j(st.left, λ y _ => (REnv::get(tys, REnv(cs, Nil), y)).v = Refer(r), cr);
+    let cr2: (sl.c.v = Refer(r)) = j(sl.hc, λ o _ => (o.unwrap_or(Cell::none(tys))).v = Refer(r), cr1);
+    trans(sl.hv, cong_fn(λ (u: Value(tys)) => Some(u), trans(sym(sl.cv), cr2)))
+}
+
+// The object a start variable holds, and that one something may change
+// through is a parameter that changes.
+theorem CSt::start_obj_at(tys: Nat → Type, strs: Strs(tys), sig: Sig, l, o: Nat, p: Param, var: (CSt::start(tys, strs, sig)).var(l) = CVar(p.code, CSt::role_of(tys, strs, p, l)),
+    h: (CSt::start(tys, strs, sig)).obj(l) = Some(o)): o = l
+{
+    let s = CSt::start(tys, strs, sig);
+    let ko = match s.ents(l) { Cons(en, _) => Some(en.obj), Nil => None<Nat>() };
+    CSt::start_obj(tys, strs, p, l, o, ko, j(var, λ q _ => (match q.role { KHold(o2, _) => Some(o2), KView => ko, KPlain => None<Nat>(), KGone => None<Nat>() }) = Some(o), h))
+}
+
+theorem CSt::start_changes(tys: Nat → Type, strs: Strs(tys), sig: Sig, o: Nat, h: (CSt::start(tys, strs, sig)).changes(o) = True):
+    Exists<Param>(λ p => (sig.params.nth(o) = Some(p)) ∧ (p.mode.changes() = True))
+{
+    let ps = CSt::params(tys, strs, sig.params, 0);
+    match Bool::or_true_parts((ps ++ Nil).any_bit(λ c => CVar::changes_obj(o, c)), (Nil<VEnt>()).any_bit(λ en => en.obj.same(o) && en.mode.writes()), h) {
+        Inl(a) => match CSt::params_changes(tys, strs, sig.params, 0, o, j(List::append_nil(ps), λ q _ => q.any_bit(λ c => CVar::changes_obj(o, c)) = True, a)) {
+            ⟨p, pp⟩ => {
+                let z: (o - 0 = o) = omega();
+                Exists(p, ⟨j(z, λ n _ => sig.params.nth(n) = Some(p), pp.left), pp.right.left⟩)
+            },
+        },
+        Inr(no) => absurd(no),
+    }
+}
+
+// The invariant at a function's start, from `SafeAt`'s premises and the
+// arguments' codes.
+theorem Inv::start(tys: Nat → Type, strs: Strs(tys), sig: Sig, vs: List<Value(tys)>, h: Heap(tys), io: Io, ds: List<Dyn(tys)>, ra: Value::ReadAll(tys, strs, h, h.len(), vs, ds),
+    coded: Dyn::Coded(tys, ds, sig.params), ld: Lendable(tys, strs, sig.params, h, vs)):
+    Inv(tys, strs, CSt::start(tys, strs, sig), Env::start(tys, ds), Mach(h, REnv(Cell::args(tys, sig.params, vs), Nil), io), h, λ b => Value::lends(tys, vs, b))
+{
+    let s = CSt::start(tys, strs, sig);
+    let m = Mach(h, REnv(Cell::args(tys, sig.params, vs), Nil), io);
+    let lv: (vs.len() = sig.params.len()) = ld.arity;
+    let ld2: (ds.len() = sig.params.len()) = trans(sym(Value::read_all_len(tys, strs, h, h.len(), vs, ds, ra)), lv);
+    let root = λ (o: Nat) => CSt::start_root(tys, vs, o);
+    Inv(Sim::start(tys, strs, sig, vs, h, io, ds, ra, coded, ld), root,
+        λ x l hl r cr => {
+            let st = CSt::start_lvl(tys, strs, sig, x, l, hl);
+            let sl = Slot::at(tys, sig.params, vs, ds, l, lv, ld2, st.right);
+            let var = CSt::start_var(tys, strs, sig, l, sl.p, sl.hp, st.right);
+            let hv = Slot::refers(tys, strs, sig, vs, ds, x, l, r, st, sl, cr);
+            let kv = VEnt::Any(s.ents(l), λ en => r = (root(en.obj)).narrow(Mach::ixs(tys, strs, m), s.unsteps(en.reg)));
+            j(sym(var), λ q _ => Role::RefAt(q.role, root, kv, r),
+                CSt::start_ref(tys, strs, sl.p, l, root, kv, r, CSt::start_root_at(tys, vs, l, r, hv), λ em ep => ld.plain(l, sl.p, sl.hp, em, ep, r)(hv)))
+        },
+        λ x1 x2 l1 l2 o1 o2 h1 h2 ho1 ho2 ne ch r1 r2 c1 c2 => {
+            let st1 = CSt::start_lvl(tys, strs, sig, x1, l1, h1);
+            let st2 = CSt::start_lvl(tys, strs, sig, x2, l2, h2);
+            let sl1 = Slot::at(tys, sig.params, vs, ds, l1, lv, ld2, st1.right);
+            let sl2 = Slot::at(tys, sig.params, vs, ds, l2, lv, ld2, st2.right);
+            let e1: (o1 = l1) = CSt::start_obj_at(tys, strs, sig, l1, o1, sl1.p, CSt::start_var(tys, strs, sig, l1, sl1.p, sl1.hp, st1.right), ho1);
+            let e2: (o2 = l2) = CSt::start_obj_at(tys, strs, sig, l2, o2, sl2.p, CSt::start_var(tys, strs, sig, l2, sl2.p, sl2.hp, st2.right), ho2);
+            match CSt::start_changes(tys, strs, sig, o1, ch) {
+                ⟨p, pp⟩ => ld.apart(l1, l2, λ e => ne(trans(e1, trans(e, sym(e2)))), p, j(e1, λ q _ => sig.params.nth(q) = Some(p), pp.left), pp.right, r1, r2,
+                    Slot::refers(tys, strs, sig, vs, ds, x1, l1, r1, st1, sl1, c1), Slot::refers(tys, strs, sig, vs, ds, x2, l2, r2, st2, sl2, c2)),
+            }
+        },
+        λ x l hl _ r cr => {
+            let st = CSt::start_lvl(tys, strs, sig, x, l, hl);
+            let sl = Slot::at(tys, sig.params, vs, ds, l, lv, ld2, st.right);
+            Inl(Value::lends_nth(tys, vs, l, r, Slot::refers(tys, strs, sig, vs, ds, x, l, r, st, sl, cr)))
+        },
+        λ b _ _ => refl,
+        omega())
 }

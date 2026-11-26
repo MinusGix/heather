@@ -211,6 +211,20 @@ record Lendable(tys: Nat → Type, strs: Strs(tys), ps: List<Param>, h: Heap(tys
         Ref::Apart(tys, strs, r, q),
 }
 
+// The meaning's arguments have the parameters' codes: what makes a junk
+// meaning of an ill-coded input sound to promise nothing about. Without it a
+// function that reads a field of an argument given a word owes nothing and
+// its run is stuck (§23.7, `get_x`). A Boolean equation, so `refl` at a
+// closed call.
+fn Dyn::coded(tys: Nat → Type, ds: List<Dyn(tys)>, ps: List<Param>) → Bool {
+    match ds {
+        Nil => match ps { Nil => True, Cons(_, _) => False },
+        Cons(d, dr) => match ps { Nil => False, Cons(q, pr) => d.code.same(q.code) && Dyn::coded(tys, dr, pr) },
+    }
+}
+
+fn Dyn::Coded(tys: Nat → Type, ds: List<Dyn(tys)>, ps: List<Param>) → Type { Dyn::coded(tys, ds, ps) = True }
+
 // Each written parameter, after: a referring argument's block reads the
 // meaning's value after; and that value fits the value before. (A plain
 // one's value after is in the answer's written slots, which `ReadAll`
@@ -262,7 +276,7 @@ fn Value::lends(tys: Nat → Type, vs: List<Value(tys)>, b: Nat) → Bool {
 // is lendable. The meaning is the program's world (each function's pin
 // relates it to its body: `CheckSound`'s premise).
 fn SafeAt(tys: Nat → Type, p: Prog(tys), g: Nat, fuel: Nat) → Type {
-    (vs: List<Value(tys)>) → (h: Heap(tys)) → (io: Io) → (ds: List<Dyn(tys)>) → Value::ReadAll(tys, p.strs, h, h.len(), vs, ds) → p.pres(g, ds) →
+    (vs: List<Value(tys)>) → (h: Heap(tys)) → (io: Io) → (ds: List<Dyn(tys)>) → Value::ReadAll(tys, p.strs, h, h.len(), vs, ds) → Dyn::Coded(tys, ds, (p.fns(g)).sig.params) → p.pres(g, ds) →
         Lendable(tys, p.strs, (p.fns(g)).sig.params, h, vs) →
         ¬(p.run(tys, fuel, g, vs, h, io) = Stuck) ∧
         ((match p.need(g) as λ _ => Type { Some(n) => n(g, ds) <= fuel → Exists<Answer(tys)>(λ a => p.run(tys, fuel, g, vs, h, io) = Done(a)), None => True }) ∧
@@ -405,5 +419,5 @@ fn Prog::Pinned(tys: Nat → Type, p: Prog(tys)) → Type {
 // precondition, give the function's safety.
 fn CheckSound(tys: Nat → Type, check: Checker(tys)) → Type<1> {
     (p: Prog(tys)) → Prog::Pinned(tys, p) → (g: Nat) → (d: Owes) → check(p.strs, λ g2 => (p.fns(g2)).sig, p.prim, g, p.fns(g)) = Some(d) →
-        ((args: List<Dyn(tys)>) → p.pres(g, args) → d.Due(tys, Prog::ctx(tys, p, g, args), p.fns(g))) → Safety(tys, p, g)
+        ((args: List<Dyn(tys)>) → Dyn::Coded(tys, args, (p.fns(g)).sig.params) → p.pres(g, args) → d.Due(tys, Prog::ctx(tys, p, g, args), p.fns(g))) → Safety(tys, p, g)
 }

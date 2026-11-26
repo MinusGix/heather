@@ -135,10 +135,17 @@ theorem empty_stuck(io: Io): (pick_prog(λ _ => True)).run(tys(), 0, 0, empty_in
 theorem unpreconditioned_not_safe(io: Io): ¬pick_safety(λ _ => True) {
     λ safe => {
         let at0 = safe(0, λ g2 k no => false_elim(Nat::not_succ_le_zero(k, no)));
-        let clauses = at0(empty_in(), Nil, io, [nats(Nil), nat(0)], ⟨refl, ⟨refl, trivial⟩⟩, trivial, empty_lendable());
+        let clauses = at0(empty_in(), Nil, io, [nats(Nil), nat(0)], ⟨refl, ⟨refl, trivial⟩⟩, refl, trivial, empty_lendable());
         clauses.left(empty_stuck(io))
     }
 }
+
+// The arguments' codes: `pick`'s are a list and a word, and two words are
+// not (§23.7: without the clause, a function reading a field of an
+// argument given a word owes nothing, and its run is stuck).
+theorem pick_args_coded(xs: List<Nat>, i: Nat): Dyn::Coded(tys(), [nats(xs), nat(i)], pick_r().sig.params) { refl }
+
+theorem words_not_coded(): ¬Dyn::Coded(tys(), [nat(5), nat(1)], pick_r().sig.params) { λ no => absurd(no) }
 
 // ---------------------------------------------------------------------------
 // The check's refusals, from codes alone: the meaning of each is junk

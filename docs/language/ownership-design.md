@@ -3417,16 +3417,46 @@ the probes do not use:
   (`Value::ViewIs`, the caller's role): a word a call answers is a plain
   variable, which an atom may read.
 
-**The invariant** (`sound.hthr`'s `Sim`, its first part built): each
-variable's run-time cell agrees with the meaning's value as its role says
-(a plain variable holds the value; a holder or a view reads it through the
-heap, its block live, its selections fitting; a gone variable owes
-nothing), with the environments' lengths and each variable's code as the
-checker records it. Still to add: each object's root reference, the views'
-references as their objects' narrowed by their regions at the words,
-objects one of which may change apart (`Lendable`'s clause, kept), the
-frame, and, for the one pending chain, the meaning's value as the heap's
-with the old value at the pending place.
+**The invariant** (`sound.hthr`'s `Inv`, stated once, with `Sim` as its
+first field): between the checker's state, the meaning's environment and
+the run's machine, for a function entered on heap `h0` and lent the blocks
+`lent`:
+
+- `sim`: each live variable's cell agrees with its meaning as its role says
+  (a plain variable holds the value; a holder or a view reads it through
+  the heap, its block live, its selections fitting; a gone one owes
+  nothing), with the environments' lengths and each variable's code;
+  against the meaning *with the pending chain written up*
+  (`CSt::patched`, `CSt::up`): while a view to write has changed and is not
+  yet written back, the heap already holds its value in each ancestor,
+  which the meaning holds only after each write-back. Nothing pending, it
+  is `Sim` itself (`Inv::sim_now`).
+- `root`, `refs`: each object has one run reference, and a live variable's
+  reference is its object's (a holder) or its object's narrowed by one of
+  its entries' region at the words (a view; `CSt::RefOk`). This is what
+  turns the licence's apartness of regions of one object into apartness of
+  the run's references.
+- `apart`: references to different objects, one of which something live
+  may change through, are apart (`Lendable`'s clause at entry; a fresh
+  block after).
+- `owned`, `frame`, `grows`: every live reference is to a block lent or
+  made here, so the blocks not lent are as they were (`Heap::Frame`).
+
+**Entry** (`Inv::start`): the invariant at a function's start from
+`SafeAt`'s premises: `ReadAll` and `Lendable` give each argument's cell its
+role's agreement and reference, `Lendable.apart` the cross-object clause,
+and `Dyn::Coded` the codes.
+
+**`Dyn::Coded`** (added 2026-11-26): the meaning's arguments have the
+parameters' codes, a premise of `SafeAt` and of `CheckSound`'s `Due`. Without
+it `CheckSound` is false: `get_x(p: Point, read) { p.x }` (a field step owes
+nothing) is checked owing nothing, and at the word `5` for `p` every other
+premise holds (it reads as itself, there is no precondition, a plain value
+is lendable) while the run is stuck reading a field of a word, at fuel 0,
+where `Safety` assumes nothing of callees. A junk meaning for an ill-coded
+input is sound only if inputs are coded, and codes come from outside only
+here. The call stage discharges it from the code check (`Stmt::code_step`'s
+`Call` case). Probes: `pick_args_coded`, `words_not_coded`.
 
 **Built** (`sound.hthr`, probes `sound_tests.hthr`): reads, writes and fits
 along appended selection paths; a place's steps as selections at the words;
@@ -3451,9 +3481,11 @@ it: the run stores, at the view's place, what the block holds there.
 `Lendable` carries the arity (`arity`: as many arguments as parameters),
 since the checker's levels assume it.
 
-**What remains for straight-line bodies and calls**: the invariant's other
-parts and its entry from `ReadAll` and `Lendable`; the stage lemmas for
-`Lit`, `Op`, `Read`, `Take`, `View`, `Fresh`, `Write` (through a holder,
+**What remains for straight-line bodies and calls** (the invariant and
+its entry are proved; `Lit`, `Op` and `Read` are proved against `Sim`): the
+stage lemmas restated against `Inv` (the three above lift through
+`Inv::sim_now`, nothing being pending when they run), then `Take`, `View`,
+`Fresh`, `Write` (through a holder,
 through a view, a write-back), `Death`, `Call` (each argument's lending,
 `Lendable` at the callee from the licence, the callee's `SafeAt` at less
 fuel, results and written slots) and `Ret` (`ReadAll`, `Written`, `Frame`,
