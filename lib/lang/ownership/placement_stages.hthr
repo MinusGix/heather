@@ -1,0 +1,258 @@
+// The leaf stages of `placement_sound` (docs/language/ownership-design.md
+// §25.6, §25.8 F6, §25.9; issues/ownership-end-to-end-slice.md): each a
+// `LeafStage` (placement_seam.hthr) for one statement kind, concluding that
+// level 2 is stuck there for every continuation, or steps to a machine the
+// stage names, related by `StageRel` to the configuration the leaf runs to.
+//
+// - **What the leaves share** (`rel_push`): a leaf that binds one new slot
+//   writes only ids at or past `next` (`Locals::Agree`), so every slot
+//   already bound reads what it read; the environment grows by the slot at
+//   the end, level 2's by the cell at the front of its locals, which is the
+//   end of the environment by level.
+// - **Each stage cases on the run's own scrutinee**, never on a fact
+//   assumed about level 2's machine: where level 2's read is `None` it is
+//   stuck, whatever follows.
+// - **"The codes agree"** comes through one named lemma per site, sourced
+//   today from `place`'s interim comparison (§25.8, F4), so that its source
+//   can become the run's not being stuck at a mismatch (§26.5) without
+//   touching the stage.
+import logic;
+import bool;
+import nat;
+import omega;
+import option;
+import list;
+import list_window;
+import pair;
+import bitvec;
+import bitvec_nat;
+import span_set;
+import store;
+import atom;
+import steps;
+import shape;
+import body;
+import level2;
+import run;
+import placement;
+import placement_seam;
+import placement_inject;
+import bytes_memory;
+import bytes_level;
+import function_ir;
+import function_ir_eval;
+import function_ir_state;
+import x86_64_memory_contract;
+import x86_64_call_contract;
+
+// ---------------------------------------------------------------------------
+// Locals agreeing below an id
+
+fn Locals::Agree(l, l2: Locals, next: Nat) → Type { (t: Typed) → t.id < next → l2.read(t) = l.read(t) }
+
+theorem Locals::agree_trans(l, l2, l3: Locals, next: Nat, a: Locals::Agree(l, l2, next), b: Locals::Agree(l2, l3, next)): Locals::Agree(l, l3, next) {
+    λ t lt => trans(b(t, lt), a(t, lt))
+}
+
+theorem Locals::agree_refl(l: Locals, next: Nat): Locals::Agree(l, l, next) { λ t lt => refl }
+
+// A word set at an id at or past `next`.
+theorem Locals::agree_set(l: Locals, id: Nat, value: (w: Nat) → BitVec(w), next: Nat, ge: next <= id): Locals::Agree(l, Locals(Valuation::set(l.words, id, value), l.refs), next) {
+    λ t lt => (match t.kind as λ kd =>
+            (match kd { WordKind => Some(x86_64_call_contract::Word(Valuation::set(l.words, id, value, 64, t.id))), RefKind => l.refs(t.id).map(λ (loc: x86_64_memory_contract::Loc) => x86_64_call_contract::Ref(loc)) })
+            = (match kd { WordKind => Some(x86_64_call_contract::Word(l.words(64, t.id))), RefKind => l.refs(t.id).map(λ (loc: x86_64_memory_contract::Loc) => x86_64_call_contract::Ref(loc)) }) {
+        WordKind => cong_fn(λ (x: BitVec(64)) => Some(x86_64_call_contract::Word(x)), Valuation::set_other(l.words, id, value, 64, t.id, λ e2 => { omega })),
+        RefKind => refl,
+    })
+}
+
+// A reference set at an id at or past `next`.
+theorem Locals::agree_set_ref(l: Locals, id: Nat, loc: x86_64_memory_contract::Loc, next: Nat, ge: next <= id): Locals::Agree(l, l.set_ref(id, loc), next) {
+    λ t lt => (match t.kind as λ kd =>
+            (match kd { WordKind => Some(x86_64_call_contract::Word(l.words(64, t.id))),
+                RefKind => (match t.id.same(id) { True => Some(loc), False => l.refs(t.id) }).map(λ (lc: x86_64_memory_contract::Loc) => x86_64_call_contract::Ref(lc)) })
+            = (match kd { WordKind => Some(x86_64_call_contract::Word(l.words(64, t.id))), RefKind => l.refs(t.id).map(λ (lc: x86_64_memory_contract::Loc) => x86_64_call_contract::Ref(lc)) }) {
+        WordKind => refl,
+        RefKind => cong_fn(λ (b: Bool) => (match b { True => Some(loc), False => l.refs(t.id) }).map(λ (lc: x86_64_memory_contract::Loc) => x86_64_call_contract::Ref(lc)),
+            Nat::same_false_of(t.id, id, λ e2 => { omega })),
+    })
+}
+
+theorem read_values_agree(l, l2: Locals, next: Nat, a: Locals::Agree(l, l2, next), ids: List<Typed>): ((t: Typed) → Mem(t, ids) → t.id < next) → read_values(ids, l2) = read_values(ids, l) {
+    match ids {
+        Nil => λ _ => refl,
+        Cons(v, rest) => λ b => eq2(λ (x: Option<x86_64_call_contract::Value>) (xs: Option<List<x86_64_call_contract::Value>>) =>
+                x.and_then(λ (y: x86_64_call_contract::Value) => xs.and_then(λ (ys: List<x86_64_call_contract::Value>) => Some(Cons(y, ys)))),
+            a(v, b(v, Inl(refl))), read_values_agree(l, l2, next, a, rest, λ t m2 => b(t, Inr(m2)))),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Slots kept, and one added at the end
+
+fn slots_below(ss: List<PSlot>, next: Nat) → Type { (k: Nat) → (s: PSlot) → ss.nth(k) = Some(s) → (t: Typed) → Mem(t, s.ids) → t.id < next }
+
+theorem holds_agree(tys: Nat → Type, strs: Strs(tys), inj: Nat → Nat, h: level2::Heap(tys), l, l2: Locals, next: Nat, a: Locals::Agree(l, l2, next), ss: List<PSlot>):
+    slots_below(ss, next) → (cs: List<Cell(tys)>) → SlotsHold(tys, strs, inj, h, ss, cs, l) → SlotsHold(tys, strs, inj, h, ss, cs, l2)
+{
+    match ss {
+        Nil => λ _ cs hs => hs,
+        Cons(s, sr) => λ b cs => (match cs as λ c2 => SlotsHold(tys, strs, inj, h, Cons(s, sr), c2, l) → SlotsHold(tys, strs, inj, h, Cons(s, sr), c2, l2) {
+            Nil => λ hs => hs,
+            Cons(c, cr) => λ hs => ⟨⟨trans(read_values_agree(l, l2, next, a, s.ids, b(0, s, refl)), hs.left.left), hs.left.right⟩,
+                holds_agree(tys, strs, inj, h, l, l2, next, a, sr, λ k s2 e2 => b(Succ(k), s2, e2), cr, hs.right)⟩,
+        }),
+    }
+}
+
+theorem holds_len(tys: Nat → Type, strs: Strs(tys), inj: Nat → Nat, h: level2::Heap(tys), l: Locals, ss: List<PSlot>):
+    (cs: List<Cell(tys)>) → SlotsHold(tys, strs, inj, h, ss, cs, l) → ss.len() = cs.len()
+{
+    match ss {
+        Nil => λ cs => (match cs as λ c2 => SlotsHold(tys, strs, inj, h, Nil, c2, l) → 0 = c2.len() { Nil => λ _ => refl, Cons(_, _) => λ f => false_elim(f) }),
+        Cons(s, sr) => λ cs => (match cs as λ c2 => SlotsHold(tys, strs, inj, h, Cons(s, sr), c2, l) → Succ(sr.len()) = c2.len() {
+            Nil => λ f => false_elim(f),
+            Cons(c, cr) => λ hs => cong_fn(λ (n: Nat) => Succ(n), holds_len(tys, strs, inj, h, l, sr, cr, hs.right)),
+        }),
+    }
+}
+
+theorem holds_snoc(tys: Nat → Type, strs: Strs(tys), inj: Nat → Nat, h: level2::Heap(tys), l: Locals, ss: List<PSlot>):
+    (cs: List<Cell(tys)>) → SlotsHold(tys, strs, inj, h, ss, cs, l) → (s: PSlot) → (c: Cell(tys)) → SlotHolds(tys, strs, inj, h, s, c, l) →
+    SlotsHold(tys, strs, inj, h, ss ++ [s], cs ++ [c], l)
+{
+    match ss {
+        Nil => λ cs => (match cs as λ c2 => SlotsHold(tys, strs, inj, h, Nil, c2, l) → (s: PSlot) → (c: Cell(tys)) → SlotHolds(tys, strs, inj, h, s, c, l) →
+                SlotsHold(tys, strs, inj, h, [s], c2 ++ [c], l) {
+            Nil => λ _ s c sh => ⟨sh, trivial⟩,
+            Cons(_, _) => λ f => false_elim(f),
+        }),
+        Cons(s0, sr) => λ cs => (match cs as λ c2 => SlotsHold(tys, strs, inj, h, Cons(s0, sr), c2, l) → (s: PSlot) → (c: Cell(tys)) → SlotHolds(tys, strs, inj, h, s, c, l) →
+                SlotsHold(tys, strs, inj, h, Cons(s0, sr ++ [s]), c2 ++ [c], l) {
+            Nil => λ f => false_elim(f),
+            Cons(c0, cr) => λ hs s c sh => ⟨hs.left, holds_snoc(tys, strs, inj, h, l, sr, cr, hs.right, s, c, sh)⟩,
+        }),
+    }
+}
+
+// An element of a list with one more at its end: one of the list's, or the
+// one added.
+theorem nth_snoc<A>(xs: List<A>, x: A): (k: Nat) → (y: A) → (xs ++ [x]).nth(k) = Some(y) → ((k < xs.len()) ∧ (xs.nth(k) = Some(y))) ∨ ((k = xs.len()) ∧ (y = x)) {
+    match xs {
+        Nil => λ k y e => (match k as λ k2 => ([x]).nth(k2) = Some(y) → ((k2 < 0) ∧ (List::nth<A>(Nil, k2) = Some(y))) ∨ ((k2 = 0) ∧ (y = x)) {
+            Zero => λ e2 => Inr(⟨refl, sym(Option::some_inj(x, y, e2))⟩),
+            Succ(_) => λ e2 => absurd(e2),
+        })(e),
+        Cons(h0, t) => λ k y e => (match k as λ k2 => (Cons(h0, t ++ [x])).nth(k2) = Some(y) →
+                ((k2 < Succ(t.len())) ∧ ((Cons(h0, t)).nth(k2) = Some(y))) ∨ ((k2 = Succ(t.len())) ∧ (y = x)) {
+            Zero => λ e2 => Inl(⟨{ omega }, e2⟩),
+            Succ(k1) => λ e2 => match nth_snoc(t, x, k1, y, e2) {
+                Inl(p) => { let pl = p.left; Inl(⟨omega(pl), p.right⟩) },
+                Inr(p) => Inr(⟨cong_fn(λ (n: Nat) => Succ(n), p.left), p.right⟩),
+            },
+        })(e),
+    }
+}
+
+theorem nth_snoc_at<A>(xs: List<A>, x: A): (xs ++ [x]).nth(xs.len()) = Some(x) { List::nth_append_at(xs, [x], xs.len(), refl) }
+
+theorem writable_snoc(tys: Nat → Type, inj: Nat → Nat, blocks: Blocks, ss: List<PSlot>, cs: List<Cell(tys)>, s: PSlot, c: Cell(tys),
+    w: SlotsWritable(tys, inj, blocks, ss, cs), len: ss.len() = cs.len(),
+    sw: s.w = True → (r: level2::Ref) → c.v = Refer(r) → blocks.written(inj(r.b)) = True): SlotsWritable(tys, inj, blocks, ss ++ [s], cs ++ [c])
+{
+    λ k s2 e2 sw2 c2 ec r er => match nth_snoc(ss, s, k, s2, e2) {
+        Inl(p) => {
+            let pl = p.left;
+            let lt: (k < cs.len()) = omega(pl, len);
+            w(k, s2, p.right, sw2, c2, trans(sym(List::nth_append_below(cs, [c], k, lt)), ec), r, er)
+        },
+        Inr(p) => {
+            let ec2 = j(trans(p.left, len), λ kk _ => (cs ++ [c]).nth(kk) = Some(c2), ec);
+            let cc: (c = c2) = Option::some_inj(c, c2, trans(sym(nth_snoc_at(cs, c)), ec2));
+            sw(j(p.right, λ x _ => x.w = True, sw2), r, j(sym(cc), λ cx _ => cx.v = Refer(r), er))
+        },
+    }
+}
+
+theorem below_snoc(ss: List<PSlot>, s: PSlot, next, next2: Nat, b: slots_below(ss, next), le: next <= next2, sb: (t: Typed) → Mem(t, s.ids) → t.id < next2):
+    slots_below(ss ++ [s], next2)
+{
+    λ k s2 e2 t m => match nth_snoc(ss, s, k, s2, e2) {
+        Inl(p) => { let x = b(k, s2, p.right, t, m); omega(x, le) },
+        Inr(p) => sb(t, j(p.right, λ y _ => Mem(t, y.ids), m)),
+    }
+}
+
+// A leaf that binds one slot: the relation kept, at the ids the leaf leaves
+// below `next` untouched.
+theorem rel_push(tys: Nat → Type, strs: Strs(tys), inj: Nat → Nat, blocks: Blocks, e: PEnv, m: Mach(tys), c: Config, next: Nat,
+    rel: StageRel(tys, strs, inj, blocks, e, m, c, next), l2: Locals, ag: Locals::Agree(c.locals, l2, next), s: PSlot, cell: Cell(tys), next2: Nat, le: next <= next2,
+    sb: (t: Typed) → Mem(t, s.ids) → t.id < next2, sh: SlotHolds(tys, strs, inj, m.heap, s, cell, l2),
+    sw: s.w = True → (r: level2::Ref) → cell.v = Refer(r) → blocks.written(inj(r.b)) = True):
+    StageRel(tys, strs, inj, blocks, e.push(s), Mach::push(tys, m, cell), Config(l2, c.memory, c.io), next2)
+{
+    let cs = m.env.args ++ m.env.locs.rev();
+    let assoc = List::append_assoc(m.env.args, m.env.locs.rev(), [cell]);
+    let held = holds_agree(tys, strs, inj, m.heap, c.locals, l2, next, ag, e.vars, rel.right.right.right.right.right, cs, rel.right.right.left);
+    let held2 = holds_snoc(tys, strs, inj, m.heap, l2, e.vars, cs, held, s, cell, sh);
+    let len = holds_len(tys, strs, inj, m.heap, c.locals, e.vars, cs, rel.right.right.left);
+    let wr2 = writable_snoc(tys, inj, blocks, e.vars, cs, s, cell, rel.right.right.right.right.left, len, sw);
+    ⟨rel.left, ⟨rel.right.left, ⟨j(assoc, λ x _ => SlotsHold(tys, strs, inj, m.heap, e.vars ++ [s], x, l2), held2),
+        ⟨rel.right.right.right.left, ⟨j(assoc, λ x _ => SlotsWritable(tys, inj, blocks, e.vars ++ [s], x), wr2),
+            below_snoc(e.vars, s, next, next2, rel.right.right.right.right.right, le, sb)⟩⟩⟩⟩⟩
+}
+
+// A slot of one word id at `next`.
+theorem one_below(next: Nat): (t: Typed) → Mem(t, [word_id(next)]) → t.id < next + 1 {
+    λ t m => match m { Inl(e) => j(sym(e), λ x _ => x.id < next + 1, { omega }), Inr(f) => false_elim(f) }
+}
+
+// What a leaf concludes, by its placed statement's output.
+fn LeafGoal(tys: Nat → Type, strs: Strs(tys), fns: Nat → Func, call: Caller(tys), blocks: Blocks, s: Stmt, e: PEnv, next: Nat, o: SOut) → Type {
+    (inj: Nat → Nat) → (m: Mach(tys)) → (c: Config) → StageRel(tys, strs, inj, blocks, e, m, c, next) →
+        (match o.code as λ _ => Type {
+            Leaf(is) => ((k: Mach(tys) → level2::Ran(tys)) → s.run(tys, strs, fns, call, m, k) = level2::Stuck) ∨
+                Exists<Mach(tys)>(λ m2 => Stmt::Steps(tys, strs, fns, call, s, m, m2) ∧
+                    Exists<Config>(λ c2 => (run_instrs(blocks, is, c) = Some(c2)) ∧ StageRel(tys, strs, inj, blocks, o.env, m2, c2, o.next))),
+            _ => False,
+        })
+}
+
+// ---------------------------------------------------------------------------
+// `Lit`: a constant at the literal reduced to its width
+
+theorem lit_goal(tys: Nat → Type, strs: Strs(tys), fns: Nat → Func, call: Caller(tys), blocks: Blocks, b, n: Nat, sz0: Nat, sz: (WBits(b)).size() = Some(sz0), e: PEnv, next: Nat):
+    LeafGoal(tys, strs, fns, call, blocks, Stmt::Lit(WBits(b), n), e, next,
+        SOut(leaf([Compute(Const(64, next, n % Nat::pow(2, b)))]), e.push(PSlot(SWord(WBits(b)), [word_id(next)], PNone, False)), next + 1))
+{
+    λ inj m c rel => {
+        let v = n % Nat::pow(2, b);
+        let l2 = Locals(Valuation::set(c.locals.words, next, λ (w: Nat) => BitVec::ofNat(v)), c.locals.refs);
+        let cell = Cell::plain(tys, Dyn(SWord(WBits(b)), BitVec::ofNat(n)));
+        let read: (read_values([word_id(next)], l2) = Some([x86_64_call_contract::Word(BitVec::ofNat(v))])) =
+            cong_fn(λ (x: BitVec(64)) => Some([x86_64_call_contract::Word(x)]), Valuation::set_here(c.locals.words, next, λ (w: Nat) => BitVec::ofNat(v), 64));
+        let lowered: (value_lower(tys, strs, inj, m.heap, cell.v) = Some([x86_64_call_contract::Word(BitVec::ofNat(v))])) =
+            trans(cong_fn(λ (z: Option<Nat>) => match z as λ _ => Option<List<x86_64_call_contract::Value>> { Some(_) => Some([x86_64_call_contract::Word(BitVec::ofNat((BitVec::ofNat(n, n := b)).toNat()))]), None => None }, sz),
+                cong_fn(λ (x: Nat) => Some([x86_64_call_contract::Word(BitVec::ofNat(x))]), BitVec::toNat_ofNat_mod(b, n)));
+        let sh: SlotHolds(tys, strs, inj, m.heap, PSlot(SWord(WBits(b)), [word_id(next)], PNone, False), cell, l2) = ⟨trans(read, sym(lowered)), refl⟩;
+        Inr(Exists(Mach::push(tys, m, cell), ⟨λ k => refl, Exists(Config(l2, c.memory, c.io), ⟨refl,
+            rel_push(tys, strs, inj, blocks, e, m, c, next, rel, l2, Locals::agree_set(c.locals, next, λ (w: Nat) => BitVec::ofNat(v), next, { omega }),
+                PSlot(SWord(WBits(b)), [word_id(next)], PNone, False), cell, next + 1, { omega }, one_below(next), sh, λ no => absurd(no))⟩)⟩))
+    }
+}
+
+theorem stage_lit(tys: Nat → Type, strs: Strs(tys), sigs: Nat → Sig, prim: Nat → Bool, fns: Nat → Func, call: Caller(tys), blocks: Blocks):
+    StageLit(tys, strs, sigs, prim, fns, call, blocks)
+{
+    λ w n e next o hp => (match w as λ w2 => (Stmt::Lit(w2, n)).place(tys, PCx(strs, sigs, prim), e, next) = Some(o) → LeafGoal(tys, strs, fns, call, blocks, Stmt::Lit(w2, n), e, next, o) {
+        WNat => λ hp2 => absurd(hp2),
+        WBits(b) => λ hp2 => (match sz: (WBits(b)).size() as λ z => (match z {
+                    None => None,
+                    Some(_) => Some(SOut(leaf([Compute(Const(64, next, n % Nat::pow(2, b)))]), e.push(PSlot(SWord(WBits(b)), [word_id(next)], PNone, False)), next + 1)),
+                }) = Some(o) → LeafGoal(tys, strs, fns, call, blocks, Stmt::Lit(WBits(b), n), e, next, o) {
+            None => λ never => absurd(never),
+            Some(sz0) => λ hp3 => j(Option::some_inj(SOut(leaf([Compute(Const(64, next, n % Nat::pow(2, b)))]), e.push(PSlot(SWord(WBits(b)), [word_id(next)], PNone, False)), next + 1), o, hp3),
+                λ o2 _ => LeafGoal(tys, strs, fns, call, blocks, Stmt::Lit(WBits(b), n), e, next, o2), lit_goal(tys, strs, fns, call, blocks, b, n, sz0, sz, e, next)),
+        })(hp2),
+    })(hp)
+}
