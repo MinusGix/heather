@@ -358,3 +358,108 @@ theorem end_to_end(tys: Nat → Type): EndToEndAll(tys) {
     λ strs w pres need prim reaches fs psa cs pc placed hplace placement program lowered M fetch data last origin stack top spans blocks =>
         end_to_end_at(tys, strs, w, pres, need, prim, reaches, fs, psa, cs, pc, placed, hplace, placement, program, lowered, fetch, data, last, origin, stack, top, spans, blocks)
 }
+
+// ---------------------------------------------------------------------------
+// The fragment, and `place`'s completeness on it (stated, §25.5)
+//
+// The fragment's limits as a test of a function's text and codes, apart
+// from ownership: every code a variable takes has a layout; no `Fresh`, no
+// primitive call, no multiply, no arithmetic below 64 bits; no copy of a
+// sequence (a read of a whole sequence, or of a sequence part as a value);
+// a call lends a sequence only to read or write, and answers no object made
+// or given back. The codes are followed as the checker follows them
+// (`Shape::steps_ok`), along each path, what follows a join in each arm.
+
+fn Shape::placeable(tys: Nat → Type, strs: Strs(tys), c: Shape) → Bool {
+    match c.word_size() { Some(_) => True, None => match Shape::layout(tys, strs, c) { LSeq(_, _, _) => True, LRecord(_) => True, LNone => False } }
+}
+
+fn Shape::is_wide(self c: Shape) → Bool { match c.word_size() { Some(s) => s.same(8), None => False } }
+
+// The codes by level, as `PEnv` holds slots.
+record CEnv { na: Nat, codes: List<Shape> }
+
+fn CEnv::get(self e: CEnv, v: Var) → Option<Shape> {
+    match v {
+        Arg(i) => match (i + 1).leb(e.na) { True => e.codes.nth(i), False => None },
+        Loc(j) => match (e.na + j + 1).leb(e.codes.len()) { True => e.codes.nth(e.codes.len() - 1 - j), False => None },
+    }
+}
+
+fn CEnv::push_all(self e: CEnv, cs: List<Shape>) → CEnv { CEnv(e.na, e.codes ++ cs) }
+
+fn CEnv::target(tys: Nat → Type, strs: Strs(tys), self e: CEnv, p: body::Place) → Option<Shape> { e.get(p.root).and_then(λ c => Shape::steps_ok(tys, strs, p.steps, c)) }
+
+fn Param::fragment(tys: Nat → Type, strs: Strs(tys), p: Param) → Bool {
+    Shape::placeable(tys, strs, p.code) && match p.code.word_size() { Some(_) => True, None => match p.mode { ByTake => False, ByRead => True, ByWrite => True } }
+}
+
+fn Result::fragment(tys: Nat → Type, strs: Strs(tys), r: Result) → Bool {
+    Shape::placeable(tys, strs, r.code) && match r.code.word_size() { Some(_) => True, None => match r.origin { OView(_, _) => True, OFresh => False, OParam(_) => False } }
+}
+
+fn Sig::fragment(tys: Nat → Type, strs: Strs(tys), s: Sig) → Bool {
+    s.params.all_bit(λ p => Param::fragment(tys, strs, p)) && s.results.all_bit(λ r => Result::fragment(tys, strs, r))
+}
+
+// A statement in the fragment, and the codes it pushes.
+fn Stmt::fragment(self st: Stmt, tys: Nat → Type, strs: Strs(tys), sigs: Nat → Sig, prim: Nat → Bool, e: CEnv) → Option<List<Shape>> {
+    match st {
+        Op(op, a, _) => match op { PMul => None, PAdd => e.get(a).and_then(λ c => match c.is_wide() { True => Some([c]), False => None }),
+            PSub => e.get(a).and_then(λ c => match c.is_wide() { True => Some([c]), False => None }) },
+        Stmt::Lit(w, _) => w.size().map(λ _ => [SWord(w)]),
+        Stmt::Read(p) => e.target(tys, strs, p).and_then(λ c => match c.word_size() { Some(_) => Some([c]), None => None }),
+        Stmt::Write(_, _) => Some(Nil),
+        View(p, _) => e.target(tys, strs, p).map(λ c => [c]),
+        Take(p) => match p.steps {
+            Nil => e.get(p.root).map(λ c => [c]),
+            Cons(_, _) => e.target(tys, strs, p).and_then(λ c => match c.word_size() { Some(_) => Some([c]), None => None }),
+        },
+        Stmt::Fresh(_, _, _) => None,
+        Stmt::Call(g, _, _) => match prim(g) || !Sig::fragment(tys, strs, sigs(g)) {
+            True => None,
+            False => Some((sigs(g)).results.map(λ r => r.code) ++ (sigs(g)).written().map(λ i => (sigs(g)).params.nth(i).map(λ p => p.code).unwrap_or(SWord(WNat)))),
+        },
+        Death(_) => Some(Nil),
+    }
+}
+
+record CFrame { rest: body::Body, env: CEnv }
+
+fn fragment_go(fuel: Nat, b: body::Body, tys: Nat → Type, strs: Strs(tys), sigs: Nat → Sig, prim: Nat → Bool, frames: List<CFrame>, e: CEnv) → Bool {
+    match fuel {
+        Zero => False,
+        Succ(f) => match b {
+            Ret(_) => True,
+            Jump(_) => True,
+            Yield(os) => match frames {
+                Nil => False,
+                Cons(fr, outer) => match os.map(λ x => e.get(x)).all_bit(λ o => o.is_some()) {
+                    False => False,
+                    True => fragment_go(f, fr.rest, tys, strs, sigs, prim, outer, fr.env.push_all(os.map(λ x => e.get(x).unwrap_or(SWord(WNat))))),
+                },
+            },
+            Do(s, rest) => match s.fragment(tys, strs, sigs, prim, e) {
+                None => False,
+                Some(cs) => cs.all_bit(λ c => Shape::placeable(tys, strs, c)) && fragment_go(f, rest, tys, strs, sigs, prim, frames, e.push_all(cs)),
+            },
+            Join(_, yes, no, rest) => fragment_go(f, yes, tys, strs, sigs, prim, Cons(CFrame(rest, e), frames), e)
+                && fragment_go(f, no, tys, strs, sigs, prim, Cons(CFrame(rest, e), frames), e),
+        },
+    }
+}
+
+fn Func::fragment(self fn_: Func, tys: Nat → Type, strs: Strs(tys), sigs: Nat → Sig, prim: Nat → Bool) → Bool {
+    Sig::fragment(tys, strs, fn_.sig) && fragment_go(body_size(fn_.body) + 1, fn_.body, tys, strs, sigs, prim, Nil, CEnv(fn_.sig.params.len(), fn_.sig.params.map(λ p => p.code)))
+}
+
+// `place` is complete on the fragment: every checked function in it, in a
+// program all of whose functions are, is placed. To be proved once the
+// run's three changes have removed `place`'s ownership tests (§25.5); the
+// one other refusal found (a word variable written, `word_write_r`) is
+// placed then too.
+fn PlaceComplete(tys: Nat → Type, strs: Strs(tys), prim: Nat → Bool) → Type {
+    (fs: List<Func>) → ((g: Nat) → g < fs.len() → Exists<Owes>(λ d => check(tys)(strs, λ g2 => (funcs_at(fs)(g2)).sig, prim, λ _ => True, g, funcs_at(fs)(g)) = Some(d)) ∧
+        ((funcs_at(fs)(g)).fragment(tys, strs, λ g2 => (funcs_at(fs)(g2)).sig, prim) = True)) →
+    Exists<Program>(λ placed => place(tys, strs, prim, fs) = Some(placed))
+}

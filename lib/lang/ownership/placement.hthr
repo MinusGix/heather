@@ -251,7 +251,8 @@ fn PEnv::atom(self e: PEnv, a: Atom, next: Nat) → Option<Word1> {
             let v = match (w + 1).leb(e.na) { True => Arg(w), False => Loc(w - e.na) };
             match e.get(v) {
                 None => None,
-                Some(s) => match s.code { SWord(wd) => match wd.bits().same(64) { True => s.word().map(λ t => Word1(Nil, t.id, next)), False => None }, SNamed(_) => None },
+                // A narrow word is held zero-extended: its 64-bit view is its value.
+                Some(s) => match s.code { SWord(wd) => match wd.size() { Some(_) => s.word().map(λ t => Word1(Nil, t.id, next)), None => None }, SNamed(_) => None },
             }
         },
     }
@@ -363,8 +364,9 @@ fn PEnv::call_args(self e: PEnv, ps: List<Param>, xs: List<Var>) → Option<List
     }
 }
 
-// A callee's results' slots: a word fresh, a returned view fresh (its
-// reference and length come back), a fresh object refused.
+// A callee's results' slots: a word fresh (made or a taken word answered
+// back), a returned view fresh (its reference and length come back); a
+// fresh object, or an object answered back, refused.
 fn Result::slots(tys: Nat → Type, strs: Strs(tys), rs: List<Result>, next: Nat) → Option<Pair<List<PSlot>, Nat>> {
     match rs {
         Nil => Some(Pair(Nil, next)),
@@ -373,7 +375,11 @@ fn Result::slots(tys: Nat → Type, strs: Strs(tys), rs: List<Result>, next: Nat
                 None => None,
                 Some(_) => Result::slots(tys, strs, rest, next + 1).map(λ b => Pair(Cons(PSlot(r.code, [word_id(next)], PNone, False), b.fst), b.snd)),
             },
-            OParam(_) => None,
+            // A taken word answered back is a word the routine returns.
+            OParam(_) => match r.code.word_size() {
+                None => None,
+                Some(_) => Result::slots(tys, strs, rest, next + 1).map(λ b => Pair(Cons(PSlot(r.code, [word_id(next)], PNone, False), b.fst), b.snd)),
+            },
             OView(_, _) => match PSlot::fresh(tys, strs, r.code, next) {
                 None => None,
                 Some(a) => Result::slots(tys, strs, rest, a.next).map(λ b => Pair(Cons(PSlot(r.code, a.ids, PNone, False), b.fst), b.snd)),

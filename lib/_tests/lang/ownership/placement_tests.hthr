@@ -445,3 +445,35 @@ fn sum_places() → List<function_ir_lower::Place> { [CallSlots(1), Into(Rcx), I
 fn sum_lowered() → Option<x86_64_asm::Prog> { placed(sum_fns()).and_then(λ (q: Program) => q.lower(sum_places())) }
 
 theorem sum_lowers(): sum_lowered().is_some() = True { refl }
+
+// ---------------------------------------------------------------------------
+// Checked, in the fragment, and refused by `place` (§25.5): what `place`
+// does not yet place beyond the fragment's limits and the three tests the
+// run's changes remove.
+
+// A view of a word element, read through: `let v = &text[i]; *v`.
+fn word_view_r() → Func { Func(Sig([rd(0), word_p()], [word_r()]), seq([View(el(Arg(0), Var(1)), Reading), Stmt::Read(whole(Loc(0)))], Ret([Loc(0)]))) }
+
+// A word variable written: `n := 1; n`.
+fn word_write_r() → Func { Func(Sig([word_p()], [word_r()]), seq([Stmt::Lit(WBits(64), 1), Stmt::Write(whole(Arg(0)), Loc(0))], Ret([Arg(0)]))) }
+
+// A taken word answered back (`OParam`), placed since §25.5.
+fn word_back_r() → Func { Func(Sig([word_p()], [Result(u64_s(), OParam(0))]), Ret([Arg(0)])) }
+
+// A narrow index, placed since §25.5: `text[i as u32]`.
+fn narrow_index_r() → Func {
+    Func(Sig([rd(0), Param(SWord(WBits(32)), ByTake)], [Result(u8_s(), OFresh)]), seq([Stmt::Read(el(Arg(0), Var(1)))], Ret([Loc(0)])))
+}
+
+// The checker's verdict and whether `place` answers: a view of a word is
+// refused by its codes (not a finding); a word variable written is checked
+// and not placed (the finding); a taken word answered back is refused by
+// `Sig::ok`'s modes; a narrow index is checked and placed.
+theorem refusals_sorted(): [word_view_r(), word_write_r(), word_back_r(), narrow_index_r()].map(λ (f: Func) => Pair(why([f], 0), placed([f]).is_some()))
+    = [Pair(Some(WCodes), False), Pair(None, False), Pair(Some(WOwn), True), Pair(None, True)] { refl }
+
+fn in_fragment(fs: List<Func>) → List<Bool> { fs.map(λ (f: Func) => f.fragment(tys(), strs(), sigs_of(fs), no_prim())) }
+
+// The three programs are in the fragment; so is the written word variable,
+// which `place` refuses today: `PlaceComplete` does not hold yet, by it.
+theorem fragments(): in_fragment(nl_fns()) ++ in_fragment(cw_fns()) ++ in_fragment(sum_fns()) ++ in_fragment([word_write_r()]) = [True, True, True, True, True, True] { refl }
