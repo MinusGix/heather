@@ -16298,3 +16298,189 @@ theorem Inv::bind_fresh_result(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e:
         },
     })(refl, ok)
 }
+
+// What the binding state knows of the object `o` a moved argument held, at
+// argument `i` as passed (`vs`): it is an object of the state no level
+// holds (the moved holder is gone after the lends, `CSt::lend_take`, and no
+// other level held it, `Inv.one`); where it has a root the argument passed
+// is that root, whole and alone in its block (`Inv.own`, the holder's cell
+// owned, `Inv.hown`, so `Cell::pass` handed it over), lent or made, apart
+// from every other object's (`Inv.owned`, `Inv.apart`, the holder owning it);
+// where it has none the argument passed is plain.
+record MovedArg(tys: Nat → Type, strs: Strs(tys), s: CSt, h0: Heap(tys), lent: List<Ref>, root: Nat → Option<Ref>, vs: List<Value(tys)>, i, o: Nat) {
+    ho: o < s.nobj,
+    nh: (l: Nat) → (a: Acc) → l < s.na + s.nd → s.role(l) = KHold(o, a) → False,
+    rf: (r: Ref) → vs.nth(i) = Some(Refer(r)) → root(o) = Some(r),
+    hrf: (r: Ref) → root(o) = Some(r) → vs.nth(i) = Some(Refer(r)),
+    rn: (r: Ref) → root(o) = Some(r) → r.sels = Nil,
+    alone: (r: Ref) → root(o) = Some(r) → (o2: Nat) → ¬(o2 = o) → (r2: Ref) → root(o2) = Some(r2) → ¬(r2.b = r.b),
+    lo: (r: Ref) → root(o) = Some(r) → Mem(r, lent) ∨ (h0.len() <= r.b),
+    ap: (o2: Nat) → ¬(o2 = o) → (r1, r2: Ref) → root(o) = Some(r1) → root(o2) = Some(r2) → Ref::Apart(tys, strs, r1, r2),
+}
+
+// A moved argument answered back passed by value or without a root: a
+// holder of its object again, plain, no root.
+theorem Inv::bind_moved_plain(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>}, {root: Nat → Option<Ref>}, inv: Inv(tys, strs, s, e, m, h0, lent, root),
+    none: s.pending() = False, code: Shape, o: Nat, c: Cell(tys), d: Dyn(tys), rd: Value::Reads(tys, strs, m.heap, c.v, d), okc: d.code = code,
+    np: (r: Ref) → c.v = Refer(r) → False, cown: c.own = False, nr: (r: Ref) → root(o) = Some(r) → False,
+    nh: (l: Nat) → (a: Acc) → l < s.na + s.nd → s.role(l) = KHold(o, a) → False, ho: o < s.nobj):
+    Inv(tys, strs, s.push(CVar(code, KHold(o, AcOwn))), Env::push(tys, e, d), Mach::push(tys, m, c), h0, lent, root)
+{
+    Inv::push_hold(tys, strs, inv, none, code, o, AcOwn, c, d, rd, okc,
+        λ r cr => false_elim(np(r, cr)),
+        λ r hr => false_elim(nr(r, hr)),
+        λ _ r hr => false_elim(nr(r, hr)),
+        λ co => absurd(trans(sym(cown), co)),
+        nh,
+        ho,
+        λ _ => ⟨λ r hr => false_elim(nr(r, hr)), λ o2 ne r1 r2 h1 h2 => false_elim(nr(r1, h1))⟩)
+}
+
+// P5, a parameter answered back (`CSt::result` at `OParam(i)`, decided by
+// the parameter's code since 416d51b): of a plain code the argument was
+// passed by value (`Lendable.plain`, `pl`), so `ViewIs` gives a plain cell;
+// of a code that moves, a holder `KHold(o, AcOwn)` of the object the
+// argument's holder held, which by `MovedArg` is the argument's root, owned
+// (`Inv::bind_moved`), or has none, the cell plain (`bind_moved_plain`). The
+// roots do not grow: the object's root, if any, is its root before.
+theorem Inv::bind_param_result(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>}, {root: Nat → Option<Ref>}, inv: Inv(tys, strs, s, e, m, h0, lent, root),
+    none: s.pending() = False, s0: CSt, sig: Sig, xs: List<Var>, code: Shape, i: Nat, s2: CSt, ok: s.result(tys, strs, s0, sig, xs, Result(code, OParam(i))) = Some(s2),
+    n: Nat, vs: List<Value(tys)>, ws: List<Ix>, c: Cell(tys), d: Dyn(tys),
+    rd: Value::read(tys, c.v, strs, m.heap, m.heap.len()) = Some(d), okc: d.code = code,
+    vi: Value::ViewIs(tys, strs, n, m.heap, vs, ws, code, OParam(i), c.v), cown: c.own = Value::refers(tys, c.v),
+    pl: (p: Param) → sig.params.nth(i) = Some(p) → Shape::plain(tys, strs, p.code) = True → (r: Ref) → ¬(vs.nth(i) = Some(Refer(r))),
+    mv: (x: Var) → xs.nth(i) = Some(x) → (l: Nat) → s0.lvl(x) = Some(l) → (o: Nat) → s0.role(l) = KHold(o, AcOwn) → MovedArg(tys, strs, s, h0, lent, root, vs, i, o)):
+    Exists<Nat → Option<Ref>>(λ root2 => Inv(tys, strs, s2, Env::push(tys, e, d), Mach::push(tys, m, c), h0, lent, root2) ∧ Ref::Grown(tys, root, root2, OParam(i), c.v))
+{
+    let G: CSt → Type = λ (st: CSt) => Exists<Nat → Option<Ref>>(λ (root2: Nat → Option<Ref>) => Inv(tys, strs, st, Env::push(tys, e, d), Mach::push(tys, m, c), h0, lent, root2) ∧ Ref::Grown(tys, root, root2, OParam(i), c.v));
+    let done = λ (st: CSt) (iv: Inv(tys, strs, st, Env::push(tys, e, d), Mach::push(tys, m, c), h0, lent, root)) => {
+        let r: G(st) = Exists(root, ⟨iv, Ref::grown_refl(tys, root, OParam(i), c.v)⟩);
+        r
+    };
+    // The argument plain: the cell is plain, it reads `d`, it does not own.
+    let plain_arg = λ (x0: Dyn(tys)) (hv: vs.nth(i) = Some(level2::Plain(x0))) => {
+        let nref: (Value::refers(tys, c.v) = False) = j(hv, λ q _ => (match q as λ _ => Type { Some(v) => match v as λ _ => Type { Refer(r) => c.v = Refer(r), Plain(_) => Value::refers(tys, c.v) = False }, None => False }), vi);
+        let np: ((r: Ref) → c.v = Refer(r) → False) = λ r cr => absurd(trans(sym(nref), j(sym(cr), λ u _ => Value::refers(tys, u) = True, refl)));
+        let rdg: Value::Reads(tys, strs, m.heap, c.v, d) = Value::get_of_read(tys, strs, m.heap, c.v, d, rd, λ r cr => false_elim(np(r, cr)));
+        let co: (c.own = False) = trans(cown, nref);
+        let r: (((r: Ref) → c.v = Refer(r) → False) ∧ ((Value::Reads(tys, strs, m.heap, c.v, d)) ∧ (c.own = False))) = ⟨np, ⟨rdg, co⟩⟩;
+        r
+    };
+    (match sig.params.nth(i) as λ op => sig.params.nth(i) = op →
+            (match (op.unwrap_or(Param(SWord(WNat), ByRead))).mode {
+                ByTake => match Shape::moves(tys, strs, (op.unwrap_or(Param(SWord(WNat), ByRead))).code) {
+                    False => Some(s.push(CVar(code, KPlain))),
+                    True => xs.nth(i).and_then(λ x => s0.lvl(x)).and_then(λ l => match s0.role(l) {
+                        KHold(o, a) => match a { AcOwn => Some(s.push(CVar(code, KHold(o, AcOwn)))), AcRead => None, AcWrite => None },
+                        _ => None,
+                    }),
+                },
+                ByRead => None,
+                ByWrite => None,
+            }) = Some(s2) → G(s2) {
+        None => λ _ no => absurd(no),
+        Some(p) => λ hp => (match p.mode as λ md => p.mode = md →
+                (match md {
+                    ByTake => match Shape::moves(tys, strs, p.code) {
+                        False => Some(s.push(CVar(code, KPlain))),
+                        True => xs.nth(i).and_then(λ x => s0.lvl(x)).and_then(λ l => match s0.role(l) {
+                            KHold(o, a) => match a { AcOwn => Some(s.push(CVar(code, KHold(o, AcOwn)))), AcRead => None, AcWrite => None },
+                            _ => None,
+                        }),
+                    },
+                    ByRead => None,
+                    ByWrite => None,
+                }) = Some(s2) → G(s2) {
+            ByRead => λ _ no => absurd(no),
+            ByWrite => λ _ no => absurd(no),
+            ByTake => λ pm => (match Shape::plain(tys, strs, p.code) as λ b => Shape::plain(tys, strs, p.code) = b →
+                    (match !b {
+                        False => Some(s.push(CVar(code, KPlain))),
+                        True => xs.nth(i).and_then(λ x => s0.lvl(x)).and_then(λ l => match s0.role(l) {
+                            KHold(o, a) => match a { AcOwn => Some(s.push(CVar(code, KHold(o, AcOwn)))), AcRead => None, AcWrite => None },
+                            _ => None,
+                        }),
+                    }) = Some(s2) → G(s2) {
+                // A plain code: passed by value, the cell plain.
+                True => λ pc h2 => {
+                    let e2: (s.push(CVar(code, KPlain)) = s2) = Option::some_inj(s.push(CVar(code, KPlain)), s2, h2);
+                    (match vs.nth(i) as λ q => vs.nth(i) = q → G(s2) {
+                        None => λ hv => false_elim(j(hv, λ q _ => (match q as λ _ => Type { Some(v) => match v as λ _ => Type { Refer(r) => c.v = Refer(r), Plain(_) => Value::refers(tys, c.v) = False }, None => False }), vi)),
+                        Some(v) => (match v as λ u => vs.nth(i) = Some(u) → G(s2) {
+                            Refer(r) => λ hv => false_elim(pl(p, hp, pc, r, hv)),
+                            Plain(x0) => λ hv => {
+                                let pa = plain_arg(x0, hv);
+                                (match c.v as λ u => c.v = u → G(s2) {
+                                    Refer(r) => λ cr => false_elim(pa.left(r, cr)),
+                                    Plain(y) => λ cy => {
+                                        let yd: (y = d) = Option::some_inj(y, d, j(cy, λ u _ => Value::read(tys, u, strs, m.heap, m.heap.len()) = Some(d), rd));
+                                        let ce: (c = Cell(level2::Plain(d), c.own)) = j(yd, λ z _ => c = Cell(level2::Plain(z), c.own), j(cy, λ u _ => c = Cell(u, c.own), refl));
+                                        let i2 = Inv::push_plain(tys, strs, inv, none, code, d, c.own, okc);
+                                        done(s2, j(e2, λ st _ => Inv(tys, strs, st, Env::push(tys, e, d), Mach::push(tys, m, c), h0, lent, root),
+                                            j(sym(ce), λ cl _ => Inv(tys, strs, s.push(CVar(code, KPlain)), Env::push(tys, e, d), Mach::push(tys, m, cl), h0, lent, root), i2)))
+                                    },
+                                })(refl)
+                            },
+                        }),
+                    })(refl)
+                },
+                // A code that moves: the holder of the argument's object.
+                False => λ _ h2 => match Option::and_then_some(xs.nth(i).and_then(λ x => s0.lvl(x)), λ l => match s0.role(l) {
+                        KHold(o, a) => match a { AcOwn => Some(s.push(CVar(code, KHold(o, AcOwn)))), AcRead => None, AcWrite => None },
+                        _ => None,
+                    }, s2, h2) {
+                    ⟨l, pl2⟩ => match Option::and_then_some(xs.nth(i), λ x => s0.lvl(x), l, pl2.left) {
+                        ⟨x, px⟩ => (match s0.role(l) as λ rr => s0.role(l) = rr →
+                                (match rr { KHold(o, a) => match a { AcOwn => Some(s.push(CVar(code, KHold(o, AcOwn)))), AcRead => None, AcWrite => None }, _ => None }) = Some(s2) → G(s2) {
+                            KPlain => λ _ no => absurd(no),
+                            KView => λ _ no => absurd(no),
+                            KGone => λ _ no => absurd(no),
+                            KHold(o, a) => λ hr => (match a as λ aa => s0.role(l) = KHold(o, aa) →
+                                    (match aa { AcOwn => Some(s.push(CVar(code, KHold(o, AcOwn)))), AcRead => None, AcWrite => None }) = Some(s2) → G(s2) {
+                                AcRead => λ _ no => absurd(no),
+                                AcWrite => λ _ no => absurd(no),
+                                AcOwn => λ hr2 h3 => {
+                                    let e2: (s.push(CVar(code, KHold(o, AcOwn))) = s2) = Option::some_inj(s.push(CVar(code, KHold(o, AcOwn))), s2, h3);
+                                    let ma = mv(x, px.left, l, px.right, o, hr2);
+                                    let fin = λ (iv: Inv(tys, strs, s.push(CVar(code, KHold(o, AcOwn))), Env::push(tys, e, d), Mach::push(tys, m, c), h0, lent, root)) =>
+                                        done(s2, j(e2, λ st _ => Inv(tys, strs, st, Env::push(tys, e, d), Mach::push(tys, m, c), h0, lent, root), iv));
+                                    (match vs.nth(i) as λ q => vs.nth(i) = q → G(s2) {
+                                        None => λ hv => false_elim(j(hv, λ q _ => (match q as λ _ => Type { Some(v) => match v as λ _ => Type { Refer(r) => c.v = Refer(r), Plain(_) => Value::refers(tys, c.v) = False }, None => False }), vi)),
+                                        Some(v) => (match v as λ u => vs.nth(i) = Some(u) → G(s2) {
+                                            Plain(x0) => λ hv => {
+                                                let pa = plain_arg(x0, hv);
+                                                let nr: ((r: Ref) → root(o) = Some(r) → False) = λ r hr3 => absurd(Option::some_inj(level2::Plain(x0), Refer(r), trans(sym(hv), ma.hrf(r, hr3))));
+                                                fin(Inv::bind_moved_plain(tys, strs, inv, none, code, o, c, d, pa.right.left, okc, pa.left, pa.right.right, nr, ma.nh, ma.ho))
+                                            },
+                                            Refer(r) => λ hv => {
+                                                let cv: (c.v = Refer(r)) = j(hv, λ q _ => (match q as λ _ => Type { Some(v1) => match v1 as λ _ => Type { Refer(r1) => c.v = Refer(r1), Plain(_) => Value::refers(tys, c.v) = False }, None => False }), vi);
+                                                let ro: (root(o) = Some(r)) = ma.rf(r, hv);
+                                                let rn: (r.sels = Nil) = ma.rn(r, ro);
+                                                let co: (c.own = True) = trans(cown, j(sym(cv), λ u _ => Value::refers(tys, u) = True, refl));
+                                                let rdr: (Value::read(tys, Refer(r), strs, m.heap, m.heap.len()) = Some(d)) = j(cv, λ u _ => Value::read(tys, u, strs, m.heap, m.heap.len()) = Some(d), rd);
+                                                let rdg: Value::Reads(tys, strs, m.heap, Refer(r), d) = Value::get_of_read(tys, strs, m.heap, Refer(r), d, rdr, λ r1 er1 => {
+                                                    let q: (r = r1) = cong_fn(λ (u: Value(tys)) => match u { Refer(z) => z, Plain(_) => r }, er1);
+                                                    let lv: Exists<Dyn(tys)>(λ d1 => (Heap::obj(tys, m.heap, r.b) = Some(Obj(d1, Nil))) ∧ (Sel::fit(tys, strs, r.sels, d1) = True)) =
+                                                        (match Heap::obj(tys, m.heap, r.b) as λ oo => Heap::obj(tys, m.heap, r.b) = oo → Exists<Dyn(tys)>(λ d1 => (oo = Some(Obj(d1, Nil))) ∧ (Sel::fit(tys, strs, r.sels, d1) = True)) {
+                                                            None => λ ho2 => absurd(j(ho2, λ oo _ => (match oo as λ _ => Option<Dyn(tys)> { Some(o1) => Obj::read(tys, strs, m.heap, m.heap.len(), o1).map(λ d2 => Sel::read_at(tys, strs, r.sels, d2)), None => None<Dyn(tys)>() }) = Some(d), rdr)),
+                                                            Some(ob) => λ ho2 => Exists(ob.val, ⟨cong_fn(λ (z: Obj(tys)) => Some(z), Obj::bare_eta(tys, ob, inv.bare(o, r, ro, ob, ho2))),
+                                                                j(sym(rn), λ z _ => Sel::fit(tys, strs, z, ob.val) = True, refl)⟩),
+                                                        })(refl);
+                                                    j(q, λ z _ => Exists<Dyn(tys)>(λ d1 => (Heap::obj(tys, m.heap, z.b) = Some(Obj(d1, Nil))) ∧ (Sel::fit(tys, strs, z.sels, d1) = True)), lv)
+                                                });
+                                                let mk = λ (u: Value(tys)) (z: Bool) => Cell(u, z);
+                                                let ce: (mk(Refer(r), True) = c) = j(co, λ z _ => mk(Refer(r), z) = c, j(sym(cv), λ u _ => mk(Refer(r), c.own) = mk(u, c.own), refl));
+                                                let i2 = Inv::bind_moved(tys, strs, inv, none, code, o, r, d, rdg, okc, ro, rn, ma.alone(r, ro), ma.nh, ma.ho, ma.lo(r, ro), ma.ap);
+                                                fin(j(ce, λ cl _ => Inv(tys, strs, s.push(CVar(code, KHold(o, AcOwn))), Env::push(tys, e, d), Mach::push(tys, m, cl), h0, lent, root), i2))
+                                            },
+                                        }),
+                                    })(refl)
+                                },
+                            })(hr),
+                        })(refl, pl2.right),
+                    },
+                },
+            })(refl),
+        })(refl),
+    })(refl, ok)
+}
