@@ -29,6 +29,14 @@ Every known defect is found as a mutant, the search runs in the PR lane within a
 
 ## Handoff
 
+### The invariant walk (paused 2026-11-26 at the owner's request)
+
+- **Merge done**: the proof branch merged at its head `fae4254` (later than `2c170ed`), clean.
+- **Generator updated**: write-backs are generated as `Back`; `Len(p, WNat)` and `Len(p, WBits(1))` are in the menu (the second owes `RLen` at a two-element list); `Residual::holds_b` decides `RLen`; `enc_stmt` and the driver's decoder have `Back` (9) and `Len` (10); the mutant `sig_ok_read_param` follows `Result::ok`'s new text (every mutant's text occurs once). Signatures are `Sig::ok` through `check`. Search and calibration compile and a small `search_stream` runs; neither was run further.
+- **The walk is built**: `lib/lang/ownership/oracle_walk.hthr`, `scripts/ownership-oracle walk [--np --k --flags --ka --kb --control C --lo L --n N]`. For every generated checked function and every input `gen_try` owes (`owed_b`, `pres_b`, `gen_pinned`) it runs `sound_trace`'s stepping (`Stmt::step3`, `Tri::joined`, `Tri::verdict`), each state labelled by the pre-order node it precedes (`Body::walk`, a labelled copy of `Body::trace_with`), and prints the first failing state per input: node, the node before it, the groups. It also counts states, halts (run, join, checker), statement kinds present, and inputs passing a named value by reference / by value. Controls: 1 agreement whole, 2 sync at every entry to write, 3 a grown entry heap. `lib/_tests/lang/ownership/oracle_walk_tests.hthr` pins the walk to the driver's verdicts (`loan1`, `join1`), the labels, and controls 1–3 failing on a closed program (`whole_fails_loan1`, `sync_unbacked_fails_loan1`, `grown_fails_join1`), a few seconds in the kernel.
+- **Results so far**: (≤1 parameter, ≤1 statement, flags 0): 717 programs, 2,399 inputs tried, 1,670 walked, 3,296 states, no halts, 782 inputs by reference and 600 by value, **no failing state**. Control 3 is found there (702 programs). Controls 1 and 2 are not found there: they need a pending view written through a reference, which needs (2, 2) or (1, 3). The whole (2, 2) at control 1 did not finish in 30 min on 4 cores; a walk of the one list `(L write, N take)` (`--lo 74 --n 1`) was stopped by the pause before it answered.
+- **Next**: controls 1 and 2 at `--np 2 --k 2 --lo 74 --n 1`; then breadth (flags 1, 2, 4, 8 at (1, 1), (2, 1), (1, 2)), slicing (2, 2) by `--lo/--n` across sessions; hand-confirm any failure by a `refl` probe in `oracle_walk_tests.hthr`; the gate `HEATHER_PR_BASE=6dfb1a2 scripts/test --pr` has not been run on this branch. The walk is generation-bound like the search; a join walks both arms from the state before it (as the driver does), so an untaken arm may halt, counted apart.
+
 **Paused** (2026-11-26) at the repository owner's request. Nothing is thrown away: the deciders and the generator are meant to evaluate a restated invariant along runs before it is proved over. That case is the last section below.
 
 ### What exists
@@ -131,3 +139,4 @@ A join steps into the arm its test picks, from `s.arm()`, then `CSt::joined` and
   - (≤1, ≤2, straight line): 47,870 programs, 168k inputs tried, 146k owed, 101k with the verdict held. 118 s, 407/s. No findings.
   - (≤1, ≤1, every flag): 3,639 programs in 43 s.
   - Calibration against the checker merged with §23.21: the Handoff's table. Paused at the owner's request with 4 of 30 mutants found, 1 unresolved and 25 not run.
+- 2026-11-26 (second session): merged the proof branch at fae4254, generator follows `Back`/`Len`/`RLen`, the invariant walk built and pinned by kernel probes; (1, 1, 0) walked clean, control 3 found; paused at the owner's request before controls 1 and 2 answered.
