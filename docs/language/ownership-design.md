@@ -4892,3 +4892,67 @@ The callee's references need only be under the caller's, not pairwise
 apart; what each callee reference reads after has the code and length it
 read before (from `Value::Written`'s fit and `ReadAll` at both heaps).
 
+
+### 23.19 P4: the callee's heap as puts (2026-11-26, ninth session)
+
+P4 is the invariant after a call's lends and the callee's run, before its
+results and slots are bound: `Inv(nl.st, e_upd, Mach(a.heap, m.env, a.io))`
+with nothing pending. It is built in three moves, in this order.
+
+**1. The written values put in turn, at the state before the lends.** For
+each written parameter whose argument refers, in the written list's order,
+the callee's value after is put at the argument's reference
+(`Heap::put_at`: the block's value with that part replaced), and the meaning
+gets the variable set to it and its chain written up (`CSt::put_mean`, the
+view write's walk at an empty place). `Inv::puts` carries the invariant
+through the list; each put is `Inv::put_arg`: a holder's is the holder
+write (`Inv::store`), a view's is the walk (`Inv::put_view`, from
+`Stmt::write_view_upat`/`write_view_inv` at an empty place). The walk is
+about one store, which is why the callee's heap is not used directly:
+several written chains (two siblings under one view, two objects in one
+block) need the heaps in between.
+
+- **The licence** is the lend's `write_at(l, Nil)`, computed in a state the
+  lends passed through (`Thin`, which now records the variable counts). It
+  is the licence in the state before them (`CSt::license_eq`: the same views
+  and counts, the lending level's role as it was), and its residuals are
+  among the call's (`CSt::lend_all_res`). `Inv::view_off` is now
+  `Inv::view_off_by`, which takes the licence as the descendants'
+  apartness, so a put later in the list uses the licence at the call's
+  words; the regions read the same words at every put (`Inv::words_after`,
+  the plain variables being as they were).
+- **A later argument reads at its turn what it read at the call**: each
+  earlier put is at a reference apart from it (`Lendable.apart`,
+  `Heap::put_at_apart`). So what is put there fits what is there
+  (`Value::Written`'s fit). The meaning of a written argument is derived
+  from the heap at each put (`Sim`), never tracked: an argument the
+  licence found (degenerately) apart from an ancestor stays consistent.
+- **What each put needs of its argument** is a record (`PutAt`): its
+  level, a holder that writes or a view with one entry to write
+  (`CSt::lend_write`), its cell the reference passed, and the licence's
+  apartness at the call's words; `Inv::put_at_arg` builds it from the lend.
+
+**2. The lends** (`Inv::lends`): a lend is the identity on the state or
+makes gone an owned holder whose object has no views (`CSt::lend_gone`),
+which is `Inv::gone`. The builder is generic in the meaning and the
+machine, so it runs after the puts.
+
+**3. The callee's heap** (`Inv::heap_rest`): given `Sim` on it, the frame
+after (`LentFrame::call`, its premises `Inv::call_un` and `Inv::call_lk`)
+and the heap kept, every other clause carries over. `LentFrame::call`'s
+`lk` now asks the like-ness only of references under a selection: a whole
+callee reference is a taken object or one lent whole, where the equation
+says nothing. `Sim` on the callee's heap comes from `Sim` on the puts' heap
+block by block: the puts at a bare block are the lens equation's puts of the
+written references into it, each value put being what that reference reads
+after (`Heap::puts_block`, `Value::OutsRead`); a block with a whole written
+reference is the callee's value on both sides (`Sel::put_lent_whole_in`).
+The swap is at the state after the lends, where a moved holder is gone, so
+the blocks a callee may kill are read by no live variable.
+
+**What P6 inherits.** The meaning after P4 is a fold over the written list
+(`CSt::puts_mean`); the invariant after the call reads the final state's
+patch, a fold by levels (`CSt::patched`). They agree at every variable,
+the chains meeting only at places `sib` says are apart; P6 shows it, by
+peeling the slots' write-backs (`CSt::patched_back`) or by commuting the
+walks.
