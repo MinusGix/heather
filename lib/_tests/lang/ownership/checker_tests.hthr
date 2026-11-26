@@ -1,0 +1,1068 @@
+// The checker by evaluation (lib/lang/ownership/checker.hthr,
+// issues/ownership-checker.md item 2): the experiments' programs restated
+// in the real body, each accepted one with its verdict by `refl` and each
+// refusal refused, and §21.5's probes 4 and 5 as verdicts.
+//
+// The experiments' one object is a list of numbers, `x`, the function's
+// `Arg(0)`, lent to write (`ByWrite`) or to read (`ByRead`); their words
+// follow as `Arg(1)`, `Arg(2)`, … taken by value. A function answering a
+// word lists it, then `x` if written (the `Ret` convention). Each body is in
+// the surface's lowered form: a literal is bound before it is written, a
+// view to write is written back after each statement that changes it (the
+// reflector's eager write-back, §15.2), and a call's written parameter is
+// bound after its results and written back to the variable lent, which is
+// then written back to its own place. The locals are listed newest first
+// beside each body; an atom reads the arguments, then the locals.
+import logic;
+import bool;
+import nat;
+import omega;
+import option;
+import list;
+import bitvec;
+import span_set;
+import store;
+import atom;
+import steps;
+import shape;
+import sequences;
+import body;
+import level2;
+import verdict;
+import checker;
+import linux_world;
+
+// ---------------------------------------------------------------------------
+// The environment: a record, a list of it, a list of numbers
+
+record Point { x: Nat, y: Nat }
+
+fn Point::origin() → Point { Point(0, 0) }
+
+fn tys() → Nat → Type { λ k => match k { Zero => Point, Succ(k1) => match k1 { Zero => List<Point>, Succ(k2) => match k2 { Zero => List<Nat>, Succ(_) => True } } } }
+
+fn pt_s() → Shape { SNamed(0) }
+
+fn pts_s() → Shape { SNamed(1) }
+
+fn nx() → Shape { SNamed(2) }
+
+fn nat_s() → Shape { SWord(WNat) }
+
+fn Point::fx() → Field(tys(), Point) { Field(nat_s(), λ (p: Point) => p.x, λ (p: Point) => λ (v: Nat) => Point(v, p.y)) }
+
+fn Point::fy() → Field(tys(), Point) { Field(nat_s(), λ (p: Point) => p.y, λ (p: Point) => λ (v: Nat) => Point(p.x, v)) }
+
+fn strs() → Strs(tys()) {
+    λ k => match k {
+        Zero => Struct(Plain, Some(Point::origin()), Record([Point::fx(), Point::fy()])),
+        Succ(k1) => match k1 {
+            Zero => Struct(Object, None, Sequence(Seq::list(tys(), pt_s(), Point::origin(), Some(Seq::list_win(tys(), pt_s(), pts_s(), λ (l: List<Point>) => l, λ (l: List<Point>) => l))))),
+            Succ(k2) => match k2 {
+                Zero => Struct(Object, None, Sequence(Seq::list(tys(), nat_s(), 0, Some(Seq::list_win(tys(), nat_s(), nx(), λ (l: List<Nat>) => l, λ (l: List<Nat>) => l))))),
+                Succ(_) => Struct(Plain, None, Opaque),
+            },
+        },
+    }
+}
+
+// A program's functions; its signatures; the verdict of its function `g`.
+fn sigs_of(fs: List<Func>) → Nat → Sig { λ g => (fs.nth(g).unwrap_or(Func(Sig(Nil, Nil), Ret(Nil)))).sig }
+
+fn verdict_in(fs: List<Func>, prim: Nat → Bool, g: Nat) → Option<Owes> { check(tys(), strs(), sigs_of(fs), prim, g, fs.nth(g).unwrap_or(Func(Sig(Nil, Nil), Ret(Nil)))) }
+
+// A program none of whose callees is a primitive.
+fn verdict(fs: List<Func>, g: Nat) → Option<Owes> { verdict_in(fs, λ _ => False, g) }
+
+// Why the pass refused a function, if it did.
+fn refusal_in(fs: List<Func>, g: Nat) → Option<Why> { (fs.nth(g).unwrap_or(Func(Sig(Nil, Nil), Ret(Nil)))).refusal(tys(), strs(), sigs_of(fs), λ _ => False, g) }
+
+// The words a function takes by value, after its object.
+fn words(n: Nat) → List<Param> { List::replicate(Param(nat_s(), ByTake), n) }
+
+// The experiments' signatures: the object to write or to read and `n`
+// words, answering a word.
+fn wsig(n: Nat) → Sig { Sig(Cons(Param(nx(), ByWrite), words(n)), [Result(nat_s(), OFresh)]) }
+
+fn rsig(n: Nat) → Sig { Sig(Cons(Param(nx(), ByRead), words(n)), [Result(nat_s(), OFresh)]) }
+
+fn el(r: Var, i: Atom) → Place { Place(r, [SElem(i)]) }
+
+fn win(r: Var, lo, n: Atom) → Place { Place(r, [SWindow(lo, n)]) }
+
+fn whole(r: Var) → Place { Place(r, Nil) }
+
+fn x() → Var { Arg(0) }
+
+fn acc_el(r: Var, i: Atom) → Residual { RAccess(el(r, i)) }
+
+fn acc_win(r: Var, lo, n: Atom) → Residual { RAccess(win(r, lo, n)) }
+
+// ---------------------------------------------------------------------------
+// 1. A written window beside a held view (call_check_tests §1):
+//    `fn fill(w: &mut [Nat], k) → Nat { w[0] := k; w[0] }`
+//    `let t = &x[0..k]; let w = &mut x[k..k+m]; let z = fill(w, 7); dead(w); t[0]`
+
+fn fill() → Func { Func(wsig(1), seq([Write(el(x(), Lit(0)), Arg(1)), Read(el(x(), Lit(0)))], Ret([Loc(0), x()]))) }
+
+// Writes owe their accessor's bound too (ownership-write-bounds).
+theorem fill_checked(): verdict([fill()], 0) = Some(ODo([acc_el(x(), Lit(0))], ODo([acc_el(x(), Lit(0))], OEnd))) { refl }
+
+// Locals at the end: [c, S, z, 7, w, t]; `S` is `fill`'s written
+// parameter after, a view to write of `w`.
+fn written() → Func {
+    Func(wsig(2), seq([
+        View(win(x(), Lit(0), Var(1)), Reading),
+        View(win(x(), Var(1), Var(2)), Writing),
+        Lit(WNat, 7),
+        Call(0, [Loc(1), Loc(0)], 2),
+        Write(whole(Loc(3)), Loc(0)),
+        Death(whole(Loc(0))),
+        Write(win(x(), Var(1), Var(2)), Loc(3)),
+        Death(whole(Loc(3))),
+        Read(el(Loc(4), Lit(0))),
+    ], Ret([Loc(0), x()])))
+}
+
+fn p1() → List<Func> { [fill(), written()] }
+
+// The loan apart from `t` (`k` ends `t` and starts the loan), fill's
+// precondition and measure at the call, and the read's bound.
+fn written_owes() → Owes {
+    ODo([acc_win(x(), Lit(0), Var(1))], ODo([acc_win(x(), Var(1), Var(2)), RApart(Lit(0), Var(1), Var(1), Var(2))], ODo(Nil,
+        ODo([RPre(0, [Loc(1), Loc(0)]), RMeasure(0, [Loc(1), Loc(0)])], ODo(Nil, ODo(Nil, ODo(Nil, ODo(Nil, ODo([acc_el(Loc(4), Lit(0))], OEnd)))))))))
+}
+
+theorem written_checked(): verdict(p1(), 1) = Some(written_owes()) { refl }
+
+// The control: the window moved to start at `j`, the third word. Accepted,
+// owing the window apart from `t`, which fails at `k = 1, j = 0`.
+fn moved() → Func {
+    Func(wsig(3), seq([
+        View(win(x(), Lit(0), Var(1)), Reading),
+        View(win(x(), Var(3), Var(2)), Writing),
+        Lit(WNat, 7),
+        Call(0, [Loc(1), Loc(0)], 2),
+        Write(whole(Loc(3)), Loc(0)),
+        Death(whole(Loc(0))),
+        Write(win(x(), Var(3), Var(2)), Loc(3)),
+        Death(whole(Loc(3))),
+        Read(el(Loc(4), Lit(0))),
+    ], Ret([Loc(0), x()])))
+}
+
+theorem moved_checked(): verdict([fill(), moved()], 1) = Some(
+    ODo([acc_win(x(), Lit(0), Var(1))], ODo([acc_win(x(), Var(3), Var(2)), RApart(Lit(0), Var(1), Var(3), Var(2))], ODo(Nil,
+        ODo([RPre(0, [Loc(1), Loc(0)]), RMeasure(0, [Loc(1), Loc(0)])], ODo(Nil, ODo(Nil, ODo(Nil, ODo(Nil, ODo([acc_el(Loc(4), Lit(0))], OEnd))))))))))
+{ refl }
+
+// A write through the loan before it is written back to `w`, or `w` read
+// while the call's slot lives: each refused.
+fn unbacked() → Func {
+    Func(wsig(2), seq([
+        View(win(x(), Var(1), Var(2)), Writing),
+        Lit(WNat, 7),
+        Call(0, [Loc(1), Loc(0)], 2),
+        Read(el(Loc(3), Lit(0))),
+    ], Ret([Loc(0), x()])))
+}
+
+theorem unbacked_refused(): verdict([fill(), unbacked()], 1) = None { refl }
+
+// The loan dying before it is written back to its owner: refused.
+fn unreturned() → Func {
+    Func(wsig(2), seq([
+        View(win(x(), Var(1), Var(2)), Writing),
+        Lit(WNat, 7),
+        Call(0, [Loc(1), Loc(0)], 2),
+        Write(whole(Loc(3)), Loc(0)),
+        Death(whole(Loc(0))),
+        Death(whole(Loc(3))),
+    ], Ret([Loc(1), x()])))
+}
+
+theorem unreturned_refused(): verdict([fill(), unreturned()], 1) = None { refl }
+
+// ---------------------------------------------------------------------------
+// 2. A returned view, frozen while it lives (call_check_tests §2):
+//    `fn first(v: &[Nat]) → &{v[0..1]} [Nat]`
+//    `let t = first(&x); let a = t[0]; let b = x[0]; dead(t); x[0] := 9; let c = x[0]; a`
+
+fn first_sig() → Sig { Sig([Param(nx(), ByRead)], [Result(nx(), OView(0, [SWindow(Lit(0), Lit(1))]))]) }
+
+fn first() → Func { Func(first_sig(), seq([View(win(x(), Lit(0), Lit(1)), Reading)], Ret([Loc(0)]))) }
+
+theorem first_checked(): verdict([first()], 0) = Some(ODo([acc_win(x(), Lit(0), Lit(1))], OEnd)) { refl }
+
+// A view the signature does not name (a window of one, not its own
+// window): refused.
+fn first_wrong() → Func { Func(first_sig(), seq([View(win(x(), Lit(1), Lit(1)), Reading)], Ret([Loc(0)]))) }
+
+theorem first_wrong_refused(): verdict([first_wrong()], 0) = None { refl }
+
+// Locals at the end: [c, 9, b, a, t].
+fn returned() → Func {
+    Func(wsig(0), seq([
+        Call(0, [x()], 1),
+        Read(el(Loc(0), Lit(0))),
+        Read(el(x(), Lit(0))),
+        Death(whole(Loc(2))),
+        Lit(WNat, 9),
+        Write(el(x(), Lit(0)), Loc(0)),
+        Read(el(x(), Lit(0))),
+    ], Ret([Loc(3), x()])))
+}
+
+fn p2() → List<Func> { [first(), returned()] }
+
+theorem returned_checked(): verdict(p2(), 1) = Some(
+    ODo([RPre(0, [x()]), RMeasure(0, [x()])], ODo([acc_el(Loc(0), Lit(0))], ODo([acc_el(x(), Lit(0))], ODo(Nil, ODo(Nil, ODo([acc_el(x(), Lit(0))], ODo([acc_el(x(), Lit(0))], OEnd))))))))
+{ refl }
+
+// The control: the write moved before the read of `t`, while the window
+// `first` answers is frozen.
+fn early() → Func {
+    Func(wsig(0), seq([
+        Call(0, [x()], 1),
+        Lit(WNat, 9),
+        Write(el(x(), Lit(0)), Loc(0)),
+        Read(el(Loc(1), Lit(0))),
+        Death(whole(Loc(2))),
+    ], Ret([Loc(0), x()])))
+}
+
+theorem early_refused(): verdict([first(), early()], 1) = None { refl }
+
+// ---------------------------------------------------------------------------
+// 3. A callee that breaks its signature: declared to read its parameter, it
+//    writes it (call_check_tests §3). Its own check refuses it; a caller
+//    reads only the signature, so its verdict is the same as with `first`.
+
+fn liar() → Func { Func(first_sig(), seq([Lit(WNat, 9), Write(el(x(), Lit(0)), Loc(0)), View(win(x(), Lit(0), Lit(1)), Reading)], Ret([Loc(0)]))) }
+
+theorem liar_refused(): verdict([liar()], 0) = None { refl }
+
+fn trusting() → Func { Func(wsig(0), seq([Call(0, [x()], 1), Read(el(x(), Lit(0)))], Ret([Loc(0), x()]))) }
+
+theorem trusting_checked(): verdict([liar(), trusting()], 1) = Some(ODo([RPre(0, [x()]), RMeasure(0, [x()])], ODo([acc_el(x(), Lit(0))], OEnd))) { refl }
+
+// ---------------------------------------------------------------------------
+// 4. A loan held across statements (call_check_tests §4):
+//    `let t = &x[0..k]; let w = &mut x[k..k+m]; w[0] := 7; let a = x[0];
+//     w[1] := 4; let b = w[0]; let c = t[0]; dead(w); x[k]`
+// The owner reads beside the loan, a read view lives beside it, and each
+// write through it is written back at once.
+
+// Locals at the end: [d, c, b, 4, a, 7, w, t].
+fn loan() → Func {
+    Func(wsig(2), seq([
+        View(win(x(), Lit(0), Var(1)), Reading),
+        View(win(x(), Var(1), Var(2)), Writing),
+        Lit(WNat, 7),
+        Write(el(Loc(1), Lit(0)), Loc(0)),
+        Write(win(x(), Var(1), Var(2)), Loc(1)),
+        Read(el(x(), Lit(0))),
+        Lit(WNat, 4),
+        Write(el(Loc(3), Lit(1)), Loc(0)),
+        Write(win(x(), Var(1), Var(2)), Loc(3)),
+        Read(el(Loc(3), Lit(0))),
+        Read(el(Loc(5), Lit(0))),
+        Death(whole(Loc(5))),
+        Read(el(x(), Var(1))),
+    ], Ret([Loc(0), x()])))
+}
+
+// Two apartness residuals: the loan apart from `t`, and the owner's read of
+// `x[0]` apart from the loan, which the caller's `1 <= k` gives.
+fn loan_owes() → Owes {
+    ODo([acc_win(x(), Lit(0), Var(1))], ODo([acc_win(x(), Var(1), Var(2)), RApart(Lit(0), Var(1), Var(1), Var(2))], ODo(Nil,
+        ODo([acc_el(Loc(1), Lit(0))], ODo(Nil, ODo([RApart(Var(1), Var(2), Lit(0), Lit(1)), acc_el(x(), Lit(0))], ODo(Nil,
+        ODo([acc_el(Loc(3), Lit(1))], ODo(Nil, ODo([acc_el(Loc(3), Lit(0))], ODo([acc_el(Loc(5), Lit(0))], ODo(Nil, ODo([acc_el(x(), Var(1))], OEnd)))))))))))))
+}
+
+theorem loan_checked(): verdict([loan()], 0) = Some(loan_owes()) { refl }
+
+// The controls of the owner: a read of the lent part, a write inside it,
+// each refused; a write through the loan after its death refused; a loan
+// of a part of a read parameter refused.
+fn peek() → Func {
+    Func(wsig(0), seq([View(win(x(), Lit(0), Lit(2)), Writing), Lit(WNat, 7), Write(el(Loc(1), Lit(0)), Loc(0)), Write(win(x(), Lit(0), Lit(2)), Loc(1)),
+        Read(el(x(), Lit(0))), Death(whole(Loc(2)))], Ret([Loc(1), x()])))
+}
+
+theorem peek_refused(): verdict([peek()], 0) = None { refl }
+
+fn clobber() → Func {
+    Func(wsig(0), seq([View(win(x(), Lit(0), Lit(2)), Writing), Lit(WNat, 9), Write(el(x(), Lit(1)), Loc(0)), Death(whole(Loc(1))), Read(el(x(), Lit(1)))], Ret([Loc(0), x()])))
+}
+
+theorem clobber_refused(): verdict([clobber()], 0) = None { refl }
+
+fn stale() → Func {
+    Func(wsig(0), seq([View(win(x(), Lit(0), Lit(2)), Writing), Death(whole(Loc(0))), Lit(WNat, 5), Write(el(Loc(1), Lit(0)), Loc(0))], Ret([Loc(0), x()])))
+}
+
+theorem stale_refused(): verdict([stale()], 0) = None { refl }
+
+fn lend_read() → Func { Func(rsig(0), seq([View(win(x(), Lit(0), Lit(1)), Writing), Lit(WNat, 5), Write(el(Loc(1), Lit(0)), Loc(0))], Ret([Loc(0)]))) }
+
+theorem lend_read_refused(): verdict([lend_read()], 0) = None { refl }
+
+// The loan that is written but never written back: its death is refused.
+fn unsynced() → Func {
+    Func(wsig(0), seq([View(win(x(), Lit(0), Lit(2)), Writing), Lit(WNat, 7), Write(el(Loc(1), Lit(0)), Loc(0)), Death(whole(Loc(1)))], Ret([Loc(0), x()])))
+}
+
+theorem unsynced_refused(): verdict([unsynced()], 0) = None { refl }
+
+// ---------------------------------------------------------------------------
+// 5. A branch with a join (call_check_tests §5):
+//    `let t = &x[0..k]; let a = if k <= j { x[j] := 5; t[0] } else { dead(t); x[0] }; x[0] := 9; a`
+// The arm that writes `x` yields it, as every arm that writes a variable
+// does: after the join the output holds the object, and `x` is gone.
+
+// After the join: [x', a', t]; at the end [9, x', a', t].
+fn branch() → Func {
+    Func(wsig(2), seq([View(win(x(), Lit(0), Var(1)), Reading)],
+        Join(TLe(Arg(1), Arg(2)),
+            seq([Lit(WNat, 5), Write(el(x(), Var(2)), Loc(0)), Read(el(Loc(1), Lit(0)))], Yield([Loc(0), x()])),
+            seq([Death(whole(Loc(0))), Read(el(x(), Lit(0)))], Yield([Loc(0), x()])),
+            seq([Lit(WNat, 9), Write(el(Loc(1), Lit(0)), Loc(0))], Ret([Loc(2), Loc(1)])))))
+}
+
+// The first arm owes the write apart from `t`: its own test, `k <= j`, is
+// the first side.
+fn branch_owes() → Owes {
+    ODo([acc_win(x(), Lit(0), Var(1))], OJoin(
+        ODo(Nil, ODo([RApart(Lit(0), Var(1), Var(2), Lit(1)), acc_el(x(), Var(2))], ODo([acc_el(Loc(1), Lit(0))], OEnd))),
+        ODo(Nil, ODo([acc_el(x(), Lit(0))], OEnd)),
+        ODo(Nil, ODo([acc_el(Loc(1), Lit(0))], OEnd))))
+}
+
+theorem branch_checked(): verdict([branch()], 0) = Some(branch_owes()) { refl }
+
+// The controls of the meet: `t` read after the join, where one arm ended
+// it; and `x` used after the join, where an arm wrote it and the arms did
+// not yield it.
+fn after_join() → Func {
+    Func(wsig(2), seq([View(win(x(), Lit(0), Var(1)), Reading)],
+        Join(TLe(Arg(1), Arg(2)),
+            seq([Lit(WNat, 5), Write(el(x(), Var(2)), Loc(0)), Read(el(Loc(1), Lit(0)))], Yield([Loc(0), x()])),
+            seq([Death(whole(Loc(0))), Read(el(x(), Lit(0)))], Yield([Loc(0), x()])),
+            seq([Read(el(Loc(2), Lit(0)))], Ret([Loc(0), Loc(1)])))))
+}
+
+theorem after_join_refused(): verdict([after_join()], 0) = None { refl }
+
+fn unyielded() → Func {
+    Func(wsig(2), seq([View(win(x(), Lit(0), Var(1)), Reading)],
+        Join(TLe(Arg(1), Arg(2)),
+            seq([Lit(WNat, 5), Write(el(x(), Var(2)), Loc(0)), Read(el(Loc(1), Lit(0)))], Yield([Loc(0)])),
+            seq([Death(whole(Loc(0))), Read(el(x(), Lit(0)))], Yield([Loc(0)])),
+            seq([Read(el(x(), Lit(0)))], Ret([Loc(0), x()])))))
+}
+
+theorem unyielded_refused(): verdict([unyielded()], 0) = None { refl }
+
+// Without the branch the same write owes the residual unconditionally; with
+// the arms swapped it is owed where the test failed.
+fn unguarded() → Func {
+    Func(wsig(2), seq([View(win(x(), Lit(0), Var(1)), Reading), Lit(WNat, 5), Write(el(x(), Var(2)), Loc(0)), Read(el(Loc(1), Lit(0)))], Ret([Loc(0), x()])))
+}
+
+theorem unguarded_checked(): verdict([unguarded()], 0) = Some(
+    ODo([acc_win(x(), Lit(0), Var(1))], ODo(Nil, ODo([RApart(Lit(0), Var(1), Var(2), Lit(1)), acc_el(x(), Var(2))], ODo([acc_el(Loc(1), Lit(0))], OEnd)))))
+{ refl }
+
+fn swapped() → Func {
+    Func(wsig(2), seq([View(win(x(), Lit(0), Var(1)), Reading)],
+        Join(TLe(Arg(1), Arg(2)),
+            seq([Death(whole(Loc(0))), Read(el(x(), Lit(0)))], Yield([Loc(0), x()])),
+            seq([Lit(WNat, 5), Write(el(x(), Var(2)), Loc(0)), Read(el(Loc(1), Lit(0)))], Yield([Loc(0), x()])),
+            Ret([Loc(1), Loc(0)]))))
+}
+
+theorem swapped_checked(): verdict([swapped()], 0) = Some(
+    ODo([acc_win(x(), Lit(0), Var(1))], OJoin(
+        ODo(Nil, ODo([acc_el(x(), Lit(0))], OEnd)),
+        ODo(Nil, ODo([RApart(Lit(0), Var(1), Var(2), Lit(1)), acc_el(x(), Var(2))], ODo([acc_el(Loc(1), Lit(0))], OEnd))),
+        OEnd)))
+{ refl }
+
+// ---------------------------------------------------------------------------
+// 6. Views the arms open on different windows, live after the join: the
+//    view's region is the union (call_check_tests §6).
+//    `let t = if k <= 0 { &x[0..1] } else { &x[1..2] }; x[2] := 7; let a = t[0]; dead(t); x[1] := 8; a`
+
+// After the join: [t']; at the end [8, a, 7, t'].
+fn coarse() → Func {
+    Func(wsig(2), Join(TLe(Arg(1), Arg(2)),
+        seq([View(win(x(), Lit(0), Lit(1)), Reading)], Yield([Loc(0)])),
+        seq([View(win(x(), Lit(1), Lit(1)), Reading)], Yield([Loc(0)])),
+        seq([Lit(WNat, 7), Write(el(x(), Lit(2)), Loc(0)), Read(el(Loc(1), Lit(0))), Death(whole(Loc(2))), Lit(WNat, 8), Write(el(x(), Lit(1)), Loc(0))], Ret([Loc(1), x()]))))
+}
+
+// The write at 2 is apart from both windows, decided at literals.
+theorem coarse_checked(): verdict([coarse()], 0) = Some(
+    OJoin(ODo([acc_win(x(), Lit(0), Lit(1))], OEnd), ODo([acc_win(x(), Lit(1), Lit(1))], OEnd),
+        ODo(Nil, ODo([acc_el(x(), Lit(2))], ODo([acc_el(Loc(1), Lit(0))], ODo(Nil, ODo(Nil, ODo([acc_el(x(), Lit(1))], OEnd))))))))
+{ refl }
+
+// A write into either arm's window while the joined view lives: refused.
+fn coarse_held() → Func {
+    Func(wsig(2), Join(TLe(Arg(1), Arg(2)),
+        seq([View(win(x(), Lit(0), Lit(1)), Reading)], Yield([Loc(0)])),
+        seq([View(win(x(), Lit(1), Lit(1)), Reading)], Yield([Loc(0)])),
+        seq([Lit(WNat, 7), Write(el(x(), Lit(1)), Loc(0)), Read(el(Loc(1), Lit(0))), Death(whole(Loc(2)))], Ret([Loc(1), x()]))))
+}
+
+theorem coarse_held_refused(): verdict([coarse_held()], 0) = None { refl }
+
+// Arms that yield different numbers of values do not join: the code check.
+fn uneven() → Func { Func(wsig(1), Join(TLe(Arg(1), Arg(1)), seq([Read(el(x(), Lit(0)))], Yield([Loc(0)])), Yield(Nil), seq([Lit(WNat, 0)], Ret([Loc(0), x()])))) }
+
+theorem uneven_refused(): verdict([uneven()], 0) = None { refl }
+
+// ---------------------------------------------------------------------------
+// 7. A finer returned region (call_check_tests §7):
+//    `fn at(w: &[Nat], k) → &{w[k..k+1]} [Nat]`; `let t = at(&x, k); x[j] := 9; t[0]`
+
+fn at() → Func {
+    Func(Sig([Param(nx(), ByRead), Param(nat_s(), ByTake)], [Result(nx(), OView(0, [SWindow(Var(1), Lit(1))]))]), seq([View(win(x(), Var(1), Lit(1)), Reading)], Ret([Loc(0)])))
+}
+
+theorem at_checked(): verdict([at()], 0) = Some(ODo([acc_win(x(), Var(1), Lit(1))], OEnd)) { refl }
+
+// The view lies at `Span(k, 1)` in the caller's words, so the write at `j`
+// owes `k + 1 <= j ∨ j + 1 <= k`. Locals at the end: [a, 9, t].
+fn beside() → Func { Func(wsig(2), seq([Call(0, [x(), Arg(1)], 1), Lit(WNat, 9), Write(el(x(), Var(2)), Loc(0)), Read(el(Loc(1), Lit(0)))], Ret([Loc(0), x()]))) }
+
+theorem beside_checked(): verdict([at(), beside()], 1) = Some(
+    ODo([RPre(0, [x(), Arg(1)]), RMeasure(0, [x(), Arg(1)])], ODo(Nil, ODo([RApart(Var(1), Lit(1), Var(2), Lit(1)), acc_el(x(), Var(2))], ODo([acc_el(Loc(1), Lit(0))], OEnd)))))
+{ refl }
+
+// A write into the answered window owes a residual that cannot hold.
+fn onto() → Func { Func(wsig(2), seq([Call(0, [x(), Arg(1)], 1), Lit(WNat, 9), Write(el(x(), Var(1)), Loc(0)), Read(el(Loc(1), Lit(0)))], Ret([Loc(0), x()]))) }
+
+theorem onto_checked(): verdict([at(), onto()], 1) = Some(
+    ODo([RPre(0, [x(), Arg(1)]), RMeasure(0, [x(), Arg(1)])], ODo(Nil, ODo([RApart(Var(1), Lit(1), Var(1), Lit(1)), acc_el(x(), Var(1))], ODo([acc_el(Loc(1), Lit(0))], OEnd)))))
+{ refl }
+
+theorem onto_fails(k: Nat): ¬RApart(Var(1), Lit(1), Var(1), Lit(1)).Holds(tys(), Ctx(strs(), λ _ _ => Nil, 1, λ _ _ => True, λ _ _ => 0, Nil),
+    Env::start(tys(), [Dyn(nx(), Nil<Nat>), Dyn(nat_s(), k)]))
+{
+    λ h => match h {
+        Inl(a) => { let a2: (k + 1 <= k) = a; omega(a2) },
+        Inr(b) => { let b2: (k + 1 <= k) = b; omega(b2) },
+    }
+}
+
+// A callee whose view lies at a word it read names that word as a result:
+// a view's steps read the call's words, the arguments' and then the
+// results' (§15.2: a view travels with its slot). `found(xs, k)` answers a
+// view of `xs[j..j+1]` and `j`, its second result (the signature's
+// `Var(3)`, past its two parameters, is result 1).
+fn found_sig() → Sig { Sig([Param(nx(), ByRead), Param(nat_s(), ByTake)], [Result(nx(), OView(0, [SWindow(Var(3), Lit(1))])), Result(nat_s(), OFresh)]) }
+
+fn found() → Func { Func(found_sig(), seq([Read(el(x(), Lit(0))), View(win(x(), Var(2), Lit(1)), Reading)], Ret([Loc(0), Loc(1)]))) }
+
+theorem found_checked(): verdict([found()], 0) = Some(ODo([acc_el(x(), Lit(0))], ODo([acc_win(x(), Var(2), Lit(1))], OEnd))) { refl }
+
+// Its caller writes beside the view: the residual reads the answered word,
+// the call's second binding (`Var(3)` at the write: [9, j, t]).
+fn beside_found() → Func {
+    Func(wsig(2), seq([Call(0, [x(), Arg(1)], 2), Lit(WNat, 9), Write(el(x(), Var(2)), Loc(0)), Read(el(Loc(2), Lit(0)))], Ret([Loc(0), x()])))
+}
+
+theorem beside_found_checked(): verdict([found(), beside_found()], 1) = Some(
+    ODo([RPre(0, [x(), Arg(1)]), RMeasure(0, [x(), Arg(1)])], ODo(Nil, ODo([RApart(Var(4), Lit(1), Var(2), Lit(1)), acc_el(x(), Var(2))], ODo([acc_el(Loc(2), Lit(0))], OEnd)))))
+{ refl }
+
+// The control: a view whose place reads a result that is not a plain word
+// (here the view itself) has no signature.
+fn found_self() → Func {
+    Func(Sig([Param(nx(), ByRead), Param(nat_s(), ByTake)], [Result(nx(), OView(0, [SWindow(Var(2), Lit(1))])), Result(nat_s(), OFresh)]),
+        seq([Read(el(x(), Lit(0))), View(win(x(), Var(2), Lit(1)), Reading)], Ret([Loc(0), Loc(1)])))
+}
+
+theorem found_self_refused(): verdict([found_self()], 0) = None { refl }
+
+// ---------------------------------------------------------------------------
+// 8. A residual about a callee's answer (call_check_tests §8):
+//    `fn ident(w: &mut [Nat], k) → Nat { k }`
+//    `let t = &x[0..k]; let w = &mut x[k..k+m]; let z = ident(w, k); dead(w); x[z] := 5; t[0]`
+
+fn ident() → Func { Func(wsig(1), Ret([Arg(1), x()])) }
+
+theorem ident_checked(): verdict([ident()], 0) = Some(OEnd) { refl }
+
+// Locals at the end: [c, 5, S, z, w, t]; `z` is `Var(5)` at the write.
+fn after_call() → Func {
+    Func(wsig(2), seq([
+        View(win(x(), Lit(0), Var(1)), Reading),
+        View(win(x(), Var(1), Var(2)), Writing),
+        Call(0, [Loc(0), Arg(1)], 2),
+        Write(whole(Loc(2)), Loc(0)),
+        Death(whole(Loc(0))),
+        Write(win(x(), Var(1), Var(2)), Loc(2)),
+        Death(whole(Loc(2))),
+        Lit(WNat, 5),
+        Write(el(x(), Var(5)), Loc(0)),
+        Read(el(Loc(4), Lit(0))),
+    ], Ret([Loc(0), x()])))
+}
+
+fn after_owes() → Owes {
+    ODo([acc_win(x(), Lit(0), Var(1))], ODo([acc_win(x(), Var(1), Var(2)), RApart(Lit(0), Var(1), Var(1), Var(2))],
+        ODo([RPre(0, [Loc(0), Arg(1)]), RMeasure(0, [Loc(0), Arg(1)])], ODo(Nil, ODo(Nil, ODo(Nil, ODo(Nil, ODo(Nil,
+        ODo([RApart(Lit(0), Var(1), Var(5), Lit(1)), acc_el(x(), Var(5))], ODo([acc_el(Loc(4), Lit(0))], OEnd))))))))))
+}
+
+theorem after_checked(): verdict([ident(), after_call()], 1) = Some(after_owes()) { refl }
+
+// ---------------------------------------------------------------------------
+// 9. Site facts (site_facts_tests): reads under a parameter proof, through a
+//    `let`, under an `if` over a bound word; readers as callees; a write
+//    beside a held view under an `if`; a call passing its proof on.
+
+// `pick(xs, i) = xs[i]`, the arena's `read` in miniature.
+fn pick() → Func { Func(rsig(1), seq([Read(el(x(), Var(1)))], Ret([Loc(0)]))) }
+
+theorem pick_checked(): verdict([pick()], 0) = Some(ODo([acc_el(x(), Var(1))], OEnd)) { refl }
+
+// `let j = xs[i]; xs[j]`: the second read's index is the local, `Var(2)`.
+fn hop() → Func { Func(rsig(1), seq([Read(el(x(), Var(1))), Read(el(x(), Var(2)))], Ret([Loc(0)]))) }
+
+theorem hop_checked(): verdict([hop()], 0) = Some(ODo([acc_el(x(), Var(1))], ODo([acc_el(x(), Var(2))], OEnd))) { refl }
+
+// `let j = xs[i]; let r = if j <= n { xs[j] } else { xs[i] }; r`
+fn hop_le() → Func {
+    Func(rsig(2), seq([Read(el(x(), Var(1)))], Join(TLe(Loc(0), Arg(2)), seq([Read(el(x(), Var(3)))], Yield([Loc(0)])), seq([Read(el(x(), Var(1)))], Yield([Loc(0)])), Ret([Loc(0)]))))
+}
+
+theorem hop_le_checked(): verdict([hop_le()], 0) = Some(ODo([acc_el(x(), Var(1))], OJoin(ODo([acc_el(x(), Var(3))], OEnd), ODo([acc_el(x(), Var(1))], OEnd), OEnd))) { refl }
+
+// Readers as callees: `pick(xs, i); pick(xs, j)`, and a reader lent a view
+// to write (`let w = &mut xs[lo..lo+n]; pick(w, i)`).
+fn both() → Func { Func(rsig(2), seq([Call(0, [x(), Arg(1)], 1), Call(0, [x(), Arg(2)], 1)], Ret([Loc(0)]))) }
+
+theorem both_checked(): verdict([pick(), both()], 1) = Some(ODo([RPre(0, [x(), Arg(1)]), RMeasure(0, [x(), Arg(1)])], ODo([RPre(0, [x(), Arg(2)]), RMeasure(0, [x(), Arg(2)])], OEnd))) { refl }
+
+fn peek_at() → Func {
+    Func(wsig(3), seq([View(win(x(), Var(1), Var(2)), Writing), Call(0, [Loc(0), Arg(3)], 1), Death(whole(Loc(1)))], Ret([Loc(0), x()])))
+}
+
+theorem peek_at_checked(): verdict([pick(), peek_at()], 1) = Some(
+    ODo([acc_win(x(), Var(1), Var(2))], ODo([RPre(0, [Loc(0), Arg(3)]), RMeasure(0, [Loc(0), Arg(3)])], ODo(Nil, OEnd))))
+{ refl }
+
+// `let t = &xs[0..k]; if k <= j { xs[j] := 9; t[0] } else { t[0] }`: the
+// residual is owed in the first arm, whose test is its first side.
+fn poke() → Func {
+    Func(wsig(2), seq([View(win(x(), Lit(0), Var(1)), Reading)], Join(TLe(Arg(1), Arg(2)),
+        seq([Lit(WNat, 9), Write(el(x(), Var(2)), Loc(0)), Read(el(Loc(1), Lit(0)))], Yield([Loc(0), x()])),
+        seq([Read(el(Loc(0), Lit(0)))], Yield([Loc(0), x()])),
+        Ret([Loc(1), Loc(0)]))))
+}
+
+theorem poke_checked(): verdict([poke()], 0) = Some(
+    ODo([acc_win(x(), Lit(0), Var(1))], OJoin(
+        ODo(Nil, ODo([RApart(Lit(0), Var(1), Var(2), Lit(1)), acc_el(x(), Var(2))], ODo([acc_el(Loc(1), Lit(0))], OEnd))),
+        ODo([acc_el(Loc(0), Lit(0))], OEnd),
+        OEnd)))
+{ refl }
+
+// The view's length a `let`-bound read: `let k = xs[0]; let t = &xs[1..1+k]; xs[j] := 9; t[0]`.
+fn after_read() → Func {
+    Func(wsig(1), seq([Read(el(x(), Lit(0))), View(win(x(), Lit(1), Var(2)), Reading), Lit(WNat, 9), Write(el(x(), Var(1)), Loc(0)), Read(el(Loc(1), Lit(0)))], Ret([Loc(0), x()])))
+}
+
+theorem after_read_checked(): verdict([after_read()], 0) = Some(
+    ODo([acc_el(x(), Lit(0))], ODo([acc_win(x(), Lit(1), Var(2))], ODo(Nil, ODo([RApart(Lit(1), Var(4), Var(1), Lit(1)), acc_el(x(), Var(1))], ODo([acc_el(Loc(1), Lit(0))], OEnd))))))
+{ refl }
+
+// A call that passes its own proof on: `shift(&mut xs[0..m], k, j)` where
+// `shift` writes `w[j]` beside its view `w[0..k]` (its precondition
+// `k <= j`). The caller owes `shift`'s precondition at the lent window.
+fn shift() → Func {
+    Func(wsig(2), seq([View(win(x(), Lit(0), Var(1)), Reading), Lit(WNat, 9), Write(el(x(), Var(2)), Loc(0)), Read(el(Loc(1), Lit(0))), Death(whole(Loc(2)))], Ret([Loc(0), x()])))
+}
+
+theorem shift_checked(): verdict([shift()], 0) = Some(
+    ODo([acc_win(x(), Lit(0), Var(1))], ODo(Nil, ODo([RApart(Lit(0), Var(1), Var(2), Lit(1)), acc_el(x(), Var(2))], ODo([acc_el(Loc(1), Lit(0))], ODo(Nil, OEnd))))))
+{ refl }
+
+// Locals at the end: [S, z, w].
+fn outer() → Func {
+    Func(wsig(3), seq([
+        View(win(x(), Lit(0), Var(1)), Writing),
+        Call(0, [Loc(0), Arg(2), Arg(3)], 2),
+        Write(whole(Loc(2)), Loc(0)),
+        Death(whole(Loc(0))),
+        Write(win(x(), Lit(0), Var(1)), Loc(2)),
+        Death(whole(Loc(2))),
+    ], Ret([Loc(1), x()])))
+}
+
+theorem outer_checked(): verdict([shift(), outer()], 1) = Some(
+    ODo([acc_win(x(), Lit(0), Var(1))], ODo([RPre(0, [Loc(0), Arg(2), Arg(3)]), RMeasure(0, [Loc(0), Arg(2), Arg(3)])], ODo(Nil, ODo(Nil, ODo(Nil, ODo(Nil, OEnd)))))))
+{ refl }
+
+// The proof passed on through a `let`: `let a = xs[0]; shift(&mut xs[1..1+m], a, j)`.
+fn outer2() → Func {
+    Func(wsig(2), seq([
+        Read(el(x(), Lit(0))),
+        View(win(x(), Lit(1), Var(1)), Writing),
+        Call(0, [Loc(0), Loc(1), Arg(2)], 2),
+        Write(whole(Loc(2)), Loc(0)),
+        Death(whole(Loc(0))),
+        Write(win(x(), Lit(1), Var(1)), Loc(2)),
+        Death(whole(Loc(2))),
+    ], Ret([Loc(1), x()])))
+}
+
+theorem outer2_checked(): verdict([shift(), outer2()], 1) = Some(
+    ODo([acc_el(x(), Lit(0))], ODo([acc_win(x(), Lit(1), Var(1))], ODo([RPre(0, [Loc(0), Loc(1), Arg(2)]), RMeasure(0, [Loc(0), Loc(1), Arg(2)])],
+        ODo(Nil, ODo(Nil, ODo(Nil, ODo(Nil, OEnd))))))))
+{ refl }
+
+// ---------------------------------------------------------------------------
+// 10. The first experiment's programs (place_check_tests). Its versions,
+//     `let x1 = x.set(i, v)`, are writes in place in the real body: a take
+//     passes the object on only where no view of it lives (§15.3: a take
+//     needs its place whole).
+
+fn tsig() → Sig { Sig([Param(nx(), ByTake)], [Result(nat_s(), OFresh)]) }
+
+// `let x1 = x.set(0, 7); let x2 = x1.set(1, 8); x2[0]`, by takes. Locals at
+// the end: [r, 8, x2, 7, x1].
+fn linear() → Func {
+    Func(tsig(), seq([Take(whole(x())), Lit(WNat, 7), Write(el(Loc(1), Lit(0)), Loc(0)), Take(whole(Loc(1))), Lit(WNat, 8), Write(el(Loc(1), Lit(1)), Loc(0)), Read(el(Loc(1), Lit(0)))], Ret([Loc(0)])))
+}
+
+theorem linear_checked(): verdict([linear()], 0) = Some(
+    ODo(Nil, ODo(Nil, ODo([acc_el(Loc(1), Lit(0))], ODo(Nil, ODo(Nil, ODo([acc_el(Loc(1), Lit(1))], ODo([acc_el(Loc(1), Lit(0))], OEnd))))))))
+{ refl }
+
+// A read of a name after it was taken: refused.
+fn stale_name() → Func { Func(tsig(), seq([Take(whole(x())), Lit(WNat, 7), Write(el(Loc(1), Lit(0)), Loc(0)), Read(el(x(), Lit(0)))], Ret([Loc(0)]))) }
+
+theorem stale_name_refused(): verdict([stale_name()], 0) = None { refl }
+
+// A take while a view of the object lives: refused.
+fn take_frozen() → Func { Func(tsig(), seq([View(win(x(), Lit(0), Lit(1)), Reading), Take(whole(x())), Read(el(Loc(1), Lit(0)))], Ret([Loc(0)]))) }
+
+theorem take_frozen_refused(): verdict([take_frozen()], 0) = None { refl }
+
+// `let t = &x[0..k]; x[j] := 9; t[0]`, accepted owing `Span(0, k)` apart
+// from `Span(j, 1)`.
+fn frozen() → Func { Func(wsig(2), seq([View(win(x(), Lit(0), Var(1)), Reading), Lit(WNat, 9), Write(el(x(), Var(2)), Loc(0)), Read(el(Loc(1), Lit(0)))], Ret([Loc(0), x()]))) }
+
+theorem frozen_checked(): verdict([frozen()], 0) = Some(
+    ODo([acc_win(x(), Lit(0), Var(1))], ODo(Nil, ODo([RApart(Lit(0), Var(1), Var(2), Lit(1)), acc_el(x(), Var(2))], ODo([acc_el(Loc(1), Lit(0))], OEnd)))))
+{ refl }
+
+// A write under a view, apart at literals: no residual; overlapping at
+// literals: refused.
+fn beside_lit() → Func { Func(wsig(0), seq([View(win(x(), Lit(0), Lit(2)), Reading), Lit(WNat, 9), Write(el(x(), Lit(2)), Loc(0)), Read(el(Loc(1), Lit(1)))], Ret([Loc(0), x()]))) }
+
+theorem beside_lit_checked(): verdict([beside_lit()], 0) = Some(ODo([acc_win(x(), Lit(0), Lit(2))], ODo(Nil, ODo([acc_el(x(), Lit(2))], ODo([acc_el(Loc(1), Lit(1))], OEnd))))) { refl }
+
+fn inside() → Func { Func(wsig(0), seq([View(win(x(), Lit(0), Lit(2)), Reading), Lit(WNat, 9), Write(el(x(), Lit(1)), Loc(0)), Read(el(Loc(1), Lit(1)))], Ret([Loc(0), x()]))) }
+
+theorem inside_refused(): verdict([inside()], 0) = None { refl }
+
+// The frozen window through two writes apart from it; then one into it.
+fn versions() → Func {
+    Func(wsig(0), seq([View(win(x(), Lit(1), Lit(2)), Reading), Lit(WNat, 4), Write(el(x(), Lit(0)), Loc(0)), Lit(WNat, 5), Write(el(x(), Lit(3)), Loc(0)), Read(el(Loc(2), Lit(0)))], Ret([Loc(0), x()])))
+}
+
+theorem versions_checked(): verdict([versions()], 0) = Some(
+    ODo([acc_win(x(), Lit(1), Lit(2))], ODo(Nil, ODo([acc_el(x(), Lit(0))], ODo(Nil, ODo([acc_el(x(), Lit(3))], ODo([acc_el(Loc(2), Lit(0))], OEnd)))))))
+{ refl }
+
+fn versions_bad() → Func {
+    Func(wsig(0), seq([View(win(x(), Lit(1), Lit(2)), Reading), Lit(WNat, 4), Write(el(x(), Lit(0)), Loc(0)), Lit(WNat, 5), Write(el(x(), Lit(2)), Loc(0)), Read(el(Loc(2), Lit(0)))], Ret([Loc(0), x()])))
+}
+
+theorem versions_bad_refused(): verdict([versions_bad()], 0) = None { refl }
+
+// A copy has a value of its own: a write to it is not under the view.
+fn cloned() → Func {
+    Func(wsig(0), seq([View(win(x(), Lit(0), Lit(2)), Reading), Read(whole(x())), Lit(WNat, 9), Write(el(Loc(1), Lit(0)), Loc(0)), Read(el(Loc(2), Lit(0)))], Ret([Loc(0), x()])))
+}
+
+theorem cloned_checked(): verdict([cloned()], 0) = Some(ODo([acc_win(x(), Lit(0), Lit(2))], ODo(Nil, ODo(Nil, ODo([acc_el(Loc(1), Lit(0))], ODo([acc_el(Loc(2), Lit(0))], OEnd)))))) { refl }
+
+// The longer program: `n` rounds over two objects `a` and `b` and words
+// `k`, `j`, each a view of `a[0..2]` held to the end, a write of `a[5]`
+// apart at literals, a write of `b[j]` (another object), reads of `a[0]`
+// and the view, and a write of `a[j]`, which owes `Span(0, 2)` apart from
+// `Span(j, 1)` against every live view (1 + 2 + … + n of them). A round's
+// statements read only its own locals and the arguments, so it repeats.
+fn round() → List<Stmt> {
+    [View(win(Arg(0), Lit(0), Lit(2)), Reading), Lit(WNat, 1), Write(el(Arg(0), Lit(5)), Loc(0)), Lit(WNat, 2), Write(el(Arg(1), Var(3)), Loc(0)),
+        Read(el(Arg(0), Lit(0))), Read(el(Loc(3), Lit(1))), Lit(WNat, 3), Write(el(Arg(0), Var(3)), Loc(0))]
+}
+
+fn rounds(n: Nat) → List<Stmt> { match n { Zero => Nil, Succ(k) => rounds(k) ++ round() } }
+
+fn long_sig() → Sig { Sig([Param(nx(), ByWrite), Param(nx(), ByWrite), Param(nat_s(), ByTake), Param(nat_s(), ByTake)], [Result(nat_s(), OFresh)]) }
+
+fn long(n: Nat) → Func { Func(long_sig(), seq(rounds(n), Ret([Loc(0), Arg(0), Arg(1)]))) }
+
+fn long_apart() → Residual { RApart(Lit(0), Lit(2), Var(3), Lit(1)) }
+
+// What round `r` (from 0) owes, then what follows.
+fn round_owes(r: Nat, rest: Owes) → Owes {
+    ODo([acc_win(Arg(0), Lit(0), Lit(2))], ODo(Nil, ODo([acc_el(Arg(0), Lit(5))], ODo(Nil, ODo([acc_el(Arg(1), Var(3))],
+        ODo([acc_el(Arg(0), Lit(0))], ODo([acc_el(Loc(3), Lit(1))], ODo(Nil, ODo(List::replicate(long_apart(), r + 1) ++ [acc_el(Arg(0), Var(3))], rest)))))))))
+}
+
+fn long_owes_from(r, n: Nat) → Owes { match n { Zero => OEnd, Succ(k) => round_owes(r, long_owes_from(r + 1, k)) } }
+
+theorem long_checked(): verdict([long(6)], 0) = Some(long_owes_from(0, 6)) { refl }
+
+// ---------------------------------------------------------------------------
+// 11. §21.5 probe 4: a loop is a function whose round ends in a `Jump`.
+//     `fn zero(w: &mut [Nat], i, n) { if i < n { w[i] := 0; zero(w, i + 1, n) } }`
+//     The write's bound is owed under the loop's guard, and the `Jump` owes
+//     the loop's precondition and its measure at the next state.
+
+fn zero_sig() → Sig { Sig([Param(nx(), ByWrite), Param(nat_s(), ByTake), Param(nat_s(), ByTake)], Nil) }
+
+fn zero_loop() → Func {
+    Func(zero_sig(), Join(TLt(Arg(1), Arg(2)),
+        seq([Lit(WNat, 0), Write(el(x(), Var(1)), Loc(0)), Lit(WNat, 1), Op(PAdd, Arg(1), Loc(0))], Jump([x(), Loc(0), Arg(2)])),
+        Ret([x()]),
+        Ret([x()])))
+}
+
+theorem zero_checked(): verdict([zero_loop()], 0) = Some(
+    OJoin(ODo(Nil, ODo([acc_el(x(), Var(1))], ODo(Nil, ODo(Nil, OJump([RPre(0, [x(), Loc(0), Arg(2)]), RMeasure(0, [x(), Loc(0), Arg(2)])]))))), OEnd, OEnd))
+{ refl }
+
+// The caller holds a view of a later window while the loop writes the
+// earlier one: `let t = &xs[k..k+m]; let w = &mut xs[0..k]; zero(w, 0, k); t[0]`.
+// The loop's parameter is `xs` partly gone, passed as its available
+// window. Locals at the end: [c, S, 0, w, t].
+fn zero_caller() → Func {
+    Func(wsig(2), seq([
+        View(win(x(), Var(1), Var(2)), Reading),
+        View(win(x(), Lit(0), Var(1)), Writing),
+        Lit(WNat, 0),
+        Call(0, [Loc(1), Loc(0), Arg(1)], 1),
+        Write(whole(Loc(2)), Loc(0)),
+        Death(whole(Loc(0))),
+        Write(win(x(), Lit(0), Var(1)), Loc(2)),
+        Death(whole(Loc(2))),
+        Read(el(Loc(3), Lit(0))),
+    ], Ret([Loc(0), x()])))
+}
+
+theorem zero_caller_checked(): verdict([zero_loop(), zero_caller()], 1) = Some(
+    ODo([acc_win(x(), Var(1), Var(2))], ODo([acc_win(x(), Lit(0), Var(1)), RApart(Var(1), Var(2), Lit(0), Var(1))], ODo(Nil,
+        ODo([RPre(0, [Loc(1), Loc(0), Arg(1)]), RMeasure(0, [Loc(1), Loc(0), Arg(1)])], ODo(Nil, ODo(Nil, ODo(Nil, ODo(Nil, ODo([acc_el(Loc(3), Lit(0))], OEnd))))))))))
+{ refl }
+
+// The control: the loop lent all of `xs` while the view of the later window
+// lives. Refused.
+fn zero_whole() → Func {
+    Func(wsig(2), seq([View(win(x(), Var(1), Var(2)), Reading), Lit(WNat, 0), Call(0, [x(), Loc(0), Arg(1)], 1), Read(el(Loc(2), Lit(0)))], Ret([Loc(0), x()])))
+}
+
+theorem zero_whole_refused(): verdict([zero_loop(), zero_whole()], 1) = None { refl }
+
+// A loop holding a view to write of one parameter and reading another:
+// `fn copy(d: &mut [Nat], s: &[Nat], i, n) { if i < n { d[i] := s[i]; copy(d, s, i + 1, n) } }`,
+// called with a window of `xs` to write and of `ys` to read.
+fn copy_sig() → Sig { Sig([Param(nx(), ByWrite), Param(nx(), ByRead), Param(nat_s(), ByTake), Param(nat_s(), ByTake)], Nil) }
+
+fn copy_loop() → Func {
+    Func(copy_sig(), Join(TLt(Arg(2), Arg(3)),
+        seq([Read(el(Arg(1), Var(2))), Write(el(x(), Var(2)), Loc(0)), Lit(WNat, 1), Op(PAdd, Arg(2), Loc(0))], Jump([x(), Arg(1), Loc(0), Arg(3)])),
+        Ret([x()]),
+        Ret([x()])))
+}
+
+theorem copy_checked(): verdict([copy_loop()], 0) = Some(
+    OJoin(ODo([acc_el(Arg(1), Var(2))], ODo([acc_el(x(), Var(2))], ODo(Nil, ODo(Nil, OJump([RPre(0, [x(), Arg(1), Loc(0), Arg(3)]), RMeasure(0, [x(), Arg(1), Loc(0), Arg(3)])]))))), OEnd, OEnd))
+{ refl }
+
+fn copy_caller_sig() → Sig { Sig([Param(nx(), ByWrite), Param(nx(), ByRead), Param(nat_s(), ByTake)], Nil) }
+
+// Locals at the end: [S, 0, s, d].
+fn copy_caller() → Func {
+    Func(copy_caller_sig(), seq([
+        View(win(x(), Lit(0), Var(2)), Writing),
+        View(win(Arg(1), Lit(0), Var(2)), Reading),
+        Lit(WNat, 0),
+        Call(0, [Loc(2), Loc(1), Loc(0), Arg(2)], 1),
+        Write(whole(Loc(3)), Loc(0)),
+        Death(whole(Loc(0))),
+        Write(win(x(), Lit(0), Var(2)), Loc(3)),
+        Death(whole(Loc(3))),
+        Death(whole(Loc(2))),
+    ], Ret([x()])))
+}
+
+theorem copy_caller_checked(): verdict([copy_loop(), copy_caller()], 1) = Some(
+    ODo([acc_win(x(), Lit(0), Var(2))], ODo([acc_win(Arg(1), Lit(0), Var(2))], ODo(Nil,
+        ODo([RPre(0, [Loc(2), Loc(1), Loc(0), Arg(2)]), RMeasure(0, [Loc(2), Loc(1), Loc(0), Arg(2)])], ODo(Nil, ODo(Nil, ODo(Nil, ODo(Nil, ODo(Nil, OEnd))))))))))
+{ refl }
+
+// A loop that does not pass its written parameter back in its place:
+// refused (its caller would be given another object's value).
+fn copy_swapped() → Func {
+    Func(Sig([Param(nx(), ByWrite), Param(nx(), ByWrite), Param(nat_s(), ByTake), Param(nat_s(), ByTake)], Nil), Join(TLt(Arg(2), Arg(3)),
+        seq([Lit(WNat, 1), Op(PAdd, Arg(2), Loc(0))], Jump([Arg(1), x(), Loc(0), Arg(3)])),
+        Ret([x(), Arg(1)]),
+        Ret([x(), Arg(1)])))
+}
+
+theorem copy_swapped_refused(): verdict([copy_swapped()], 0) = None { refl }
+
+// ---------------------------------------------------------------------------
+// 12. §21.5 probe 5: two objects, a view of one beside a write of the
+//     other, owing nothing; a write of a whole place, owing its fit.
+
+fn two_sig() → Sig { Sig([Param(nx(), ByWrite), Param(nx(), ByWrite)], [Result(nat_s(), OFresh)]) }
+
+fn two_objects() → Func {
+    Func(two_sig(), seq([View(win(Arg(0), Lit(0), Lit(2)), Reading), Lit(WNat, 5), Write(el(Arg(1), Lit(0)), Loc(0)), Read(el(Loc(1), Lit(0)))], Ret([Loc(0), Arg(0), Arg(1)])))
+}
+
+theorem two_objects_checked(): verdict([two_objects()], 0) = Some(
+    ODo([acc_win(Arg(0), Lit(0), Lit(2))], ODo(Nil, ODo([acc_el(Arg(1), Lit(0))], ODo([acc_el(Loc(1), Lit(0))], OEnd)))))
+{ refl }
+
+// `a := b`: a list written whole owes that it has `a`'s length.
+fn whole_write() → Func { Func(two_sig(), seq([Write(whole(Arg(0)), Arg(1)), Lit(WNat, 0)], Ret([Loc(0), Arg(0), Arg(1)]))) }
+
+theorem whole_write_checked(): verdict([whole_write()], 0) = Some(ODo([RFits(whole(Arg(0)), Arg(1))], ODo(Nil, OEnd))) { refl }
+
+// A window written whole owes its fit too: `a[0..2] := b`.
+fn window_write() → Func { Func(two_sig(), seq([Write(win(Arg(0), Lit(0), Lit(2)), Arg(1)), Lit(WNat, 0)], Ret([Loc(0), Arg(0), Arg(1)]))) }
+
+theorem window_write_checked(): verdict([window_write()], 0) = Some(ODo([acc_win(Arg(0), Lit(0), Lit(2)), RFits(win(Arg(0), Lit(0), Lit(2)), Arg(1))], ODo(Nil, OEnd))) { refl }
+
+// A fresh object of `n` copies of a word, written and read: its own object,
+// apart from the argument's view.
+fn fresh_use() → Func {
+    Func(wsig(1), seq([View(win(x(), Lit(0), Lit(1)), Reading), Lit(WNat, 0), Fresh(nx(), Arg(1), Loc(0)), Lit(WNat, 3), Write(el(Loc(1), Lit(0)), Loc(0)),
+        Read(el(Loc(1), Lit(0))), Death(whole(Loc(2))), Read(el(Loc(4), Lit(0)))], Ret([Loc(0), x()])))
+}
+
+theorem fresh_use_checked(): verdict([fresh_use()], 0) = Some(
+    ODo([acc_win(x(), Lit(0), Lit(1))], ODo(Nil, ODo(Nil, ODo(Nil, ODo([acc_el(Loc(1), Lit(0))], ODo([acc_el(Loc(1), Lit(0))], ODo(Nil, ODo([acc_el(Loc(4), Lit(0))], OEnd)))))))))
+{ refl }
+
+// ---------------------------------------------------------------------------
+// 13. The refusals that matter
+
+// A view outliving its owner's death.
+fn outlived() → Func {
+    Func(wsig(1), seq([Lit(WNat, 0), Fresh(nx(), Arg(1), Loc(0)), View(win(Loc(0), Lit(0), Lit(1)), Reading), Death(whole(Loc(1))), Read(el(Loc(0), Lit(0)))], Ret([Loc(0), x()])))
+}
+
+theorem outlived_refused(): verdict([outlived()], 0) = None { refl }
+
+// The same with the view dead first: accepted.
+fn outlived_not() → Func {
+    Func(wsig(1), seq([Lit(WNat, 0), Fresh(nx(), Arg(1), Loc(0)), View(win(Loc(0), Lit(0), Lit(1)), Reading), Read(el(Loc(0), Lit(0))), Death(whole(Loc(1))), Death(whole(Loc(2)))], Ret([Loc(0), x()])))
+}
+
+theorem outlived_not_checked(): verdict([outlived_not()], 0) = Some(ODo(Nil, ODo(Nil, ODo([acc_win(Loc(0), Lit(0), Lit(1))], ODo([acc_el(Loc(0), Lit(0))], ODo(Nil, ODo(Nil, OEnd))))))) { refl }
+
+fn join_sig() → Sig { Sig([Param(nx(), ByWrite), Param(nx(), ByWrite), Param(nat_s(), ByTake)], [Result(nat_s(), OFresh)]) }
+
+// A view to write chosen by a join over two roots, then written through.
+fn two_roots() → Func {
+    Func(join_sig(), Join(TLe(Arg(2), Arg(2)),
+        seq([View(win(Arg(0), Lit(0), Lit(1)), Writing)], Yield([Loc(0)])),
+        seq([View(win(Arg(1), Lit(0), Lit(1)), Writing)], Yield([Loc(0)])),
+        seq([Lit(WNat, 5), Write(el(Loc(1), Lit(0)), Loc(0)), Death(whole(Loc(1)))], Ret([Loc(0), Arg(0), Arg(1)]))))
+}
+
+theorem two_roots_refused(): verdict([two_roots()], 0) = None { refl }
+
+theorem two_roots_owned(): refusal_in([two_roots()], 0) = Some(WOwn) { refl }
+
+// One root, two windows: refused as well (no write-back place names the
+// window the test chose).
+fn two_windows() → Func {
+    Func(join_sig(), Join(TLe(Arg(2), Arg(2)),
+        seq([View(win(Arg(0), Lit(0), Lit(1)), Writing)], Yield([Loc(0)])),
+        seq([View(win(Arg(0), Lit(1), Lit(1)), Writing)], Yield([Loc(0)])),
+        seq([Death(whole(Loc(0))), Lit(WNat, 5)], Ret([Loc(0), Arg(0), Arg(1)]))))
+}
+
+theorem two_windows_refused(): verdict([two_windows()], 0) = None { refl }
+
+theorem two_windows_owned(): refusal_in([two_windows()], 0) = Some(WOwn) { refl }
+
+// One root, one window: the view to write survives the join, written
+// through and back after it.
+fn one_window() → Func {
+    Func(join_sig(), Join(TLe(Arg(2), Arg(2)),
+        seq([View(win(Arg(0), Lit(0), Lit(1)), Writing)], Yield([Loc(0)])),
+        seq([View(win(Arg(0), Lit(0), Lit(1)), Writing)], Yield([Loc(0)])),
+        seq([Lit(WNat, 5), Write(el(Loc(1), Lit(0)), Loc(0)), Write(win(Arg(0), Lit(0), Lit(1)), Loc(1)), Death(whole(Loc(1)))], Ret([Loc(0), Arg(0), Arg(1)]))))
+}
+
+theorem one_window_checked(): verdict([one_window()], 0) = Some(
+    OJoin(ODo([acc_win(Arg(0), Lit(0), Lit(1))], OEnd), ODo([acc_win(Arg(0), Lit(0), Lit(1))], OEnd), ODo(Nil, ODo([acc_el(Loc(1), Lit(0))], ODo(Nil, ODo(Nil, OEnd))))))
+{ refl }
+
+// Each refusal above is the licence's, not the codes': the pass says why it
+// refused (`Func::refusal`), and every one of them is refused for ownership
+// but the ill-coded `uneven`.
+theorem refusals_owned():
+    List::append<Option<Why>>([refusal_in([fill(), unbacked()], 1), refusal_in([fill(), unreturned()], 1), refusal_in([first_wrong()], 0), refusal_in([first(), early()], 1), refusal_in([liar()], 0),
+        refusal_in([peek()], 0), refusal_in([clobber()], 0), refusal_in([stale()], 0), refusal_in([lend_read()], 0), refusal_in([unsynced()], 0), refusal_in([after_join()], 0),
+        refusal_in([unyielded()], 0), refusal_in([coarse_held()], 0), refusal_in([found_self()], 0), refusal_in([stale_name()], 0), refusal_in([take_frozen()], 0),
+        refusal_in([inside()], 0), refusal_in([versions_bad()], 0), refusal_in([zero_loop(), zero_whole()], 1), refusal_in([copy_swapped()], 0), refusal_in([outlived()], 0)], Nil)
+    = List::replicate(Some(WOwn), 21)
+{ refl }
+
+theorem uneven_ill_coded(): refusal_in([uneven()], 0) = Some(WCodes) { refl }
+
+// ---------------------------------------------------------------------------
+// 14. The pinned functions of `body_tests.hthr`, with their signatures:
+//     the run's probes (run_tests.hthr) are of these bodies.
+
+fn x_of(r: Var, i: Atom) → Place { Place(r, [SElem(i), SField(0)]) }
+
+fn y_of(r: Var, i: Atom) → Place { Place(r, [SElem(i), SField(1)]) }
+
+// Callee 0 is a list's length, a primitive.
+fn len_sig() → Sig { Sig([Param(pts_s(), ByRead)], [Result(nat_s(), OFresh)]) }
+
+fn len_fn() → Func { Func(len_sig(), Ret(Nil)) }
+
+fn pts_read(n: Nat) → Sig { Sig(Cons(Param(pts_s(), ByRead), words(n)), [Result(nat_s(), OFresh)]) }
+
+// `ps[i].x`: the element's bound, at the prefix that ends in it.
+fn get_x() → Func { Func(pts_read(1), seq([Read(x_of(Arg(0), Var(1)))], Ret([Loc(0)]))) }
+
+theorem get_x_checked(): verdict([len_fn(), get_x()], 1) = Some(ODo([RAccess(Place(Arg(0), [SElem(Var(1))]))], OEnd)) { refl }
+
+// `ps[i].x := v`.
+fn set_x() → Func { Func(Sig([Param(pts_s(), ByWrite), Param(nat_s(), ByTake), Param(nat_s(), ByTake)], Nil), seq([Write(x_of(Arg(0), Var(1)), Arg(2))], Ret([Arg(0)]))) }
+
+theorem set_x_checked(): verdict([len_fn(), set_x()], 1) = Some(ODo([RAccess(Place(Arg(0), [SElem(Var(1))]))], OEnd)) { refl }
+
+// `if h: i < ps.len() { ps[i].x } else { 0 }`: the read under the test.
+fn guarded() → Func {
+    Func(pts_read(1), seq([Call(0, [Arg(0)], 1)], Join(TLt(Arg(1), Loc(0)), seq([Read(x_of(Arg(0), Var(1)))], Yield([Loc(0)])), seq([Lit(WNat, 0)], Yield([Loc(0)])), Ret([Loc(0)]))))
+}
+
+theorem guarded_checked(): verdict([len_fn(), guarded()], 1) = Some(
+    ODo([RPre(0, [Arg(0)]), RMeasure(0, [Arg(0)])], OJoin(ODo([RAccess(Place(Arg(0), [SElem(Var(1))]))], OEnd), ODo(Nil, OEnd), OEnd)))
+{ refl }
+
+// A join assigning two variables, one an object an arm writes, then a use
+// of both (§21.5 probe 3): `ps` taken, written in one arm, yielded by both.
+fn join_two() → Func {
+    Func(Sig([Param(pts_s(), ByTake), Param(nat_s(), ByTake), Param(nat_s(), ByTake)], [Result(nat_s(), OFresh)]), Join(TLt(Arg(1), Arg(2)),
+        seq([Write(x_of(Arg(0), Var(1)), Arg(2)), Lit(WNat, 1), Op(PAdd, Arg(2), Loc(0))], Yield([Arg(0), Loc(0)])),
+        seq([Lit(WNat, 0)], Yield([Arg(0), Loc(0)])),
+        seq([Read(x_of(Loc(1), Var(3))), Op(PAdd, Loc(0), Loc(1))], Ret([Loc(0)]))))
+}
+
+theorem join_two_checked(): verdict([len_fn(), join_two()], 1) = Some(
+    OJoin(ODo([RAccess(Place(Arg(0), [SElem(Var(1))]))], ODo(Nil, ODo(Nil, OEnd))), ODo(Nil, OEnd), ODo([RAccess(Place(Loc(1), [SElem(Var(3))]))], ODo(Nil, OEnd))))
+{ refl }
+
+// After the join `ps` itself is gone: the output holds the object.
+fn join_two_stale() → Func {
+    Func(Sig([Param(pts_s(), ByTake), Param(nat_s(), ByTake), Param(nat_s(), ByTake)], [Result(nat_s(), OFresh)]), Join(TLt(Arg(1), Arg(2)),
+        seq([Write(x_of(Arg(0), Var(1)), Arg(2)), Lit(WNat, 1), Op(PAdd, Arg(2), Loc(0))], Yield([Arg(0), Loc(0)])),
+        seq([Lit(WNat, 0)], Yield([Arg(0), Loc(0)])),
+        seq([Read(x_of(Arg(0), Var(3))), Op(PAdd, Loc(0), Loc(1))], Ret([Loc(0)]))))
+}
+
+theorem join_two_stale_refused(): verdict([len_fn(), join_two_stale()], 1) = None { refl }
+
+// A join with an inner return: what follows is checked once.
+fn early_ret() → Func {
+    Func(Sig([Param(nat_s(), ByTake), Param(nat_s(), ByTake), Param(nat_s(), ByTake)], [Result(nat_s(), OFresh)]), Join(TLt(Arg(0), Arg(1)),
+        Join(TLt(Arg(1), Arg(2)), seq([Lit(WNat, 0)], Ret([Loc(0)])), Yield(Nil), seq([Lit(WNat, 1), Op(PAdd, Arg(0), Loc(0))], Yield([Loc(0)]))),
+        seq([Lit(WNat, 2)], Yield([Loc(0)])),
+        seq([Op(PAdd, Loc(0), Arg(1))], Ret([Loc(0)]))))
+}
+
+theorem early_ret_checked(): verdict([early_ret()], 0) = Some(
+    OJoin(OJoin(ODo(Nil, OEnd), OEnd, ODo(Nil, ODo(Nil, OEnd))), ODo(Nil, OEnd), ODo(Nil, OEnd)))
+{ refl }
+
+// The `while` loop's round: `if 1 <= i { drain(i - 1) } else { i }`.
+fn drain() → Func {
+    Func(Sig([Param(nat_s(), ByTake)], [Result(nat_s(), OFresh)]), seq([Lit(WNat, 1)], Join(TLe(Loc(0), Arg(0)), seq([Op(PSub, Arg(0), Loc(0))], Jump([Loc(0)])), Ret([Arg(0)]), Ret([Arg(0)]))))
+}
+
+theorem drain_checked(): verdict([drain()], 0) = Some(ODo(Nil, OJoin(ODo(Nil, OJump([RPre(0, [Loc(0)]), RMeasure(0, [Loc(0)])])), OEnd, OEnd))) { refl }
+
+// ---------------------------------------------------------------------------
+// 15. Primitives (§15.4's "level 2's primitives"): a list's length, a world
+//     entry with no body that only reads and answers plain values.
+
+fn prim0() → Nat → Bool { λ g => g.same(0) }
+
+theorem len_prim_checked(): verdict_in([len_fn(), guarded()], prim0(), 0) = Some(OEnd) { refl }
+
+theorem guarded_prim_checked(): verdict_in([len_fn(), guarded()], prim0(), 1) = verdict([len_fn(), guarded()], 1) { refl }
+
+// A primitive that writes its parameter, or answers a view: refused, and
+// so is a call of one.
+fn wprim() → Func { Func(Sig([Param(pts_s(), ByWrite)], Nil), Ret(Nil)) }
+
+theorem wprim_refused(): verdict_in([wprim()], prim0(), 0) = None { refl }
+
+fn calls_wprim() → Func { Func(Sig([Param(pts_s(), ByWrite)], Nil), seq([Call(0, [Arg(0)], 1), Write(whole(Arg(0)), Loc(0)), Death(whole(Loc(0)))], Ret([Arg(0)]))) }
+
+theorem calls_wprim_refused(): verdict_in([wprim(), calls_wprim()], prim0(), 1) = None { refl }
+
+theorem calls_wprim_bodied(): verdict([wprim(), calls_wprim()], 1).is_some() = True { refl }
+
+// ---------------------------------------------------------------------------
+// 16. `RMeasure` at a call outside any recursion costs nothing: a
+//     generator gives a function that is not in a recursion the need one
+//     more than the largest of its call sites' callee needs at the values
+//     passed, so the residual holds by that definition. `both` calls
+//     `pick` (need 1) twice; its need is 2.
+
+fn pick_pre(ds: List<Dyn(tys())>) → Type { ∥Dyn::index(tys(), ds.nth(1).unwrap_or(Dyn::none(tys()))) < Dyn::len(tys(), strs(), ds.nth(0).unwrap_or(Dyn::none(tys())))∥ }
+
+fn both_ctx(xs: List<Nat>, i, j: Nat) → Ctx(tys()) {
+    Ctx(strs(), λ _ _ => Nil, 1, λ g ds => match g { Zero => pick_pre(ds), Succ(_) => True }, λ g _ => match g { Zero => 1, Succ(_) => 2 }, [Dyn(nx(), xs), Dyn(nat_s(), i), Dyn(nat_s(), j)])
+}
+
+fn both_owes() → Owes { ODo([RPre(0, [x(), Arg(1)]), RMeasure(0, [x(), Arg(1)])], ODo([RPre(0, [x(), Arg(2)]), RMeasure(0, [x(), Arg(2)])], OEnd)) }
+
+// Each call's precondition is the source's own hypothesis, by conversion;
+// each measure is `1 < 2`.
+theorem both_due(xs: List<Nat>, i, j: Nat, hi: ∥i < xs.len()∥, hj: ∥j < xs.len()∥): both_owes().Due(tys(), both_ctx(xs, i, j), both()) {
+    let below: (1 < 2) = omega();
+    ⟨hi, ⟨below, ⟨hj, ⟨below, trivial⟩⟩⟩⟩
+}
+
+// ---------------------------------------------------------------------------
+// 17. The write-back is eager (§15.2): after a view to write changes, the
+//     next statements are its write-backs (and deaths of views already
+//     written back). A read of the owner beside the loan before the
+//     write-back is refused; after it, accepted.
+
+fn between() → Func {
+    Func(wsig(0), seq([View(win(x(), Lit(0), Lit(2)), Writing), Lit(WNat, 7), Write(el(Loc(1), Lit(0)), Loc(0)), Read(el(x(), Lit(5))), Write(win(x(), Lit(0), Lit(2)), Loc(2)),
+        Death(whole(Loc(3)))], Ret([Loc(1), x()])))
+}
+
+theorem between_refused(): verdict([between()], 0) = None { refl }
+
+fn between_after() → Func {
+    Func(wsig(0), seq([View(win(x(), Lit(0), Lit(2)), Writing), Lit(WNat, 7), Write(el(Loc(1), Lit(0)), Loc(0)), Write(win(x(), Lit(0), Lit(2)), Loc(1)), Read(el(x(), Lit(5))),
+        Death(whole(Loc(2)))], Ret([Loc(0), x()])))
+}
+
+theorem between_after_checked(): verdict([between_after()], 0).is_some() = True { refl }

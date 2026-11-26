@@ -79,15 +79,15 @@ theorem index_u64(w: u64): Dyn::index(tys(), Dyn(u64_s(), w)) = w.toNat() { refl
 // ---------------------------------------------------------------------------
 // The records' laws, by hand: what a derived instance proves
 
-theorem Point::fx_laws(): FieldLaws(tys(), Point, Point::fx()) { FieldLaws(λ v x => refl, λ v x y => refl) }
+theorem Point::fx_laws(): FieldLaws(tys(), Point, Point::fx()) { FieldLaws(λ v x => refl, λ v x y => refl, λ v => refl) }
 
-theorem Point::fy_laws(): FieldLaws(tys(), Point, Point::fy()) { FieldLaws(λ v x => refl, λ v x y => refl) }
+theorem Point::fy_laws(): FieldLaws(tys(), Point, Point::fy()) { FieldLaws(λ v x => refl, λ v x y => refl, λ v => refl) }
 
 theorem Point::fx_fy(): FieldsApart(tys(), Point, Point::fx(), Point::fy()) { FieldsApart(λ v y => refl, λ v x => refl, λ v x y => refl) }
 
-theorem Tagged::ftag_laws(): FieldLaws(tys(), Tagged, Tagged::ftag()) { FieldLaws(λ v x => refl, λ v x y => refl) }
+theorem Tagged::ftag_laws(): FieldLaws(tys(), Tagged, Tagged::ftag()) { FieldLaws(λ v x => refl, λ v x y => refl, λ v => refl) }
 
-theorem Tagged::fat_laws(): FieldLaws(tys(), Tagged, Tagged::fat()) { FieldLaws(λ v x => refl, λ v x y => refl) }
+theorem Tagged::fat_laws(): FieldLaws(tys(), Tagged, Tagged::fat()) { FieldLaws(λ v x => refl, λ v x y => refl, λ v => refl) }
 
 theorem Tagged::ftag_fat(): FieldsApart(tys(), Tagged, Tagged::ftag(), Tagged::fat()) { FieldsApart(λ v y => refl, λ v x => refl, λ v x y => refl) }
 

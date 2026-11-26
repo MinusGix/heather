@@ -3428,3 +3428,362 @@ Kernel steps, width one, a fresh cache per run, read with `scripts/timings`.
   of a trie or tree is a comparison, a halving and a subtraction on
   numerals, constant-time but tens of kernel steps each, where a list cell
   is a few. The full rows are on `ownership-long-lived-local`.
+
+## 23. The checker as built (2026-11-25, in progress)
+
+`issues/ownership-checker.md` builds the run, the checker and `check_sound`
+over §22's interfaces, for objects whose nested parts are plain (no holes).
+This section grows with that issue: items 1 and 2 (definitions and
+evaluation) are here; the proofs (items 3 and 4) follow. Where it says
+"proposed", the coordinating session has not yet decided.
+
+### 23.1 What each module holds
+
+| Module | Holds |
+|---|---|
+| `lib/lang/ownership/run.hthr` | The run: a variable as a `Cell` (a `Value` and whether its frame owns the block it refers to), the run's environment with the meaning's shape (`REnv`), reads and writes at selections that fit (`Sel::get`, `Sel::put`), statements, bodies in continuation form, `Func::run`, `Run::calls` (a callee at one less fuel, a primitive natively), `Run::of` |
+| `lib/lang/ownership/checker.hthr` | The checker: a role per variable, the table of live views, the licence, the statements, calls, leaves, the join's meet, `check: Checker(tys)` |
+
+Probes: `lib/_tests/lang/ownership/{run,checker}_tests.hthr`.
+
+### 23.2 The run
+
+- **A body read over a heap.** An object is in a block; a variable holds a
+  plain value or a reference (`Value`), and its frame owns the block where
+  it took or made it (`Cell.own`). A read, a word primitive, a literal and
+  a take out of a part bind a plain copy. A view of a referring variable
+  binds its reference narrowed (`Ref::narrow`), of a plain one a copy. A take
+  of a whole variable passes its cell on. `fresh` makes the next block. A
+  write stores where the place is: in the block the root refers to, or in a
+  plain root's own value. A death of an owner kills its block; any other is
+  nothing. So the eager write-back the reflector places after each change
+  of a view stores, in the run, what the block already holds.
+- **Calls** run the callee's body at one less fuel (`Run::calls`): a taken
+  argument the caller owns is passed on, unless it is a word; a word and one
+  it does not own are copied; a read or written argument is passed as it
+  is. A **primitive** (a callee the program gives no body, such as a list's
+  length, which `body_tests.hthr` reaches as a callee) reads its arguments
+  through the heap and answers the world's results, plain. A `Jump` is a
+  call of the function itself. Out of fuel a call is `Going`.
+- **A join** runs the arm its test picks; a `Yield` continues after the join
+  with the outputs pushed on the environment from before it, as the
+  meaning's does. The run needs no convoy and no join point: both join forms
+  run alike.
+- **Stuck** is a read of a dead or dangling block, and any selection that
+  does not fit what it selects in (an element past the end, a field the
+  record lacks). The meaning's reads are total; the run's are not, which is
+  where the accessors' preconditions (`RAccess`) are needed at this level.
+
+The probes: each pinned function of `body_tests.hthr` at closed arguments,
+its objects in blocks, answers what its meaning answers (both by
+evaluation); a write is a store in the block; the loop is done from fuel
+four (the outer call and three jumps) and going below; a read past the end,
+a dangling and a dead block, a write through a view whose owner died, and a
+field the record lacks are stuck.
+
+### 23.3 The checker
+
+One forward pass, reading the signatures only, after the code check
+(`Func::coded`, folded in: `check` refuses what it refuses).
+
+- **The state mirrors the meaning's environment**: an entry per variable,
+  the arguments by position and the locals newest first, so a variable is
+  reached at the meaning's cost. A variable is plain (the run holds a
+  plain copy), holds an object with an access (an argument as its mode
+  lends it, a fresh object, a taken one), is a view, or is gone.
+- **A table of live views**, each naming its variable's level, its object,
+  its region there (steps with atoms at levels, so a stored region keeps its
+  meaning as locals are pushed), its mode, its parent (the variable it was
+  opened on) and its place in the parent, and for a view to write whether it
+  has been written back since it last changed.
+- **The licence** (§15.3): an access of a variable at a place lands at the
+  variable's region followed by the place's steps. A holder's access meets
+  every live view of its object; a view's meets only the views opened
+  through it, since every other live view was found apart from it when the
+  later of the two was opened (a live view to write is apart from every
+  other live view). A read meets only views to write. Apart is
+  `Steps::apart`: closed, decided; open, `RApart` naming its two sides, its
+  atoms read back at the site.
+- **The write-back** `Write(Place(p, at), w)` of a view to write onto its own
+  parent and place is licensed as it is (the run stores what is there),
+  marks `w` written back and changes `p`. A view to write dies only written
+  back; a view dies only after the views opened through it; an owner dies
+  or is taken only with no view of its object live. A word that a live
+  region reads is not written.
+- **Residuals**: an accessor's precondition at every element or window
+  prefix of a place read, written, taken or viewed (`RAccess`); `RFits` at a
+  write whose place is a sequence; `RPre` and `RMeasure` at every call and
+  `Jump`; `RApart` from the licence.
+- **Calls** read what they lend to read, write what they lend to write, and
+  move an owned non-word object they take (anything else taken is a copy).
+  Arguments lent where one may change are apart where one is a view of the
+  other or holds the object. Results: a fresh object; a taken object back;
+  a read view of a parameter at the steps the signature names. Then each
+  written parameter's value after, bound as a view to write of the argument
+  lent (its whole, not written back): the caller writes it back to that
+  argument, and the argument back to its own place.
+- **Leaves.** A `Ret` reads its variables owing nothing (a `Ret` owes
+  nothing in the verdict's tree), answers each result as its origin says,
+  and gives back each written parameter's object, held and written back. A
+  `Jump` passes each written or returned parameter back in its own place.
+- **The join** is the meet (§15.3). What each arm yields becomes the
+  outputs. A variable from before the join that an arm wrote or yielded is
+  gone after it (the meaning returns to its value before the join, the heap
+  does not); one the arms leave alike stays; any other is gone. A read view
+  chosen by the join keeps every arm's entries (its region the union); a
+  view to write survives only where both arms hold it on one parent at one
+  place. Every view an arm holds that the join does not keep is dropped, and
+  a dropped view to write must be written back.
+
+### 23.4 What changed in the interfaces
+
+Each agreed by the coordinating session after items 1 and 2.
+
+- **A call binds its results, then its written parameters.**
+  `Stmt::code_step` bound the results only, so after a call lending a view
+  to write its value after could not be bound or written back. It now
+  binds `ret_codes()`, §22.2's `Ret` convention read at the call.
+- **Primitives are §15.4's "level 2's primitives", and there is no other
+  kind.** A primitive is a world entry the program gives no body
+  (`Prog.prim`): every parameter read or taken plain, every result fresh and
+  plain (`Sig::reads_only`). Its run is, by definition, the world's function
+  at its arguments read through the heap (`Run::prim`), so it has no run of
+  its own to prove sound. The checker licenses a call of one as a read of
+  each argument and refuses a primitive, or a call of one, that is not
+  read-only. A list's length is the first (`body_tests.hthr` reaches it as
+  a callee).
+- **Passed by value is copied for plain data**, by the sharing class
+  (`Shape::plain`: a word, or a name whose class is `Plain`), in the run
+  (`Cell::pass`) and the checker (a taken plain parameter is a plain
+  variable; a taken non-plain owned one moves).
+- **The program's run is the defined one** (`Prog::run` is `Run::of`); the
+  field is gone.
+- **`SafeAt`** compares the run with the world `p.w`, and `CheckSound` takes
+  each function's pin pointwise as a premise (`Prog::Pinned`, §21.3). Both
+  hold under the function's own precondition. Its inputs are lendable
+  (`Lendable`, named once, the design's "a function requires only that what
+  it may change is not aliased"): each referring argument's block is live
+  and has no holes and its selections fit; an argument taken at a plain code
+  is plain; an argument the callee may change is apart from every other.
+  The caller's side of `Lendable` is to be a lemma the licence gives at
+  each call (item 3), not a premise re-proved per call.
+  `Heap::Frame` covers the blocks that existed before. `ReadAll` reads the
+  whole answer, results then written values. `Value::Written` reads a
+  referring written argument's block after; a plain one is in the written
+  slots. `Value::ViewIs`: a fresh result is plain or a block the call made
+  (none below the heap's length before it, so no argument reaches it; the
+  checker answers `OFresh` only with an object made in the call, never a
+  taken argument, which is `OParam`); an `OParam(i)` result is the argument
+  itself.
+- **A returned view's place reads the call's words, the arguments' and then
+  the results'** (§15.2: a view travels with its slot). In an `OView`'s
+  steps an atom past the parameters' count reads a result; the callee's
+  check requires that result to be a plain word, and the caller binds it
+  among the call's results, so its write-back place is static in its own
+  words. `call_check_tests`' `found` is accepted that way (`found_checked`,
+  `beside_found_checked`); no region coarser than the view is added.
+- **The sequences' laws**: `SeqLaws` and `WinLaws` have `pre_inside` (what
+  the accessor asks gives the run's fit) and `inside_len` (the fit reads
+  only the length, so a write that keeps lengths keeps every fit). A list's
+  `Pre` at a word index is `False`, as decision B makes an index of another
+  kind unfit (a source indexing by `i.toNat()` binds the number with a word
+  primitive). `[A; n]` reads any word through `toNat` in both, and `Bytes(n)`
+  a `u64` in both.
+- **`RMeasure` at every call.** Fuel is depth, so `Done` from `need` composes
+  through every call, and a signature does not name its recursion. Within
+  a recursion the source's `decreases` proof discharges it. Outside one a
+  generator writes the caller's `need` as one more than the largest of its
+  call sites' callee needs at the values passed, and the residual holds by
+  that definition (`both_due`: two calls of `pick`, need 1, from `both`,
+  need 2).
+- **A view to write survives a join only where both arms hold it at one
+  parent and one place**; otherwise it is written back before the join. A
+  write-back's place is static steps, so no place spells "the convoy of the
+  arms' steps" (`two_windows_refused`; §21.2's allowance is withdrawn).
+
+### 23.5 The experiments' programs
+
+Restated in `checker_tests.hthr`, each accepted one with its verdict by
+`refl`, each refusal refused and shown to pass the code check
+(`refusals_coded`). In the real body the experiments' versions
+(`let x1 = x.set(i, v)`) are writes in place, a take needing its place
+whole; a lending call is followed by the two write-backs; every arm that
+writes a variable yields it. Not restated: `call_check_tests` §9 (a
+collection of stored write references and the erased owner, next round's
+with stored views), and the first experiment's plan probes (two parameters
+on one buffer, a clone into its source's buffer), which have no
+counterpart: there is no plan, and arguments a callee may change are apart
+by `SafeAt`'s inputs.
+
+### 23.6 What was measured
+
+Kernel steps, a fresh copy of a library-only cache per run, read with
+`scripts/timings`. Each row is a generated body of `N` rounds over two
+objects, its verdict checked to its residual count (which forces every
+residual):
+
+| N | straight loans (11 statements a round) | joins in sequence | calls lending a view to write |
+|---|---|---|---|
+| 8 | 131k | 44.5k | 104k |
+| 16 | 264k | 86.7k | 206k |
+| 32 | 542k | 173k | 414k |
+| 48 | 836k | 262k | 627k |
+
+All three are linear. Past about a million steps a single declaration
+meets the kernel's budget, and the count it reports is no longer the
+term's (a plain list sum shows the same at the same count), so a verdict
+larger than about five hundred statements is checked in parts: the pass
+over a body's prefix is a function of the state it starts in
+(`Body::verdict` takes `CSt`), so a generator states, as one declaration,
+the state a prefix ends in, and as the next, the verdict of the rest from
+that state. Not a defect.
+
+The dearest definition to elaborate is `CSt::out_role` (half a million
+steps): a match on the two arms' roles, four by four, each arm an
+`Option` built by `then` over a nested match on view entries, whose
+motive the elaborator spells per arm. Not optimised. Of the
+probes the dearest is `long_checked` (six rounds, 21 apartness residuals,
+102k steps).
+
+### 23.7 `check_sound`, in progress
+
+**Three tightenings of the checker**, each so the invariant needs no case
+the probes do not use:
+
+- **The write-back is eager, as §15.2 says**: after a statement that
+  changes a view to write, the only statements until it is written back are
+  write-backs and deaths of views already written back; a join, a `Yield`,
+  a `Ret` and a `Jump` are refused while one is pending (`CSt::pending`,
+  `CSt::writes_back`; probes `between_refused`, `between_after_checked`).
+  This is §15.2's rule made a refusal, `between_refused` its probe. So
+  between statements at most the chain of a just-changed view is stale, and
+  the invariant's patch is only along that chain.
+- **Atoms read plain variables only** (`CSt::atoms_ok`): an index cannot move
+  under a region, the variable being written refused while a region reads
+  it and a plain variable's run value being its meaning's.
+- **A fresh result of a plain code is a plain value**, on both sides
+  (`Value::ViewIs`, the caller's role): a word a call answers is a plain
+  variable, which an atom may read.
+
+**The invariant** (`sound.hthr`'s `Inv`, stated once, with `Sim` as its
+first field): between the checker's state, the meaning's environment and
+the run's machine, for a function entered on heap `h0` and lent the blocks
+`lent`:
+
+- `sim`: each live variable's cell agrees with its meaning as its role says
+  (a plain variable holds the value; a holder or a view reads it through
+  the heap, its block live, its selections fitting; a gone one owes
+  nothing), with the environments' lengths and each variable's code;
+  against the meaning *with the pending chain written up*
+  (`CSt::patched`, `CSt::up`): while a view to write has changed and is not
+  yet written back, the heap already holds its value in each ancestor,
+  which the meaning holds only after each write-back. Nothing pending, it
+  is `Sim` itself (`Inv::sim_now`).
+- `root`, `refs`: each object has one run reference, and a live variable's
+  reference is its object's (a holder) or its object's narrowed by one of
+  its entries' region at the words (a view; `CSt::RefOk`). This is what
+  turns the licence's apartness of regions of one object into apartness of
+  the run's references.
+- `apart`: references to different objects, one of which something live
+  may change through, are apart (`Lendable`'s clause at entry; a fresh
+  block after).
+- `owned`, `frame`, `grows`: every live reference is to a block lent or
+  made here, so the blocks not lent are as they were (`Heap::Frame`).
+
+**Entry** (`Inv::start`): the invariant at a function's start from
+`SafeAt`'s premises: `ReadAll` and `Lendable` give each argument's cell its
+role's agreement and reference, `Lendable.apart` the cross-object clause,
+and `Dyn::Coded` the codes.
+
+**`Dyn::Coded`** (added 2026-11-26): the meaning's arguments have the
+parameters' codes, a premise of `SafeAt` and of `CheckSound`'s `Due`. Without
+it `CheckSound` is false: `get_x(p: Point, read) { p.x }` (a field step owes
+nothing) is checked owing nothing, and at the word `5` for `p` every other
+premise holds (it reads as itself, there is no precondition, a plain value
+is lendable) while the run is stuck reading a field of a word, at fuel 0,
+where `Safety` assumes nothing of callees. A junk meaning for an ill-coded
+input is sound only if inputs are coded, and codes come from outside only
+here. The call stage discharges it from the code check (`Stmt::code_step`'s
+`Call` case). Probes: `pick_args_coded`, `words_not_coded`.
+
+**Built** (`sound.hthr`, probes `sound_tests.hthr`): reads, writes and fits
+along appended selection paths; a place's steps as selections at the words;
+levels and variables, and a push keeping every earlier level; `Sim::push`,
+the one lemma every binding statement uses; `Value::get_more`; and
+`Place::fit_from`: a place whose codes have parts and whose accessors'
+residuals hold fits in the run, from `pre_inside`. A read's verdict split
+once into its parts (`ReadInv`); the stage lemmas for `Lit` and `Op`
+(`Stepped`: the run continues, the invariant holds after); and the words:
+an atom the checker reads at plain levels reads one index in the run and in
+the meaning (`Sim::atom_ix`), so a place's steps make one list of
+selections in both (`Sim::steps_same`).
+
+**Added to the interfaces** (decided 2026-11-26): writing back what was
+read changes nothing, `put_back`, a law of the model rather than of this
+proof: `FieldLaws` (`f.set(v, f.get(v)) = v`), `SeqLaws` and `WinLaws` (at
+every index, inside or out: outside it is `still`), `PartLaws`, and
+`StepModelLaws` (`over(a, λ _ => at(a, s), s) = s`, with no fit hypothesis),
+derived for `Dyn::model` by `Dyn::in_put_back` and proved for the list,
+`[A; n]`, `Bytes(n)` and list-window instances. The write-back stage needs
+it: the run stores, at the view's place, what the block holds there.
+`Lendable` carries the arity (`arity`: as many arguments as parameters),
+since the checker's levels assume it.
+
+**What remains for straight-line bodies and calls** (the invariant and
+its entry are proved; `Lit`, `Op` and `Read` are proved against `Sim`): the
+stage lemmas restated against `Inv` (the three above lift through
+`Inv::sim_now`, nothing being pending when they run), then `Take`, `View`,
+`Fresh`, `Write` (through a holder,
+through a view, a write-back), `Death`, `Call` (each argument's lending,
+`Lendable` at the callee from the licence, the callee's `SafeAt` at less
+fuel, results and written slots) and `Ret` (`ReadAll`, `Written`, `Frame`,
+`Views`); then `SafeAt` for a body with no join and no `Jump`.
+
+### 23.8 `check_sound` continued: the interfaces tightened (2026-11-26)
+
+Decided by the coordinating session after the first half of item 3, and
+found while designing the invariant for every stage.
+
+- **A block lent only to read is unchanged by the call.** `Heap::Frame` in
+  `SafeAt` exempts only the blocks lent to a parameter that may change them
+  (`Value::lends` takes the parameters). The caller's invariant after a call
+  of a reader needs it: its other variables' reads of a read-lent block stand
+  on the frame, not on the callee's word.
+- **An object taken is a whole block no other argument refers to**
+  (`Lendable.whole`). The callee owns it and its death frees the block, so a
+  taken argument sharing a block with another one made `CheckSound` false:
+  `f(a: Buf take, b: Buf read) { Death(a); Read(b) }` is checked, and at two
+  apart fields of one block the run kills the block and the read is stuck.
+  The caller's side is its own invariant (`own`, below).
+- **The code conditions are in the checker's pass.** `Func::coded`, its
+  `CEnv` walk and `CheckRefusesIllCoded` are gone from `verdict.hthr`; each
+  statement, test, leaf and join is refused first if its codes are wrong
+  (`Stmt::code_ok`, `Test::code_ok`, the leaves' and arms' code lists), from
+  the codes the checker's state records, so a stage reads its codes off the
+  verdict's inversion. A refusal says whether it was the codes or ownership
+  (`Why`, `Func::refusal`): the code-refusal probes answer `Some(WCodes)`
+  (`interfaces_tests`), and the experiments' refused programs `Some(WOwn)`
+  (`refusals_owned`, which replaces `refusals_coded`).
+- **A plain variable a live region reads does not die** (a checker
+  refusal): the invariant needs every word a region reads to stay a plain
+  variable.
+
+**The invariant's shape** (`Inv`; the reasons are beside its definition):
+`root: Nat → Option<Ref>` (an object held by value has no root); the
+cross-object clauses are per object over roots, so a binding touches none of
+them: roots of objects one of which may change are apart (`apart`), every root
+is in the heap (`inheap`, so a fresh block is past it), an object something
+may change through has its root in a block lent to change or made here
+(`owned`, which with `frame` gives the tightened `Frame` at `Ret`); a cell its
+frame owns is its object's whole block, which no other object's root is in
+(`own`); an object has one holder (`one`); every level a live region reads is
+plain (`words`). A view's reference is one of its entries' object's root
+narrowed (`RefOk`), since after a join a read view's entries may be of several
+objects. `Inv::start` proves every clause at entry.
+
+Found for the call stage (item 4), reported and not yet built: a written
+parameter's slot in the answer must be the argument where it refers, and two
+fresh results of one call must be distinct blocks; and three checker defects,
+each a refusal to add (a join over a read-lent holder binding an owned
+output; an arm yielding one holder twice; a returned view's region reading a
+non-plain level in the caller).
