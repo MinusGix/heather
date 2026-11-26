@@ -583,19 +583,22 @@ fn Function::translate(self f: Function, at: Nat, lents: List<Nat>) → Option<R
     }
 }
 
-// Function `at` on, in number order, `lents` each one's lent count.
-fn translate_functions(functions: List<Function>, at: Nat, lents: List<Nat>) → Option<List<Routine>> {
+// FunctionIR lists its functions last first, function `f` the one with
+// `f` before it: the earlier functions' routines, then the last's, as the
+// old run answers a function's calls by the functions before it
+// (`program_run`). `lents` is each function's lent count by number
+// (`program_counts`).
+fn translate_last_first(functions: List<Function>, lents: List<Nat>) → Option<List<Routine>> {
     match functions {
         Nil => Some([]),
-        Cons(f, rest) => match f.translate(at, lents) {
+        Cons(last, earlier) => match translate_last_first(earlier, lents) {
             None => None,
-            Some(r) => match translate_functions(rest, at + 1, lents) { None => None, Some(rs) => Some(Cons(r, rs)) },
+            Some(routines) => match last.translate(earlier.len(), lents) { None => None, Some(r) => Some(routines ++ [r]) },
         },
     }
 }
 
-// The program: FunctionIR lists its functions last first, the bytes level
-// numbers its routines from the first.
+// The program: its routines in number order.
 fn translate_program(functions: List<Function>) → Option<Program> {
-    match translate_functions(functions.rev(), 0, functions.rev().map(λ (f: Function) => f.lent)) { None => None, Some(routines) => Some(Program(routines)) }
+    match translate_last_first(functions, program_counts(functions)) { None => None, Some(routines) => Some(Program(routines)) }
 }
