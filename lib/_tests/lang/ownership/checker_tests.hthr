@@ -69,7 +69,10 @@ fn strs() → Strs(tys()) {
 // A program's functions; its signatures; the verdict of its function `g`.
 fn sigs_of(fs: List<Func>) → Nat → Sig { λ g => (fs.nth(g).unwrap_or(Func(Sig(Nil, Nil), Ret(Nil)))).sig }
 
-fn verdict(fs: List<Func>, g: Nat) → Option<Owes> { check(tys(), strs(), sigs_of(fs), g, fs.nth(g).unwrap_or(Func(Sig(Nil, Nil), Ret(Nil)))) }
+fn verdict_in(fs: List<Func>, prim: Nat → Bool, g: Nat) → Option<Owes> { check(tys(), strs(), sigs_of(fs), prim, g, fs.nth(g).unwrap_or(Func(Sig(Nil, Nil), Ret(Nil)))) }
+
+// A program none of whose callees is a primitive.
+fn verdict(fs: List<Func>, g: Nat) → Option<Owes> { verdict_in(fs, λ _ => False, g) }
 
 // The words a function takes by value, after its object.
 fn words(n: Nat) → List<Param> { List::replicate(Param(nat_s(), ByTake), n) }
@@ -451,12 +454,35 @@ theorem onto_fails(k: Nat): ¬RApart(Var(1), Lit(1), Var(1), Lit(1)).Holds(tys()
     }
 }
 
-// A callee whose view lies at a word it read has no signature: a returned
-// view is its parameter narrowed by the steps the signature names, exactly
-// (`Value::ViewIs`), and the whole object is not that view.
-fn found() → Func { Func(Sig([Param(nx(), ByRead), Param(nat_s(), ByTake)], [Result(nx(), OView(0, Nil))]), seq([Read(el(x(), Lit(0))), View(win(x(), Var(2), Lit(1)), Reading)], Ret([Loc(0)]))) }
+// A callee whose view lies at a word it read names that word as a result:
+// a view's steps read the call's words, the arguments' and then the
+// results' (§15.2: a view travels with its slot). `found(xs, k)` answers a
+// view of `xs[j..j+1]` and `j`, its second result (the signature's
+// `Var(3)`, past its two parameters, is result 1).
+fn found_sig() → Sig { Sig([Param(nx(), ByRead), Param(nat_s(), ByTake)], [Result(nx(), OView(0, [SWindow(Var(3), Lit(1))])), Result(nat_s(), OFresh)]) }
 
-theorem found_refused(): verdict([found()], 0) = None { refl }
+fn found() → Func { Func(found_sig(), seq([Read(el(x(), Lit(0))), View(win(x(), Var(2), Lit(1)), Reading)], Ret([Loc(0), Loc(1)]))) }
+
+theorem found_checked(): verdict([found()], 0) = Some(ODo([acc_el(x(), Lit(0))], ODo([acc_win(x(), Var(2), Lit(1))], OEnd))) { refl }
+
+// Its caller writes beside the view: the residual reads the answered word,
+// the call's second binding (`Var(3)` at the write: [9, j, t]).
+fn beside_found() → Func {
+    Func(wsig(2), seq([Call(0, [x(), Arg(1)], 2), Lit(WNat, 9), Write(el(x(), Var(2)), Loc(0)), Read(el(Loc(2), Lit(0)))], Ret([Loc(0), x()])))
+}
+
+theorem beside_found_checked(): verdict([found(), beside_found()], 1) = Some(
+    ODo([RPre(0, [x(), Arg(1)]), RMeasure(0, [x(), Arg(1)])], ODo(Nil, ODo([RApart(Var(4), Lit(1), Var(2), Lit(1)), acc_el(x(), Var(2))], ODo([acc_el(Loc(2), Lit(0))], OEnd)))))
+{ refl }
+
+// The control: a view whose place reads a result that is not a plain word
+// (here the view itself) has no signature.
+fn found_self() → Func {
+    Func(Sig([Param(nx(), ByRead), Param(nat_s(), ByTake)], [Result(nx(), OView(0, [SWindow(Var(2), Lit(1))])), Result(nat_s(), OFresh)]),
+        seq([Read(el(x(), Lit(0))), View(win(x(), Var(2), Lit(1)), Reading)], Ret([Loc(0), Loc(1)])))
+}
+
+theorem found_self_refused(): verdict([found_self()], 0) = None { refl }
 
 // ---------------------------------------------------------------------------
 // 8. A residual about a callee's answer (call_check_tests §8):
@@ -892,7 +918,7 @@ fn coded_in(fs: List<Func>, g: Nat) → Bool { (fs.nth(g).unwrap_or(Func(Sig(Nil
 theorem refusals_coded():
     List::append<Bool>([coded_in([fill(), unbacked()], 1), coded_in([fill(), unreturned()], 1), coded_in([first_wrong()], 0), coded_in([first(), early()], 1), coded_in([liar()], 0),
         coded_in([peek()], 0), coded_in([clobber()], 0), coded_in([stale()], 0), coded_in([lend_read()], 0), coded_in([unsynced()], 0), coded_in([after_join()], 0),
-        coded_in([unyielded()], 0), coded_in([coarse_held()], 0), coded_in([found()], 0), coded_in([stale_name()], 0), coded_in([take_frozen()], 0),
+        coded_in([unyielded()], 0), coded_in([coarse_held()], 0), coded_in([found_self()], 0), coded_in([stale_name()], 0), coded_in([take_frozen()], 0),
         coded_in([inside()], 0), coded_in([versions_bad()], 0), coded_in([zero_loop(), zero_whole()], 1), coded_in([copy_swapped()], 0), coded_in([outlived()], 0)], Nil)
     = [True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True]
 { refl }
@@ -974,3 +1000,47 @@ fn drain() → Func {
 }
 
 theorem drain_checked(): verdict([drain()], 0) = Some(ODo(Nil, OJoin(ODo(Nil, OJump([RPre(0, [Loc(0)]), RMeasure(0, [Loc(0)])])), OEnd, OEnd))) { refl }
+
+// ---------------------------------------------------------------------------
+// 15. Primitives (§15.4's "level 2's primitives"): a list's length, a world
+//     entry with no body that only reads and answers plain values.
+
+fn prim0() → Nat → Bool { λ g => g.same(0) }
+
+theorem len_prim_checked(): verdict_in([len_fn(), guarded()], prim0(), 0) = Some(OEnd) { refl }
+
+theorem guarded_prim_checked(): verdict_in([len_fn(), guarded()], prim0(), 1) = verdict([len_fn(), guarded()], 1) { refl }
+
+// A primitive that writes its parameter, or answers a view: refused, and
+// so is a call of one.
+fn wprim() → Func { Func(Sig([Param(pts_s(), ByWrite)], Nil), Ret(Nil)) }
+
+theorem wprim_refused(): verdict_in([wprim()], prim0(), 0) = None { refl }
+
+fn calls_wprim() → Func { Func(Sig([Param(pts_s(), ByWrite)], Nil), seq([Call(0, [Arg(0)], 1), Write(whole(Arg(0)), Loc(0)), Death(whole(Loc(0)))], Ret([Arg(0)]))) }
+
+theorem calls_wprim_refused(): verdict_in([wprim(), calls_wprim()], prim0(), 1) = None { refl }
+
+theorem calls_wprim_bodied(): verdict([wprim(), calls_wprim()], 1).is_some() = True { refl }
+
+// ---------------------------------------------------------------------------
+// 16. `RMeasure` at a call outside any recursion costs nothing: a
+//     generator gives a function that is not in a recursion the need one
+//     more than the largest of its call sites' callee needs at the values
+//     passed, so the residual holds by that definition. `both` calls
+//     `pick` (need 1) twice; its need is 2.
+
+fn pick_pre(ds: List<Dyn(tys())>) → Type { ∥Dyn::index(tys(), ds.nth(1).unwrap_or(Dyn::none(tys()))) < Dyn::len(tys(), strs(), ds.nth(0).unwrap_or(Dyn::none(tys())))∥ }
+
+fn both_ctx(xs: List<Nat>, i, j: Nat) → Ctx(tys()) {
+    Ctx(strs(), λ _ _ => Nil, 1, λ g ds => match g { Zero => pick_pre(ds), Succ(_) => True }, λ g _ => match g { Zero => 1, Succ(_) => 2 }, [Dyn(nx(), xs), Dyn(nat_s(), i), Dyn(nat_s(), j)])
+}
+
+fn both_owes() → Owes { ODo([RPre(0, [x(), Arg(1)]), RMeasure(0, [x(), Arg(1)])], ODo([RPre(0, [x(), Arg(2)]), RMeasure(0, [x(), Arg(2)])], OEnd)) }
+
+// Each call's precondition is the source's own hypothesis, by conversion;
+// each measure is `1 < 2`.
+theorem both_due(xs: List<Nat>, i, j: Nat, hi: ∥i < xs.len()∥, hj: ∥j < xs.len()∥): both_owes().Due(tys(), both_ctx(xs, i, j), both()) {
+    let below: (1 < 2) = omega();
+    ⟨hi, ⟨below, ⟨hj, ⟨below, trivial⟩⟩⟩⟩
+}

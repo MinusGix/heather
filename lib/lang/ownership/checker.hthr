@@ -260,9 +260,9 @@ fn Steps::access_from(r: Var, pre: List<Step>, xs: List<Step>) → List<Residual
 
 fn Place::accesses(self p: Place) → List<Residual> { Steps::access_from(p.root, Nil, p.steps) }
 
-// A value of this code moves when taken: anything but a word, which is
+// A value of this code moves when taken: anything but plain data, which is
 // copied (the run copies it too, `Cell::pass`).
-fn Shape::moves(self c: Shape) → Bool { match c { SWord(_) => False, SNamed(_) => True } }
+fn Shape::moves(tys: Nat → Type, strs: Strs(tys), c: Shape) → Bool { !Shape::plain(tys, strs, c) }
 
 // ---------------------------------------------------------------------------
 // The licence
@@ -451,7 +451,7 @@ fn CSt::lend(self s: CSt, tys: Nat → Type, strs: Strs(tys), p: Param, x: Var) 
         ByRead => Some(Next(s, g.rs)),
         ByWrite => s.write_at(g.root, Nil).map(λ rw => Next(s, g.rs ++ rw)),
         ByTake => match s.role(g.root) {
-            KHold(o, a) => match a.writes() && p.code.moves() {
+            KHold(o, a) => match a.writes() && Shape::moves(tys, strs, p.code) {
                 True => match a { AcOwn => (!s.has_obj_views(o)).then(Some(Next(s.set(g.root, KGone), g.rs))), AcRead => Some(Next(s, g.rs)), AcWrite => Some(Next(s, g.rs)) },
                 False => Some(Next(s, g.rs)),
             },
@@ -512,10 +512,14 @@ fn CSt::apart_args(self s: CSt, ls: List<Lent>) → Option<List<Residual>> {
     match ls { Nil => Some(Nil), Cons(a, rest) => s.apart_one(a, rest).and_then(λ r1 => s.apart_args(rest).map(λ r2 => r1 ++ r2)) }
 }
 
-// A callee's atom, which reads its own argument `k`, as the caller's at
-// levels: the argument passed there.
+// A callee's atom as the caller's at levels: below its parameters' count it
+// reads the argument passed there; past it, the callee's result `k - n`,
+// which the call binds at the next level and on.
 fn CSt::subst_atom(self s: CSt, xs: List<Var>, a: Atom) → Option<Atom> {
-    match a { Lit(n) => Some(Lit(n)), Var(k) => xs.nth(k).and_then(λ x => s.lvl(x).map(λ l => Var(l))) }
+    match a {
+        Lit(n) => Some(Lit(n)),
+        Var(k) => match (k + 1).leb(xs.len()) { True => xs.nth(k).and_then(λ x => s.lvl(x).map(λ l => Var(l))), False => Some(Var(s.next() + (k - xs.len()))) },
+    }
 }
 
 fn CSt::subst_step(self s: CSt, xs: List<Var>, a: Step) → Option<Step> {
@@ -534,11 +538,11 @@ fn CSt::subst_steps(self s: CSt, xs: List<Var>, ys: List<Step>) → Option<List<
 
 // One result bound: `s0` is the state before the call (where the arguments
 // are read), `s` the state binding.
-fn CSt::result(self s: CSt, s0: CSt, sig: Sig, xs: List<Var>, r: Result) → Option<CSt> {
+fn CSt::result(self s: CSt, tys: Nat → Type, strs: Strs(tys), s0: CSt, sig: Sig, xs: List<Var>, r: Result) → Option<CSt> {
     match r.origin {
         OFresh => Some(s.push(CVar(r.code, KHold(s.nobj, AcOwn))).fresh_obj()),
         OParam(i) => match (sig.params.nth(i).unwrap_or(Param(SWord(WNat), ByRead))).mode {
-            ByTake => match r.code.moves() {
+            ByTake => match Shape::moves(tys, strs, r.code) {
                 False => Some(s.push(CVar(r.code, KPlain))),
                 True => xs.nth(i).and_then(λ x => s0.lvl(x)).and_then(λ l => match s0.role(l) {
                     KHold(o, a) => match a { AcOwn => Some(s.push(CVar(r.code, KHold(o, AcOwn)))), AcRead => None, AcWrite => None },
@@ -561,8 +565,8 @@ fn CSt::result(self s: CSt, s0: CSt, sig: Sig, xs: List<Var>, r: Result) → Opt
     }
 }
 
-fn CSt::results(self s: CSt, s0: CSt, sig: Sig, xs: List<Var>, rs: List<Result>) → Option<CSt> {
-    match rs { Nil => Some(s), Cons(r, rest) => s.result(s0, sig, xs, r).and_then(λ s2 => s2.results(s0, sig, xs, rest)) }
+fn CSt::results(self s: CSt, tys: Nat → Type, strs: Strs(tys), s0: CSt, sig: Sig, xs: List<Var>, rs: List<Result>) → Option<CSt> {
+    match rs { Nil => Some(s), Cons(r, rest) => s.result(tys, strs, s0, sig, xs, r).and_then(λ s2 => s2.results(tys, strs, s0, sig, xs, rest)) }
 }
 
 // Each written parameter's value after: a view to write of the argument it
@@ -582,15 +586,16 @@ fn CSt::slots(self s: CSt, s0: CSt, sig: Sig, xs: List<Var>, ws: List<Nat>) → 
     }
 }
 
-fn CSt::call(self s: CSt, tys: Nat → Type, strs: Strs(tys), sigs: Nat → Sig, g: Nat, xs: List<Var>) → Option<Next> {
+fn CSt::call(self s: CSt, tys: Nat → Type, strs: Strs(tys), sigs: Nat → Sig, prim: Nat → Bool, g: Nat, xs: List<Var>) → Option<Next> {
     let sig = sigs(g);
-    s.lend_all(tys, strs, sig.params, xs).and_then(λ nl =>
-        s.apart_args(s.lent(sig.params, xs)).and_then(λ ra =>
-            nl.st.results(s, sig, xs, sig.results).and_then(λ s2 =>
-                s2.slots(s, sig, xs, sig.written()).map(λ s3 => Next(s3, nl.rs ++ ra ++ [RPre(g, xs), RMeasure(g, xs)])))))
+    (!prim(g) || Sig::reads_only(tys, strs, sig)).then(
+        s.lend_all(tys, strs, sig.params, xs).and_then(λ nl =>
+            s.apart_args(s.lent(sig.params, xs)).and_then(λ ra =>
+                nl.st.results(tys, strs, s, sig, xs, sig.results).and_then(λ s2 =>
+                    s2.slots(s, sig, xs, sig.written()).map(λ s3 => Next(s3, nl.rs ++ ra ++ [RPre(g, xs), RMeasure(g, xs)]))))))
 }
 
-fn Stmt::verdict(self st: Stmt, tys: Nat → Type, strs: Strs(tys), sigs: Nat → Sig, s: CSt) → Option<Next> {
+fn Stmt::verdict(self st: Stmt, tys: Nat → Type, strs: Strs(tys), sigs: Nat → Sig, prim: Nat → Bool, s: CSt) → Option<Next> {
     match st {
         Op(_, a, b) => s.read_var(tys, strs, a).and_then(λ ga => s.read_var(tys, strs, b).map(λ gb => Next(s.push(CVar(ga.code, KPlain)), ga.rs ++ gb.rs))),
         Lit(w, _) => Some(Next(s.push(CVar(SWord(w), KPlain)), Nil)),
@@ -599,7 +604,7 @@ fn Stmt::verdict(self st: Stmt, tys: Nat → Type, strs: Strs(tys), sigs: Nat �
         View(p, md) => s.view(tys, strs, p, md),
         Take(p) => s.take(tys, strs, p),
         Fresh(c, n, v) => s.read_var(tys, strs, n).and_then(λ gn => s.read_var(tys, strs, v).map(λ gv => Next(s.push(CVar(c, KHold(s.nobj, AcOwn))).fresh_obj(), gn.rs ++ gv.rs))),
-        Call(g, xs, _) => s.call(tys, strs, sigs, g, xs),
+        Call(g, xs, _) => s.call(tys, strs, sigs, prim, g, xs),
         Death(p) => s.death(p),
     }
 }
@@ -607,19 +612,49 @@ fn Stmt::verdict(self st: Stmt, tys: Nat → Type, strs: Strs(tys), sigs: Nat �
 // ---------------------------------------------------------------------------
 // Leaves: a return, a `Jump`
 
-// A result as its origin promises: a plain value or an object the callee
-// owns (made here, or taken); the parameter's object; a read view of the parameter at the
-// steps named.
-fn CSt::returns(self s: CSt, l: Nat, r: Result) → Bool {
-    match r.origin {
-        OFresh => match s.role(l) { KPlain => True, KHold(_, a) => match a { AcOwn => True, AcRead => False, AcWrite => False }, KView => False, KGone => False },
-        OParam(i) => match s.role(l) { KHold(o, _) => o.same(i), _ => False },
-        OView(i, xs) => match s.ents(l) { Cons(e, Nil) => e.obj.same(i) && Steps::same(e.reg, xs) && !e.mode.writes(), _ => False },
+// A signature's atom at this function's levels: below the parameters'
+// count an argument's level; past it a result the `Ret` lists, which must
+// be a plain word, so the view's place cannot move under it.
+fn CSt::sig_atom(self s: CSt, ls: List<Nat>, a: Atom) → Option<Atom> {
+    match a {
+        Lit(n) => Some(Lit(n)),
+        Var(k) => match (k + 1).leb(s.na) {
+            True => Some(Var(k)),
+            False => ls.nth(k - s.na).and_then(λ l => match s.role(l) { KPlain => Some(Var(l)), _ => None }),
+        },
     }
 }
 
-fn CSt::returns_all(self s: CSt, ls: List<Nat>, rs: List<Result>) → Bool {
-    match rs { Nil => True, Cons(r, rest) => match ls { Nil => False, Cons(l, lr) => s.returns(l, r) && s.returns_all(lr, rest) } }
+fn CSt::sig_step(self s: CSt, ls: List<Nat>, a: Step) → Option<Step> {
+    match a {
+        SField(i) => Some(SField(i)),
+        SElem(i) => s.sig_atom(ls, i).map(λ j => SElem(j)),
+        SWindow(lo, n) => s.sig_atom(ls, lo).and_then(λ l2 => s.sig_atom(ls, n).map(λ n2 => SWindow(l2, n2))),
+        SKey(_, _) => None,
+        SVariant(_) => None,
+    }
+}
+
+fn CSt::sig_steps(self s: CSt, ls: List<Nat>, xs: List<Step>) → Option<List<Step>> {
+    match xs { Nil => Some(Nil), Cons(a, rest) => s.sig_step(ls, a).and_then(λ b => s.sig_steps(ls, rest).map(λ bs => Cons(b, bs))) }
+}
+
+// A result as its origin promises: a plain value or an object made by
+// this call (not an argument's: `Value::ViewIs`); the parameter's object; a read view of the parameter at the
+// steps named.
+fn CSt::returns(self s: CSt, ls: List<Nat>, l: Nat, r: Result) → Bool {
+    match r.origin {
+        OFresh => match s.role(l) { KPlain => True, KHold(o, a) => s.na.leb(o) && (match a { AcOwn => True, AcRead => False, AcWrite => False }), KView => False, KGone => False },
+        OParam(i) => match s.role(l) { KHold(o, _) => o.same(i), _ => False },
+        OView(i, xs) => match s.sig_steps(ls, xs) {
+            Some(ys) => match s.ents(l) { Cons(e, Nil) => e.obj.same(i) && Steps::same(e.reg, ys) && !e.mode.writes(), _ => False },
+            None => False,
+        },
+    }
+}
+
+fn CSt::returns_all(self s: CSt, all, ls: List<Nat>, rs: List<Result>) → Bool {
+    match rs { Nil => True, Cons(r, rest) => match ls { Nil => False, Cons(l, lr) => s.returns(all, l, r) && s.returns_all(all, lr, rest) } }
 }
 
 // Each written parameter's object back, held, and written back.
@@ -637,7 +672,7 @@ fn CSt::lvls(self s: CSt, xs: List<Var>) → Option<List<Nat>> {
 fn CSt::ret(self s: CSt, tys: Nat → Type, strs: Strs(tys), sig: Sig, xs: List<Var>) → Bool {
     match s.read_vars(tys, strs, xs) {
         Some(rs) => match rs {
-            Nil => match s.lvls(xs) { Some(ls) => s.returns_all(ls, sig.results) && s.gives_back(ls.drop(sig.results.len()), sig.written()), None => False },
+            Nil => match s.lvls(xs) { Some(ls) => s.returns_all(ls, ls, sig.results) && s.gives_back(ls.drop(sig.results.len()), sig.written()), None => False },
             Cons(_, _) => False,
         },
         None => False,
@@ -817,18 +852,18 @@ fn CSt::joined(s0: CSt, oy, on: Option<Yd>) → Option<CSt> {
 // ---------------------------------------------------------------------------
 // Bodies, and the checker
 
-fn Body::verdict(self b: Body, tys: Nat → Type, strs: Strs(tys), sigs: Nat → Sig, me: Nat, s: CSt) → Option<CRes> {
+fn Body::verdict(self b: Body, tys: Nat → Type, strs: Strs(tys), sigs: Nat → Sig, prim: Nat → Bool, me: Nat, s: CSt) → Option<CRes> {
     match b {
         Ret(xs) => s.ret(tys, strs, sigs(me), xs).then(Some(CRes(OEnd, None))),
         Yield(xs) => Some(CRes(OEnd, Some(Yd(s, xs)))),
         Jump(xs) => s.jump(tys, strs, sigs(me), me, xs).map(λ rs => CRes(OJump(rs), None)),
-        Do(st, rest) => st.verdict(tys, strs, sigs, s).and_then(λ nx => rest.verdict(tys, strs, sigs, me, nx.st).map(λ cr => CRes(ODo(nx.rs, cr.owes), cr.yld))),
+        Do(st, rest) => st.verdict(tys, strs, sigs, prim, s).and_then(λ nx => rest.verdict(tys, strs, sigs, prim, me, nx.st).map(λ cr => CRes(ODo(nx.rs, cr.owes), cr.yld))),
         Join(t, yes, no, rest) => {
             let tv = match t as λ _ => List<Var> { TLt(a, c) => [a, c], TLe(a, c) => [a, c] };
             match s.read_vars(tys, strs, tv) {
                 Some(trs) => match trs {
-                    Nil => yes.verdict(tys, strs, sigs, me, s.arm()).and_then(λ cy => no.verdict(tys, strs, sigs, me, s.arm()).and_then(λ cn =>
-                        CSt::joined(s, cy.yld, cn.yld).and_then(λ s1 => rest.verdict(tys, strs, sigs, me, s1).map(λ cr => CRes(OJoin(cy.owes, cn.owes, cr.owes), cr.yld))))),
+                    Nil => yes.verdict(tys, strs, sigs, prim, me, s.arm()).and_then(λ cy => no.verdict(tys, strs, sigs, prim, me, s.arm()).and_then(λ cn =>
+                        CSt::joined(s, cy.yld, cn.yld).and_then(λ s1 => rest.verdict(tys, strs, sigs, prim, me, s1).map(λ cr => CRes(OJoin(cy.owes, cn.owes, cr.owes), cr.yld))))),
                     Cons(_, _) => None,
                 },
                 None => None,
@@ -839,13 +874,25 @@ fn Body::verdict(self b: Body, tys: Nat → Type, strs: Strs(tys), sigs: Nat →
 
 // The state a function starts with: each argument holds an object of its
 // own, as its mode lends it.
-fn CSt::params(ps: List<Param>, i: Nat) → List<CVar> { match ps { Nil => Nil, Cons(p, rest) => Cons(CVar(p.code, KHold(i, Acc::of(p.mode))), CSt::params(rest, i + 1)) } }
+fn CSt::params(tys: Nat → Type, strs: Strs(tys), ps: List<Param>, i: Nat) → List<CVar> {
+    match ps {
+        Nil => Nil,
+        Cons(p, rest) => Cons(CVar(p.code, match p.mode { ByTake => match Shape::plain(tys, strs, p.code) { True => KPlain, False => KHold(i, AcOwn) }, ByRead => KHold(i, AcRead), ByWrite => KHold(i, AcWrite) }),
+            CSt::params(tys, strs, rest, i + 1)),
+    }
+}
 
-fn CSt::start(sig: Sig) → CSt { CSt(CSt::params(sig.params, 0), Nil, sig.params.len(), 0, Nil, sig.params.len(), Nil, Nil) }
+fn CSt::start(tys: Nat → Type, strs: Strs(tys), sig: Sig) → CSt { CSt(CSt::params(tys, strs, sig.params, 0), Nil, sig.params.len(), 0, Nil, sig.params.len(), Nil, Nil) }
 
-fn Func::verdict(self f: Func, tys: Nat → Type, strs: Strs(tys), sigs: Nat → Sig, me: Nat) → Option<Owes> { f.body.verdict(tys, strs, sigs, me, CSt::start(f.sig)).map(λ cr => cr.owes) }
+fn Func::verdict(self f: Func, tys: Nat → Type, strs: Strs(tys), sigs: Nat → Sig, prim: Nat → Bool, me: Nat) → Option<Owes> {
+    f.body.verdict(tys, strs, sigs, prim, me, CSt::start(tys, strs, f.sig)).map(λ cr => cr.owes)
+}
 
-// The checker: the code check, then the pass.
+// The checker: a primitive has no body and owes nothing if it only reads;
+// any other function, the code check, then the pass.
 fn check(tys: Nat → Type) → Checker(tys) {
-    λ strs sigs g f => match f.coded(tys, strs, sigs, g) { True => f.verdict(tys, strs, sigs, g), False => None }
+    λ strs sigs prim g f => match prim(g) {
+        True => Sig::reads_only(tys, strs, f.sig).then(Some(OEnd)),
+        False => match f.coded(tys, strs, sigs, g) { True => f.verdict(tys, strs, sigs, prim, g), False => None },
+    }
 }

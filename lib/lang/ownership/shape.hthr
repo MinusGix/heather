@@ -297,6 +297,10 @@ record SeqLaws(tys: Nat → Type, T: Type, q: Seq(tys, T)) {
     len_set: (v: T) → (i: Ix) → (x: El(tys, q.elem)) → q.len(q.set(v, i, x)) = q.len(v),
     get_other: (v: T) → (i, j: Ix) → Ix::Apart(i, INat(1), j, INat(1)) → (x: El(tys, q.elem)) → q.get(q.set(v, j, x), i) = q.get(v, i),
     commute: (v: T) → (i, j: Ix) → Ix::Apart(i, INat(1), j, INat(1)) → (x, y: El(tys, q.elem)) → q.set(q.set(v, j, y), i, x) = q.set(q.set(v, i, x), j, y),
+    // What the accessor asks gives the run's fit there, and the fit reads
+    // only the length, so a write that keeps lengths keeps every fit.
+    pre_inside: (v: T) → (i: Ix) → q.Pre(v, i) → q.inside(v, i) = True,
+    inside_len: (v, w: T) → (i: Ix) → q.len(v) = q.len(w) → q.inside(v, i) = q.inside(w, i),
 }
 
 // Its windows: the same, relative to the length of what was read, and
@@ -313,6 +317,8 @@ record WinLaws(tys: Nat → Type, T: Type, q: Seq(tys, T), w: Win(tys, T)) {
         w.set(q.set(v, j, x), lo, n, ys) = q.set(w.set(v, lo, n, ys), j, x),
     commute_win: (v: T) → (lo, n, lo2, n2: Ix) → Ix::Apart(lo, n, lo2, n2) → (ys, zs: El(tys, w.shape)) →
         w.set(w.set(v, lo2, n2, zs), lo, n, ys) = w.set(w.set(v, lo, n, ys), lo2, n2, zs),
+    pre_inside: (v: T) → (lo, n: Ix) → w.Pre(v, lo, n) → w.inside(v, lo, n) = True,
+    inside_len: (v, u: T) → (lo, n: Ix) → q.len(v) = q.len(u) → w.inside(v, lo, n) = w.inside(u, lo, n),
 }
 
 fn Seq::Windows(tys: Nat → Type, {T: Type}, q: Seq(tys, T)) → Type { match q.win { Some(w) => WinLaws(tys, T, q, w), None => True } }

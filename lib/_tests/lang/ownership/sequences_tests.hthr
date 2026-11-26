@@ -285,3 +285,15 @@ theorem past_end_kept(n: u64, g: Dyn(tys(n)) → Dyn(tys(n)), xs: List<Nat>):
 {
     past_end_apart(n).left_after_right(g, Dyn(nats_s(), xs))
 }
+
+// ---------------------------------------------------------------------------
+// What each accessor asks gives the run's fit (`SeqLaws.pre_inside`). An
+// index of another kind is unfit, so a list asks `False` at a word index
+// (§22.2 decision B), where reading it through `toNat` would ask a number
+// its `inside` refuses.
+
+theorem list_pre_nat(xs: List<Nat>, i: Nat): (Seq::list(tys(0), nat_s(), 0, None)).Pre(xs, INat(i)) = (∥i < xs.len()∥) { refl }
+
+theorem list_pre_word(xs: List<Nat>, i: u64): (Seq::list(tys(0), nat_s(), 0, None)).Pre(xs, IWord(64, i)) = False { refl }
+
+theorem list_inside_word(xs: List<Nat>, i: u64): (Seq::list(tys(0), nat_s(), 0, None)).inside(xs, IWord(64, i)) = False { refl }

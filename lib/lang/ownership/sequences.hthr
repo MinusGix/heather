@@ -97,17 +97,52 @@ fn List::ix_put_win<A>(self xs: List<A>, lo, n: Ix, ys: List<A>) → List<A> {
     }
 }
 
+// What the list's accessors ask: a number below the length; an index of
+// another kind is unfit (§22.2 decision B: an instance reads an index at its
+// own accessor's type), so it asks `False`.
+fn List::ix_pre<A>(self xs: List<A>, i: Ix) → Type { match i { INat(k) => ∥k < xs.len()∥, IWord(_, _) => False } }
+
+fn List::ix_win_pre<A>(self xs: List<A>, lo, n: Ix) → Type { match lo { INat(l) => match n { INat(m) => ∥l + m <= xs.len()∥, IWord(_, _) => False }, IWord(_, _) => False } }
+
+// A squashed decidable fact gives its bit: the bit cannot be `False`.
+theorem Bool::squash_true<P>(b: Bool, r: Reflects(P, b), q: ∥P∥): b = True {
+    (match b as λ c => b = c → c = True { True => λ _ => refl, False => λ e => false_elim(unsquash_empty(squash_map(q, r.right(e)))) })(refl)
+}
+
+theorem Nat::lt_leb_reflects(k, n: Nat): Reflects(k < n, (k + 1).leb(n)) { ⟨λ e => omega(e), λ e h => omega(e, h)⟩ }
+
+theorem Nat::le_leb_reflects(k, n: Nat): Reflects(k <= n, k.leb(n)) { ⟨λ e => omega(e), λ e h => omega(e, h)⟩ }
+
+theorem List::ix_pre_inside<A>(self xs: List<A>, i: Ix): xs.ix_pre(i) → xs.ix_inside(i) = True {
+    match i { INat(k) => λ q => Bool::squash_true((k + 1).leb(xs.len()), Nat::lt_leb_reflects(k, xs.len()), q), IWord(_, _) => λ no => false_elim(no) }
+}
+
+theorem List::ix_win_pre_inside<A>(self xs: List<A>, lo, n: Ix): xs.ix_win_pre(lo, n) → xs.ix_win_inside(lo, n) = True {
+    match lo {
+        INat(l) => match n { INat(m) => λ q => Bool::squash_true((l + m).leb(xs.len()), Nat::le_leb_reflects(l + m, xs.len()), q), IWord(_, _) => λ no => false_elim(no) },
+        IWord(_, _) => λ no => false_elim(no),
+    }
+}
+
+theorem List::ix_inside_len<A>(xs, ys: List<A>, i: Ix, e: xs.len() = ys.len()): xs.ix_inside(i) = ys.ix_inside(i) {
+    match i { INat(k) => cong_fn(λ (m: Nat) => (k + 1).leb(m), e), IWord(_, _) => refl }
+}
+
+theorem List::ix_win_inside_len<A>(xs, ys: List<A>, lo, n: Ix, e: xs.len() = ys.len()): xs.ix_win_inside(lo, n) = ys.ix_win_inside(lo, n) {
+    match lo { INat(l) => match n { INat(m) => cong_fn(λ (k: Nat) => (l + m).leb(k), e), IWord(_, _) => refl }, IWord(_, _) => refl }
+}
+
 // A list window's own type is the list's: `me` names it, and `to`, `of`
 // carry it to and from the list (each the identity where the environment
 // decodes `me` to the list type, so both convert away).
 fn Seq::list_win(tys: Nat → Type, a: Shape, me: Shape, to: El(tys, me) → List<El(tys, a)>, of: List<El(tys, a)> → El(tys, me)) → Win(tys, List<El(tys, a)>) {
     Win(me, λ ys => List::len(to(ys)), λ xs lo n => of(xs.ix_win(lo, n)), λ xs lo n ys => xs.ix_put_win(lo, n, to(ys)),
-        λ xs lo n => xs.ix_win_inside(lo, n), λ xs lo n => ∥lo.toNat() + n.toNat() <= xs.len()∥)
+        λ xs lo n => xs.ix_win_inside(lo, n), λ xs lo n => xs.ix_win_pre(lo, n))
 }
 
 // The instance at element shape `a` with its pad.
 fn Seq::list(tys: Nat → Type, a: Shape, pad: El(tys, a), win: Option<Win(tys, List<El(tys, a)>)>) → Seq(tys, List<El(tys, a)>) {
-    Seq(a, λ xs => xs.len(), λ xs i => xs.ix_get(i, pad), λ xs i x => xs.ix_set(i, x), λ xs i => xs.ix_inside(i), λ xs i => ∥i.toNat() < xs.len()∥, λ n x => List::replicate(x, n.toNat()), win)
+    Seq(a, λ xs => xs.len(), λ xs i => xs.ix_get(i, pad), λ xs i x => xs.ix_set(i, x), λ xs i => xs.ix_inside(i), λ xs i => xs.ix_pre(i), λ n x => List::replicate(x, n.toNat()), win)
 }
 
 theorem List::ix_get_set<A>(self xs: List<A>, i: Ix, pad: A, inside: xs.ix_inside(i) = True, x: A): xs.ix_set(i, x).ix_get(i, pad) = x {
@@ -164,6 +199,8 @@ theorem Seq::list_laws(tys: Nat → Type, a: Shape, pad: El(tys, a), win: Option
         λ v i x => v.ix_len_set(i, x),
         λ v i j h x => v.ix_get_other(i, j, h, x, pad),
         λ v i j h x y => v.ix_commute(i, j, h, x, y),
+        λ v i q => v.ix_pre_inside(i, q),
+        λ v w i e => List::ix_inside_len(v, w, i, e),
     )
 }
 
@@ -188,6 +225,8 @@ theorem Seq::vec_laws(tys: Nat → Type, a: Shape, n: Nat, pad: El(tys, a)): Seq
             let h0: Span(i.toNat(), 1).apart(Span(j.toNat(), 1)).IsTrue() = h;
             vector_update_update_apart(n, v, j.toNat(), i.toNat(), y, x, λ e => omega(h0, e))
         },
+        λ v i q => Bool::squash_true((i.toNat() + 1).leb(n), Nat::lt_leb_reflects(i.toNat(), n), q),
+        λ v w i e => refl,
     )
 }
 
@@ -205,6 +244,13 @@ fn Bytes::ix_set({n: u64}, self s: Bytes(n), i: Ix, v: u8) → Bytes(n) { match 
 fn Bytes::ix_inside({n: u64}, self s: Bytes(n), i: Ix) → Bool { match i.as_u64() { Some(x) => x.unsigned_lt_bit(n), None => False } }
 
 fn Bytes::ix_pre({n: u64}, self s: Bytes(n), i: Ix) → Type { match i.as_u64() { Some(x) => ∥x < s.len()∥, None => False } }
+
+theorem Bytes::ix_pre_inside({n: u64}, self s: Bytes(n), i: Ix): s.ix_pre(i) → s.ix_inside(i) = True {
+    match i.as_u64() as λ o => (match o as λ _ => Type { Some(x) => ∥x < s.len()∥, None => False }) → (match o as λ _ => Bool { Some(x) => x.unsigned_lt_bit(n), None => False }) = True {
+        Some(x) => λ q => Bool::squash_true(x.unsigned_lt_bit(n), BitVec::reflects_lt(64, x, n), q),
+        None => λ no => false_elim(no),
+    }
+}
 
 fn Seq::bytes(tys: Nat → Type, n: u64) → Seq(tys, Bytes(n)) {
     Seq(SWord(WBits(8)), λ s => s.bytes.len(), λ s i => s.ix_get(i), λ s i x => s.ix_set(i, x), λ s i => s.ix_inside(i), λ s i => s.ix_pre(i), λ _ x => Bytes(List::replicate(x, n.toNat()), List::len_replicate(x, n.toNat())), None)
@@ -327,6 +373,8 @@ theorem Seq::bytes_laws(tys: Nat → Type, n: u64): SeqLaws(tys, Bytes(n), Seq::
         λ s i v => s.ix_len_set(i, v),
         λ s i k h v => s.ix_get_other(i, k, h, v),
         λ s i k h v w => s.ix_commute(i, k, h, v, w),
+        λ s i q => s.ix_pre_inside(i, q),
+        λ s t i e => refl,
     )
 }
 
@@ -718,5 +766,7 @@ theorem Seq::list_win_laws(tys: Nat → Type, a: Shape, pad: El(tys, a), me: Sha
             },
             IWord(_, _) => λ ap ys zs => refl,
         },
+        λ v lo n q => v.ix_win_pre_inside(lo, n, q),
+        λ v u lo n e => List::ix_win_inside_len(v, u, lo, n, e),
     )
 }

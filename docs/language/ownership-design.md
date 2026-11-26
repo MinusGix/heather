@@ -3287,46 +3287,71 @@ One forward pass, reading the signatures only, after the code check
   place. Every view an arm holds that the join does not keep is dropped, and
   a dropped view to write must be written back.
 
-### 23.4 What changed in the interfaces, and what is proposed
+### 23.4 What changed in the interfaces
 
-- **A call binds its results, then its written parameters** (made; to be
-  agreed). `Stmt::code_step` bound the results only (`n` the results'
-  count), so after a call lending a view to write its value after could not
-  be bound or written back. It now requires `n = sig.ret_codes().len()` and
+Each agreed by the coordinating session after items 1 and 2.
+
+- **A call binds its results, then its written parameters.**
+  `Stmt::code_step` bound the results only, so after a call lending a view
+  to write its value after could not be bound or written back. It now
   binds `ret_codes()`, §22.2's `Ret` convention read at the call.
-- **Primitives** (proposed). A list's length is a callee in the meaning's
-  world (`body_tests.hthr`); the run gives a primitive callee a native
-  reading (`Run::of` takes the world and which callees are primitives).
-  `Prog` would name them.
-- **For item 3** (proposed, not changed yet): `Prog.run` becomes the defined
-  run (`Run::of`), since `CheckSound` over any run cannot hold; `SafeAt`
-  compares with the world `p.w` and `CheckSound` takes each pin
-  `p.w(g, ds) = p.fns(g).denote(…)` as a premise (§21.3); `SafeAt` and
-  `CheckSound`'s residuals are under the function's own precondition
-  `p.pres(g, ds)` (`interfaces_tests`' `pick_due` already needs it) and
-  inputs that are well formed (live blocks, and an argument the callee may
-  change apart from every other: the experiment's `Lendable`);
-  `Heap::Frame` excludes blocks fresh in the answer (as stated, a function
-  that allocates is never safe); `Value::ViewIs` says a fresh result is a
-  plain value or a reference no other argument reaches, and an `OParam(i)`
-  result is the argument; the written clause holds for referring written
-  arguments, plain ones being read in the answer's written values.
-- **The sequences' laws** (proposed): `SeqLaws` and `WinLaws` need
-  `Pre(v, i) → inside(v, i) = True` (the access residual gives the run's
-  fit) and `inside` reading only the length (a write that keeps lengths
-  keeps every fit). `Seq::list`'s `Pre` reads a word index through `toNat`
-  while its `inside` refuses a word, so the first fails at `IWord`.
-- **`RMeasure` at every call**, not only within a recursion: `Done` from
-  `need` composes through every call, and a signature does not name its
-  recursion group. A non-recursive call discharges it from the caller's
-  measure being the larger.
-- **A returned view is exact** (`Value::ViewIs` is an equation): a callee
-  whose view lies at a word it read (`call_check_tests`' `found`) has no
-  signature, and is refused by its own check.
-- **A view to write chosen by a join at two places** has no write-back
-  place: a `Write`'s place is static steps, and no place spells the convoy
-  of the arms' steps. Such a view is refused (`two_windows_refused`);
-  one parent at one place survives (`one_window_checked`).
+- **Primitives are §15.4's "level 2's primitives", and there is no other
+  kind.** A primitive is a world entry the program gives no body
+  (`Prog.prim`): every parameter read or taken plain, every result fresh and
+  plain (`Sig::reads_only`). Its run is, by definition, the world's function
+  at its arguments read through the heap (`Run::prim`), so it has no run of
+  its own to prove sound. The checker licenses a call of one as a read of
+  each argument and refuses a primitive, or a call of one, that is not
+  read-only. A list's length is the first (`body_tests.hthr` reaches it as
+  a callee).
+- **Passed by value is copied for plain data**, by the sharing class
+  (`Shape::plain`: a word, or a name whose class is `Plain`), in the run
+  (`Cell::pass`) and the checker (a taken plain parameter is a plain
+  variable; a taken non-plain owned one moves).
+- **The program's run is the defined one** (`Prog::run` is `Run::of`); the
+  field is gone.
+- **`SafeAt`** compares the run with the world `p.w`, and `CheckSound` takes
+  each function's pin pointwise as a premise (`Prog::Pinned`, §21.3). Both
+  hold under the function's own precondition. Its inputs are lendable
+  (`Lendable`, named once, the design's "a function requires only that what
+  it may change is not aliased"): each referring argument's block is live
+  and has no holes and its selections fit; an argument taken at a plain code
+  is plain; an argument the callee may change is apart from every other.
+  The caller's side of `Lendable` is to be a lemma the licence gives at
+  each call (item 3), not a premise re-proved per call.
+  `Heap::Frame` covers the blocks that existed before. `ReadAll` reads the
+  whole answer, results then written values. `Value::Written` reads a
+  referring written argument's block after; a plain one is in the written
+  slots. `Value::ViewIs`: a fresh result is plain or a block the call made
+  (none below the heap's length before it, so no argument reaches it; the
+  checker answers `OFresh` only with an object made in the call, never a
+  taken argument, which is `OParam`); an `OParam(i)` result is the argument
+  itself.
+- **A returned view's place reads the call's words, the arguments' and then
+  the results'** (§15.2: a view travels with its slot). In an `OView`'s
+  steps an atom past the parameters' count reads a result; the callee's
+  check requires that result to be a plain word, and the caller binds it
+  among the call's results, so its write-back place is static in its own
+  words. `call_check_tests`' `found` is accepted that way (`found_checked`,
+  `beside_found_checked`); no region coarser than the view is added.
+- **The sequences' laws**: `SeqLaws` and `WinLaws` have `pre_inside` (what
+  the accessor asks gives the run's fit) and `inside_len` (the fit reads
+  only the length, so a write that keeps lengths keeps every fit). A list's
+  `Pre` at a word index is `False`, as decision B makes an index of another
+  kind unfit (a source indexing by `i.toNat()` binds the number with a word
+  primitive). `[A; n]` reads any word through `toNat` in both, and `Bytes(n)`
+  a `u64` in both.
+- **`RMeasure` at every call.** Fuel is depth, so `Done` from `need` composes
+  through every call, and a signature does not name its recursion. Within
+  a recursion the source's `decreases` proof discharges it. Outside one a
+  generator writes the caller's `need` as one more than the largest of its
+  call sites' callee needs at the values passed, and the residual holds by
+  that definition (`both_due`: two calls of `pick`, need 1, from `both`,
+  need 2).
+- **A view to write survives a join only where both arms hold it at one
+  parent and one place**; otherwise it is written back before the join. A
+  write-back's place is static steps, so no place spells "the convoy of the
+  arms' steps" (`two_windows_refused`; §21.2's allowance is withdrawn).
 
 ### 23.5 The experiments' programs
 
@@ -3359,6 +3384,15 @@ residual):
 All three are linear. Past about a million steps a single declaration
 meets the kernel's budget, and the count it reports is no longer the
 term's (a plain list sum shows the same at the same count), so a verdict
-larger than about five hundred statements is checked in parts. Of the
+larger than about five hundred statements is checked in parts: the pass
+over a body's prefix is a function of the state it starts in
+(`Body::verdict` takes `CSt`), so a generator states, as one declaration,
+the state a prefix ends in, and as the next, the verdict of the rest from
+that state. Not a defect.
+
+The dearest definition to elaborate is `CSt::out_role` (half a million
+steps): a match on the two arms' roles, four by four, each arm an
+`Option` built by `then` over a nested match on view entries, whose
+motive the elaborator spells per arm. Not optimised. Of the
 probes the dearest is `long_checked` (six rounds, 21 apartness residuals,
 102k steps).

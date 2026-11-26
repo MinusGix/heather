@@ -151,12 +151,18 @@ fn Mach::push(tys: Nat → Type, m: Mach(tys), c: Cell(tys)) → Mach(tys) { Mac
 // The run of a program's functions at one fuel, as a callee sees it.
 fn Caller(tys: Nat → Type) → Type { Nat → List<Value(tys)> → Heap(tys) → Io → Ran(tys) }
 
+// A code whose values are plain data (§15.1's sharing class): a word, or a
+// name the structures call plain.
+fn Shape::plain(tys: Nat → Type, strs: Strs(tys), c: Shape) → Bool {
+    match c { SWord(_) => True, SNamed(k) => match strs(k).sharing { Plain => True, Object => False, Linear => False } }
+}
+
 // What a caller hands over: a taken argument it owns is passed on, unless
-// it is a word; a word and one it does not own are copied; any other is
-// passed as it is.
+// it is plain data; plain data and one it does not own are copied; any
+// other is passed as it is.
 fn Cell::pass(tys: Nat → Type, strs: Strs(tys), h: Heap(tys), p: Param, c: Cell(tys)) → Option<Value(tys)> {
     match p.mode {
-        ByTake => match c.own && (match p.code { SWord(_) => False, SNamed(_) => True }) { True => Some(c.v), False => Value::get(tys, strs, h, c.v, Nil).map(λ d => Plain(d)) },
+        ByTake => match c.own && !Shape::plain(tys, strs, p.code) { True => Some(c.v), False => Value::get(tys, strs, h, c.v, Nil).map(λ d => Plain(d)) },
         ByRead => Some(c.v),
         ByWrite => Some(c.v),
     }

@@ -94,22 +94,49 @@ theorem ref_reads(xs: List<Nat>): Value::read(tys(), Refer(Ref(0, [OnSeq(SeqOne(
 // ---------------------------------------------------------------------------
 // A program, a function's safety, `check_sound`: their types at `pick`
 
-fn pick_prog(run: Run(tys())) → Prog(tys()) {
-    Prog(strs(), λ _ => pick_r(), λ _ _ => Nil, λ _ _ => True, λ _ => Some(λ _ _ => 0), run, λ _ _ _ => True)
+// `pick` with its precondition, and without it.
+fn pick_pre(ds: List<Dyn(tys())>) → Type { ∥Dyn::index(tys(), ds.nth(1).unwrap_or(Dyn::none(tys()))) < Dyn::len(tys(), strs(), ds.nth(0).unwrap_or(Dyn::none(tys())))∥ }
+
+fn pick_world() → Callees(tys()) { λ _ ds => [nat(Dyn::back(tys(), SNamed(0), ds.nth(0).unwrap_or(Dyn::none(tys())), Nil).nth(Dyn::index(tys(), ds.nth(1).unwrap_or(Dyn::none(tys())))).unwrap_or(0))] }
+
+fn pick_prog(pre: List<Dyn(tys())> → Type) → Prog(tys()) {
+    Prog(strs(), λ _ => pick_r(), pick_world(), λ _ ds => pre(ds), λ _ => Some(λ _ _ => 0), λ _ => False, λ _ _ _ => True)
 }
 
-fn pick_safety(run: Run(tys())) → Type { Safety(tys(), pick_prog(run), 0) }
+fn pick_safety(pre: List<Dyn(tys())> → Type) → Type { Safety(tys(), pick_prog(pre), 0) }
 
 fn pick_check_sound(check: Checker(tys())) → Type<1> { CheckSound(tys(), check) }
 
 fn pick_check_refuses(check: Checker(tys())) → Type<1> { CheckRefusesIllCoded(tys(), check) }
 
-// The control: a run that is stuck is not safe.
-theorem stuck_not_safe(io: Io): ¬pick_safety(λ _ _ _ _ _ => Stuck) {
+// The program's run is the defined one, reading the list by value here.
+theorem pick_runs(io: Io): (pick_prog(pick_pre)).run(tys(), 1, 0, [Plain(nats([4, 5])), Plain(nat(1))], Nil, io) = Done(Answer([Plain(nat(5))], Nil, io)) { refl }
+
+// The control: without its precondition `pick` is not safe. At an empty
+// list it reads past the end, and its own run is stuck, at inputs that
+// read as the meaning's arguments and are lendable.
+fn empty_in() → List<Value(tys())> { [Plain(nats(Nil)), Plain(nat(0))] }
+
+// A plain argument is not a reference.
+fn Value::is_refer(o: Option<Value(tys())>) → Type { match o { Some(v) => match v { Plain(_) => False, Refer(_) => True }, None => False } }
+
+theorem plain_not_refer(d: Dyn(tys()), r: Ref, e: Some(level2::Plain(d)) = Some(Refer(r))): False { j(sym(e), λ o _ => Value::is_refer(o), trivial) }
+
+theorem empty_no_refer(i: Nat, r: Ref): ¬(empty_in().nth(i) = Some(Refer(r))) {
+    match i { Zero => λ e => plain_not_refer(nats(Nil), r, e), Succ(k) => match k { Zero => λ e => plain_not_refer(nat(0), r, e), Succ(_) => λ e => absurd(e) } }
+}
+
+theorem empty_lendable(): Lendable(tys(), strs(), pick_r().sig.params, Nil, empty_in()) {
+    Lendable(λ i r e => false_elim(empty_no_refer(i, r, e)), λ i p _ _ _ r => empty_no_refer(i, r), λ i k _ p _ _ r q e _ => false_elim(empty_no_refer(i, r, e)))
+}
+
+theorem empty_stuck(io: Io): (pick_prog(λ _ => True)).run(tys(), 0, 0, empty_in(), Nil, io) = Stuck { refl }
+
+theorem unpreconditioned_not_safe(io: Io): ¬pick_safety(λ _ => True) {
     λ safe => {
         let at0 = safe(0, λ g2 k no => false_elim(Nat::not_succ_le_zero(k, no)));
-        let clauses = at0(Nil, Nil, io, 0, Nil, trivial);
-        clauses.left(refl)
+        let clauses = at0(empty_in(), Nil, io, [nats(Nil), nat(0)], ⟨refl, ⟨refl, trivial⟩⟩, trivial, empty_lendable());
+        clauses.left(empty_stuck(io))
     }
 }
 
@@ -188,11 +215,11 @@ theorem bump_written_clause(x, y: Nat):
 fn at_sig() → Sig { Sig([Param(SNamed(0), ByRead), Param(SWord(WBits(64)), ByTake)], [Result(SWord(WNat), OView(0, [SElem(Var(1))]))]) }
 
 theorem view_clause(xs: List<Nat>, i: u64, b: Nat, out: Value(tys())):
-    Value::Views(tys(), [Refer(Ref(b, Nil)), Plain(Dyn(SWord(WBits(64)), i))], Dyn::ixs(tys(), [nats(xs), Dyn(SWord(WBits(64)), i)]), at_sig().results, [out])
+    Value::Views(tys(), 1, [Refer(Ref(b, Nil)), Plain(Dyn(SWord(WBits(64)), i))], Dyn::ixs(tys(), [nats(xs), Dyn(SWord(WBits(64)), i)]), at_sig().results, [out])
     = ((out = Refer(Ref(b, [OnSeq(SeqOne(IWord(64, i)))]))) ∧ True)
 { refl }
 
 // The control: a view of a parameter passed by value owes `False`.
 theorem view_of_plain(xs: List<Nat>, i: u64, out: Value(tys())):
-    Value::Views(tys(), [Plain(nats(xs)), Plain(Dyn(SWord(WBits(64)), i))], Dyn::ixs(tys(), [nats(xs), Dyn(SWord(WBits(64)), i)]), at_sig().results, [out]) = (False ∧ True)
+    Value::Views(tys(), 1, [Plain(nats(xs)), Plain(Dyn(SWord(WBits(64)), i))], Dyn::ixs(tys(), [nats(xs), Dyn(SWord(WBits(64)), i)]), at_sig().results, [out]) = (False ∧ True)
 { refl }
