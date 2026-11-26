@@ -48,6 +48,7 @@ import x86_64_asm;
 import x86_64_asm_runs;
 import x86_64_stack_runs;
 import bitvec;
+import bitvec_signed;
 import bool;
 import list;
 import logic;
@@ -2733,6 +2734,184 @@ fn Prog::guarded(self prog: Prog, need, stop: Nat) → Prog {
 fn stop_code() → List<Instruction> { [MovRI(Rdi, BitVec::ofNat(spent_status())), MovRI(Rax, BitVec::ofNat(60))] }
 
 fn Prog::stopped_at(self prog: Prog, stop: Nat) → Prog { At(At(prog, stop, Block(stop_code())), 0, Syscall) }
+
+// ---------------------------------------------------------------------------
+// The guard's claim (issues/bytes-level-out-of-room.md, step 3)
+//
+// From the call node's start, with the floor in RBP and the stack pointer
+// `d` bytes above it: where the call's need fits in `d`, the guard arrives
+// after its ADD with every register as it was; otherwise it escapes, at the
+// stop's SYSCALL, with the reserved status in RDI and the exit's number in
+// RAX, the memory and the world as they were.
+
+// Writing a register twice keeps the second.
+theorem write_gpr_twice(register: Gpr, a, b: BitVec(64), g: Gprs): write_gpr(register, a, write_gpr(register, b, g)) = write_gpr(register, a, g) {
+    match register {
+        Rax => refl, Rcx => refl, Rdx => refl, Rbx => refl, Rsp => refl, Rbp => refl, Rsi => refl, Rdi => refl,
+        R8 => refl, R9 => refl, R10 => refl, R11 => refl, R12 => refl, R13 => refl, R14 => refl, R15 => refl,
+    }
+}
+
+// An address `k` bytes on, read as a number, where it does not wrap.
+theorem rip_toNat(low: BitVec(64), k: Nat, fits: low.toNat() + k < Nat::pow(2, 64)): next_rip(low, k).toNat() = low.toNat() + k {
+    let count: (BitVec::ofNat(k, n := 64).toNat() = k) = BitVec::toNat_ofNat(64, k, { omega });
+    let as_add: (next_rip(low, k) = low.add(BitVec::ofNat(k))) =
+        trans(BitVec::cong_iterate_increment_count(64, low, sym(count)), BitVec::iter_add_eq_add(64, low, BitVec::ofNat(k)));
+    let bounded: (low.toNat() + BitVec::ofNat(k, n := 64).toNat() < Nat::pow(2, 64)) = { omega };
+    trans(cong_fn<BitVec(64), Nat>(λ x => x.toNat(), as_add), trans(BitVec::toNat_add_mod(64, low, BitVec::ofNat(k)),
+        trans((low.toNat() + BitVec::ofNat(k, n := 64).toNat()).mod_of_lt(Nat::pow(2, 64), bounded),
+            cong_fn<Nat, Nat>(λ x => low.toNat() + x, count))))
+}
+
+// Every offset of the stack lies below the canonical boundary from its
+// lowest address: an offset past it would pass the boundary's own address,
+// which no stack word may be at.
+theorem Stack::offset_small<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), d: Nat,
+    inside: d + 8 <= stack.size): stack.low.toNat() + d < Nat::pow(2, 47) {
+    let top: (Nat::pow(2, 47) < Nat::pow(2, 64)) = Nat::leb_sound(Nat::pow(2, 47) + 1, Nat::pow(2, 64), trivial);
+    let base: (stack.low.toNat() + 8 <= Nat::pow(2, 47)) = stack.canonical(0, { omega });
+    match (stack.low.toNat() + d).lt_or_ge(Nat::pow(2, 47)) {
+        Inl(below) => below,
+        Inr(over) => {
+            let gap = Nat::pow(2, 47) - stack.low.toNat();
+            let at_gap: (stack.at(gap).toNat() = stack.low.toNat() + gap) = rip_toNat(stack.low, gap, { omega });
+            let boundary: (stack.at(gap).toNat() + 8 <= Nat::pow(2, 47)) = stack.canonical(gap, { omega });
+            false_elim({ omega })
+        },
+    }
+}
+
+// The room left, RSP less the floor, read as a number: `d`.
+theorem Stack::room_word<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), d: Nat,
+    inside: d + 8 <= stack.size): stack.at(d).sub(stack.low).toNat() = d {
+    let small = stack.offset_small(d, inside);
+    let top: (Nat::pow(2, 47) < Nat::pow(2, 64)) = Nat::leb_sound(Nat::pow(2, 47) + 1, Nat::pow(2, 64), trivial);
+    let as_add: (stack.at(d) = stack.low.add(BitVec::ofNat(d))) =
+        trans(BitVec::cong_iterate_increment_count(64, stack.low, sym(BitVec::toNat_ofNat(64, d, { omega }))),
+            BitVec::iter_add_eq_add(64, stack.low, BitVec::ofNat(d)));
+    let moved: (stack.at(d).sub(stack.low) = BitVec::ofNat(d)) =
+        trans(cong_fn<BitVec(64), BitVec(64)>(λ x => x.sub(stack.low), trans(as_add, BitVec::add_comm(64, stack.low, BitVec::ofNat(d)))),
+            BitVec::add_sub_cancel(64, BitVec::ofNat(d), stack.low));
+    trans(cong_fn<BitVec(64), Nat>(λ x => x.toNat(), moved), BitVec::toNat_ofNat(64, d, { omega }))
+}
+
+// The guard's immediate, sign-extended, is `need` where it is at most
+// `guard_most()`.
+theorem guard_immediate(need: Nat, most: need <= guard_most()): BitVec::ofNat(need, n := 32).sign_extend(32).toNat() = need {
+    let low: (BitVec::ofNat(need, n := 32).toNat() = need) = BitVec::toNat_ofNat(32, need, { let m: (guard_most() = 2147483647) = refl; omega });
+    let clear: (BitVec::ofNat(need, n := 32).sign_bit() = False) = BitVec::sign_bit_small(31, BitVec::ofNat(need, n := 32),
+        j(sym(low), λ v _ => v < Nat::pow(2, 31), { let m: (guard_most() = 2147483647) = refl; omega }));
+    trans(BitVec::sign_extend_clear_toNat(31, 32, BitVec::ofNat(need, n := 32), clear), low)
+}
+
+// RSP less the floor, in RSP: the guard's JCC is taken exactly where the
+// room left is below the need.
+fn guard_lowered(g: Gprs) → Gprs { write_gpr(Rsp, read_gpr(Rsp, g).sub(read_gpr(Rbp, g)), g) }
+
+theorem guard_taken<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, stack: Stack<M>(fetch, data), d, need: Nat, inside: d + 8 <= stack.size,
+    most: need <= guard_most(), g: Gprs, rsp: read_gpr(Rsp, g) = stack.at(d), rbp: read_gpr(Rbp, g) = stack.low):
+    ((guard_test(need).taken(guard_lowered(g)) = True) → d < need) ∧ ((guard_test(need).taken(guard_lowered(g)) = False) → need <= d) {
+    let left = read_gpr(Rsp, guard_lowered(g));
+    let right = BitVec::ofNat(need, n := 32).sign_extend(32);
+    let room: (left.toNat() = d) = trans(cong_fn<BitVec(64), Nat>(λ x => x.toNat(),
+        trans(read_gpr_self(Rsp, read_gpr(Rsp, g).sub(read_gpr(Rbp, g)), g),
+            trans(cong_fn<BitVec(64), BitVec(64)>(λ x => x.sub(read_gpr(Rbp, g)), rsp),
+                cong_fn<BitVec(64), BitVec(64)>(λ x => stack.at(d).sub(x), rbp)))), stack.room_word(d, inside));
+    let imm: (right.toNat() = need) = guard_immediate(need, most);
+    let is: (guard_test(need).taken(guard_lowered(g)) = left.unsigned_lt_bit(right)) = refl;
+    ⟨λ yes => { let lt = bitvec_omega::unsigned_true(64, left, right, trans(sym(is), yes)); omega },
+     λ no => { let ge = bitvec_omega::unsigned_false(64, left, right, trans(sym(is), no)); omega }⟩
+}
+
+// The stop's SYSCALL, reached: resident, the reserved status and the
+// exit's number in place.
+fn Site::StopAt<M>(self site: Site<M>, at: Nat) → MachineState<M> → Type {
+    λ t => ((t.rip = next_rip(site.origin, at)) ∧ site.Resident(t.memory)) ∧
+        ((read_gpr(Rdi, t.gprs) = BitVec::ofNat(spent_status())) ∧ (read_gpr(Rax, t.gprs) = BitVec::ofNat(60)))
+}
+
+// The guard as a claim, at no system call and bound zero. Its escape is
+// whatever `fires` makes of the stop reached from a start whose room is
+// below the need.
+theorem Site::guard_claims<M, W>(self site: Site<M>, writes: ByteWrites<M>, kernel: Kernel<M, W>, fits: FillsFit(site.program, no_fills()),
+    stack: Stack<M>(site.fetch, site.data), prog: Prog, need, stop: Nat,
+    lower_k: Nat, lower_at: asm_back(site.program, lower_k) = At(prog, 0, Block([guard_lower()])),
+    test_k: Nat, test_at: asm_back(site.program, test_k) = At(prog, 0, Block([guard_lower()])).tested(guard_test(need)),
+    branch_k: Nat, branch_at: asm_back(site.program, branch_k) = At(prog, 0, Block([guard_lower()])).branched_by(guard_test(need), stop, False),
+    raise_k: Nat, raise_at: asm_back(site.program, raise_k) = prog.guarded(need, stop),
+    stop_k: Nat, stop_prog: Prog, stop_at: asm_back(site.program, stop_k) = At(stop_prog, stop, Block(stop_code())),
+    stop_lands: JccLands(asm_labels(site.program), prog_len(At(prog, 0, Block([guard_lower()])).tested(guard_test(need))), False, B, stop,
+        prog_len(stop_prog)),
+    d: Nat, inside: d + 8 <= stack.size, most: need <= guard_most(), pre: Gprs → M → W → Type, esc: Running<M, W> → Type,
+    floored: (g: Gprs) → (m: M) → (w: W) → pre(g, m, w) → (read_gpr(Rsp, g) = stack.at(d)) ∧ (read_gpr(Rbp, g) = stack.low),
+    fires: (r, t: Running<M, W>) → pre(r.state.gprs, r.state.memory, r.io) → t.state.memory = r.state.memory → t.io = r.io → d < need →
+        site.StopAt(prog_len(stop_prog) + block_length(stop_code()), t.state) → esc(t)):
+    site.ClaimsOr(writes, kernel, 0, 0, prog_len(prog), λ (r: Running<M, W>) => pre(r.state.gprs, r.state.memory, r.io),
+        site.Arrived(prog_len(prog.guarded(need, stop)), λ (t: Running<M, W>) => pre(t.state.gprs, t.state.memory, t.io) ∧ (need <= d)), esc) {
+    λ r here resident held => {
+        let s = r.state;
+        let g0 = s.gprs;
+        let start = At(prog, 0, Block([guard_lower()]));
+        let regs = floored(g0, s.memory, r.io, held);
+        let goal = site.Arrived(prog_len(prog.guarded(need, stop)), λ (t: Running<M, W>) => pre(t.state.gprs, t.state.memory, t.io) ∧ (need <= d));
+        // SUB RSP, RBP.
+        let lowered = site.moves_block(writes, fits, lower_k, prog, 0, [guard_lower()], lower_at, refl,
+            λ (g: Gprs) (m: M) => (g = g0) ∧ (m = s.memory), λ (g: Gprs) (m: M) => (g = guard_lowered(g0)) ∧ (m = s.memory),
+            λ x m h => ⟨j(h.left, λ y _ => execute_block_normal([guard_lower()], x).gprs = guard_lowered(y), refl), h.right⟩)(s, here, resident,
+            ⟨refl, refl⟩);
+        let u = lowered.witness;
+        let u_gprs: (u.gprs = guard_lowered(g0)) = lowered.proof.right.right.right.left;
+        let u_memory: (u.memory = s.memory) = lowered.proof.right.right.right.right;
+        // CMP RSP, need; JB stop.
+        let found = site.test_by_steps(writes, fits, start, guard_test(need), stop, False, test_k, test_at, branch_k, branch_at, prog_len(stop_prog),
+            stop_lands, u, lowered.proof.right.left, lowered.proof.right.right.left);
+        let v = found.witness;
+        let v_gprs: (v.gprs = guard_lowered(g0)) = trans(found.proof.right.left.left, u_gprs);
+        let v_memory: (v.memory = s.memory) = trans(found.proof.right.left.right, u_memory);
+        let to_v = machine_steps_trans(site.fetch, site.data, writes, s, u, v, lowered.proof.left, found.proof.left);
+        let v_resident = j(sym(v_memory), λ memory _ => site.Resident(memory), resident);
+        let which = guard_taken(stack, d, need, inside, most, g0, regs.left, regs.right);
+        match taken: guard_test(need).taken(guard_lowered(g0)) {
+            False => {
+                // ADD RSP, RBP: every register back.
+                let fits_d: (need <= d) = which.right(taken);
+                let raised = site.moves_block(writes, fits, raise_k, start.branched_by(guard_test(need), stop, False), 0, [guard_raise()], raise_at, refl,
+                    λ (g: Gprs) (m: M) => (g = guard_lowered(g0)) ∧ (m = s.memory), λ (g: Gprs) (m: M) => (g = g0) ∧ (m = s.memory),
+                    λ x m h => {
+                        let back: (read_gpr(Rsp, guard_lowered(g0)).add(read_gpr(Rbp, guard_lowered(g0))) = read_gpr(Rsp, g0)) =
+                            BitVec::sub_add_cancel(64, read_gpr(Rsp, g0), read_gpr(Rbp, g0));
+                        let restored: (write_gpr(Rsp, read_gpr(Rsp, g0), guard_lowered(g0)) = g0) =
+                            trans(write_gpr_twice(Rsp, read_gpr(Rsp, g0), read_gpr(Rsp, g0).sub(read_gpr(Rbp, g0)), g0), write_gpr_held(Rsp, g0));
+                        let at_x: (write_gpr(Rsp, read_gpr(Rsp, x.gprs).add(read_gpr(Rbp, x.gprs)), x.gprs) =
+                            write_gpr(Rsp, read_gpr(Rsp, guard_lowered(g0)).add(read_gpr(Rbp, guard_lowered(g0))), guard_lowered(g0))) =
+                            j(sym(h.left), λ y _ => write_gpr(Rsp, read_gpr(Rsp, y).add(read_gpr(Rbp, y)), y) =
+                                write_gpr(Rsp, read_gpr(Rsp, guard_lowered(g0)).add(read_gpr(Rbp, guard_lowered(g0))), guard_lowered(g0)), refl);
+                        ⟨trans(at_x, trans(cong_fn<BitVec(64), Gprs>(λ w => write_gpr(Rsp, w, guard_lowered(g0)), back), restored)), h.right⟩
+                    })(v, found.proof.right.right.left(taken), v_resident, ⟨v_gprs, v_memory⟩);
+                let t = raised.witness;
+                let t_gprs: (t.gprs = g0) = raised.proof.right.right.right.left;
+                let t_memory: (t.memory = s.memory) = raised.proof.right.right.right.right;
+                site.performs_or_steps(writes, kernel, goal, esc, r, t, machine_steps_trans(site.fetch, site.data, writes, s, v, t, to_v, raised.proof.left),
+                    ⟨⟨raised.proof.right.left, raised.proof.right.right.left⟩,
+                     ⟨j(sym(t_gprs), λ g _ => pre(g, t.memory, r.io), j(sym(t_memory), λ m _ => pre(g0, m, r.io), held)), fits_d⟩⟩)
+            },
+            True => {
+                // The stop: the status, the exit's number, the SYSCALL.
+                let short: (d < need) = which.left(taken);
+                let stopped = site.moves_block(writes, fits, stop_k, stop_prog, stop, stop_code(), stop_at, refl,
+                    λ (g: Gprs) (m: M) => m = s.memory,
+                    λ (g: Gprs) (m: M) => ((read_gpr(Rdi, g) = BitVec::ofNat(spent_status())) ∧ (read_gpr(Rax, g) = BitVec::ofNat(60))) ∧ (m = s.memory),
+                    λ x m h => ⟨⟨refl, refl⟩, h⟩)(v, found.proof.right.right.right(taken), v_resident, v_memory);
+                let t = stopped.witness;
+                let t_memory: (t.memory = s.memory) = stopped.proof.right.right.right.right;
+                let steps = machine_steps_trans(site.fetch, site.data, writes, s, v, t, to_v, stopped.proof.left);
+                site.performs_or_escape(writes, kernel, goal, esc, 0, 0, r, t, steps.witness, steps.proof,
+                    fires(r, Running(t, r.io), held, t_memory, refl, short,
+                        ⟨⟨stopped.proof.right.left, stopped.proof.right.right.left⟩, stopped.proof.right.right.right.left⟩))
+            },
+        }
+    }
+}
 
 // A region's code: a leaf's nodes; a sequence's parts one after the other;
 // a branch as FunctionIR's conditional (the test of its bit, or of the

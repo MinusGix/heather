@@ -2960,6 +2960,21 @@ ruled after part 2.
 - Until part 4 the lowering proves `TracksAt` (`Tracked` at no escape);
   its proof did not move.
 
+**Step 3, part 3, item 2: the guard's stage lemma** (`bytes_level_lower`:
+`Site::guard_claims`). From the call node's start, under any precondition
+that holds RSP at `stack.at(d)` and RBP at `stack.low`, at no system call
+and bound zero: where `need <= d`, the guard arrives after its ADD with every
+register as it was (`need <= d` added to the goal); otherwise it escapes at
+the stop's SYSCALL (`Site::StopAt`: resident, RDI the reserved status, RAX
+the exit's number), the memory and the world as they were, the escape being
+whatever the caller's `fires` makes of that state and `d < need`. The
+arithmetic is three lemmas: `Stack::offset_small` (every offset of the
+stack lies below the canonical boundary from its lowest address, from
+`canonical` at the boundary's own offset), `Stack::room_word` (RSP less the
+floor reads as `d`) and `guard_immediate` (the sign-extended immediate is
+`need` at most `guard_most()`); `guard_taken` puts them together: the JB is
+taken exactly where `d < need`.
+
 ## 18. The world, termination, and level 2 fixed (2026-11-25)
 
 Round six of the design review. Where this section and §15.4, §15.5 or §17
