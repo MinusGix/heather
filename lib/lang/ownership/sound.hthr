@@ -15525,3 +15525,129 @@ theorem Inv::call_swap(tys: Nat → Type, strs: Strs(tys), sl: StrsLaws(tys, str
             }),
         simK.codes)
 }
+
+// ---------------------------------------------------------------------------
+// P4's assembly: the invariant after a call's lends and the callee's run,
+// before its results and slots are bound.
+
+theorem Heap::put_at_len(tys: Nat → Type, strs: Strs(tys), h: Heap(tys), k: Ref, o: Dyn(tys)): (Heap::put_at(tys, strs, h, k, o)).len() = h.len() {
+    (match Heap::val(tys, strs, h, k.b) as λ z => (match z as λ _ => Heap(tys) { Some(d) => Heap::store(tys, h, k.b, Sel::write_at(tys, strs, k.sels ++ Nil<Sel>(), λ _ => o, d)), None => h }).len() = h.len() {
+        None => refl,
+        Some(d) => Heap::store_len(tys, h, k.b, Sel::write_at(tys, strs, k.sels ++ Nil<Sel>(), λ _ => o, d)),
+    })
+}
+
+theorem Heap::put_at_fwd(tys: Nat → Type, strs: Strs(tys), h: Heap(tys), k: Ref, o: Dyn(tys), b: Nat, ob: Obj(tys), ho: Heap::obj(tys, h, b) = Some(ob)):
+    Exists<Obj(tys)>(λ o1 => (Heap::obj(tys, Heap::put_at(tys, strs, h, k, o), b) = Some(o1)) ∧ (o1.holes = ob.holes))
+{
+    (match Heap::val(tys, strs, h, k.b) as λ z => Exists<Obj(tys)>(λ o1 => (Heap::obj(tys, match z as λ _ => Heap(tys) { Some(d) => Heap::store(tys, h, k.b, Sel::write_at(tys, strs, k.sels ++ Nil<Sel>(), λ _ => o, d)), None => h }, b) = Some(o1)) ∧ (o1.holes = ob.holes)) {
+        None => Exists(ob, ⟨ho, refl⟩),
+        Some(d) => {
+            let nw = Sel::write_at(tys, strs, k.sels ++ Nil<Sel>(), λ _ => o, d);
+            match Nat::eq_or_ne(b, k.b) {
+                Inl(eb) => Exists(Obj(nw, ob.holes), ⟨j(sym(eb), λ z _ => Heap::obj(tys, Heap::store(tys, h, k.b, nw), z) = Some(Obj(nw, ob.holes)),
+                    Heap::obj_store_here(tys, h, k.b, nw, ob, j(eb, λ z _ => Heap::obj(tys, h, z) = Some(ob), ho))), refl⟩),
+                Inr(ne) => Exists(ob, ⟨trans(Heap::obj_store_other(tys, h, k.b, b, nw, ne), ho), refl⟩),
+            }
+        },
+    })
+}
+
+theorem Heap::puts_len(tys: Nat → Type, strs: Strs(tys), vs: List<Value(tys)>, is: List<Nat>): (outs: List<Dyn(tys)>) → (h: Heap(tys)) → (Heap::puts(tys, strs, h, vs, is, outs)).len() = h.len() {
+    match is {
+        Nil => λ outs h => refl,
+        Cons(i, rest) => λ outs => match outs {
+            Nil => λ h => refl,
+            Cons(o, orest) => λ h => trans(Heap::puts_len(tys, strs, vs, rest, orest, Heap::put_opt(tys, strs, h, vs.nth(i), o)),
+                (match vs.nth(i) as λ z => (Heap::put_opt(tys, strs, h, z, o)).len() = h.len() {
+                    None => refl,
+                    Some(v) => match v as λ v2 => (Heap::put_opt(tys, strs, h, Some(v2), o)).len() = h.len() { Plain(_) => refl, Refer(k) => Heap::put_at_len(tys, strs, h, k, o) },
+                })),
+        },
+    }
+}
+
+theorem Heap::puts_fwd(tys: Nat → Type, strs: Strs(tys), vs: List<Value(tys)>, b: Nat, is: List<Nat>): (outs: List<Dyn(tys)>) → (h: Heap(tys)) → (ob: Obj(tys)) → Heap::obj(tys, h, b) = Some(ob) →
+    Exists<Obj(tys)>(λ o1 => (Heap::obj(tys, Heap::puts(tys, strs, h, vs, is, outs), b) = Some(o1)) ∧ (o1.holes = ob.holes))
+{
+    match is {
+        Nil => λ outs h ob ho => Exists(ob, ⟨ho, refl⟩),
+        Cons(i, rest) => λ outs => match outs {
+            Nil => λ h ob ho => Exists(ob, ⟨ho, refl⟩),
+            Cons(o, orest) => λ h ob ho => {
+                let step: Exists<Obj(tys)>(λ o1 => (Heap::obj(tys, Heap::put_opt(tys, strs, h, vs.nth(i), o), b) = Some(o1)) ∧ (o1.holes = ob.holes)) =
+                    (match vs.nth(i) as λ z => Exists<Obj(tys)>(λ o1 => (Heap::obj(tys, Heap::put_opt(tys, strs, h, z, o), b) = Some(o1)) ∧ (o1.holes = ob.holes)) {
+                        None => Exists(ob, ⟨ho, refl⟩),
+                        Some(v) => match v as λ v2 => Exists<Obj(tys)>(λ o1 => (Heap::obj(tys, Heap::put_opt(tys, strs, h, Some(v2), o), b) = Some(o1)) ∧ (o1.holes = ob.holes)) {
+                            Plain(_) => Exists(ob, ⟨ho, refl⟩),
+                            Refer(k) => Heap::put_at_fwd(tys, strs, h, k, o, b, ob, ho),
+                        },
+                    });
+                match step {
+                    ⟨o1, p1⟩ => match Heap::puts_fwd(tys, strs, vs, b, rest, orest, Heap::put_opt(tys, strs, h, vs.nth(i), o), o1, p1.left) {
+                        ⟨o2, p2⟩ => Exists(o2, ⟨p2.left, trans(p2.right, p1.right)⟩),
+                    },
+                }
+            },
+        },
+    }
+}
+
+// P4: the invariant after the lends and the callee's run, the written values
+// put (`Inv::puts`), the lends made (`Inv::lends`), then the callee's heap in
+// place of the puts' (`Inv::call_swap`, `Inv::heap_rest`) with the caller's
+// frame composed with the callee's (`LentFrame::call`). What is assumed of
+// the callee is its `SafeAt`'s conclusions at a `Done`.
+theorem Inv::call_after(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(tys, cx.strs), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>}, inv: Inv(tys, cx.strs, s, e, m, h0, lent),
+    none: s.pending() = False, ps: List<Param>, xs: List<Var>, nl: Next, okl: s.lend_all(tys, cx.strs, ps, xs) = Some(nl), hres: Residual::All(nl.rs, tys, cx, e, True),
+    vs: List<Value(tys)>, pv: Cell::pass_all(tys, cx.strs, m.heap, ps, xs.map(λ x => REnv::get(tys, m.env, x))) = Some(vs), ld: Lendable(tys, cx.strs, ps, m.heap, vs),
+    ds: List<Dyn(tys)>, rv: Value::ReadAll(tys, cx.strs, m.heap, m.heap.len(), vs, ds),
+    nres: Nat, outs: List<Value(tys)>, wout: List<Dyn(tys)>, ah: Heap(tys), io2: Io, ra: Value::ReadAll(tys, cx.strs, ah, ah.len(), outs, wout),
+    wr: Value::Written(tys, cx.strs, vs, ds, Param::written_from(ps)(0), outs.drop(nres), wout.drop(nres)),
+    fr: Heap::Frame(tys, cx.strs, m.heap, ah, Value::lent(tys, ps, vs)), kp: Heap::Kept(tys, m.heap, ah)):
+    Inv(tys, cx.strs, nl.st, s.puts_mean(tys, cx.strs, vs, xs, e, Param::written_from(ps)(0), wout.drop(nres)), Mach(ah, m.env, io2), h0, lent)
+{
+    let strs = cx.strs;
+    let W = Param::written_from(ps)(0);
+    let hK = Heap::puts(tys, strs, m.heap, vs, W, wout.drop(nres));
+    let eK = s.puts_mean(tys, strs, vs, xs, e, W, wout.drop(nres));
+    let sim0 = Inv::sim_now(tys, strs, inv, none);
+    let arg = λ (i: Nat) (p: Param) (hp: ps.nth(i) = Some(p)) (pm: p.mode = ByWrite) (k: Ref) (hv: vs.nth(i) = Some(Refer(k))) =>
+        Inv::put_at_arg(tys, cx, sl, inv, none, ps, xs, nl, okl, hres, vs, pv, i, p, hp, pm, k, hv);
+    let rd = λ (i: Nat) (k: Ref) (hv: vs.nth(i) = Some(Refer(k))) => match Value::read_all_at(tys, strs, m.heap, m.heap.len(), vs, ds, rv, i, Refer(k), hv) {
+        ⟨d, pd⟩ => {
+            let g: (Value::get(tys, strs, m.heap, Refer(k), Nil) = Some(d)) = Value::get_of_read(tys, strs, m.heap, Refer(k), d, pd.right,
+                λ r er => j(er, λ u _ => match u as λ _ => Type { Refer(r2) => Exists<Dyn(tys)>(λ d1 => (Heap::obj(tys, m.heap, r2.b) = Some(Obj(d1, Nil))) ∧ (Sel::fit(tys, strs, r2.sels, d1) = True)), Plain(_) => True },
+                    ld.live(i, k, hv)));
+            let r: Exists<Dyn(tys)>(λ d2 => (ds.nth(i) = Some(d2)) ∧ (Value::get(tys, strs, m.heap, Refer(k), Nil) = Some(d2))) = Exists(d, ⟨pd.left, g⟩);
+            r
+        },
+    };
+    let wm = λ (i: Nat) (mi: Mem(i, W)) => {
+        let wi = Param::written_in(ps, 0, i, mi);
+        let ii: (i - 0 = i) = omega();
+        let r: Exists<Param>(λ p => (ps.nth(i) = Some(p)) ∧ (p.mode = ByWrite)) = j(ii, λ z _ => Exists<Param>(λ p => (ps.nth(z) = Some(p)) ∧ (p.mode = ByWrite)), wi.right);
+        r
+    };
+    let hb = λ (i: Nat) (k: Ref) (hv: vs.nth(i) = Some(Refer(k))) (ob: Obj(tys)) (ho: Heap::obj(tys, m.heap, k.b) = Some(ob)) => match ld.live(i, k, hv) {
+        ⟨d1, pd1⟩ => {
+            let r: (ob.holes = Nil) = cong_fn(λ (z: Obj(tys)) => z.holes, Option::some_inj(ob, Obj(d1, Nil), trans(sym(ho), pd1.left)));
+            r
+        },
+    };
+    let iP: Inv(tys, strs, s, eK, Mach(hK, m.env, m.io), h0, lent) = Inv::puts(tys, cx, sl, inv, none, ps, xs, vs, ds, ld.apart, arg, rd, W, outs.drop(nres), wout.drop(nres), wr,
+        Param::written_incr(ps, 0), wm, e, m.heap, inv, λ _ _ _ _ => refl, hb);
+    let iL: Inv(tys, strs, nl.st, eK, Mach(hK, m.env, m.io), h0, lent) = Inv::lends(tys, strs, xs, s, iP, ps, nl, okl);
+    let th = CSt::lend_all_thin(tys, strs, xs, s, ps, nl, okl);
+    let noneL: (nl.st.pending() = False) = trans(cong_fn(λ (vw: List<VEnt>) => vw.any_bit(λ en => en.mode.writes() && !en.back), th.views), none);
+    let simK = Inv::sim_now(tys, strs, iL, noneL);
+    let sim2 = Inv::call_swap(tys, strs, sl, inv, ps, xs, nl, okl, vs, pv, ld, ds, nres, outs, wout, ah, ra, wr, fr, kp.right, eK, io2, simK);
+    let lf = LentFrame::call(tys, strs, sl, inv.frame, ah, Value::lent(tys, ps, vs), fr, Inv::call_un(tys, strs, inv, sim0, ps, xs, nl, okl, vs, pv),
+        Inv::call_lk(tys, strs, m.heap, ah, ps, vs, ld, ds, rv, nres, outs, wout, ra, wr, kp.right));
+    let kl: (hK.len() = m.heap.len()) = Heap::puts_len(tys, strs, vs, W, wout.drop(nres), m.heap);
+    let stK: Heap::Stays(tys, hK, m.heap) = λ b bl ob2 ho2 => match Heap::puts_fwd(tys, strs, vs, b, W, wout.drop(nres), m.heap, ob2, ho2) {
+        ⟨o1, p1⟩ => Exists(o1, ⟨p1.left, λ hn => trans(sym(p1.right), hn)⟩),
+    };
+    let st: Heap::Stays(tys, hK, ah) = Heap::stays_trans(tys, hK, m.heap, ah, stK, kp.right, omega(kl));
+    Inv::heap_rest(tys, strs, iL, noneL, ah, io2, lf, omega(kl, kp.left), st, eK, sim2, λ _ _ => refl)
+}
