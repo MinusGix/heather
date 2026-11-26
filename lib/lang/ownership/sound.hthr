@@ -14860,3 +14860,102 @@ theorem Inv::put_at_arg(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(tys, cx.st
         },
     }
 }
+
+// ---------------------------------------------------------------------------
+// P4, the puts against the callee's heap, block by block: the puts at a
+// block are the lens equation's puts of the written references into it,
+// each value put being what that reference reads after the call.
+
+// A whole reference into the block among the puts: the fold ends at what is
+// put, every later put writing back what is there (`Sel::put_lent_self`).
+theorem Sel::put_lent_whole_in(tys: Nat → Type, strs: Strs(tys), sl: StrsLaws(tys, strs), b: Nat, a: Dyn(tys), rs: List<Ref>):
+    Exists<Ref>(λ r => Mem(r, rs) ∧ ((r.b = b) ∧ (r.sels = Nil))) → (d: Dyn(tys)) → Sel::put_lent(tys, strs, rs, b, a, d) = a
+{
+    match rs {
+        Nil => λ ex d => match ex { ⟨r, pr⟩ => false_elim(pr.left) },
+        Cons(r0, rest) => λ ex d => match ex {
+            ⟨r, pr⟩ => match pr.left {
+                Inl(er) => {
+                    let w: (Sel::put_ref(tys, strs, r0, b, a, d) = a) = {
+                        let rb: (r0.b = b) = trans(cong_fn(λ (z: Ref) => z.b, sym(er)), pr.right.left);
+                        let rn: (r0.sels = Nil) = trans(cong_fn(λ (z: Ref) => z.sels, sym(er)), pr.right.right);
+                        trans(Sel::put_ref_in(tys, strs, r0, b, a, d, rb),
+                            j(sym(rn), λ z _ => Sel::write_at(tys, strs, z, λ _ => Sel::read_at(tys, strs, z, a), d) = a, refl))
+                    };
+                    trans(cong_fn(λ (z: Dyn(tys)) => Sel::put_lent(tys, strs, rest, b, a, z), w), Sel::put_lent_self(tys, strs, sl, rest, b, a))
+                },
+                Inr(m2) => Sel::put_lent_whole_in(tys, strs, sl, b, a, rest, Exists(r, ⟨m2, pr.right⟩), Sel::put_ref(tys, strs, r0, b, a, d)),
+            },
+        },
+    }
+}
+
+// The references a list of written indices passes, in its order.
+fn Value::wrefs(tys: Nat → Type, vs: List<Value(tys)>, is: List<Nat>) → List<Ref> {
+    match is { Nil => Nil, Cons(i, rest) => match vs.nth(i) { Some(v) => match v { Refer(k) => Cons(k, Value::wrefs(tys, vs, rest)), Plain(_) => Value::wrefs(tys, vs, rest) }, None => Value::wrefs(tys, vs, rest) } }
+}
+
+// Each value put at a reference into block `b` is what that reference reads
+// in `a`.
+fn Value::OutsRead(tys: Nat → Type, strs: Strs(tys), vs: List<Value(tys)>, b: Nat, a: Dyn(tys), is: List<Nat>, outs: List<Dyn(tys)>) → Type {
+    match is {
+        Nil => True,
+        Cons(i, rest) => match outs {
+            Nil => False,
+            Cons(o, orest) => (match vs.nth(i) as λ _ => Type { Some(v) => match v as λ _ => Type { Refer(k) => k.b = b → o = Sel::read_at(tys, strs, k.sels, a), Plain(_) => True }, None => True }) ∧
+                Value::OutsRead(tys, strs, vs, b, a, rest, orest),
+        },
+    }
+}
+
+// The puts at a bare block: its value with the written references into it
+// put from `a`.
+theorem Heap::puts_block(tys: Nat → Type, strs: Strs(tys), vs: List<Value(tys)>, b: Nat, a: Dyn(tys), is: List<Nat>): (outs: List<Dyn(tys)>) → Value::OutsRead(tys, strs, vs, b, a, is, outs) →
+    (h: Heap(tys)) → (d: Dyn(tys)) → Heap::obj(tys, h, b) = Some(Obj(d, Nil)) →
+    Heap::obj(tys, Heap::puts(tys, strs, h, vs, is, outs), b) = Some(Obj(Sel::put_lent(tys, strs, Value::wrefs(tys, vs, is), b, a, d), Nil))
+{
+    match is {
+        Nil => λ outs _ h d ho => ho,
+        Cons(i, rest) => λ outs => match outs {
+            Nil => λ no => false_elim(no),
+            Cons(o, orest) => λ orr h d ho => {
+                let ih = λ (h2: Heap(tys)) (d2: Dyn(tys)) (ho2: Heap::obj(tys, h2, b) = Some(Obj(d2, Nil))) => Heap::puts_block(tys, strs, vs, b, a, rest, orest, orr.right, h2, d2, ho2);
+                (match vs.nth(i) as λ z => (match z as λ _ => Type { Some(v) => match v as λ _ => Type { Refer(k) => k.b = b → o = Sel::read_at(tys, strs, k.sels, a), Plain(_) => True }, None => True }) →
+                        Heap::obj(tys, Heap::puts(tys, strs, Heap::put_opt(tys, strs, h, z, o), vs, rest, orest), b) =
+                            Some(Obj(Sel::put_lent(tys, strs, match z as λ _ => List<Ref> { Some(v) => match v as λ _ => List<Ref> { Refer(k) => Cons(k, Value::wrefs(tys, vs, rest)), Plain(_) => Value::wrefs(tys, vs, rest) }, None => Value::wrefs(tys, vs, rest) }, b, a, d), Nil)) {
+                    None => λ _ => ih(h, d, ho),
+                    Some(v) => match v as λ v2 => (match v2 as λ _ => Type { Refer(k) => k.b = b → o = Sel::read_at(tys, strs, k.sels, a), Plain(_) => True }) →
+                            Heap::obj(tys, Heap::puts(tys, strs, Heap::put_opt(tys, strs, h, Some(v2), o), vs, rest, orest), b) =
+                                Some(Obj(Sel::put_lent(tys, strs, match v2 as λ _ => List<Ref> { Refer(k) => Cons(k, Value::wrefs(tys, vs, rest)), Plain(_) => Value::wrefs(tys, vs, rest) }, b, a, d), Nil)) {
+                        Plain(_) => λ _ => ih(h, d, ho),
+                        Refer(k) => λ hk => match Nat::eq_or_ne(k.b, b) {
+                            Inl(eb) => {
+                                let hob: (Heap::obj(tys, h, k.b) = Some(Obj(d, Nil))) = j(sym(eb), λ z _ => Heap::obj(tys, h, z) = Some(Obj(d, Nil)), ho);
+                                let hv: (Heap::val(tys, strs, h, k.b) = Some(d)) = Heap::val_bare(tys, strs, h, k.b, Obj(d, Nil), hob, refl);
+                                let nw = Sel::write_at(tys, strs, k.sels ++ Nil<Sel>(), λ _ => o, d);
+                                let pr: (nw = Sel::put_ref(tys, strs, k, b, a, d)) =
+                                    trans(cong_fn(λ (z: List<Sel>) => Sel::write_at(tys, strs, z, λ _ => o, d), List::append_nil(k.sels)),
+                                        trans(j(hk(eb), λ z _ => Sel::write_at(tys, strs, k.sels, λ _ => o, d) = Sel::write_at(tys, strs, k.sels, λ _ => z, d), refl), sym(Sel::put_ref_in(tys, strs, k, b, a, d, eb))));
+                                let ho2: (Heap::obj(tys, Heap::put_at(tys, strs, h, k, o), b) = Some(Obj(Sel::put_ref(tys, strs, k, b, a, d), Nil))) =
+                                    trans(cong_fn(λ (hh: Heap(tys)) => Heap::obj(tys, hh, b), Heap::put_at_val(tys, strs, h, k, o, d, hv)),
+                                        trans(j(eb, λ z _ => Heap::obj(tys, Heap::store(tys, h, k.b, nw), z) = Some(Obj(nw, Nil)), Heap::obj_store_here(tys, h, k.b, nw, Obj(d, Nil), hob)),
+                                            cong_fn(λ (z: Dyn(tys)) => Some(Obj(z, Nil<HoleAt>())), pr)));
+                                ih(Heap::put_at(tys, strs, h, k, o), Sel::put_ref(tys, strs, k, b, a, d), ho2)
+                            },
+                            Inr(ne) => {
+                                let keep: (Heap::obj(tys, Heap::put_at(tys, strs, h, k, o), b) = Heap::obj(tys, h, b)) =
+                                    (match Heap::val(tys, strs, h, k.b) as λ z => Heap::obj(tys, match z as λ _ => Heap(tys) { Some(d2) => Heap::store(tys, h, k.b, Sel::write_at(tys, strs, k.sels ++ Nil<Sel>(), λ _ => o, d2)), None => h }, b) = Heap::obj(tys, h, b) {
+                                        None => refl,
+                                        Some(d2) => Heap::obj_store_other(tys, h, k.b, b, Sel::write_at(tys, strs, k.sels ++ Nil<Sel>(), λ _ => o, d2), λ eq => ne(sym(eq))),
+                                    });
+                                j(sym(Sel::put_ref_out(tys, strs, k, b, a, d, ne)), λ z _ => Heap::obj(tys, Heap::puts(tys, strs, Heap::put_at(tys, strs, h, k, o), vs, rest, orest), b) =
+                                        Some(Obj(Sel::put_lent(tys, strs, Value::wrefs(tys, vs, rest), b, a, z), Nil)),
+                                    ih(Heap::put_at(tys, strs, h, k, o), d, trans(keep, ho)))
+                            },
+                        },
+                    },
+                })(orr.left)
+            },
+        },
+    }
+}
