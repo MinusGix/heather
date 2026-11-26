@@ -622,7 +622,7 @@ fn CSt::result(self s: CSt, tys: Nat → Type, strs: Strs(tys), s0: CSt, sig: Si
     match r.origin {
         OFresh => match Shape::plain(tys, strs, r.code) { True => Some(s.push(CVar(r.code, KPlain))), False => Some(s.push(CVar(r.code, KHold(s.nobj, AcOwn))).fresh_obj()) },
         OParam(i) => match (sig.params.nth(i).unwrap_or(Param(SWord(WNat), ByRead))).mode {
-            ByTake => match Shape::moves(tys, strs, r.code) {
+            ByTake => match Shape::moves(tys, strs, (sig.params.nth(i).unwrap_or(Param(SWord(WNat), ByRead))).code) {
                 False => Some(s.push(CVar(r.code, KPlain))),
                 True => xs.nth(i).and_then(λ x => s0.lvl(x)).and_then(λ l => match s0.role(l) {
                     KHold(o, a) => match a { AcOwn => Some(s.push(CVar(r.code, KHold(o, AcOwn)))), AcRead => None, AcWrite => None },
@@ -672,14 +672,22 @@ fn CSt::slots(self s: CSt, s0: CSt, sig: Sig, xs: List<Var>, ws: List<Nat>) → 
 // caller's `result` read this one statement of the modes:
 // - a parameter answered back (`OParam(i)`) names a taken parameter, and a
 //   view (`OView(i, …)`) a read one;
+// - a result's code is what its origin gives: a parameter's code, or the
+//   code at a view's steps in its parameter's (`Shape::steps_ok`, as `View`
+//   finds a place's code). The caller binds by it while the run hands back
+//   by the parameter's (`Cell::pass`), and a caller of a table entry that
+//   differs would hold a reference as a plain value, or a copy as an object;
 // - a view's steps name parameters and earlier results only (a telescope,
 //   as a dependent answer is scoped: `(i, view of xs[i])`), so a caller
 //   binds one result at a time.
 fn Result::ok(tys: Nat → Type, strs: Strs(tys), ps: List<Param>, r: Result, k: Nat) → Bool {
     match r.origin {
         OFresh => True,
-        OParam(i) => match ps.nth(i) { Some(p) => match p.mode { ByTake => True, ByRead => False, ByWrite => False }, None => False },
-        OView(i, xs) => (match ps.nth(i) { Some(p) => match p.mode { ByRead => True, ByTake => False, ByWrite => False }, None => False }) && Steps::lvls(xs).all_bit(λ a => (a + 1).leb(ps.len() + k)),
+        OParam(i) => match ps.nth(i) { Some(p) => (match p.mode { ByTake => True, ByRead => False, ByWrite => False }) && r.code.same(p.code), None => False },
+        OView(i, xs) => (match ps.nth(i) {
+            Some(p) => (match p.mode { ByRead => True, ByTake => False, ByWrite => False }) && (match Shape::steps_ok(tys, strs, xs, p.code) { Some(c) => r.code.same(c), None => False }),
+            None => False,
+        }) && Steps::lvls(xs).all_bit(λ a => (a + 1).leb(ps.len() + k)),
     }
 }
 

@@ -522,6 +522,32 @@ fn view_of_written() → Func {
 
 theorem view_of_written_refused(): refusal_in([view_of_written()], 0) = Some(WOwn) { refl }
 
+// A result's code is what its origin gives (`Sig::ok`, §23.21): a parameter
+// answered back has its parameter's code, and a view the code at its steps.
+// A signature that differs is refused where it is written and at the call:
+// the caller binds by the result's code while the run hands back by the
+// parameter's, so it would hold the argument's reference as a plain value,
+// or a plain copy as an object.
+fn recode(sg: Sig, b: Body) → List<Func> { [Func(sg, b), Func(Sig(sg.params, Nil), seq([Call(0, [x()], 1)], Ret(Nil)))] }
+
+fn obj_as_word() → List<Func> { recode(Sig([Param(nx(), ByTake)], [Result(nat_s(), OParam(0))]), Ret([x()])) }
+
+fn word_as_obj() → List<Func> { recode(Sig([Param(nat_s(), ByTake)], [Result(nx(), OParam(0))]), Ret([x()])) }
+
+fn view_as_point() → List<Func> { recode(Sig([Param(nx(), ByRead)], [Result(pt_s(), OView(0, [SWindow(Lit(0), Lit(1))]))]), seq([View(win(x(), Lit(0), Lit(1)), Reading)], Ret([Loc(0)]))) }
+
+theorem obj_as_word_refused(): refusal_in(obj_as_word(), 0) = Some(WOwn) { refl }
+
+theorem obj_as_word_caller_refused(): refusal_in(obj_as_word(), 1) = Some(WOwn) { refl }
+
+theorem word_as_obj_refused(): refusal_in(word_as_obj(), 0) = Some(WOwn) { refl }
+
+theorem word_as_obj_caller_refused(): refusal_in(word_as_obj(), 1) = Some(WOwn) { refl }
+
+theorem view_as_point_refused(): refusal_in(view_as_point(), 0) = Some(WOwn) { refl }
+
+theorem view_as_point_caller_refused(): refusal_in(view_as_point(), 1) = Some(WOwn) { refl }
+
 fn once_param() → Func { Func(Sig([Param(nx(), ByTake)], [Result(nx(), OParam(0))]), Ret([x()])) }
 
 fn once_caller() → Func { Func(Sig([Param(nx(), ByTake)], Nil), seq([Call(0, [x()], 1), Death(whole(Loc(0)))], Ret(Nil))) }
