@@ -4,8 +4,10 @@
 // (bytes_level_tests' `lend` and `both`) compiled, each tracking its meaning
 // (`Site::Tracks`) for every routine at every fuel; a routine that calls
 // itself compiled and tracked at the room table by depth, with the control
-// that no table constant in the depth holds it; and the controls: one that
-// binds an id twice, and one that exits, refused.
+// that no table constant in the depth holds it; the language's `exits`, and
+// an exit inside a callee, compiled and tracked, their exited reading not
+// vacuous; and the controls: one that binds an id twice, and an exit whose
+// status is unbound, refused.
 import bytes_level::{run};
 import bytes_memory;
 import bytes_level_lower;
@@ -176,8 +178,7 @@ theorem countdown_reusing_valid(): Program([countdown_reusing()]).valid() = True
 
 theorem countdown_reusing_refused(): lowers(Program([countdown_reusing()]), countdown_places()) = False { refl }
 
-// The exited clause holds of every program the lowering returns: none
-// lowers an exit, so its meaning never exits.
+// The exited clause, read off `Tracks` at the table by depth.
 theorem countdown_meets_exited<M>(program: Prog, lowered: countdown_program().lower(countdown_places()) = Some(program), fetch: FetchAccess<M>,
     data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64), stack: Stack<M>(fetch, data), top: Nat, spans: Spans, blocks: Blocks):
     Site<M>(fetch, data, program, last, origin).MeetsExited(stack, spans, top, blocks.Lent(spans), depth_rooms(countdown_program().routines),
@@ -186,9 +187,78 @@ theorem countdown_meets_exited<M>(program: Prog, lowered: countdown_program().lo
     lower_program_meets_exited<M>(countdown_program(), countdown_places(), program, lowered, fetch, data, last, origin, stack, top, spans, blocks)
 }
 
-// Control: a routine that exits is refused, so the clause is not had of it
-// by the lowering.
-theorem exits_refused(): lowers(Program([Routine([], Seq(Leaf([Compute(Const(64, 0, 3))]), Exit(0)), [])]), into([Rax])) = False { refl }
+// ---------------------------------------------------------------------------
+// An exit (issues/bytes-level-lowering-world.md item 1)
+
+// The language's `exits` (bytes_level_tests): 3, then exit with it.
+fn exits_program() → Program { Program([Routine([], Seq(Leaf([Compute(Const(64, 0, 3))]), Exit(0)), [])]) }
+
+fn exits_places() → List<Place> { into([Rax, Rax]) }
+
+theorem exits_lowers(): lowers(exits_program(), exits_places()) = True { refl }
+
+fn exited_status(o: Ran<Answer>) → Option<Nat> {
+    match o { Done(_) => None, Exited(status, _) => Some(status.toNat()), Going(_) => None, Stuck(_) => None }
+}
+
+fn exited_world(o: Ran<Answer>) → Option<Io> {
+    match o { Done(_) => None, Exited(_, io) => Some(io), Going(_) => None, Stuck(_) => None }
+}
+
+// At every fuel that enters it, in every world and over every heap, its
+// run exits with 3, the world as it was: the exited reading is not
+// vacuous.
+theorem exits_at(blocks: Blocks, n: Nat, heap: Heap, io: Io): exited_status(run(exits_program(), blocks, Succ(n), 0, [], heap, io)) = Some(3) { refl }
+
+theorem exits_keeps_world(blocks: Blocks, n: Nat, heap: Heap, io: Io): exited_world(run(exits_program(), blocks, Succ(n), 0, [], heap, io)) = Some(io) {
+    refl
+}
+
+// Its code tracks the meaning: where it exits, the code performs the exit
+// call with that status in RDI and sixty in RAX, in the meaning's world.
+theorem exits_tracks<M>(program: Prog, lowered: exits_program().lower(exits_places()) = Some(program), fetch: FetchAccess<M>, data: ByteReadAccess<M>,
+    last: List<BitVec(8)>, origin: BitVec(64), stack: Stack<M>(fetch, data), top: Nat, spans: Spans, blocks: Blocks):
+    Site<M>(fetch, data, program, last, origin).Tracks(stack, spans, top, blocks.Lent(spans), depth_rooms(exits_program().routines),
+        λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run_peak(exits_program(), blocks, n, f, args, heap, io), 1,
+        λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run(exits_program(), blocks, n, f, args, heap, io)) {
+    lower_program_tracks<M>(exits_program(), exits_places(), program, lowered, fetch, data, last, origin, stack, top, spans, blocks,
+        depth_rooms(exits_program().routines), depth_rooms_lawful(exits_program().routines))
+}
+
+theorem exits_meets_exited<M>(program: Prog, lowered: exits_program().lower(exits_places()) = Some(program), fetch: FetchAccess<M>,
+    data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64), stack: Stack<M>(fetch, data), top: Nat, spans: Spans, blocks: Blocks):
+    Site<M>(fetch, data, program, last, origin).MeetsExited(stack, spans, top, blocks.Lent(spans), depth_rooms(exits_program().routines),
+        λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run_peak(exits_program(), blocks, n, f, args, heap, io), 1,
+        λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run(exits_program(), blocks, n, f, args, heap, io)) {
+    lower_program_meets_exited<M>(exits_program(), exits_places(), program, lowered, fetch, data, last, origin, stack, top, spans, blocks)
+}
+
+// An exit inside a callee: routine 1 calls routine 0, which exits; the
+// caller's run exits with the callee's status.
+fn exits_nested() → Program {
+    Program([Routine([word_id(0)], Exit(0), []), Routine([], Seq(Leaf([Compute(Const(64, 0, 7))]), Call(0, [word_id(0)], [])), [])])
+}
+
+fn nested_places() → List<Place> { into([Rax, Rax, Rax]) }
+
+theorem exits_nested_lowers(): lowers(exits_nested(), nested_places()) = True { refl }
+
+theorem exits_nested_at(blocks: Blocks, n: Nat, heap: Heap, io: Io): exited_status(run(exits_nested(), blocks, Succ(Succ(n)), 1, [], heap, io)) = Some(7) {
+    refl
+}
+
+theorem exits_nested_tracks<M>(program: Prog, lowered: exits_nested().lower(nested_places()) = Some(program), fetch: FetchAccess<M>,
+    data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64), stack: Stack<M>(fetch, data), top: Nat, spans: Spans, blocks: Blocks):
+    Site<M>(fetch, data, program, last, origin).Tracks(stack, spans, top, blocks.Lent(spans), depth_rooms(exits_nested().routines),
+        λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run_peak(exits_nested(), blocks, n, f, args, heap, io), 2,
+        λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run(exits_nested(), blocks, n, f, args, heap, io)) {
+    lower_program_tracks<M>(exits_nested(), nested_places(), program, lowered, fetch, data, last, origin, stack, top, spans, blocks,
+        depth_rooms(exits_nested().routines), depth_rooms_lawful(exits_nested().routines))
+}
+
+// Control: an exit whose status no id holds is refused (validity: the
+// status is a word bound before it).
+theorem exit_unbound_refused(): lowers(Program([Routine([], Exit(0), [])]), into([Rax])) = False { refl }
 
 // ---------------------------------------------------------------------------
 // A routine that calls itself (docs/language/ownership-design.md §17.7)

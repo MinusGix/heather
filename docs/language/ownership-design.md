@@ -2205,6 +2205,40 @@ terms. The region theorems' claim forms cost what their `Moves` forms did,
 plus the counted step. The going induction mirrors the done induction
 region by region.
 
+**The exit lowered (round `issues/bytes-level-lowering-world.md`, item 1).**
+`Exit(status)` is emitted as the status moved from the register the file
+says holds it into RDI, sixty into RAX, and `SYSCALL` (`emit_exit`); the
+code after it is never reached. `Body::fresh` accepts it (it binds
+nothing). Its claim is not a third induction beside the done and the
+going ones: the going development is generalised over how a run stops
+short (`Stop`: `StopGoing(o)` or `StopExited(status, o)`, read off a run by
+`Ran::stopped`), and going and exited are its two instances.
+
+- The facts (`Body::Stops`, was `Body::Goes`) carry the stop: a loop out
+  of fuel is `x.Zero()` (going: true; exited: false), an exit node with the
+  word at its status is `x.Exits(w)` (going: false; exited: `w` is the
+  status). Read off the run by `Body::stops_of` (was `goes_of`), whose
+  only new case is the exit node.
+- The code theorems (`StopsHeap`, `Body::emit_stops`, the loop, branch and
+  call lemmas) claim the stop's state (`Stop::Reached`: going, any; exited,
+  `LinuxSyscallAt` and `LinuxExits` with the status) with at least
+  `x.least(fuel)` steps (going, the fuel; exited, none). The counting is
+  three lemmas on `Stop::least` (`least_le`, `least_succ`, `least_mono`,
+  and `least_pred` at the routine). The exit node's claim is `exit_stops`:
+  the block, then the `SYSCALL` item fetched (`Site::item_fetched`).
+- The routine and program inductions are `routine_stops`/`program_stops`
+  at a stop `x`; `program_tracks` reads `Tracks` at `StopGoing(o)` for
+  going and at `StopExited(status, o)` for exited. The world is the
+  entry's (`program_stop_quiet`, generalising `program_going_quiet`), as
+  no system call is lowered yet. `program_no_exit` and its lemmas are
+  deleted.
+
+The exited reading is no longer vacuous: the language's `exits` and an exit
+inside a callee are compiled and tracked (`bytes_level_routines_tests`:
+`exits_tracks`, `exits_meets_exited`, `exits_nested_tracks`, with their runs
+exiting at every fuel that enters them); the control is an exit whose status
+no id holds, refused.
+
 ## 18. The world, termination, and level 2 fixed (2026-11-25)
 
 Round six of the design review. Where this section and §15.4, §15.5 or §17
