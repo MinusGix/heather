@@ -1,6 +1,6 @@
 ---
 title: Decode P3109 codes by shifts, not unary division
-status: open
+status: closed
 labels: [mathematics,floating-point,evaluation]
 area: mathematics
 milestone: [math-float]
@@ -26,3 +26,7 @@ table at all.
 
 - **[[nat-wide-evaluation]]** owns evaluating `Nat::pow`/`ldiv` at large sizes.
   Assumed here: nothing; this removes a division rather than speeding one up.
+
+## Log
+
+- 2026-11-26: LANDED: code_q/code_r by Nat::shr with the code_qr bridge; a probe showed Nat::div(65000, 32) out of fuel where shr and ldiv finish at once. Tables are 256-code stages now and cover Binary10p5se and Binary12p7se as well (21 formats).
