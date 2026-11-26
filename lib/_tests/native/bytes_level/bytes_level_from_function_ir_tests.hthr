@@ -1,0 +1,228 @@
+// Probes of FunctionIR programs translated to the bytes level
+// (lib/native/bytes_level/bytes_level_from_function_ir.hthr;
+// issues/bytes-level-translation.md): the programs of exports that
+// `crates/linked` links, as their `runtime fn`s publish them, translated
+// and run on the heap that is their buffers, each answer read back as the
+// old run's (`program_run`) by evaluation; a small program of each form
+// the translation treats (a guarded load past the end, a store, a wide
+// load and store, a bounded loop that runs out and one that exits, a loop
+// of no passes, a lend); and the controls: a store the path does not know
+// is inside, refused; a guarded load past the end reading zero, as the old
+// meaning does; a leveled function, refused.
+//
+// The comparison of each export's assembly is scripts/bytes-level-compare,
+// which evaluates `bytes_level_compare` against each compile's certificate.
+import bytes_level::{run};
+import bytes_memory;
+import bytes_level_from_function_ir;
+import bytes_level_compare;
+import bytes_level_from_function_ir_sound;
+import x86_64_memory_contract;
+import x86_64_call_contract;
+import function_ir;
+import function_ir_state;
+import function_ir_run;
+import native_tool_spans;
+import function_ir_lower;
+import function_ir_lower_calls;
+import x86_64;
+import x86_64_asm;
+import linux_world;
+import bitvec;
+import bool;
+import list;
+import logic;
+import nat;
+import option;
+
+fn bytes_of(ns: List<Nat>) → List<BitVec(8)> { ns.map(λ (n: Nat) => BitVec::ofNat(n)) }
+
+fn word(n: Nat) → Value { Word(BitVec::ofNat(n)) }
+
+fn io() → Io { Io::of(World::piped([])) }
+
+fn reading() → Blocks { Blocks(λ (_: Nat) => False) }
+
+fn writing() → Blocks { Blocks(λ (_: Nat) => True) }
+
+// Word `i` of a done answer.
+fn answer_word(o: Ran<Answer>, i: Nat) → Option<Nat> {
+    match o { Done(a) => match a.words.nth(i) { None => None, Some(v) => match v { Word(w) => Some(w.toNat()), Ref(_) => None } }, Exited(_, _) => None,
+        Going(_) => None, Stuck(_) => None }
+}
+
+// Block `b`'s bytes in a done answer's heap.
+fn answer_bytes(o: Ran<Answer>, b: Nat) → Option<List<Nat>> {
+    match o { Done(a) => Some(a.heap.bytes(b).map(λ (x: BitVec(8)) => x.toNat())), Exited(_, _) => None, Going(_) => None, Stuck(_) => None }
+}
+
+fn stuck(o: Ran<Answer>) → Bool { match o { Done(_) => False, Exited(_, _) => False, Going(_) => False, Stuck(_) => True } }
+
+fn translated(functions: List<Function>) → Program { match translate_program(functions) { None => Program([]), Some(p) => p } }
+
+fn refused(functions: List<Function>) → Bool { match translate_program(functions) { None => True, Some(_) => False } }
+
+fn old_word(functions: List<Function>, buffers: Buffers(), f: Nat, words: List<Nat>) → Nat {
+    program_run(functions, buffers, f, words.map(λ (n: Nat) => BitVec::ofNat(n))).word.toNat()
+}
+
+fn old_bytes(functions: List<Function>, buffers: Buffers(), f: Nat, words: List<Nat>, b: Nat) → List<Nat> {
+    buffer_bytes(program_run(functions, buffers, f, words.map(λ (n: Nat) => BitVec::ofNat(n))).buffers, b).map(λ (x: BitVec(8)) => x.toNat())
+}
+
+// ---------------------------------------------------------------------------
+// The exports' programs
+
+// "a\nb\nc": two newlines. `count_newlines(span, length, count)`: its
+// function 1, the span's reference and length, the count.
+fn text() → List<BitVec(8)> { bytes_of([97, 10, 98, 10, 99]) }
+
+// Counting past the span's end: the old program's own bound keeps the
+// load inside, so the translation needs no guard and answers as before.
+// `raise_span(span, length, count, i)` stores into its span: the heap read
+// back is the old file. ("ab": two bytes, to keep the kernel's evaluation
+// in its budget.)
+fn pair() → List<BitVec(8)> { bytes_of([97, 98]) }
+
+fn raise_args() → List<Value> { [Ref(Loc(0, 0)), word(2), word(2), word(0)] }
+
+// `copy_window(out, length, text, size, from, end)`: a lend of two views.
+fn window_args() → List<Value> { [Ref(Loc(0, 0)), word(4), Ref(Loc(1, 0)), word(5), word(1), word(4)] }
+
+fn window_buffers() → Buffers() { [bytes_of([0, 0, 0, 0]), text()] }
+
+fn short_args() → List<Value> { [Ref(Loc(0, 0)), word(2), Ref(Loc(1, 0)), word(2), word(0), word(1)] }
+
+// Each run is two closed verdicts, the new answer and the old, and their
+// agreement from them (docs/proof-patterns.md: never `refl` between two
+// computations).
+theorem count_newlines_new(): answer_word(run(translated(count_newlines_program()), reading(), 16, 1, [Ref(Loc(0, 0)), word(5), word(5)], Heap::of([text()]), io()), 0) = Some(2) { refl }
+theorem count_newlines_old(): old_word(count_newlines_program(), [text()], 1, [0, 5, 5]) = 2 { refl }
+theorem count_newlines(): answer_word(run(translated(count_newlines_program()), reading(), 16, 1, [Ref(Loc(0, 0)), word(5), word(5)], Heap::of([text()]), io()), 0) = Some(old_word(count_newlines_program(), [text()], 1, [0, 5, 5])) { trans(count_newlines_new(), cong_fn<Nat, Option<Nat>>(λ x => Some(x), sym(count_newlines_old()))) }
+theorem count_newlines_past_end_new(): answer_word(run(translated(count_newlines_program()), reading(), 16, 1, [Ref(Loc(0, 0)), word(5), word(9)], Heap::of([text()]), io()), 0) = Some(2) { refl }
+theorem count_newlines_past_end_old(): old_word(count_newlines_program(), [text()], 1, [0, 5, 9]) = 2 { refl }
+theorem count_newlines_past_end(): answer_word(run(translated(count_newlines_program()), reading(), 16, 1, [Ref(Loc(0, 0)), word(5), word(9)], Heap::of([text()]), io()), 0) = Some(old_word(count_newlines_program(), [text()], 1, [0, 5, 9])) { trans(count_newlines_past_end_new(), cong_fn<Nat, Option<Nat>>(λ x => Some(x), sym(count_newlines_past_end_old()))) }
+theorem raise_span_word_new(): answer_word(run(translated(raise_span_program()), writing(), 8, 1, raise_args(), Heap::of([pair()]), io()), 0) = Some(2) { refl }
+theorem raise_span_word_old(): old_word(raise_span_program(), [pair()], 1, [0, 2, 2, 0]) = 2 { refl }
+theorem raise_span_word(): answer_word(run(translated(raise_span_program()), writing(), 8, 1, raise_args(), Heap::of([pair()]), io()), 0) = Some(old_word(raise_span_program(), [pair()], 1, [0, 2, 2, 0])) { trans(raise_span_word_new(), cong_fn<Nat, Option<Nat>>(λ x => Some(x), sym(raise_span_word_old()))) }
+theorem raise_span_bytes_new(): answer_bytes(run(translated(raise_span_program()), writing(), 8, 1, raise_args(), Heap::of([pair()]), io()), 0) = Some([65, 66]) { refl }
+theorem raise_span_bytes_old(): old_bytes(raise_span_program(), [pair()], 1, [0, 2, 2, 0], 0) = [65, 66] { refl }
+theorem raise_span_bytes(): answer_bytes(run(translated(raise_span_program()), writing(), 8, 1, raise_args(), Heap::of([pair()]), io()), 0) = Some(old_bytes(raise_span_program(), [pair()], 1, [0, 2, 2, 0], 0)) { trans(raise_span_bytes_new(), cong_fn<List<Nat>, Option<List<Nat>>>(λ x => Some(x), sym(raise_span_bytes_old()))) }
+theorem copy_window_bytes_new(): answer_bytes(run(translated(copy_window_program()), writing(), 16, 1, window_args(), Heap::of(window_buffers()), io()), 0) = Some([0, 10, 98, 10]) { refl }
+theorem copy_window_bytes_old(): old_bytes(copy_window_program(), window_buffers(), 1, [0, 4, 0, 5, 1, 4], 0) = [0, 10, 98, 10] { refl }
+theorem copy_window_bytes(): answer_bytes(run(translated(copy_window_program()), writing(), 16, 1, window_args(), Heap::of(window_buffers()), io()), 0) = Some(old_bytes(copy_window_program(), window_buffers(), 1, [0, 4, 0, 5, 1, 4], 0)) { trans(copy_window_bytes_new(), cong_fn<List<Nat>, Option<List<Nat>>>(λ x => Some(x), sym(copy_window_bytes_old()))) }
+theorem copy_window_word_new(): answer_word(run(translated(copy_window_program()), writing(), 16, 1, window_args(), Heap::of(window_buffers()), io()), 0) = Some(3) { refl }
+theorem copy_window_word_old(): old_word(copy_window_program(), window_buffers(), 1, [0, 4, 0, 5, 1, 4]) = 3 { refl }
+theorem copy_window_word(): answer_word(run(translated(copy_window_program()), writing(), 16, 1, window_args(), Heap::of(window_buffers()), io()), 0) = Some(old_word(copy_window_program(), window_buffers(), 1, [0, 4, 0, 5, 1, 4])) { trans(copy_window_word_new(), cong_fn<Nat, Option<Nat>>(λ x => Some(x), sym(copy_window_word_old()))) }
+
+// ---------------------------------------------------------------------------
+// One form at a time
+
+fn leaf(nodes: List<Node>) → StructuredRegion { Dataflow(Region(Ports([]), nodes, Ports([]))) }
+
+fn compose(first, rest: StructuredRegion) → StructuredRegion { Compose(first, rest) }
+
+fn when(condition: Nat, yes, no: StructuredRegion) → StructuredRegion { Conditional(Ports([]), condition, Ports([]), Ports([]), yes, no) }
+
+// Byte `index` of the span, under no comparison: the translation guards it,
+// and past the end it reads zero, as the old meaning does.
+fn reads_at() → List<Function> {
+    [Function(parameters := [0, 1, 2], body := leaf([BufferLoad(3, 0, 2)]), result := 3, lent := 1)]
+}
+
+// A store under the comparison that keeps it inside, its output the byte
+// stored; then the byte loaded back.
+fn stores_at() → List<Function> {
+    [Function(parameters := [0, 1, 2, 3], body := compose(leaf([UnsignedLessThan(64, 4, 2, 1)]),
+        when(4, leaf([BufferStore(5, 0, 2, 3)]), leaf([Const(64, 5, 0)]))), result := 5, lent := 1)]
+}
+
+// Control: a store under no comparison is refused, not given a meaning.
+fn stores_blind() → List<Function> {
+    [Function(parameters := [0, 1, 2, 3], body := leaf([BufferStore(4, 0, 2, 3)]), result := 4, lent := 1)]
+}
+
+theorem blind_store_refused(): refused(stores_blind()) = True { refl }
+
+// A wide load and a wide store of four bytes, the span's bound known
+// through the index plus three.
+fn wide_at() → List<Function> {
+    [Function(parameters := [0, 1, 2], body := compose(leaf([Const(64, 3, 3), Add(64, 4, 2, 3), UnsignedLessThan(64, 5, 2, 1), UnsignedLessThan(64, 6, 4, 1)]),
+        when(5, when(6, leaf([WideLoad(4, 7, 0, 2), WideStore(4, 8, 0, 2, 7), WideLoad(4, 9, 0, 2)]), leaf([Const(64, 9, 0)])), leaf([Const(64, 9, 0)]))),
+        result := 9, lent := 1)]
+}
+
+// Control: the same load with no knowledge of the last byte is refused.
+fn wide_blind() → List<Function> {
+    [Function(parameters := [0, 1, 2], body := compose(leaf([UnsignedLessThan(64, 5, 2, 1)]),
+        when(5, leaf([WideLoad(4, 9, 0, 2)]), leaf([Const(64, 9, 0)]))), result := 9, lent := 1)]
+}
+
+theorem wide_blind_refused(): refused(wide_blind()) = True { refl }
+
+// A bounded loop summing 1 to `bound`, with the bound from a parameter: it
+// runs out, and its exhausted bit is the answer's second word.
+fn summing() → List<Function> {
+    [Function(parameters := [0], body := compose(leaf([Const(64, 1, 0)]),
+        Loop([1], 0, [2], 3, leaf([Add(64, 4, 2, 3), Const(1, 5, 0)]), 5, [4], [6], 7)),
+        result := 6, also := [7])]
+}
+
+theorem loop_exhausted(): answer_word(run(translated(summing()), reading(), 16, 0, [word(4)], Heap::of([]), io()), 1) = Some(1) { refl }
+
+// A bound of zero: no pass runs, the state is the inputs, and the bit set.
+theorem loop_no_pass_exhausted(): answer_word(run(translated(summing()), reading(), 16, 0, [word(0)], Heap::of([]), io()), 1) = Some(1) { refl }
+
+// A loop that exits on its third pass, its bound larger: the bit clear.
+fn exiting() → List<Function> {
+    [Function(parameters := [0], body := compose(leaf([Const(64, 1, 0)]),
+        Loop([1], 0, [2], 3, leaf([Const(64, 8, 1), Add(64, 4, 2, 8), Const(64, 9, 3), Equal(64, 5, 4, 9)]), 5, [4], [6], 7)),
+        result := 6, also := [7])]
+}
+
+theorem loop_exits_clear(): answer_word(run(translated(exiting()), reading(), 16, 0, [word(10)], Heap::of([]), io()), 1) = Some(0) { refl }
+
+// Exiting on its last allowed pass: exited, not exhausted.
+theorem loop_exits_last(): answer_word(run(translated(exiting()), reading(), 16, 0, [word(3)], Heap::of([]), io()), 1) = Some(0) { refl }
+
+// Control: a function with levels is refused.
+fn leveled() → List<Function> { [Function(parameters := [0], body := Call(0, [0], 1, []), result := 1, levels := 2)] }
+
+theorem leveled_refused(): refused(leveled()) = True { refl }
+
+// The forms, each against the old run.
+theorem guarded_inside_new(): answer_word(run(translated(reads_at()), reading(), 4, 0, [Ref(Loc(0, 0)), word(5), word(2)], Heap::of([text()]), io()), 0) = Some(98) { refl }
+theorem guarded_inside_old(): old_word(reads_at(), [text()], 0, [0, 5, 2]) = 98 { refl }
+theorem guarded_inside(): answer_word(run(translated(reads_at()), reading(), 4, 0, [Ref(Loc(0, 0)), word(5), word(2)], Heap::of([text()]), io()), 0) = Some(old_word(reads_at(), [text()], 0, [0, 5, 2])) { trans(guarded_inside_new(), cong_fn<Nat, Option<Nat>>(λ x => Some(x), sym(guarded_inside_old()))) }
+theorem guarded_past_end_new(): answer_word(run(translated(reads_at()), reading(), 4, 0, [Ref(Loc(0, 0)), word(5), word(7)], Heap::of([text()]), io()), 0) = Some(0) { refl }
+theorem guarded_past_end_old(): old_word(reads_at(), [text()], 0, [0, 5, 7]) = 0 { refl }
+theorem guarded_past_end(): answer_word(run(translated(reads_at()), reading(), 4, 0, [Ref(Loc(0, 0)), word(5), word(7)], Heap::of([text()]), io()), 0) = Some(old_word(reads_at(), [text()], 0, [0, 5, 7])) { trans(guarded_past_end_new(), cong_fn<Nat, Option<Nat>>(λ x => Some(x), sym(guarded_past_end_old()))) }
+theorem store_bytes_new(): answer_bytes(run(translated(stores_at()), writing(), 4, 0, [Ref(Loc(0, 0)), word(5), word(1), word(300)], Heap::of([text()]), io()), 0) = Some([97, 44, 98, 10, 99]) { refl }
+theorem store_bytes_old(): old_bytes(stores_at(), [text()], 0, [0, 5, 1, 300], 0) = [97, 44, 98, 10, 99] { refl }
+theorem store_bytes(): answer_bytes(run(translated(stores_at()), writing(), 4, 0, [Ref(Loc(0, 0)), word(5), word(1), word(300)], Heap::of([text()]), io()), 0) = Some(old_bytes(stores_at(), [text()], 0, [0, 5, 1, 300], 0)) { trans(store_bytes_new(), cong_fn<List<Nat>, Option<List<Nat>>>(λ x => Some(x), sym(store_bytes_old()))) }
+theorem store_output_new(): answer_word(run(translated(stores_at()), writing(), 4, 0, [Ref(Loc(0, 0)), word(5), word(1), word(300)], Heap::of([text()]), io()), 0) = Some(44) { refl }
+theorem store_output_old(): old_word(stores_at(), [text()], 0, [0, 5, 1, 300]) = 44 { refl }
+theorem store_output(): answer_word(run(translated(stores_at()), writing(), 4, 0, [Ref(Loc(0, 0)), word(5), word(1), word(300)], Heap::of([text()]), io()), 0) = Some(old_word(stores_at(), [text()], 0, [0, 5, 1, 300])) { trans(store_output_new(), cong_fn<Nat, Option<Nat>>(λ x => Some(x), sym(store_output_old()))) }
+theorem wide_word_new(): answer_word(run(translated(wide_at()), writing(), 4, 0, [Ref(Loc(0, 0)), word(5), word(1)], Heap::of([text()]), io()), 0) = Some(1661624842) { refl }
+theorem wide_word_old(): old_word(wide_at(), [text()], 0, [0, 5, 1]) = 1661624842 { refl }
+theorem wide_word(): answer_word(run(translated(wide_at()), writing(), 4, 0, [Ref(Loc(0, 0)), word(5), word(1)], Heap::of([text()]), io()), 0) = Some(old_word(wide_at(), [text()], 0, [0, 5, 1])) { trans(wide_word_new(), cong_fn<Nat, Option<Nat>>(λ x => Some(x), sym(wide_word_old()))) }
+theorem loop_runs_out_new(): answer_word(run(translated(summing()), reading(), 16, 0, [word(4)], Heap::of([]), io()), 0) = Some(10) { refl }
+theorem loop_runs_out_old(): old_word(summing(), [], 0, [4]) = 10 { refl }
+theorem loop_runs_out(): answer_word(run(translated(summing()), reading(), 16, 0, [word(4)], Heap::of([]), io()), 0) = Some(old_word(summing(), [], 0, [4])) { trans(loop_runs_out_new(), cong_fn<Nat, Option<Nat>>(λ x => Some(x), sym(loop_runs_out_old()))) }
+theorem loop_no_pass_new(): answer_word(run(translated(summing()), reading(), 16, 0, [word(0)], Heap::of([]), io()), 0) = Some(0) { refl }
+theorem loop_no_pass_old(): old_word(summing(), [], 0, [0]) = 0 { refl }
+theorem loop_no_pass(): answer_word(run(translated(summing()), reading(), 16, 0, [word(0)], Heap::of([]), io()), 0) = Some(old_word(summing(), [], 0, [0])) { trans(loop_no_pass_new(), cong_fn<Nat, Option<Nat>>(λ x => Some(x), sym(loop_no_pass_old()))) }
+theorem loop_exits_new(): answer_word(run(translated(exiting()), reading(), 16, 0, [word(10)], Heap::of([]), io()), 0) = Some(3) { refl }
+theorem loop_exits_old(): old_word(exiting(), [], 0, [10]) = 3 { refl }
+theorem loop_exits(): answer_word(run(translated(exiting()), reading(), 16, 0, [word(10)], Heap::of([]), io()), 0) = Some(old_word(exiting(), [], 0, [10])) { trans(loop_exits_new(), cong_fn<Nat, Option<Nat>>(λ x => Some(x), sym(loop_exits_old()))) }
+
+// ---------------------------------------------------------------------------
+// The comparison (bytes_level_compare), on a program small enough to lower
+// here: a word function, the old lowering's code and the translation's,
+// the same bytes.
+
+fn adds() → List<Function> { [Function(parameters := [0, 1], body := leaf([Add(64, 2, 0, 1)]), result := 2)] }
+
+fn adds_code() → Prog { match lower_program_roomed(adds(), [Into(Rax)], [], λ (_: Nat) => 0) { None => Start, Some(p) => p } }
+
+theorem adds_same(): compare_report(adds(), [], [Into(Rax)], adds_code()) = [5, 7] { refl }

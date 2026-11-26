@@ -2402,6 +2402,84 @@ What stands between this and `Sim` for a whole image is in
 `issues/call-contract-whole-program.md`: the image's `_start`, the meaning
 as an itree, and `LinuxValid`.
 
+### 17.8 Stage 2's test (2026-11-26)
+
+The question: can the bytes level replace FunctionIR's memory half in one
+move? To test it, every FunctionIR program was translated
+(`bytes_level_from_function_ir`), and each row of `crates/linked`'s exports,
+and each native gate's program, was compiled both ways
+(`scripts/bytes-level-compare`). The log is
+`issues/bytes-level-translation.md`.
+
+**The survey.** The forms each row's lowered program uses:
+
+| Rows | Forms |
+|---|---|
+| sha512 and sha256 rounds | word nodes, calls (no buffers) |
+| sha256_compress, _init, _update, _finish | byte and four-byte loads and stores, byte swaps, lent calls, bounded loops |
+| count_newlines, raise_span, list_raise_letters, copy_span, copy_window | byte loads and stores, one bounded loop; copy_window the exports' only `Lend` |
+| scan_token, scan_tokens | byte loads, hundreds of conditionals, lent calls, loops; scan_tokens a four-byte store |
+| gates | `also` (two_words, enum_fields), a `Fixed` span (three_words), levels (recursion), loops (binary_search, sort, utf8) |
+
+No export uses levels, `also`, a `Fixed` span, `TableRead`, or a wide access
+at any width but four.
+
+**The comparison.** The results:
+- Same bytes: every routine without a bounded loop in every row that lowers,
+  call displacements aside. That covers six export rows and four gate
+  programs entirely, and every non-loop routine of the rest (scan_token's 38
+  of 39, for one).
+- Bigger: each loop routine grows by 8 bytes, 12 with REX prefixes. Every
+  loop has the same shape. Per pass that continues, the code runs one more
+  instruction (`MOV flag, 1`, the translation's) and one more taken jump (a
+  jump to a jump, the lowering's `plain_jumped`). The head's `TEST; JE`
+  moves to the tail as `CMP; JNE`.
+- One further byte difference: a dead reference `Move`, which the old
+  placement gave no instruction, becomes `ADD r, 0` (sort).
+- Refused: five rows by the lowering. A four-byte access's result and value
+  are held as `Word`, not `Narrow(32)`, so the hash's buffer rows and
+  scan_tokens are refused. The levels gate is refused by the translation.
+- Free in both: every byte store's reload is dead, and the old lowering
+  emits the same `MOVZX` after each store. The clip at copy_window's lend is
+  the old code's too.
+
+**What the old optimizer emits that the bytes level refuses.** The
+translation normalises two things, each exact in meaning:
+- a pure node rebound in its leaf before it is read is dropped: 60–65 times
+  in the sha256 buffer rows, 3 in sha256_init and scan_tokens, 2 in sort;
+- every loop's pass is read at an id offset of its own, because the
+  optimizer's copies reuse a pass's ids after the loop.
+
+**The theorem** (`translated_runs_as_old`). Over programs, every `Done` of
+the translation at any fuel is the old run, with the buffers read back from
+the heap. It is proved for leaves, sequences, conditionals and one-result
+calls, which is the word-only rows. Bounded loops, lends, wide accesses,
+guarded loads, `also` and levels remain.
+
+**What stage 3 still needs**, from the comparison and the proof:
+1. **An access names the view it uses.** A store says which width's view it
+   stores from, and a load what kind its output is held at. This unblocks
+   the five refused rows.
+2. **Bounded loops, a temporary cost** until loops are reflected directly:
+   the numbers above. The new design keeps fuel out of the code, so a
+   counted loop is not a need.
+3. The jump to a jump, the lowering's to remove.
+4. The dead reference move: dropped by the translation, or a reference move
+   in the language.
+5. Levels and the out-of-room exit, designed separately.
+6. A refusal report from `Program::lower`.
+7. The theorem's remaining forms, and a decider for its premise.
+8. The optimizer and the planner on the new layer.
+9. Read-only views: the old lend drops a callee's store into an unwritten
+   view, and the bytes level keeps it.
+
+native_cat and native_tools compile through the program compiler, not
+FunctionIR, so stage 3 does not move them.
+
+So the answer is: not yet in one move. The memory half translates exactly
+where proved, and its code is the same outside loops. The access view is
+the one change that blocks rows outright.
+
 ## 18. The world, termination, and level 2 fixed (2026-11-25)
 
 Round six of the design review. Where this section and §15.4, §15.5 or §17
