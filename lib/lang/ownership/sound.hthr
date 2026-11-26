@@ -8901,3 +8901,91 @@ theorem Stmt::stage_take_view(tys: Nat → Type, strs: Strs(tys), fns: Nat → F
     Stepped(Mach::push(tys, m, REnv::get(tys, m.env, x)), λ k => Stmt::take_runs(tys, strs, fns, call, m, x, Env::get(tys, e, x), Sim::read_val(tys, strs, sim, x, g, ok), k),
         Inv::take_view(tys, strs, inv, none, x, g.root, ri.lvl, hr, Inv::noch(tys, strs, inv, g.root, nch), g.code, Sim::read_code(tys, strs, sim, x, g, ok)), λ _ => refl)
 }
+
+// ---------------------------------------------------------------------------
+// The return: what `SafeAt` asks of the answer, from the invariant at `Ret`
+
+// What the run reads of a value at no selections, the meaning reads.
+theorem Value::read_of_get(tys: Nat → Type, strs: Strs(tys), h: Heap(tys), v: Value(tys), d: Dyn(tys), g: Value::get(tys, strs, h, v, Nil) = Some(d)):
+    Value::read(tys, v, strs, h, h.len()) = Some(d)
+{
+    (match v as λ u => Value::get(tys, strs, h, u, Nil) = Some(d) → Value::read(tys, u, strs, h, h.len()) = Some(d) {
+        Plain(d0) => λ g0 => cong_fn(λ (q: Dyn(tys)) => Some(q), (Sel::get_parts(tys, strs, Nil, d0, d, g0)).right),
+        Refer(r) => λ g0 => (match Heap::obj(tys, h, r.b) as λ oo =>
+                (match (match oo { Some(o) => Obj::read(tys, strs, h, h.len(), o), None => None<Dyn(tys)>() }) { Some(x) => Sel::get(tys, strs, r.sels ++ Nil, x), None => None<Dyn(tys)>() }) = Some(d) →
+                (match oo { Some(o) => Obj::read(tys, strs, h, h.len(), o).map(λ x => Sel::read_at(tys, strs, r.sels, x)), None => None<Dyn(tys)>() }) = Some(d) {
+            None => λ no => absurd(no),
+            Some(o) => λ g1 => (match Obj::read(tys, strs, h, h.len(), o) as λ ox =>
+                    (match ox { Some(x) => Sel::get(tys, strs, r.sels ++ Nil, x), None => None<Dyn(tys)>() }) = Some(d) → ox.map(λ x => Sel::read_at(tys, strs, r.sels, x)) = Some(d) {
+                None => λ no => absurd(no),
+                Some(x) => λ g2 => cong_fn(λ (q: Dyn(tys)) => Some(q),
+                    trans(cong_fn(λ (ss: List<Sel>) => Sel::read_at(tys, strs, ss, x), sym(List::append_nil(r.sels))), (Sel::get_parts(tys, strs, r.sels ++ Nil, x, d, g2)).right)),
+            })(g1),
+        })(g0),
+    })(g)
+}
+
+// The variables a `Ret` lists, read as the meaning's (`ReadAll`).
+theorem Sim::read_all(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, sim: Sim(tys, strs, s, e, m), xs: List<Var>): (rs: List<Residual>) → s.read_vars(tys, strs, xs) = Some(rs) →
+    Value::ReadAll(tys, strs, m.heap, m.heap.len(), xs.map(λ x => (REnv::get(tys, m.env, x)).v), xs.map(λ x => Env::get(tys, e, x)))
+{
+    match xs {
+        Nil => λ rs _ => trivial,
+        Cons(x, rest) => λ rs ok => {
+            let a = Option::and_then_some(s.read_var(tys, strs, x), λ g => s.read_vars(tys, strs, rest).map(λ r2 => g.rs ++ r2), rs, ok);
+            match Option::map_some_inv(s.read_vars(tys, strs, rest), λ r2 => a.witness.rs ++ r2, rs, a.proof.right) {
+                ⟨r2, pb⟩ => ⟨Value::read_of_get(tys, strs, m.heap, (REnv::get(tys, m.env, x)).v, Env::get(tys, e, x), Sim::read_val(tys, strs, sim, x, a.witness, a.proof.left)),
+                    Sim::read_all(tys, strs, sim, rest, r2, pb.left)⟩,
+            }
+        },
+    }
+}
+
+// An argument object's root is the argument as passed: the start gave it,
+// and no stage changed the argument's cell's reference (`Stepped.kept`).
+theorem Inv::arg_root(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: Nat → Bool}, inv: Inv(tys, strs, s, e, m, h0, lent),
+    ps: List<Param>, vs: List<Value(tys)>, ent: REnv::ArgsKept(tys, m.env, REnv(Cell::args(tys, ps, vs), Nil)), i: Nat, lt: i < s.na, v: Value(tys), hv: vs.nth(i) = Some(v)):
+    inv.root(i) = Value::ref_of(tys, v)
+{
+    trans(inv.args(i, lt), trans(ent(i), cong_fn(λ (u: Value(tys)) => Value::ref_of(tys, u), Cell::args_get(tys, vs, ps, i, v, hv))))
+}
+
+// A holder of an object with a root: what the root reads is its meaning.
+theorem Inv::hold_reads(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: Nat → Bool}, inv: Inv(tys, strs, s, e, m, h0, lent),
+    none: s.pending() = False, x: Var, l, o: Nat, a: Acc, hl: s.lvl(x) = Some(l), hr: s.role(l) = KHold(o, a), r: Ref, rt: inv.root(o) = Some(r)):
+    Value::read(tys, Refer(r), strs, m.heap, m.heap.len()) = Some(Env::get(tys, e, x))
+{
+    let sim = Inv::sim_now(tys, strs, inv, none);
+    let cv: ((REnv::get(tys, m.env, x)).v = Refer(r)) = inv.href(x, l, o, a, hl, hr, r, rt);
+    let ag: Value::Reads(tys, strs, m.heap, (REnv::get(tys, m.env, x)).v, Env::get(tys, e, x)) =
+        j(hr, λ q _ => Cell::Agrees(tys, strs, m.heap, q, REnv::get(tys, m.env, x), Env::get(tys, e, x)), sim.vars(x, l, hl));
+    Value::read_of_get(tys, strs, m.heap, Refer(r), Env::get(tys, e, x), j(cv, λ u _ => Value::get(tys, strs, m.heap, u, Nil) = Some(Env::get(tys, e, x)), ag))
+}
+
+theorem Bool::false_of_not_true(b: Bool, h: !b = True): b = False { (match b as λ c => !c = True → c = False { True => λ no => absurd(no), False => λ _ => refl })(h) }
+
+// A fresh result, as `CSt::returns` checks it: plain, or an object past the
+// arguments, whose root is a block the call made (`made`).
+theorem Inv::ret_fresh(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: Nat → Bool}, inv: Inv(tys, strs, s, e, m, h0, lent),
+    ls: List<Nat>, vs: List<Value(tys)>, ws: List<Ix>, x: Var, l: Nat, hl: s.lvl(x) = Some(l), code: Shape, ok: s.returns(tys, strs, ls, l, Result(code, OFresh)) = True):
+    Value::ViewIs(tys, strs, h0.len(), vs, ws, code, OFresh, (REnv::get(tys, m.env, x)).v)
+{
+    (match (REnv::get(tys, m.env, x)).v as λ u => (REnv::get(tys, m.env, x)).v = u → Value::ViewIs(tys, strs, h0.len(), vs, ws, code, OFresh, u) {
+        Plain(_) => λ _ => trivial,
+        Refer(r) => λ cr => {
+            let rk = inv.refs(x, l, hl, r, cr);
+            (match s.role(l) as λ q => s.role(l) = q → (match q { KPlain => True, KHold(o, a) => !Shape::plain(tys, strs, code) && s.na.leb(o) && (match a { AcOwn => True, AcRead => False, AcWrite => False }), KView => False, KGone => False }) = True →
+                    (match q { KHold(o, _) => inv.root(o) = Some(r), KView => VEnt::Any(s.ents(l), λ en => (inv.root(en.obj)).map(λ r0 => r0.narrow(Mach::ixs(tys, strs, m), s.unsteps(en.reg))) = Some(r)), KPlain => False, KGone => True }) →
+                    (Shape::plain(tys, strs, code) = False) ∧ ((h0.len() <= r.b) ∧ (r.sels = Nil)) {
+                KPlain => λ _ _ no => false_elim(no),
+                KHold(o, a) => λ _ c rt => {
+                    let p1 = Bool::and_true_parts(!Shape::plain(tys, strs, code) && s.na.leb(o), match a { AcOwn => True, AcRead => False, AcWrite => False }, c);
+                    let p2 = Bool::and_true_parts(!Shape::plain(tys, strs, code), s.na.leb(o), p1.left);
+                    ⟨Bool::false_of_not_true(Shape::plain(tys, strs, code), p2.left), inv.made(o, Nat::le_of_leb(s.na, o, p2.right), r, rt)⟩
+                },
+                KView => λ _ no _ => absurd(no),
+                KGone => λ _ no _ => absurd(no),
+            })(refl, ok, rk)
+        },
+    })(refl)
+}
