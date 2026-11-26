@@ -167,14 +167,6 @@ fn CSt::has_children(self s: CSt, l: Nat) → Bool { s.views.any_bit(λ e => e.p
 
 fn CSt::has_obj_views(self s: CSt, o: Nat) → Bool { s.views.any_bit(λ e => e.obj.same(o)) }
 
-// Whether some level holds object `o`. A taken parameter answered back is
-// the caller's object again, held once: a signature answering it twice
-// would give the caller two owned holders of one object, the death of either
-// freeing the other's (`twice_param_refused`).
-fn CVar::holds(self c: CVar, o: Nat) → Bool { match c.role { KHold(o2, _) => o2.same(o), KPlain => False, KView => False, KGone => False } }
-
-fn CSt::holds(self s: CSt, o: Nat) → Bool { s.args.any_bit(λ c => c.holds(o)) || s.locs.any_bit(λ c => c.holds(o)) }
-
 fn CSt::unsynced(self s: CSt, o: Nat) → Bool { s.views.any_bit(λ e => e.obj.same(o) && e.mode.writes() && !e.back) }
 
 // A view to write changed and not yet written back. §15.2's write-back is
@@ -621,7 +613,11 @@ fn CSt::subst_steps(self s: CSt, xs: List<Var>, ys: List<Step>) → Option<List<
 }
 
 // One result bound: `s0` is the state before the call (where the arguments
-// are read), `s` the state binding.
+// are read), `s` the state binding. A moved parameter answered back is held
+// again: its holder is gone after the lends, and the callee answers it once
+// (`Value::OwnedApart`). A view's region reads plain levels only: an
+// argument it names as an atom, and the earlier results it names
+// (`atoms_ok`, as `View` asks).
 fn CSt::result(self s: CSt, tys: Nat → Type, strs: Strs(tys), s0: CSt, sig: Sig, xs: List<Var>, r: Result) → Option<CSt> {
     match r.origin {
         OFresh => match Shape::plain(tys, strs, r.code) { True => Some(s.push(CVar(r.code, KPlain))), False => Some(s.push(CVar(r.code, KHold(s.nobj, AcOwn))).fresh_obj()) },
@@ -629,7 +625,7 @@ fn CSt::result(self s: CSt, tys: Nat → Type, strs: Strs(tys), s0: CSt, sig: Si
             ByTake => match Shape::moves(tys, strs, r.code) {
                 False => Some(s.push(CVar(r.code, KPlain))),
                 True => xs.nth(i).and_then(λ x => s0.lvl(x)).and_then(λ l => match s0.role(l) {
-                    KHold(o, a) => match a { AcOwn => (!s.holds(o)).then(Some(s.push(CVar(r.code, KHold(o, AcOwn))))), AcRead => None, AcWrite => None },
+                    KHold(o, a) => match a { AcOwn => Some(s.push(CVar(r.code, KHold(o, AcOwn)))), AcRead => None, AcWrite => None },
                     _ => None,
                 }),
             },
@@ -637,12 +633,12 @@ fn CSt::result(self s: CSt, tys: Nat → Type, strs: Strs(tys), s0: CSt, sig: Si
             ByWrite => None,
         },
         OView(i, steps) => match (sig.params.nth(i).unwrap_or(Param(SWord(WNat), ByTake))).mode {
-            ByRead => xs.nth(i).and_then(λ x => s0.lvl(x)).and_then(λ l => s0.subst_steps(xs, steps).and_then(λ at =>
+            ByRead => xs.nth(i).and_then(λ x => s0.lvl(x)).and_then(λ l => s0.subst_steps(xs, steps).and_then(λ at => s.atoms_ok(Steps::lvls(at)).and_then(λ _ =>
                 match s0.role(l) {
                     KPlain => Some(s.push(CVar(r.code, KPlain))),
                     KGone => None,
                     _ => Some(s.with_views((s0.places(l, at)).map(λ pl => VEnt(s.next(), pl.obj, pl.at, Reading, l, at, True)) ++ s.views).push(CVar(r.code, KView))),
-                })),
+                }))),
             ByWrite => None,
             ByTake => None,
         },
@@ -670,12 +666,35 @@ fn CSt::slots(self s: CSt, s0: CSt, sig: Sig, xs: List<Var>, ws: List<Nat>) → 
     }
 }
 
+// A signature a caller can bind (§23.21), tested of a function's own where it
+// is written and of the callee's at each call, since the table of
+// signatures a proof is given is arbitrary; the callee's `returns` and the
+// caller's `result` read this one statement of the modes:
+// - a parameter answered back (`OParam(i)`) names a taken parameter, and a
+//   view (`OView(i, …)`) a read one;
+// - a view's steps name parameters and earlier results only (a telescope,
+//   as a dependent answer is scoped: `(i, view of xs[i])`), so a caller
+//   binds one result at a time.
+fn Result::ok(tys: Nat → Type, strs: Strs(tys), ps: List<Param>, r: Result, k: Nat) → Bool {
+    match r.origin {
+        OFresh => True,
+        OParam(i) => match ps.nth(i) { Some(p) => match p.mode { ByTake => True, ByRead => False, ByWrite => False }, None => False },
+        OView(i, xs) => (match ps.nth(i) { Some(p) => match p.mode { ByRead => True, ByTake => False, ByWrite => False }, None => False }) && Steps::lvls(xs).all_bit(λ a => (a + 1).leb(ps.len() + k)),
+    }
+}
+
+fn Sig::ok_from(tys: Nat → Type, strs: Strs(tys), ps: List<Param>, rs: List<Result>, k: Nat) → Bool {
+    match rs { Nil => True, Cons(r, rest) => Result::ok(tys, strs, ps, r, k) && Sig::ok_from(tys, strs, ps, rest, k + 1) }
+}
+
+fn Sig::ok(tys: Nat → Type, strs: Strs(tys), sg: Sig) → Bool { Sig::ok_from(tys, strs, sg.params, sg.results, 0) }
+
 // The measure a call owes: where the caller is measured and the callee has a body.
 fn Residual::measure(owed: Bool, g: Nat, xs: List<Var>) → List<Residual> { match owed { True => [RMeasure(g, xs)], False => Nil } }
 
 fn CSt::call(self s: CSt, tys: Nat → Type, strs: Strs(tys), sigs: Nat → Sig, prim: Nat → Bool, mo: Bool, g: Nat, xs: List<Var>) → Option<Next> {
     let sig = sigs(g);
-    (!prim(g) || Sig::reads_only(tys, strs, sig)).then(
+    ((!prim(g) || Sig::reads_only(tys, strs, sig)) && Sig::ok(tys, strs, sig)).then(
         s.lend_all(tys, strs, sig.params, xs).and_then(λ nl =>
             s.apart_args(s.lent(sig.params, xs)).and_then(λ ra =>
                 nl.st.results(tys, strs, s, sig, xs, sig.results).and_then(λ s2 =>
@@ -749,13 +768,14 @@ fn CSt::sig_steps(self s: CSt, ls: List<Nat>, xs: List<Step>) → Option<List<St
 fn Result::param(self r: Result) → List<Nat> { match r.origin { OParam(i) => [i], OView(i, _) => [i], OFresh => Nil } }
 
 // A result as its origin promises: a plain value or an object made by
-// this call (not an argument's: `Value::ViewIs`); the parameter's object; a read view of the parameter at the
+// this call (not an argument's: `Value::ViewIs`); the parameter's object, held
+// to own (`Value::OwnedApart`); a read view of the parameter at the
 // steps named. A parameter named is one of the function's (an object made
 // here is no argument the caller can compare with).
 fn CSt::returns(self s: CSt, tys: Nat → Type, strs: Strs(tys), ls: List<Nat>, l: Nat, r: Result) → Bool {
     r.param().all_bit(λ i => (i + 1).leb(s.na)) && match r.origin {
         OFresh => match s.role(l) { KPlain => True, KHold(o, a) => !Shape::plain(tys, strs, r.code) && s.na.leb(o) && (match a { AcOwn => True, AcRead => False, AcWrite => False }), KView => False, KGone => False },
-        OParam(i) => match s.role(l) { KHold(o, _) => o.same(i), _ => False },
+        OParam(i) => match s.role(l) { KHold(o, a) => o.same(i) && (match a { AcOwn => True, AcRead => False, AcWrite => False }), _ => False },
         OView(i, xs) => match s.sig_steps(ls, xs) {
             Some(ys) => match s.ents(l) { Cons(e, Nil) => e.obj.same(i) && Steps::same(e.reg, ys) && !e.mode.writes(), _ => False },
             None => False,
@@ -1050,7 +1070,11 @@ fn CSt::params(tys: Nat → Type, strs: Strs(tys), ps: List<Param>, i: Nat) → 
 
 fn CSt::start(tys: Nat → Type, strs: Strs(tys), sig: Sig) → CSt { CSt(CSt::params(tys, strs, sig.params, 0), Nil, sig.params.len(), 0, Nil, sig.params.len(), Nil, Nil) }
 
-fn Func::verdict(self f: Func, tys: Nat → Type, strs: Strs(tys), sigs: Nat → Sig, prim, meas: Nat → Bool, me: Nat) → Vd { f.body.verdict(tys, strs, sigs, prim, meas, me, CSt::start(tys, strs, f.sig)) }
+// A function whose own signature no caller can bind is refused where it is
+// written (`Sig::ok`).
+fn Func::verdict(self f: Func, tys: Nat → Type, strs: Strs(tys), sigs: Nat → Sig, prim, meas: Nat → Bool, me: Nat) → Vd {
+    match Sig::ok(tys, strs, f.sig) { True => f.body.verdict(tys, strs, sigs, prim, meas, me, CSt::start(tys, strs, f.sig)), False => VNo(WOwn) }
+}
 
 // Why a function is refused, if it is.
 fn Func::refusal(self f: Func, tys: Nat → Type, strs: Strs(tys), sigs: Nat → Sig, prim, meas: Nat → Bool, me: Nat) → Option<Why> {

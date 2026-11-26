@@ -11358,6 +11358,26 @@ theorem Inv::ret_words(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys
     }
 }
 
+// The parameter a result answers back, as `CSt::returns` checks it: one of
+// this function's, held here to own.
+theorem CSt::returns_param(self s: CSt, tys: Nat → Type, strs: Strs(tys), all: List<Nat>, l: Nat, code: Shape, i: Nat, ok: s.returns(tys, strs, all, l, Result(code, OParam(i))) = True):
+    (i < s.na) ∧ (s.role(l) = KHold(i, AcOwn))
+{
+    let p1 = Bool::and_true_parts((i + 1).leb(s.na) && True, match s.role(l) { KHold(o, a) => o.same(i) && (match a { AcOwn => True, AcRead => False, AcWrite => False }), _ => False }, ok);
+    let lt: (i < s.na) = omega(Nat::le_of_leb(i + 1, s.na, (Bool::and_true_parts((i + 1).leb(s.na), True, p1.left)).left));
+    ⟨lt, (match s.role(l) as λ r => s.role(l) = r → (match r { KHold(o, a) => o.same(i) && (match a { AcOwn => True, AcRead => False, AcWrite => False }), _ => False }) = True → s.role(l) = KHold(i, AcOwn) {
+        KHold(o, a) => λ er c => {
+            let q = Bool::and_true_parts(o.same(i), match a { AcOwn => True, AcRead => False, AcWrite => False }, c);
+            (match a as λ a2 => (match a2 { AcOwn => True, AcRead => False, AcWrite => False }) = True → s.role(l) = KHold(o, a2) → s.role(l) = KHold(i, AcOwn) {
+                AcOwn => λ _ h => trans(h, cong_fn(λ (z: Nat) => KHold(z, AcOwn), Nat::same_sound(o, i, q.left))),
+                AcRead => λ no _ => absurd(no),
+                AcWrite => λ no _ => absurd(no),
+            })(q.right, er)
+        },
+        KPlain => λ _ no => absurd(no), KView => λ _ no => absurd(no), KGone => λ _ no => absurd(no),
+    })(refl, p1.right)⟩
+}
+
 // One result at `Ret`, as `CSt::returns` checked it: `Value::ViewIs`.
 theorem Inv::ret_one(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>}, {root: Nat → Option<Ref>}, inv: Inv(tys, strs, s, e, m, h0, lent, root),
     sim: Sim(tys, strs, s, e, m), ps: List<Param>, vs: List<Value(tys)>, ent: REnv::ArgsKept(tys, m.env, REnv(Cell::args(tys, ps, vs), Nil)), vl: vs.len() = s.na,
@@ -11370,12 +11390,9 @@ theorem Inv::ret_one(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}
     (match og as λ o => s.returns(tys, strs, all, l, Result(code, o)) = True → Value::ViewIs(tys, strs, h0.len(), m.heap, vs, ws, code, o, cv) {
         OFresh => λ okf => Inv::ret_fresh(tys, strs, inv, sim, all, vs, ws, x, l, hl, code, okf),
         OParam(i) => λ okp => {
-            let p1 = Bool::and_true_parts((i + 1).leb(s.na) && True, match s.role(l) { KHold(o, _) => o.same(i), _ => False }, okp);
-            let lt: (i < s.na) = omega(Nat::le_of_leb(i + 1, s.na, (Bool::and_true_parts((i + 1).leb(s.na), True, p1.left)).left));
-            let ha: Exists<Acc>(λ a => (s.role(l) = KHold(i, a))) = (match s.role(l) as λ r => s.role(l) = r → (match r { KHold(o, _) => o.same(i), _ => False }) = True → Exists<Acc>(λ a => (s.role(l) = KHold(i, a))) {
-                KHold(o, a) => λ er c => Exists(a, trans(er, cong_fn(λ (q: Nat) => KHold(q, a), Nat::same_sound(o, i, c)))),
-                KPlain => λ _ no => absurd(no), KView => λ _ no => absurd(no), KGone => λ _ no => absurd(no),
-            })(refl, p1.right);
+            let rp = s.returns_param(tys, strs, all, l, code, i, okp);
+            let lt: (i < s.na) = rp.left;
+            let ha: Exists<Acc>(λ a => (s.role(l) = KHold(i, a))) = Exists(AcOwn, rp.right);
             match ha {
                 ⟨a, hr⟩ => match argv(i, lt) {
                     ⟨v, hv⟩ => j(sym(hv), λ q _ => (match q as λ _ => Type { Some(w) => match w as λ _ => Type { Refer(r) => cv = Refer(r), Plain(_) => Value::refers(tys, cv) = False }, None => False }),
@@ -11520,19 +11537,71 @@ theorem Nat::member_cons_false(l, h: Nat, t: List<Nat>, e: l.member(Cons(h, t)) 
     ⟨λ eq => Nat::ne_of_same(h, l, p.left)(sym(eq)), p.right⟩
 }
 
-// A fresh result that refers, as `CSt::returns` checks it: an object made
-// here, held to own, its root the result's block with no selections.
-theorem Inv::fresh_hold(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>}, {root: Nat → Option<Ref>}, inv: Inv(tys, strs, s, e, m, h0, lent, root),
-    all: List<Nat>, x: Var, l: Nat, hl: s.lvl(x) = Some(l), code: Shape, og: Origin, ok: s.returns(tys, strs, all, l, Result(code, og)) = True, b: Nat,
-    fb: Value::fresh_b(tys, og, (REnv::get(tys, m.env, x)).v) = Some(b)):
+// What `Sig::ok` says of a parameter answered back: a taken one.
+theorem Result::ok_param(tys: Nat → Type, strs: Strs(tys), ps: List<Param>, r: Result, k: Nat, ok: Result::ok(tys, strs, ps, r, k) = True, i: Nat, og: r.origin = OParam(i)):
+    Exists<Param>(λ p => (ps.nth(i) = Some(p)) ∧ (p.mode = ByTake))
+{
+    let ok2: ((match ps.nth(i) { Some(p) => match p.mode { ByTake => True, ByRead => False, ByWrite => False }, None => False }) = True) =
+        j(og, λ o _ => (match o { OFresh => True, OParam(i2) => match ps.nth(i2) { Some(p) => match p.mode { ByTake => True, ByRead => False, ByWrite => False }, None => False },
+            OView(i2, xs) => (match ps.nth(i2) { Some(p) => match p.mode { ByRead => True, ByTake => False, ByWrite => False }, None => False }) && Steps::lvls(xs).all_bit(λ a => (a + 1).leb(ps.len() + k)) }) = True, ok);
+    (match ps.nth(i) as λ o => ps.nth(i) = o → (match o { Some(p) => match p.mode { ByTake => True, ByRead => False, ByWrite => False }, None => False }) = True →
+            Exists<Param>(λ p => (ps.nth(i) = Some(p)) ∧ (p.mode = ByTake)) {
+        None => λ _ no => absurd(no),
+        Some(p) => λ hp c => Exists(p, ⟨hp, (match p.mode as λ md => (match md { ByTake => True, ByRead => False, ByWrite => False }) = True → md = ByTake {
+            ByTake => λ _ => refl, ByRead => λ no => absurd(no), ByWrite => λ no => absurd(no),
+        })(c)⟩),
+    })(refl, ok2)
+}
+
+// An owning result, as `CSt::returns` checks it: a level holding its object
+// to own, the object's root the result's whole block. A fresh one's object
+// is made here (`made`); a parameter's is the argument (`Lendable.whole`:
+// the parameter is a taken one by `Sig::ok`, and one of a plain code is
+// passed by value, so does not refer).
+theorem Inv::owned_hold(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>}, {root: Nat → Option<Ref>}, inv: Inv(tys, strs, s, e, m, h0, lent, root),
+    ps: List<Param>, vs: List<Value(tys)>, ent: REnv::ArgsKept(tys, m.env, REnv(Cell::args(tys, ps, vs), Nil)), vl: vs.len() = s.na, ld: Lendable(tys, strs, ps, h0, vs),
+    all: List<Nat>, x: Var, l: Nat, hl: s.lvl(x) = Some(l), code: Shape, og: Origin, ok: s.returns(tys, strs, all, l, Result(code, og)) = True,
+    pk: (i: Nat) → og = OParam(i) → Exists<Param>(λ p => (ps.nth(i) = Some(p)) ∧ (p.mode = ByTake)),
+    b: Nat, fb: Value::owned_b(tys, og, (REnv::get(tys, m.env, x)).v) = Some(b)):
     Exists<Nat>(λ o => (s.role(l) = KHold(o, AcOwn)) ∧ Exists<Ref>(λ q => (root(o) = Some(q)) ∧ ((q.b = b) ∧ (q.sels = Nil))))
 {
     let cv = (REnv::get(tys, m.env, x)).v;
-    (match og as λ o2 => s.returns(tys, strs, all, l, Result(code, o2)) = True → Value::fresh_b(tys, o2, cv) = Some(b) →
+    (match og as λ o2 => og = o2 → s.returns(tys, strs, all, l, Result(code, o2)) = True → Value::owned_b(tys, o2, cv) = Some(b) →
             Exists<Nat>(λ o => (s.role(l) = KHold(o, AcOwn)) ∧ Exists<Ref>(λ q => (root(o) = Some(q)) ∧ ((q.b = b) ∧ (q.sels = Nil)))) {
-        OParam(_) => λ _ no => absurd(no),
-        OView(_, _) => λ _ no => absurd(no),
-        OFresh => λ okf => (match cv as λ u => cv = u → Value::fresh_b(tys, OFresh, u) = Some(b) →
+        OView(_, _) => λ _ _ no => absurd(no),
+        OParam(i) => λ eo okp => {
+            let rp = s.returns_param(tys, strs, all, l, code, i, okp);
+            (match cv as λ u => cv = u → Value::owned_b(tys, OParam(i), u) = Some(b) →
+                    Exists<Nat>(λ o => (s.role(l) = KHold(o, AcOwn)) ∧ Exists<Ref>(λ q => (root(o) = Some(q)) ∧ ((q.b = b) ∧ (q.sels = Nil)))) {
+                Plain(_) => λ _ no => absurd(no),
+                Refer(q) => λ cq fq => {
+                    let qb: (q.b = b) = Option::some_inj(q.b, b, fq);
+                    let rt: (root(i) = Some(q)) = j(rp.right, λ rr _ => match rr { KHold(o2, _) => root(o2) = Some(q),
+                        KView => VEnt::Any(s.ents(l), λ en => (root(en.obj)).map(λ r0 => r0.narrow(Mach::ixs(tys, strs, m), s.unsteps(en.reg))) = Some(q)), KPlain => False, KGone => True },
+                        inv.refs(x, l, hl, q, cq));
+                    match List::nth_present(vs, i, omega(rp.left, vl)) {
+                        ⟨v, hv⟩ => {
+                            let ar: (root(i) = Value::ref_of(tys, v)) = Inv::arg_root(tys, strs, inv, ps, vs, ent, i, rp.left, v, hv);
+                            let vq: (v = Refer(q)) = (match v as λ u => Some(q) = Value::ref_of(tys, u) → u = Refer(q) {
+                                Plain(_) => λ no => absurd(no),
+                                Refer(q2) => λ h => cong_fn(λ (z: Ref) => Refer(z), sym(Option::some_inj(q, q2, h))),
+                            })(trans(sym(rt), ar));
+                            let hv2: (vs.nth(i) = Some(Refer(q))) = j(vq, λ u _ => vs.nth(i) = Some(u), hv);
+                            match pk(i, eo) {
+                                ⟨p, pp⟩ => {
+                                    let sn: (q.sels = Nil) = (match Shape::plain(tys, strs, p.code) as λ c => Shape::plain(tys, strs, p.code) = c → q.sels = Nil {
+                                        True => λ pl => false_elim(ld.plain(i, p, pp.left, pp.right, pl, q, hv2)),
+                                        False => λ pl => (ld.whole(i, p, pp.left, pp.right, pl, q, hv2)).left,
+                                    })(refl);
+                                    Exists(i, ⟨rp.right, Exists(q, ⟨rt, ⟨qb, sn⟩⟩)⟩)
+                                },
+                            }
+                        },
+                    }
+                },
+            })(refl)
+        },
+        OFresh => λ _ okf => (match cv as λ u => cv = u → Value::owned_b(tys, OFresh, u) = Some(b) →
                 Exists<Nat>(λ o => (s.role(l) = KHold(o, AcOwn)) ∧ Exists<Ref>(λ q => (root(o) = Some(q)) ∧ ((q.b = b) ∧ (q.sels = Nil)))) {
             Plain(_) => λ _ no => absurd(no),
             Refer(q) => λ cr fq => {
@@ -11556,41 +11625,46 @@ theorem Inv::fresh_hold(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(ty
                     },
                 })(refl, okf, inv.refs(x, l, hl, q, cr))
             },
-        })(refl)
-    })(ok, fb)
+        })(refl),
+    })(refl, ok, fb)
 }
 
-// No result after one fresh in `q0`'s block is fresh in it: its holder is at
-// another level (`CSt::fresh_once`), so of another object (`one`), made here
-// whole (`made`), and two objects one of which may change are apart
-// (`apart`), which two whole references into one block are not.
-theorem Inv::ret_not_fresh(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>}, {root: Nat → Option<Ref>}, inv: Inv(tys, strs, s, e, m, h0, lent, root),
+// No result after an owning one in `q0`'s block owns it: its holder is at
+// another level (`CSt::fresh_once`, which a parameter answered back obeys as
+// a made object does), so of another object (`one`), and two objects one of
+// which may change are apart (`apart`), which two whole references into
+// one block are not.
+theorem Inv::ret_not_owned(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>}, {root: Nat → Option<Ref>}, inv: Inv(tys, strs, s, e, m, h0, lent, root),
+    ps: List<Param>, vs: List<Value(tys)>, ent: REnv::ArgsKept(tys, m.env, REnv(Cell::args(tys, ps, vs), Nil)), vl: vs.len() = s.na, ld: Lendable(tys, strs, ps, h0, vs),
     all: List<Nat>, l0, o0: Nat, q0: Ref, b0: l0 < s.na + s.nd, hr0: s.role(l0) = KHold(o0, AcOwn), rt0: root(o0) = Some(q0), sn0: q0.sels = Nil, rs: List<Result>):
-    (xs: List<Var>) → (ls: List<Nat>) → s.lvls(xs) = Some(ls) → s.returns_all(tys, strs, all, ls, rs) = True → l0.member(ls) = False →
-    Value::NotFresh(tys, q0.b, rs, xs.map(λ x => (REnv::get(tys, m.env, x)).v))
+    (k: Nat) → (xs: List<Var>) → (ls: List<Nat>) → s.lvls(xs) = Some(ls) → s.returns_all(tys, strs, all, ls, rs) = True → Sig::ok_from(tys, strs, ps, rs, k) = True → l0.member(ls) = False →
+    Value::NotOwned(tys, q0.b, rs, xs.map(λ x => (REnv::get(tys, m.env, x)).v))
 {
     match rs {
-        Nil => λ _ _ _ _ _ => trivial,
-        Cons(r, rest) => λ xs => match xs {
-            Nil => λ _ _ _ _ => trivial,
-            Cons(x, xr) => λ ls hl ok nm => {
+        Nil => λ _ _ _ _ _ _ _ => trivial,
+        Cons(r, rest) => λ k xs => match xs {
+            Nil => λ _ _ _ _ _ => trivial,
+            Cons(x, xr) => λ ls hl ok sok nm => {
                 let a = Option::and_then_some(s.lvl(x), λ l => s.lvls(xr).map(λ lt => Cons(l, lt)), ls, hl);
                 match Option::map_some_inv(s.lvls(xr), λ (lt: List<Nat>) => Cons(a.witness, lt), ls, a.proof.right) {
                     ⟨lr, pl⟩ => {
-                        let ok2: (s.returns_all(tys, strs, all, Cons(a.witness, lr), Cons(r, rest)) = True) = j(sym(pl.right), λ q _ => s.returns_all(tys, strs, all, q, Cons(r, rest)) = True, ok);
-                        let parts = Bool::and_true_parts(s.returns(tys, strs, all, a.witness, r), s.returns_all(tys, strs, all, lr, rest), ok2);
-                        let nm3 = Nat::member_cons_false(l0, a.witness, lr, j(sym(pl.right), λ q _ => l0.member(q) = False, nm));
-                        ⟨λ fb => match Inv::fresh_hold(tys, strs, inv, all, x, a.witness, a.proof.left, r.code, r.origin, parts.left, q0.b, fb) {
+                        let l = a.witness;
+                        let ok2: (s.returns_all(tys, strs, all, Cons(l, lr), Cons(r, rest)) = True) = j(sym(pl.right), λ q _ => s.returns_all(tys, strs, all, q, Cons(r, rest)) = True, ok);
+                        let parts = Bool::and_true_parts(s.returns(tys, strs, all, l, r), s.returns_all(tys, strs, all, lr, rest), ok2);
+                        let sp = Bool::and_true_parts(Result::ok(tys, strs, ps, r, k), Sig::ok_from(tys, strs, ps, rest, k + 1), sok);
+                        let pk = λ (i: Nat) (og: r.origin = OParam(i)) => Result::ok_param(tys, strs, ps, r, k, sp.left, i, og);
+                        let nm3 = Nat::member_cons_false(l0, l, lr, j(sym(pl.right), λ q _ => l0.member(q) = False, nm));
+                        ⟨λ fb => match Inv::owned_hold(tys, strs, inv, ps, vs, ent, vl, ld, all, x, l, a.proof.left, r.code, r.origin, parts.left, pk, q0.b, fb) {
                             ⟨o, po⟩ => match po.right {
                                 ⟨q, pq⟩ => {
-                                    let ne: ¬(o = o0) = λ eo => inv.one(l0, a.witness, o0, AcOwn, AcOwn, b0, s.lvl_below(x, a.witness, a.proof.left), nm3.left, hr0,
-                                        j(eo, λ z _ => s.role(a.witness) = KHold(z, AcOwn), po.left));
+                                    let ne: ¬(o = o0) = λ eo => inv.one(l0, l, o0, AcOwn, AcOwn, b0, s.lvl_below(x, l, a.proof.left), nm3.left, hr0,
+                                        j(eo, λ z _ => s.role(l) = KHold(z, AcOwn), po.left));
                                     let ch: s.Changes(o0) = Inl(Exists(l0, ⟨b0, Exists(AcOwn, ⟨hr0, refl⟩)⟩));
                                     let ap: Sel::Apart(tys, strs, q0.sels, q.sels) = inv.apart(o0, o, λ eq => ne(sym(eq)), ch, q0, q, rt0, pq.left)(sym(pq.right.left));
                                     Sel::apart_nil_nil(tys, strs, j(pq.right.right, λ z _ => Sel::Apart(tys, strs, Nil, z), j(sn0, λ z _ => Sel::Apart(tys, strs, z, q.sels), ap)))
                                 },
                             },
-                        }, Inv::ret_not_fresh(tys, strs, inv, all, l0, o0, q0, b0, hr0, rt0, sn0, rest, xr, lr, pl.left, parts.right, nm3.right)⟩
+                        }, Inv::ret_not_owned(tys, strs, inv, ps, vs, ent, vl, ld, all, l0, o0, q0, b0, hr0, rt0, sn0, rest, k + 1, xr, lr, pl.left, parts.right, sp.right, nm3.right)⟩
                     },
                 }
             },
@@ -11598,17 +11672,18 @@ theorem Inv::ret_not_fresh(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env
     }
 }
 
-// The fresh results at `Ret` are in different blocks (`Value::FreshApart`).
-theorem Inv::ret_fresh_apart(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>}, {root: Nat → Option<Ref>}, inv: Inv(tys, strs, s, e, m, h0, lent, root),
+// The owning results at `Ret` are in different blocks (`Value::OwnedApart`).
+theorem Inv::ret_owned_apart(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>}, {root: Nat → Option<Ref>}, inv: Inv(tys, strs, s, e, m, h0, lent, root),
+    ps: List<Param>, vs: List<Value(tys)>, ent: REnv::ArgsKept(tys, m.env, REnv(Cell::args(tys, ps, vs), Nil)), vl: vs.len() = s.na, ld: Lendable(tys, strs, ps, h0, vs),
     all: List<Nat>, rs: List<Result>):
-    (xs: List<Var>) → (ls: List<Nat>) → s.lvls(xs) = Some(ls) → s.returns_all(tys, strs, all, ls, rs) = True → s.fresh_once(ls, rs) = True →
-    Value::FreshApart(tys, rs, xs.map(λ x => (REnv::get(tys, m.env, x)).v))
+    (k: Nat) → (xs: List<Var>) → (ls: List<Nat>) → s.lvls(xs) = Some(ls) → s.returns_all(tys, strs, all, ls, rs) = True → s.fresh_once(ls, rs) = True → Sig::ok_from(tys, strs, ps, rs, k) = True →
+    Value::OwnedApart(tys, rs, xs.map(λ x => (REnv::get(tys, m.env, x)).v))
 {
     match rs {
-        Nil => λ _ _ _ _ _ => trivial,
-        Cons(r, rest) => λ xs => match xs {
-            Nil => λ _ _ _ _ => trivial,
-            Cons(x, xr) => λ ls hl ok once => {
+        Nil => λ _ _ _ _ _ _ _ => trivial,
+        Cons(r, rest) => λ k xs => match xs {
+            Nil => λ _ _ _ _ _ => trivial,
+            Cons(x, xr) => λ ls hl ok once sok => {
                 let a = Option::and_then_some(s.lvl(x), λ l => s.lvls(xr).map(λ lt => Cons(l, lt)), ls, hl);
                 match Option::map_some_inv(s.lvls(xr), λ (lt: List<Nat>) => Cons(a.witness, lt), ls, a.proof.right) {
                     ⟨lr, pl⟩ => {
@@ -11618,27 +11693,61 @@ theorem Inv::ret_fresh_apart(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: E
                         let once2 = j(sym(pl.right), λ q _ => s.fresh_once(q, Cons(r, rest)) = True, once);
                         let op = Bool::and_true_parts(match r.origin { OFresh => match s.role(l) { KHold(_, _) => !l.member(lr), KPlain => True, KView => True, KGone => True }, OParam(_) => match s.role(l) { KHold(_, _) => !l.member(lr), KPlain => True, KView => True, KGone => True }, OView(_, _) => True },
                             s.fresh_once(lr, rest), once2);
+                        let sp = Bool::and_true_parts(Result::ok(tys, strs, ps, r, k), Sig::ok_from(tys, strs, ps, rest, k + 1), sok);
+                        let pk = λ (i: Nat) (og: r.origin = OParam(i)) => Result::ok_param(tys, strs, ps, r, k, sp.left, i, og);
                         let cv = (REnv::get(tys, m.env, x)).v;
-                        let head: (match Value::fresh_b(tys, r.origin, cv) as λ _ => Type { Some(b) => Value::NotFresh(tys, b, rest, xr.map(λ y => (REnv::get(tys, m.env, y)).v)), None => True }) =
-                            (match Value::fresh_b(tys, r.origin, cv) as λ ob => Value::fresh_b(tys, r.origin, cv) = ob →
-                                    (match ob as λ _ => Type { Some(b) => Value::NotFresh(tys, b, rest, xr.map(λ y => (REnv::get(tys, m.env, y)).v)), None => True }) {
+                        let head: (match Value::owned_b(tys, r.origin, cv) as λ _ => Type { Some(b) => Value::NotOwned(tys, b, rest, xr.map(λ y => (REnv::get(tys, m.env, y)).v)), None => True }) =
+                            (match Value::owned_b(tys, r.origin, cv) as λ ob => Value::owned_b(tys, r.origin, cv) = ob →
+                                    (match ob as λ _ => Type { Some(b) => Value::NotOwned(tys, b, rest, xr.map(λ y => (REnv::get(tys, m.env, y)).v)), None => True }) {
                                 None => λ _ => trivial,
-                                Some(b) => λ fb => match Inv::fresh_hold(tys, strs, inv, all, x, l, a.proof.left, r.code, r.origin, parts.left, b, fb) {
+                                Some(b) => λ fb => match Inv::owned_hold(tys, strs, inv, ps, vs, ent, vl, ld, all, x, l, a.proof.left, r.code, r.origin, parts.left, pk, b, fb) {
                                     ⟨o, po⟩ => match po.right {
                                         ⟨q, pq⟩ => {
-                                            let og: (r.origin = OFresh) = (match r.origin as λ o2 => Value::fresh_b(tys, o2, cv) = Some(b) → o2 = OFresh {
-                                                OFresh => λ _ => refl, OParam(_) => λ no => absurd(no), OView(_, _) => λ no => absurd(no),
-                                            })(fb);
-                                            let nm: (!l.member(lr) = True) = j(po.left, λ rr _ => (match rr { KHold(_, _) => !l.member(lr), KPlain => True, KView => True, KGone => True }) = True,
-                                                j(og, λ o2 _ => (match o2 { OFresh => match s.role(l) { KHold(_, _) => !l.member(lr), KPlain => True, KView => True, KGone => True }, OParam(_) => match s.role(l) { KHold(_, _) => !l.member(lr), KPlain => True, KView => True, KGone => True }, OView(_, _) => True }) = True, op.left));
-                                            j(pq.right.left, λ z _ => Value::NotFresh(tys, z, rest, xr.map(λ y => (REnv::get(tys, m.env, y)).v)),
-                                                Inv::ret_not_fresh(tys, strs, inv, all, l, o, q, s.lvl_below(x, l, a.proof.left), po.left, pq.left, pq.right.right, rest, xr, lr, pl.left, parts.right,
+                                            // A level answered as an owning result is not answered again.
+                                            let hm: ((match s.role(l) { KHold(_, _) => !l.member(lr), KPlain => True, KView => True, KGone => True }) = True) =
+                                                (match r.origin as λ o2 => Value::owned_b(tys, o2, cv) = Some(b) →
+                                                        (match o2 { OFresh => match s.role(l) { KHold(_, _) => !l.member(lr), KPlain => True, KView => True, KGone => True }, OParam(_) => match s.role(l) { KHold(_, _) => !l.member(lr), KPlain => True, KView => True, KGone => True }, OView(_, _) => True }) = True →
+                                                        (match s.role(l) { KHold(_, _) => !l.member(lr), KPlain => True, KView => True, KGone => True }) = True {
+                                                    OFresh => λ _ h => h,
+                                                    OParam(_) => λ _ h => h,
+                                                    OView(_, _) => λ no _ => absurd(no),
+                                                })(fb, op.left);
+                                            let nm: (!l.member(lr) = True) = j(po.left, λ rr _ => (match rr { KHold(_, _) => !l.member(lr), KPlain => True, KView => True, KGone => True }) = True, hm);
+                                            j(pq.right.left, λ z _ => Value::NotOwned(tys, z, rest, xr.map(λ y => (REnv::get(tys, m.env, y)).v)),
+                                                Inv::ret_not_owned(tys, strs, inv, ps, vs, ent, vl, ld, all, l, o, q, s.lvl_below(x, l, a.proof.left), po.left, pq.left, pq.right.right, rest, k + 1, xr, lr, pl.left, parts.right, sp.right,
                                                     Bool::false_of_not_true(l.member(lr), nm)))
                                         },
                                     },
                                 },
                             })(refl);
-                        ⟨head, Inv::ret_fresh_apart(tys, strs, inv, all, rest, xr, lr, pl.left, parts.right, op.right)⟩
+                        ⟨head, Inv::ret_owned_apart(tys, strs, inv, ps, vs, ent, vl, ld, all, rest, k + 1, xr, lr, pl.left, parts.right, op.right, sp.right)⟩
+                    },
+                }
+            },
+        },
+    }
+}
+
+// The results' codes at `Ret` are the signature's: the code check's, read
+// through `Sim.codes`.
+theorem Sim::coded_res(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, sim: Sim(tys, strs, s, e, m), cs: List<Shape>, rs: List<Result>):
+    (xs: List<Var>) → (ls: List<Nat>) → s.lvls(xs) = Some(ls) → Shape::same_list(s.codes(xs), rs.map(λ r => r.code) ++ cs) = True →
+    Dyn::Coded(tys, (xs.map(λ x => Env::get(tys, e, x))).take(rs.len()), rs.map(λ r => Param(r.code, ByTake)))
+{
+    match rs {
+        Nil => λ xs => match xs { Nil => λ _ _ _ => refl, Cons(_, _) => λ _ _ _ => refl },
+        Cons(r, rr) => λ xs => match xs {
+            Nil => λ _ _ no => absurd(no),
+            Cons(x, xr) => λ ls hl h => {
+                let a = Option::and_then_some(s.lvl(x), λ l => s.lvls(xr).map(λ lt => Cons(l, lt)), ls, hl);
+                match Option::map_some_inv(s.lvls(xr), λ (lt: List<Nat>) => Cons(a.witness, lt), ls, a.proof.right) {
+                    ⟨lr, pl⟩ => {
+                        let parts = Bool::and_true_parts(s.code(x).same(r.code), Shape::same_list(s.codes(xr), rr.map(λ q => q.code) ++ cs), h);
+                        let cx: ((Env::get(tys, e, x)).code = s.code(x)) = trans(sim.codes(x, a.witness, a.proof.left),
+                            sym(j(sym(a.proof.left), λ o _ => (match o as λ _ => Shape { Some(l2) => (s.var(l2)).code, None => SWord(WNat) }) = (s.var(a.witness)).code, refl)));
+                        let c1: ((Env::get(tys, e, x)).code.same(r.code) = True) = j(sym(cx), λ c _ => c.same(r.code) = True, parts.left);
+                        j(sym(c1), λ b _ => (b && Dyn::coded(tys, (xr.map(λ y => Env::get(tys, e, y))).take(rr.len()), rr.map(λ q => Param(q.code, ByTake)))) = True,
+                            Sim::coded_res(tys, strs, sim, cs, rr, xr, lr, pl.left, parts.right))
                     },
                 }
             },
@@ -11654,14 +11763,16 @@ record RetOk(tys: Nat → Type, strs: Strs(tys), sig: Sig, vs: List<Value(tys)>,
     frame: Heap::Frame(tys, strs, h0, h, lent),
     kept: Heap::Kept(tys, h0, h),
     views: Value::Views(tys, strs, h0.len(), h, vs, Dyn::ixs(tys, ds ++ outs), sig.results, rv),
-    fresh: Value::FreshApart(tys, sig.results, rv),
+    owned: Value::OwnedApart(tys, sig.results, rv),
+    coded: Dyn::Coded(tys, outs.take(sig.results.len()), sig.res_params()),
 }
 
 // The `Ret` stage: from the invariant, `Like`, and the argument cells as
 // passed, what `SafeAt` asks of the answer the run gives there.
 theorem Body::stage_ret(tys: Nat → Type, strs: Strs(tys), sig: Sig, {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>}, {root: Nat → Option<Ref>}, inv: Inv(tys, strs, s, e, m, h0, lent, root),
     ds: List<Dyn(tys)>, lk: Like(tys, strs, sig.params, ds, s, e), vs: List<Value(tys)>, ent: REnv::ArgsKept(tys, m.env, REnv(Cell::args(tys, sig.params, vs), Nil)),
-    na: s.na = sig.params.len(), vl: vs.len() = s.na, dl: ds.len() = s.na, xs: List<Var>, ok: s.ret(tys, strs, sig, xs) = True):
+    na: s.na = sig.params.len(), vl: vs.len() = s.na, dl: ds.len() = s.na, ld: Lendable(tys, strs, sig.params, h0, vs), sok: Sig::ok(tys, strs, sig) = True,
+    xs: List<Var>, cd: Shape::same_list(s.codes(xs), sig.ret_codes()) = True, ok: s.ret(tys, strs, sig, xs) = True):
     RetOk(tys, strs, sig, vs, ds, h0, lent, xs.map(λ x => (REnv::get(tys, m.env, x)).v), m.heap, xs.map(λ x => Env::get(tys, e, x)))
 {
     let ri = s.ret_inv(tys, strs, sig, xs, ok);
@@ -11679,7 +11790,8 @@ theorem Body::stage_ret(tys: Nat → Type, strs: Strs(tys), sig: Sig, {s: CSt}, 
     let sw = Inv::ret_words(tys, strs, inv, ri.none, sig.params, ds, lk, dl, xs, ri.ls, ri.lvls);
     RetOk(Sim::read_all(tys, strs, sim, xs, Nil, ri.reads), wr2, inv.frame.eq, ⟨inv.grows, inv.stays⟩,
         Inv::ret_views(tys, strs, inv, sim, sig.params, vs, ent, vl, Dyn::ixs(tys, ds ++ xs.map(λ x => Env::get(tys, e, x))), ri.ls, sw, sig.results, xs, ri.ls, ri.lvls, ri.rets),
-        Inv::ret_fresh_apart(tys, strs, inv, ri.ls, sig.results, xs, ri.ls, ri.lvls, ri.rets, ri.once))
+        Inv::ret_owned_apart(tys, strs, inv, sig.params, vs, ent, vl, ld, ri.ls, sig.results, 0, xs, ri.ls, ri.lvls, ri.rets, ri.once, sok),
+        Sim::coded_res(tys, strs, sim, sig.written().map(λ i => sig.params.nth(i).map(λ p => p.code).unwrap_or(SWord(WNat))), sig.results, xs, ri.ls, ri.lvls, cd))
 }
 
 // ---------------------------------------------------------------------------
@@ -15696,21 +15808,7 @@ theorem Inv::call_after(tys: Nat → Type, cx: Ctx(tys), sl: StrsLaws(tys, cx.st
 // its block, or, passed by value, a holder of a new object with no root
 // (`Inv::bind_fresh_plain`); a moved argument answered back is a holder of
 // its object again (`Inv::bind_moved`, the moved holder being gone and the
-// checker refusing a second, `CSt::holds`); a read view is `Inv::push_view`.
-
-// No level holds an object the state says no level holds.
-theorem CSt::holds_none(self s: CSt, o: Nat, h: s.holds(o) = False, l: Nat, a: Acc, hr: s.role(l) = KHold(o, a)): False {
-    let hb: ((cs: List<CVar>) → (k: Nat) → (cs.nth(k).unwrap_or(CVar::none())).role = KHold(o, a) → cs.any_bit(λ c => c.holds(o)) = True) = λ cs k e =>
-        (match cs.nth(k) as λ z => cs.nth(k) = z → (z.unwrap_or(CVar::none())).role = KHold(o, a) → cs.any_bit(λ c => c.holds(o)) = True {
-            None => λ _ e2 => absurd(e2),
-            Some(c) => λ ez e2 => cs.any_bit_mem(λ c2 => c2.holds(o), c, cs.nth_mem(k, c, ez),
-                j(sym(e2), λ rr _ => (match rr { KHold(o2, _) => o2.same(o), KPlain => False, KView => False, KGone => False }) = True, o.same_self())),
-        })(refl, e);
-    (match (l + 1).leb(s.na) as λ b => (match b { True => s.args.nth(l).unwrap_or(CVar::none()), False => s.locs.nth(s.na + s.nd - 1 - l).unwrap_or(CVar::none()) }).role = KHold(o, a) → False {
-        True => λ e => absurd(trans(sym(h), j(sym(hb(s.args, l, e)), λ b _ => (b || s.locs.any_bit(λ c => c.holds(o))) = True, refl))),
-        False => λ e => absurd(trans(sym(h), j(sym(hb(s.locs, s.na + s.nd - 1 - l, e)), λ b _ => (s.args.any_bit(λ c => c.holds(o)) || b) = True, Bool::or_true_right(s.args.any_bit(λ c => c.holds(o)))))),
-    })(hr)
-}
+// callee answering it once, `Value::OwnedApart`); a read view is `Inv::push_view`.
 
 // A fresh result of an object's code passed by value: a holder of a new
 // object with no root.
@@ -15731,11 +15829,13 @@ theorem Inv::bind_fresh_plain(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: 
 
 // A moved argument answered back: a holder of its object again, owned, its
 // root the argument's whole block (`own` before the call), no level holding
-// it (the checker's `CSt::holds`).
+// it (the moved holder gone in the lends, and the callee answering it once:
+// two owning results in different blocks, `Value::OwnedApart`, that
+// `Value::ViewIs` says are both the argument).
 theorem Inv::bind_moved(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(tys)}, {m: Mach(tys)}, {h0: Heap(tys)}, {lent: List<Ref>}, {root: Nat → Option<Ref>}, inv: Inv(tys, strs, s, e, m, h0, lent, root),
     none: s.pending() = False, code: Shape, o: Nat, r: Ref, d: Dyn(tys), rd: Value::Reads(tys, strs, m.heap, Refer(r), d), okc: d.code = code,
     ro: root(o) = Some(r), rn: r.sels = Nil, alone: (o2: Nat) → ¬(o2 = o) → (r2: Ref) → root(o2) = Some(r2) → ¬(r2.b = r.b),
-    nh: s.holds(o) = False, ho: o < s.nobj, lo: Mem(r, lent) ∨ (h0.len() <= r.b),
+    nh: (l: Nat) → (a: Acc) → l < s.na + s.nd → s.role(l) = KHold(o, a) → False, ho: o < s.nobj, lo: Mem(r, lent) ∨ (h0.len() <= r.b),
     ap: (o2: Nat) → ¬(o2 = o) → (r1, r2: Ref) → root(o) = Some(r1) → root(o2) = Some(r2) → Ref::Apart(tys, strs, r1, r2)):
     Inv(tys, strs, s.push(CVar(code, KHold(o, AcOwn))), Env::push(tys, e, d), Mach::push(tys, m, Cell(Refer(r), True)), h0, lent, root)
 {
@@ -15748,7 +15848,7 @@ theorem Inv::bind_moved(tys: Nat → Type, strs: Strs(tys), {s: CSt}, {e: Env(ty
         λ r2 cr => trans(ro, cong_fn(λ (z: Ref) => Some(z), inj(r2, cr))),
         λ r2 h => cong_fn(λ (z: Ref) => Refer(z), Option::some_inj(r, r2, trans(sym(ro), h))),
         λ _ r2 cr => j(inj(r2, cr), λ z _ => (AcOwn = AcOwn) ∧ ((z.sels = Nil) ∧ ((o2: Nat) → ¬(o2 = o) → (r3: Ref) → root(o2) = Some(r3) → ¬(r3.b = z.b))), ⟨refl, ⟨rn, alone⟩⟩),
-        λ l a2 lb hr => s.holds_none(o, nh, l, a2, hr),
+        nh,
         ho,
         λ _ => ⟨λ r2 h => j(Option::some_inj(r, r2, trans(sym(ro), h)), λ z _ => Mem(z, lent) ∨ (h0.len() <= z.b), lo), ap⟩)
 }
