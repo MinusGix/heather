@@ -2,9 +2,8 @@
 // (docs/language/ownership-design.md §17.9's test,
 // issues/bytes-level-out-of-room.md step 1).
 //
-// - The guarded emission, here as a probe (`Program::lower_guarded`): the
-//   lowering's emission with each guarded call's guard before its CALL and
-//   the stop after the routines. Step 3 makes it `Program::lower` itself.
+// - The guarded emission (`Program::lower`, step 3): each guarded call's
+//   guard at the call's start and the stop after the routines.
 // - A machine to run the lowered items by evaluation (`mach_run`): not the
 //   model's relation (`MachineStep` is not executable) but its register
 //   semantics (`execute_register`), the stack as words by address, CALL,
@@ -52,149 +51,9 @@ import nat;
 import option;
 
 // ---------------------------------------------------------------------------
-// The guarded emission (a probe of step 3's)
+// The guarded emission is `Program::lower` (bytes_level_routines)
 
-// A call's code with its guard after the argument moves, before the CALL.
-fn call_prog_guarded(saved: List<Gpr>, prog: Prog, sources: List<Gpr>, moves: List<Instruction>, callee, need, stop: Nat) → Prog {
-    saved.reloads(At(At(At(call_staged(saved, prog, sources), 0, Block(moves)).guarded(need, stop), 0, CallTo(callee + 1)), 0,
-        Block(stack_raise(sources.len()))), 0)
-}
-
-fn File::emit_call_staged_guarded(self file: File, saved: List<Gpr>, staged: File, prog: Prog, callee: Nat, arguments: List<Nat>, result: Nat,
-    also: List<Nat>, placement: List<Place>, names, need, stop: Nat) → Option<Emitted> {
-    match staged.sources(arguments.drop(6)) {
-        None => None,
-        Some(sources) => match sources.len().same(arguments.drop(6).len()) && staged.outputs_check(word_ports(arguments.drop(6)), sources) {
-            False => None,
-            True => match staged.move_outputs(ArgumentMove::ports(staged.call_moves(arguments.take(6))),
-                ArgumentMove::registers(staged.call_moves(arguments.take(6)))) {
-                None => None,
-                Some(moves) => match moves.file.outputs_check(word_ports(arguments.take(6)), argument_registers()) &&
-                    leaves_all(moves.code, callee_saved()) {
-                    False => None,
-                    True => Some(Emitted(call_prog_guarded(saved, prog, sources, moves.code, callee, need, stop), file.called(saved, result, also),
-                        placement, names)),
-                },
-            },
-        },
-    }
-}
-
-fn File::emit_call_guarded(self file: File, slots: Nat, prog: Prog, callee: Nat, arguments: List<Nat>, result: Nat, also: List<Nat>,
-    placement: List<Place>, names, bound, need, stop: Nat) → Option<Emitted> {
-    match saves_ok(slots, call_saves(placement)) && ((callee + 1).leb(bound) && (arguments.drop(6).len().leb(2) &&
-        answer_registers().take(also.len()).clear_of(call_saves(placement)))) {
-        False => None,
-        True => file.emit_call_staged_guarded(call_saves(placement), file.write(Rsp, None), prog, callee, arguments, result, also,
-            after_saves(placement), names, need, stop),
-    }
-}
-
-// `Body::emit` with the guarded calls (`guards`) guarded.
-fn Body::emit_guarded(self body: Body, guards: List<Nat>, rooms: Nat → Nat, stop: Nat, saves, slots: Nat, short: List<Nat>, bound, spare: Nat,
-    prog: Prog, file: File, placement: List<Place>, names: Nat) → Option<Emitted> {
-    match body {
-        Leaf(instrs) => emit_instrs(saves, prog, file, instrs, placement, names),
-        Seq(first, rest) => match first.emit_guarded(guards, rooms, stop, saves, slots, short, bound, spare, prog, file, placement, names) {
-            None => None,
-            Some(done) => rest.emit_guarded(guards, rooms, stop, saves, slots, short, bound, spare, done.prog, done.file, done.placement, done.names),
-        },
-        Branch(condition, yes, no) => match file.branch_test(condition) {
-            None => None,
-            Some(tested) => match yes.emit_guarded(guards, rooms, stop, saves, slots, short, bound, spare,
-                prog.branched_by(tested.test, names + 1, shorts(short, names + 1)), file.know(Truth(condition)), placement, names + 2) {
-                None => None,
-                Some(left) => match no.emit_guarded(guards, rooms, stop, saves, slots, short, bound, spare,
-                    left.prog.else_label_by(names + 1, names + 2, shorts(short, names + 2)), file.know(Falsity(condition)), left.placement, left.names) {
-                    None => None,
-                    Some(right) => Some(Emitted(right.prog.join_label(names + 2), left.file.meet(right.file, file.known), right.placement, right.names)),
-                },
-            },
-        },
-        Call(callee, arguments, results) => match listed(guards, callee) {
-            False => file.emit_call(slots, prog, callee, typed_ids(arguments), call_result(results, spare), call_also(results), placement, names, bound,
-                [], []),
-            True => file.emit_call_guarded(slots, prog, callee, typed_ids(arguments), call_result(results, spare), call_also(results), placement, names,
-                bound, guard_need(rooms, callee), stop),
-        },
-        Loop(inputs, parameters, inner, exit, next, outputs) => match state_registers(placement, typed_ids(parameters).len()) {
-            None => None,
-            Some(taken) => match file.plain_entry(saves, typed_ids(inputs), typed_ids(parameters), taken.registers) {
-                None => None,
-                Some(entry) => match inner.emit_guarded(guards, rooms, stop, saves, slots, short, bound, spare, plain_head(prog, entry.code, names),
-                    entry.head, taken.rest, names + 4) {
-                    None => None,
-                    Some(pass) => pass.plain_close(saves, taken.registers, exit, typed_ids(next), typed_ids(outputs), names, short),
-                },
-            },
-        },
-        Sys(call) => emit_sys(saves, prog, file, call, placement, names),
-        Exit(status) => emit_exit(prog, file, status, placement, names),
-    }
-}
-
-fn Routine::emit_guarded_body(self r: Routine, guards: List<Nat>, rooms: Nat → Nat, stop: Nat, asked, saves: Nat, short: List<Nat>, prog: Prog,
-    k, bound, spare: Nat, file: File, placement: List<Place>, names: Nat) → Option<Emitted> {
-    match r.whole(spare).emit_guarded(guards, rooms, stop, saves, r.slots(asked), short, bound, spare,
-        function_opened(prog, k, r.loads(), r.slots(asked), saves), file, placement, names) {
-        None => None,
-        Some(body) => r.closing(asked, saves, spare, body),
-    }
-}
-
-// A routine of a program that guards keeps the floor: no placement saves
-// six.
-fn Routine::emit_guarded(self r: Routine, guards: List<Nat>, rooms: Nat → Nat, stop: Nat, floored: Bool, prog: Prog, k, bound: Nat,
-    placement: List<Place>, names: Nat) → Option<Emitted> {
-    match r.scope() {
-        None => None,
-        Some(used) => match input_file(word_ports(typed_ids(r.parameters)), parameter_registers()) {
-            None => None,
-            Some(file) => match !floored || placement_saves(placement).leb(5) {
-                False => None,
-                True => r.emit_guarded_body(guards, rooms, stop, placement_slots(placement), placement_saves(placement), placement_short(placement), prog,
-                    k, bound, ids_past(used), file, placement_body(placement), names),
-            },
-        },
-    }
-}
-
-fn emit_routines_guarded(prog: Prog, routines: List<Routine>, guards: List<List<Nat>>, rooms: Nat → Nat, stop: Nat, floored: Bool, k, bound: Nat,
-    placement: List<Place>, names: Nat) → Option<Emitted> {
-    match routines {
-        Nil => Some(Emitted(prog, File::empty(), placement, names)),
-        Cons(r, rest) => match r.emit_guarded(guards_at(guards, k), rooms, stop, floored, prog, k, bound, placement, names) {
-            None => None,
-            Some(out) => emit_routines_guarded(out.prog, rest, guards, rooms, stop, floored, k + 1, bound, out.placement, out.names),
-        },
-    }
-}
-
-// The program: with no guard, as today; with one, its labels from one past
-// the stop's, the stop after the routines. Refused where the table does
-// not settle.
-fn Program::lower_guarded(self p: Program, placement: List<Place>) → Option<Prog> {
-    match p.valid() && rooms_settled(p.routines, program_guards(p.routines), routine_rooms(p.routines)) {
-        False => None,
-        True => match any_guard(program_guards(p.routines)) {
-            False => match emit_routines_guarded(Start, p.routines, [], routine_rooms(p.routines), 0, False, 0, p.routines.len(), placement,
-                p.routines.len()) {
-                None => None,
-                Some(out) => match out.prog.laid_out() { False => None, True => Some(out.prog) },
-            },
-            True => match emit_routines_guarded(Start, p.routines, program_guards(p.routines), routine_rooms(p.routines), p.routines.len() + 1, True, 0,
-                p.routines.len(), placement, p.routines.len() + 1) {
-                None => None,
-                Some(out) => match out.prog.stopped_at(p.routines.len() + 1).laid_out() {
-                    False => None,
-                    True => Some(out.prog.stopped_at(p.routines.len() + 1)),
-                },
-            },
-        },
-    }
-}
-
-fn lowers_guarded(p: Program, placement: List<Place>) → Bool { match p.lower_guarded(placement) { None => False, Some(_) => True } }
+fn lowers_guarded(p: Program, placement: List<Place>) → Bool { p.lower(placement).is_some() }
 
 // ---------------------------------------------------------------------------
 // A machine over the lowered items, by evaluation
@@ -316,12 +175,12 @@ fn mach_run(program: Prog, f: Nat, args: List<Nat>, floor, i, fuel: Nat) → Hal
 }
 
 fn run_lowered_by(p: Program, placement: List<Place>, f: Nat, args: List<Nat>, i, fuel: Nat) → Halt {
-    match p.lower_guarded(placement) { None => Fault(0, 9), Some(program) => mach_run(program, f, args, 4096, i, fuel) }
+    match p.lower(placement) { None => Fault(0, 9), Some(program) => mach_run(program, f, args, 4096, i, fuel) }
 }
 
 fn run_lowered(p: Program, placement: List<Place>, f: Nat, args: List<Nat>, i: Nat) → Halt { run_lowered_by(p, placement, f, args, i, 2000) }
 
-fn item_count(p: Program, placement: List<Place>) → Nat { match p.lower_guarded(placement) { None => 0, Some(program) => prog_items(program, []).len() } }
+fn item_count(p: Program, placement: List<Place>) → Nat { match p.lower(placement) { None => 0, Some(program) => prog_items(program, []).len() } }
 
 fn halt_returned(h: Halt) → Option<Nat> { match h { Stopped(_, _, _) => None, Returned(rax, _, _) => Some(rax), Fault(_, _) => None, Steps => None } }
 fn halt_stopped(h: Halt) → Option<Nat> { match h { Stopped(status, _, _) => Some(status), Returned(_, _, _) => None, Fault(_, _) => None, Steps => None } }
@@ -392,7 +251,9 @@ fn guard_needs_from(items: List<Named>, here: Nat, bound: Nat) → List<Nat> {
             match it.item {
                 Block(instrs) => match instrs {
                     Cons(i, more) => match more {
-                        Nil => match i { CmpRI32(left, imm) => match left { Rax => Cons(now, Cons(imm.toNat(), guard_needs_from(rest, now, bound))),
+                        Nil => match i { AddRI32(dest, imm) => match dest { Rsp => match (2147483648).leb(imm.toNat()) {
+                                True => Cons(now, Cons(4294967296 - imm.toNat(), guard_needs_from(rest, now, bound))),
+                                False => guard_needs_from(rest, now, bound) },
                             _ => guard_needs_from(rest, now, bound) }, _ => guard_needs_from(rest, now, bound) },
                         Cons(_, _) => guard_needs_from(rest, now, bound),
                     },
@@ -405,7 +266,7 @@ fn guard_needs_from(items: List<Named>, here: Nat, bound: Nat) → List<Nat> {
 }
 
 fn guard_needs(p: Program, placement: List<Place>) → List<Nat> {
-    match p.lower_guarded(placement) { None => [], Some(program) => guard_needs_from(prog_items(program, []), 0, p.routines.len()) }
+    match p.lower(placement) { None => [], Some(program) => guard_needs_from(prog_items(program, []), 0, p.routines.len()) }
 }
 
 fn pingpong_places() → List<Place> { into([Rcx, Rax] ++ [Rax, Rcx, Rax, Rdx, Rsi, Rax] ++ [Rax, Rax, Rcx, Rax, Rdx, Rsi, Rax]) }
@@ -437,9 +298,9 @@ fn nats_same(a, b: List<Nat>) → Bool {
 fn code_nats(o: Option<Prog>) → Option<List<Nat>> { match o { None => None, Some(q) => Some(assemble(no_fills(), q, []).map(λ (b: BitVec(8)) => b.toNat())) } }
 
 fn same_lowering(p: Program, placement: List<Place>) → Bool {
-    match code_nats(p.lower(placement)) {
-        None => match p.lower_guarded(placement) { None => True, Some(_) => False },
-        Some(old) => match code_nats(p.lower_guarded(placement)) { None => False, Some(new) => nats_same(old, new) },
+    match code_nats(p.lower_plain(placement)) {
+        None => match p.lower(placement) { None => True, Some(_) => False },
+        Some(old) => match code_nats(p.lower(placement)) { None => False, Some(new) => nats_same(old, new) },
     }
 }
 
@@ -462,11 +323,11 @@ theorem down_returns_in_room(): halt_is(run_lowered(down_program(), down_places(
 // One frame of the table short, it stops with the reserved status at its
 // second call; its code's frames are smaller than the table's largest, so
 // the exact edge is lower: it returns at 280 and stops at 279.
-theorem down_spent_short(): halt_is(run_lowered(down_program(), down_places(), 0, [2], 408 - 136), [0, 139, 4232]) = True { refl }
+theorem down_spent_short(): halt_is(run_lowered(down_program(), down_places(), 0, [2], 408 - 136), [0, 139, 4296]) = True { refl }
 
 theorem down_returns_at_edge(): halt_is(run_lowered(down_program(), down_places(), 0, [2], 280), [1, 0, 4232]) = True { refl }
 
-theorem down_spent_at_edge(): halt_is(run_lowered(down_program(), down_places(), 0, [2], 279), [0, 139, 4239]) = True { refl }
+theorem down_spent_at_edge(): halt_is(run_lowered(down_program(), down_places(), 0, [2], 279), [0, 139, 4303]) = True { refl }
 
 // The writing recursion: its meaning from three writes four bytes, three
 // calls deep; in its room by depth the code writes four, and short of it
@@ -481,9 +342,9 @@ theorem shout_room_is(): stop_rooms(shout_program().routines)(0, 3).same(544) = 
 
 theorem shout_writes_all(): halt_is(run_lowered(shout_program(), shout_places(), 0, [65536, 3], 544), [1, 0, 4424, 1, 1, 1, 1]) = True { refl }
 
-theorem shout_spent_after_two(): halt_is(run_lowered(shout_program(), shout_places(), 0, [65536, 3], 272), [0, 139, 4232, 1, 1]) = True { refl }
+theorem shout_spent_after_two(): halt_is(run_lowered(shout_program(), shout_places(), 0, [65536, 3], 272), [0, 139, 4296, 1, 1]) = True { refl }
 
-theorem shout_spent_after_one(): halt_is(run_lowered(shout_program(), shout_places(), 0, [65536, 3], 136), [0, 139, 4168, 1]) = True { refl }
+theorem shout_spent_after_one(): halt_is(run_lowered(shout_program(), shout_places(), 0, [65536, 3], 136), [0, 139, 4232, 1]) = True { refl }
 
 // The cycle of two: each guard checks its callee's room (ping's, pong's
 // 184 and the return address; pong's, ping's 136 and it), not its own.
@@ -496,7 +357,7 @@ theorem pingpong_needs(): nats_same(guard_needs(pingpong_program(), pingpong_pla
 
 theorem pingpong_returns(): halt_is(run_lowered(pingpong_program(), pingpong_places(), 1, [3], 400), [1, 0, 4208]) = True { refl }
 
-theorem pingpong_spent(): halt_is(run_lowered(pingpong_program(), pingpong_places(), 1, [3], 300), [0, 139, 4188]) = True { refl }
+theorem pingpong_spent(): halt_is(run_lowered(pingpong_program(), pingpong_places(), 1, [3], 300), [0, 139, 4252]) = True { refl }
 
 // The table by depth as §17.7 built it (`depth_rooms`, deleted since): at
 // each depth its routines' largest frames and their callees' rooms one
@@ -523,10 +384,10 @@ theorem downh_spent_in_depth_room(): halt_is(run_lowered(downh_program(), downh_
 theorem downh_returns_in_stop_room(): halt_is(run_lowered(downh_program(), downh_places(5), 1, [1], 320), [1, 0, 4264]) = True { refl }
 
 // The floor is RBP: a program that guards refuses a placement saving six;
-// the lowering of today takes it.
+// the plain lowering takes it.
 theorem downh_six_refused(): lowers_guarded(downh_program(), downh_places(6)) = False { refl }
 
-theorem downh_six_today(): lowers(downh_program(), downh_places(6)) = True { refl }
+theorem downh_six_plain(): downh_program().lower_plain(downh_places(6)).is_some() = True { refl }
 
 // No cycle, no guard: the same bytes as today.
 theorem acyclic_same(): same_lowering(lend_program(3), lend_places()) && (same_lowering(both_program(8), both_places()) &&

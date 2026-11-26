@@ -82,7 +82,7 @@ theorem lend_tracks<M>(program: Prog, lowered: lend_program(3).lower(lend_places
     Site<M>(fetch, data, program, last, origin).TracksAt(stack, spans, top, blocks.Lent(spans), False, stop_rooms(lend_program(3).routines),
         λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run_peak(lend_program(3), blocks, n, f, args, heap, io), 2,
         λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run(lend_program(3), blocks, n, f, args, heap, io)) {
-    lower_program_tracks_at<M>(lend_program(3), lend_places(), program, lowered, fetch, data, last, origin, stack, top, spans, blocks, stop_rooms(lend_program(3).routines),
+    lower_program_tracks_at<M>(lend_program(3), lend_places(), program, lowered, refl, fetch, data, last, origin, stack, top, spans, blocks, stop_rooms(lend_program(3).routines),
         stop_rooms_lawful(lend_program(3).routines))
 }
 
@@ -116,7 +116,7 @@ theorem both_tracks<M>(program: Prog, lowered: both_program(8).lower(both_places
     Site<M>(fetch, data, program, last, origin).TracksAt(stack, spans, top, blocks.Lent(spans), False, stop_rooms(both_program(8).routines),
         λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run_peak(both_program(8), blocks, n, f, args, heap, io), 2,
         λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run(both_program(8), blocks, n, f, args, heap, io)) {
-    lower_program_tracks_at<M>(both_program(8), both_places(), program, lowered, fetch, data, last, origin, stack, top, spans, blocks, stop_rooms(both_program(8).routines),
+    lower_program_tracks_at<M>(both_program(8), both_places(), program, lowered, refl, fetch, data, last, origin, stack, top, spans, blocks, stop_rooms(both_program(8).routines),
         stop_rooms_lawful(both_program(8).routines))
 }
 
@@ -242,7 +242,7 @@ theorem exits_tracks<M>(program: Prog, lowered: exits_program().lower(exits_plac
     Site<M>(fetch, data, program, last, origin).TracksAt(stack, spans, top, blocks.Lent(spans), False, stop_rooms(exits_program().routines),
         λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run_peak(exits_program(), blocks, n, f, args, heap, io), 1,
         λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run(exits_program(), blocks, n, f, args, heap, io)) {
-    lower_program_tracks_at<M>(exits_program(), exits_places(), program, lowered, fetch, data, last, origin, stack, top, spans, blocks,
+    lower_program_tracks_at<M>(exits_program(), exits_places(), program, lowered, refl, fetch, data, last, origin, stack, top, spans, blocks,
         stop_rooms(exits_program().routines), stop_rooms_lawful(exits_program().routines))
 }
 
@@ -275,7 +275,7 @@ theorem exits_nested_tracks<M>(program: Prog, lowered: exits_nested().lower(nest
     Site<M>(fetch, data, program, last, origin).TracksAt(stack, spans, top, blocks.Lent(spans), False, stop_rooms(exits_nested().routines),
         λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run_peak(exits_nested(), blocks, n, f, args, heap, io), 2,
         λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run(exits_nested(), blocks, n, f, args, heap, io)) {
-    lower_program_tracks_at<M>(exits_nested(), nested_places(), program, lowered, fetch, data, last, origin, stack, top, spans, blocks,
+    lower_program_tracks_at<M>(exits_nested(), nested_places(), program, lowered, refl, fetch, data, last, origin, stack, top, spans, blocks,
         stop_rooms(exits_nested().routines), stop_rooms_lawful(exits_nested().routines))
 }
 
@@ -323,12 +323,12 @@ theorem down_still_going(): down_going(down_run(2, 2)) = True { refl }
 
 theorem down_depth(): run_peak(down_program(), Blocks(λ (b: Nat) => False), 3, 0, [Word(BitVec::ofNat(2))], down_heap(), down_io()) = 2 { refl }
 
-theorem down_tracks<M>(program: Prog, lowered: down_program().lower(down_places()) = Some(program), fetch: FetchAccess<M>, data: ByteReadAccess<M>,
+theorem down_tracks<M>(program: Prog, lowered: down_program().lower_plain(down_places()) = Some(program), fetch: FetchAccess<M>, data: ByteReadAccess<M>,
     last: List<BitVec(8)>, origin: BitVec(64), stack: Stack<M>(fetch, data), top: Nat, spans: Spans, blocks: Blocks):
     Site<M>(fetch, data, program, last, origin).TracksAt(stack, spans, top, blocks.Lent(spans), False, stop_rooms(down_program().routines),
         λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run_peak(down_program(), blocks, n, f, args, heap, io), 1,
         λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run(down_program(), blocks, n, f, args, heap, io)) {
-    lower_program_tracks_at<M>(down_program(), down_places(), program, lowered, fetch, data, last, origin, stack, top, spans, blocks,
+    lower_plain_tracks_at<M>(down_program(), down_places(), program, lowered, fetch, data, last, origin, stack, top, spans, blocks,
         stop_rooms(down_program().routines), stop_rooms_lawful(down_program().routines))
 }
 

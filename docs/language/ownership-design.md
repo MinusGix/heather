@@ -2860,6 +2860,41 @@ ruled, and nothing else moved:
   records). Step 3 states their escape form only where a reading of the
   stop needs one.
 
+**Step 3, part 2: the guarded emission is the lowering's**
+(`bytes_level_lower`, `bytes_level_routines`). The probe copy is deleted.
+
+- `Body::emit_by(g: CallGuards, …)` is the one emission: a call to a callee
+  in `g`'s list is guarded, every other call is FunctionIR's as before.
+  `Body::emit` is its instance at `CallGuards::none()`, so every lemma
+  about an unguarded region reads as it did.
+- **Where the guard sits** (amending step 1's finding): at the call node's
+  start, before any of the call's code, with no register written:
+  `ADD RSP, −need; CMP RSP, RBP; JB stop; ADD RSP, need`, with
+  `need = 8·(words past the sixth) + 8 + rooms(callee)`. The stop path
+  does not care what RSP holds, and the path that goes on restores it, so
+  the call's code after the guard is `File::emit_call` unchanged. The
+  guarded call's claim is then the guard's claim (with the escape) followed
+  by FunctionIR's call claim lifted to any escape, and nothing in
+  `function_ir_lower_calls` is edited or copied. Step 1's guard (after the
+  argument moves, RAX free) would have needed escape versions of
+  FunctionIR's four call-claim lemmas. The guard fires at the same rooms:
+  `d ≥ need` is the callee's entering premise
+  `rooms(g) <= (d − 8·count) − 8`. It is 23 bytes against step 1's 19.
+  `need` is refused above `2³¹ − 1` (the immediate is sign-extended).
+- `Routine::emit_by` refuses a placement saving six (the floor is RBP).
+  `Program::lower` refuses a table that does not settle (`rooms_settled`).
+  It lowers a program with no cycle as before (`Program::lower_plain`, the
+  same bytes) and one with a cycle guarded (`Program::lower_guarded`:
+  labels from one past the stop's, the stop after the routines).
+- The probes (`bytes_level_guard_tests`) now run `Program::lower`. Every
+  verdict keeps its status and its writes. Only the lowest address
+  stored at a stop is higher: the guard fires before the call stores its
+  return address.
+- Until part 3, the theorem is the plain lowering's
+  (`lower_plain_tracks_at`, for every program, `down`'s probe included).
+  `lower_program_tracks_at` is its reading at `Program::lower` under the
+  interim hypothesis `any_guard(…) = False`, which part 3 drops.
+
 ## 18. The world, termination, and level 2 fixed (2026-11-25)
 
 Round six of the design review. Where this section and §15.4, §15.5 or §17

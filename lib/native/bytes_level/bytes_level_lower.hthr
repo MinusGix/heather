@@ -2686,6 +2686,50 @@ theorem emit_exit_emits<M>(saves: Nat, site: Site<M>, stack: Stack<M>(site.fetch
     }
 }
 
+// ---------------------------------------------------------------------------
+// The out-of-room guard (ownership-design §17.9, §17.10)
+//
+// A call whose callee shares its component of the call graph is guarded:
+// at the call node's start, before any of the call's code, the stack
+// pointer is lowered by what the call needs below the frame (its words on
+// the stack, the return address and the callee's room by routine), compared
+// with the floor (RBP, `floor_register`), and raised again; below the
+// floor, the JCC goes to the stop. No register is written, so the call's
+// code after it is FunctionIR's, unchanged.
+
+// The guarded callees of the routine being emitted, the room by routine,
+// and the stop's label.
+record CallGuards { at: List<Nat>, rooms: Nat → Nat, stop: Nat }
+
+fn CallGuards::none() → CallGuards { CallGuards([], λ (_: Nat) => 0, 0) }
+
+fn among(ids: List<Nat>, id: Nat) → Bool { match ids { Nil => False, Cons(x, rest) => x.same(id) || among(rest, id) } }
+
+fn CallGuards::guards(self g: CallGuards, callee: Nat) → Bool { among(g.at, callee) }
+
+// What a call to `callee` with `arguments` needs below the frame: its
+// words past the sixth, its return address, the callee's room.
+fn CallGuards::need(self g: CallGuards, callee: Nat, arguments: List<Typed>) → Nat { (8 * typed_ids(arguments).drop(6).len() + 8) + g.rooms(callee) }
+
+// The most a guard's immediate holds, sign-extended.
+fn guard_most() → Nat { 2147483647 }
+
+fn guard_test() → Test { Compare(B, Rsp, RightRegister(floor_register())) }
+
+fn guard_lower(need: Nat) → Instruction { AddRI32(Rsp, BitVec::ofNat(4294967296 - need)) }
+
+fn guard_raise(need: Nat) → Instruction { AddRI32(Rsp, BitVec::ofNat(need)) }
+
+fn Prog::guarded(self prog: Prog, need, stop: Nat) → Prog {
+    At(At(prog, 0, Block([guard_lower(need)])).branched_by(guard_test(), stop, False), 0, Block([guard_raise(need)]))
+}
+
+// The stop: the reserved status (the contract's), Linux's exit; laid out
+// once, after the routines.
+fn stop_code() → List<Instruction> { [MovRI(Rdi, BitVec::ofNat(spent_status())), MovRI(Rax, BitVec::ofNat(60))] }
+
+fn Prog::stopped_at(self prog: Prog, stop: Nat) → Prog { At(At(prog, stop, Block(stop_code())), 0, Syscall) }
+
 // A region's code: a leaf's nodes; a sequence's parts one after the other;
 // a branch as FunctionIR's conditional (the test of its bit, or of the
 // comparison the file knows it to be, the first arm, a jump to the join,
@@ -2693,33 +2737,40 @@ theorem emit_exit_emits<M>(saves: Nat, site: Site<M>, stack: Stack<M>(site.fetch
 // survives: `File::branch_test`, `File::meet`); a call as FunctionIR's,
 // lending no buffers, of a routine below `bound`, its frame's `slots`
 // call slots. `short` names the labels whose jumps take their short form.
-fn Body::emit(self body: Body, saves, slots: Nat, short: List<Nat>, bound, spare: Nat, prog: Prog, file: File, placement: List<Place>, names: Nat) →
+fn Body::emit_by(self body: Body, g: CallGuards, saves, slots: Nat, short: List<Nat>, bound, spare: Nat, prog: Prog, file: File, placement: List<Place>, names: Nat) →
     Option<Emitted> {
     match body {
         Leaf(instrs) => emit_instrs(saves, prog, file, instrs, placement, names),
-        Seq(first, rest) => match first.emit(saves, slots, short, bound, spare, prog, file, placement, names) {
+        Seq(first, rest) => match first.emit_by(g, saves, slots, short, bound, spare, prog, file, placement, names) {
             None => None,
-            Some(done) => rest.emit(saves, slots, short, bound, spare, done.prog, done.file, done.placement, done.names),
+            Some(done) => rest.emit_by(g, saves, slots, short, bound, spare, done.prog, done.file, done.placement, done.names),
         },
         Branch(condition, yes, no) => match file.branch_test(condition) {
             None => None,
-            Some(tested) => match yes.emit(saves, slots, short, bound, spare, prog.branched_by(tested.test, names + 1, shorts(short, names + 1)),
+            Some(tested) => match yes.emit_by(g, saves, slots, short, bound, spare, prog.branched_by(tested.test, names + 1, shorts(short, names + 1)),
                 file.know(Truth(condition)), placement, names + 2) {
                 None => None,
-                Some(left) => match no.emit(saves, slots, short, bound, spare, left.prog.else_label_by(names + 1, names + 2, shorts(short, names + 2)),
+                Some(left) => match no.emit_by(g, saves, slots, short, bound, spare, left.prog.else_label_by(names + 1, names + 2, shorts(short, names + 2)),
                     file.know(Falsity(condition)), left.placement, left.names) {
                     None => None,
                     Some(right) => Some(Emitted(right.prog.join_label(names + 2), left.file.meet(right.file, file.known), right.placement, right.names)),
                 },
             },
         },
-        Call(callee, arguments, results) =>
-            file.emit_call(slots, prog, callee, typed_ids(arguments), call_result(results, spare), call_also(results), placement, names, bound, [], []),
+        Call(callee, arguments, results) => match g.guards(callee) {
+            False => file.emit_call(slots, prog, callee, typed_ids(arguments), call_result(results, spare), call_also(results), placement, names, bound,
+                [], []),
+            True => match g.need(callee, arguments).leb(guard_most()) {
+                False => None,
+                True => file.emit_call(slots, prog.guarded(g.need(callee, arguments), g.stop), callee, typed_ids(arguments), call_result(results, spare),
+                    call_also(results), placement, names, bound, [], []),
+            },
+        },
         Loop(inputs, parameters, inner, exit, next, outputs) => match state_registers(placement, typed_ids(parameters).len()) {
             None => None,
             Some(taken) => match file.plain_entry(saves, typed_ids(inputs), typed_ids(parameters), taken.registers) {
                 None => None,
-                Some(entry) => match inner.emit(saves, slots, short, bound, spare, plain_head(prog, entry.code, names), entry.head, taken.rest, names + 4) {
+                Some(entry) => match inner.emit_by(g, saves, slots, short, bound, spare, plain_head(prog, entry.code, names), entry.head, taken.rest, names + 4) {
                     None => None,
                     Some(pass) => pass.plain_close(saves, taken.registers, exit, typed_ids(next), typed_ids(outputs), names, short),
                 },
@@ -2728,6 +2779,14 @@ fn Body::emit(self body: Body, saves, slots: Nat, short: List<Nat>, bound, spare
         Sys(call) => emit_sys(saves, prog, file, call, placement, names),
         Exit(status) => emit_exit(prog, file, status, placement, names),
     }
+}
+
+
+// The emission with no guard: every program with no cycle, and every
+// lemma about a region that calls no routine of its own cycle.
+fn Body::emit(self body: Body, saves, slots: Nat, short: List<Nat>, bound, spare: Nat, prog: Prog, file: File, placement: List<Place>, names: Nat) →
+    Option<Emitted> {
+    body.emit_by(CallGuards::none(), saves, slots, short, bound, spare, prog, file, placement, names)
 }
 
 // ---------------------------------------------------------------------------

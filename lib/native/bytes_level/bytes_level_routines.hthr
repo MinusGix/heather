@@ -344,23 +344,6 @@ fn rooms_settled(routines: List<Routine>, guards: List<List<Nat>>, rooms: Nat �
     settled_from(rooms_round(routines, 0, guards, rooms), 0, rooms)
 }
 
-// The guard's test before a guarded CALL: RAX (free there: the call
-// clobbers it, and every argument is in its register or slot) gets the
-// room left above the floor in RBP; below the callee's room and its return
-// address, the JCC goes to the stop.
-fn guard_need(rooms: Nat → Nat, callee: Nat) → Nat { 8 + rooms(callee) }
-
-fn guard_code() → List<Instruction> { [MovRR(Rax, Rsp), SubRR(Rax, floor_register())] }
-
-fn guard_test(need: Nat) → Test { Compare(B, Rax, RightImm32(BitVec::ofNat(need))) }
-
-fn Prog::guarded(self prog: Prog, need, stop: Nat) → Prog { At(At(At(prog, 0, Block(guard_code())), 0, Block([guard_test(need).instruction()])), 0, Jcc(B, stop)) }
-
-// The stop: the reserved status (the contract's), Linux's exit.
-fn stop_code() → List<Instruction> { [MovRI(Rdi, BitVec::ofNat(spent_status())), MovRI(Rax, BitVec::ofNat(60))] }
-
-fn Prog::stopped_at(self prog: Prog, stop: Nat) → Prog { At(At(prog, stop, Block(stop_code())), 0, Syscall) }
-
 // The table by depth the stop is read against: at every depth at least the
 // constant table, and lawful (`RoomLaw`) as the depth table is. Where its
 // room is there, no guard fires: a guarded call's callee is entered at a
@@ -443,13 +426,18 @@ fn Routine::closing(self r: Routine, asked, saves, spare: Nat, body: Emitted) �
     }
 }
 
-fn Routine::emit_body(self r: Routine, asked, saves: Nat, short: List<Nat>, prog: Prog, k, bound, spare: Nat, file: File, placement: List<Place>,
-    names: Nat) → Option<Emitted> {
-    match r.whole(spare).emit(saves, r.slots(asked), short, bound, spare, function_opened(prog, k, r.loads(), r.slots(asked), saves), file, placement,
-        names) {
+fn Routine::emit_body_by(self r: Routine, g: CallGuards, asked, saves: Nat, short: List<Nat>, prog: Prog, k, bound, spare: Nat, file: File,
+    placement: List<Place>, names: Nat) → Option<Emitted> {
+    match r.whole(spare).emit_by(g, saves, r.slots(asked), short, bound, spare, function_opened(prog, k, r.loads(), r.slots(asked), saves), file,
+        placement, names) {
         None => None,
         Some(body) => r.closing(asked, saves, spare, body),
     }
+}
+
+fn Routine::emit_body(self r: Routine, asked, saves: Nat, short: List<Nat>, prog: Prog, k, bound, spare: Nat, file: File, placement: List<Place>,
+    names: Nat) → Option<Emitted> {
+    r.emit_body_by(CallGuards::none(), asked, saves, short, prog, k, bound, spare, file, placement, names)
 }
 
 // Routine `k`'s code after `prog`: its label, its frame and saves as its
@@ -467,6 +455,23 @@ fn Routine::emit_in(self r: Routine, used: List<Nat>, prog: Prog, k, bound: Nat,
 
 fn Routine::emit(self r: Routine, prog: Prog, k, bound: Nat, placement: List<Place>, names: Nat) → Option<Emitted> {
     match r.scope() { None => None, Some(used) => r.emit_in(used, prog, k, bound, placement, names) }
+}
+
+// A routine of a program that guards: its guarded calls guarded, and the
+// floor kept, so no placement saves six (RBP is the sixth a placement
+// saves, `kept_order`).
+fn Routine::emit_by(self r: Routine, g: CallGuards, prog: Prog, k, bound: Nat, placement: List<Place>, names: Nat) → Option<Emitted> {
+    match r.scope() {
+        None => None,
+        Some(used) => match input_file(word_ports(typed_ids(r.parameters)), parameter_registers()) {
+            None => None,
+            Some(file) => match placement_saves(placement).leb(5) {
+                False => None,
+                True => r.emit_body_by(g, placement_slots(placement), placement_saves(placement), placement_short(placement), prog, k, bound,
+                    ids_past(used), file, placement_body(placement), names),
+            },
+        },
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1313,7 +1318,32 @@ fn emit_routines(prog: Prog, routines: List<Routine>, k, bound: Nat, placement: 
 // A program's code: its routines at labels `1` on, the branches' labels
 // past them. Refused where the program is not valid, a routine is refused,
 // or the code is not laid out.
-fn Program::lower(self p: Program, placement: List<Place>) → Option<Prog> {
+fn emit_routines_guarded(prog: Prog, routines: List<Routine>, guards: List<List<Nat>>, rooms: Nat → Nat, stop, k, bound: Nat,
+    placement: List<Place>, names: Nat) → Option<Emitted> {
+    match routines {
+        Nil => Some(Emitted(prog, File::empty(), placement, names)),
+        Cons(r, rest) => match r.emit_by(CallGuards(guards_at(guards, k), rooms, stop), prog, k, bound, placement, names) {
+            None => None,
+            Some(out) => emit_routines_guarded(out.prog, rest, guards, rooms, stop, k + 1, bound, out.placement, out.names),
+        },
+    }
+}
+
+// A program with a cycle: its guarded calls guarded against the table by
+// routine, its labels from one past the stop's, the stop after the
+// routines so every guard's JCC lands forward.
+fn Program::lower_guarded(self p: Program, placement: List<Place>) → Option<Prog> {
+    let stop = p.routines.len() + 1;
+    match emit_routines_guarded(Start, p.routines, program_guards(p.routines), routine_rooms(p.routines), stop, 0, p.routines.len(), placement, stop) {
+        None => None,
+        Some(out) => match out.prog.stopped_at(stop).laid_out() { False => None, True => Some(out.prog.stopped_at(stop)) },
+    }
+}
+
+// A program with no cycle: its routines at labels `1` on, the branches'
+// labels past them, as before the guards. Refused where the program is not
+// valid, a routine is refused, or the code is not laid out.
+fn Program::lower_plain(self p: Program, placement: List<Place>) → Option<Prog> {
     match p.valid() {
         False => None,
         True => match emit_routines(Start, p.routines, 0, p.routines.len(), placement, p.routines.len()) {
@@ -1321,6 +1351,34 @@ fn Program::lower(self p: Program, placement: List<Place>) → Option<Prog> {
             Some(out) => match out.prog.laid_out() { False => None, True => Some(out.prog) },
         },
     }
+}
+
+// A program's code: refused where the table by routine does not settle;
+// with no cycle, as before the guards (`Program::lower_plain`); with one,
+// guarded (`Program::lower_guarded`).
+fn Program::lower(self p: Program, placement: List<Place>) → Option<Prog> {
+    match rooms_settled(p.routines, program_guards(p.routines), routine_rooms(p.routines)) {
+        False => None,
+        True => match any_guard(program_guards(p.routines)) {
+            False => p.lower_plain(placement),
+            True => match p.valid() { False => None, True => p.lower_guarded(placement) },
+        },
+    }
+}
+
+// With no cycle the lowering is the plain one.
+theorem Program::lower_plain_of(self p: Program, placement: List<Place>, program: Prog, lowered: p.lower(placement) = Some(program),
+    acyclic: any_guard(program_guards(p.routines)) = False): p.lower_plain(placement) = Some(program) {
+    let Cyclic = λ (c: Bool) => (match c { False => p.lower_plain(placement), True => match p.valid() { False => None, True => p.lower_guarded(placement) } })
+        = Some(program);
+    (match rooms_settled(p.routines, program_guards(p.routines), routine_rooms(p.routines)) as λ b =>
+        (match b { False => None, True => match any_guard(program_guards(p.routines)) {
+            False => p.lower_plain(placement),
+            True => match p.valid() { False => None, True => p.lower_guarded(placement) },
+        } }) = Some(program) → p.lower_plain(placement) = Some(program) {
+        False => λ never => absurd(never),
+        True => λ e => j(acyclic, λ c _ => Cyclic(c), e),
+    })(lowered)
 }
 
 // Each routine of the list, numbered from `k`, valid and with its room at
@@ -1608,7 +1666,7 @@ theorem emit_routines_scoped(routines: List<Routine>, bound: Nat): (prog: Prog) 
     }
 }
 
-theorem Program::lower_scoped(self p: Program, placement: List<Place>, program: Prog, lowered: p.lower(placement) = Some(program)): Scoped::all(p.routines) {
+theorem Program::lower_scoped(self p: Program, placement: List<Place>, program: Prog, lowered: p.lower_plain(placement) = Some(program)): Scoped::all(p.routines) {
     let bound = p.routines.len();
     (match p.valid() as λ b => (match b { False => None, True => match emit_routines(Start, p.routines, 0, bound, placement, bound) {
             None => None,
@@ -1628,12 +1686,12 @@ theorem Program::lower_scoped(self p: Program, placement: List<Place>, program: 
 // ---------------------------------------------------------------------------
 // The theorem
 
-// Proved once: whatever the placement, a program `Program::lower` returns,
+// Proved once: whatever the placement, a program `Program::lower_plain` returns,
 // resident at any origin, with any stack meeting the stack laws and its
 // blocks lent under the lending laws, the blocks it may write among those
 // lent, tracks its meaning (`Site::Tracks`) for each of its routines at
 // every fuel, under every lawful room table.
-theorem lower_program_tracks_at<M>(p: Program, placement: List<Place>, program: Prog, lowered: p.lower(placement) = Some(program),
+theorem lower_plain_tracks_at<M>(p: Program, placement: List<Place>, program: Prog, lowered: p.lower_plain(placement) = Some(program),
     fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64), stack: Stack<M>(fetch, data), top: Nat, spans: Spans,     blocks: Blocks, room: Nat → Nat → Nat, law: RoomLaw(p.routines, room)):
     Site<M>(fetch, data, program, last, origin).TracksAt(stack, spans, top, blocks.Lent(spans), False, room,
         λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run_peak(p, blocks, n, f, args, heap, io), p.routines.len(),
@@ -1667,6 +1725,21 @@ theorem lower_program_tracks_at<M>(p: Program, placement: List<Place>, program: 
         })(λ site laid st ln lt => emit_routines_returns<M>(site, laid, st, top, spans, ln, blocks, lt, room, sigs, bound, p.routines, Start, 0, placement,
             bound), e),
     })(lowered)
+}
+
+// And of `Program::lower` at a program with no cycle, whose lowering is
+// the plain one. (Until the guarded lowering's theorem, step 3 of
+// issues/bytes-level-out-of-room.md, a program with a cycle has its claim
+// at the plain lowering only.)
+theorem lower_program_tracks_at<M>(p: Program, placement: List<Place>, program: Prog, lowered: p.lower(placement) = Some(program),
+    acyclic: any_guard(program_guards(p.routines)) = False,
+    fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64), stack: Stack<M>(fetch, data), top: Nat, spans: Spans,
+    blocks: Blocks, room: Nat → Nat → Nat, law: RoomLaw(p.routines, room)):
+    Site<M>(fetch, data, program, last, origin).TracksAt(stack, spans, top, blocks.Lent(spans), False, room,
+        λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run_peak(p, blocks, n, f, args, heap, io), p.routines.len(),
+        λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run(p, blocks, n, f, args, heap, io)) {
+    lower_plain_tracks_at<M>(p, placement, program, p.lower_plain_of(placement, program, lowered, acyclic), fetch, data, last, origin, stack, top, spans,
+        blocks, room, law)
 }
 
 // The contract's readings (`Site::tracks_meets`), from the lowering's
