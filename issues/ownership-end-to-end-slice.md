@@ -58,3 +58,4 @@ The composed theorem's type is written and checks with `placement_sound` as its 
 - Recursion must match on a theorem parameter, not a λ binder.
 - `Nat::mul` recurses on its second argument: state lengths as `size * k`.
 - Suite: `HEATHER_PR_BASE=a7965e15 scripts/test --pr`, with no native gates (the coordinator runs those). Never run it beside a check.
+- 2026-11-26: Second session: F1-F6 found and ruled (§25.8); the statement corrected in placement_seam.hthr (Strs::Laid and StrsLaws premises, arguments coded, images below 2^64, StageRel with codes and ids below next, leaf stages stuck-or-step), end_to_end re-checked; place compares codes as a marked interim; the injection's lemmas proved in placement_inject.hthr (locate_image, put_image, window_kept, injects_store, injects_kill). Suite at 4678039, HEATHER_PR_BASE=a7965e15 scripts/test --pr: == suite: 847 passed, 0 failed, 1 ignored ==. Handoff rewritten.
