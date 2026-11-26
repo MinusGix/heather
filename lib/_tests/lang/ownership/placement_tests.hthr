@@ -641,3 +641,15 @@ fn after_death() → Option<level2::Heap(tys())> {
 theorem death_breaks_rel(): Pair((Death(whole(Arg(0)))).place(tys(), PCx(strs(), sigs_of(Nil), no_prim()), PEnv(1, [owner_slot()]), 2).is_some(),
         Pair(value_lower(tys(), strs(), ident(), heap1(text()), obj(0)).is_some(), after_death().map(λ (h: level2::Heap(tys())) => value_lower(tys(), strs(), ident(), h, obj(0)).is_some())))
     = Pair(True, Pair(True, Some(False))) { refl }
+
+// A loop answering a view (§25.9): checked and in the fragment, refused by
+// `place`, whose loop state zeroes its results part and a reference has no
+// zero.
+fn view_loop_r() → Func {
+    Func(Sig([rd(0), word_p()], [Result(buf_s(), OView(0, [SWindow(Lit(0), Lit(1))]))]),
+        seq([Stmt::Lit(WBits(64), 1)],                                            // [one]
+            Join(TLt(Arg(1), Loc(0)), seq([View(win(Arg(0), Lit(0), Lit(1)), Reading)], Ret([Loc(0)])), Yield(Nil),
+                seq([Op(PSub, Arg(1), Loc(0))], Jump([Arg(0), Loc(0)])))))
+}
+
+theorem view_loop_refused(): Pair(why([view_loop_r()], 0), Pair(in_fragment([view_loop_r()]), placed([view_loop_r()]).is_some())) = Pair(None, Pair([True], False)) { refl }
