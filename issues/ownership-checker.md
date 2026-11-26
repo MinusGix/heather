@@ -29,72 +29,96 @@ Items 1 and 2 are definitions and evaluation; item 3 waits for the coordinating 
 
 `CheckSound` has an inhabitant for the fragment, the experiments' programs are probes or theorems of the real modules, and the experiment modules are gone.
 
-## Handoff (2026-11-26, item 3: the write stages in progress)
+## Handoff (2026-11-26, end of the third session: the writes but the write-back)
 
-Continue on branch `claude/ownership-checker-sound` (the coordinating
-session's item list and rails are in its brief; this section is the state).
-Everything is in `lib/lang/ownership/sound.hthr` unless named. Design
-§23.8–§23.10 says what changed and why; read them first.
+Continue on branch `claude/ownership-checker-sound`. Everything is in
+`lib/lang/ownership/sound.hthr`; design §23.11 says what was built this
+session and why (read it, then §23.8–§23.10).
 
-**Done in item 3**: the stages `Lit`, `Op`, `Read`, `Fresh`, `Take` (part,
-plain, holder), `Death` (part, plain, holder), `View` (plain; to read and to
-write, of a holder and of a view), and `Write` whose root is plain
-(`Stmt::stage_write_plain`), each concluding `Stepped` against the whole
-`Inv` from `none: s.pending() = False`.
+**Done**: the stages `Lit`, `Op`, `Read`, `Fresh`, `Take` (part, plain,
+holder), `Death` (part, plain, holder), `View` (all four), `Write` to a plain
+root, through a holder (`stage_write_hold`) and through a view
+(`stage_write_view`, split in three), both cells each. Each concludes
+`Stepped` from `none`. The decider law `Steps::apart_prefix` (a common prefix
+decides nothing) is in `steps.hthr` with probes.
+
+**The invariant now** (`Inv`): `sim` against `s.patched(e, m)` (a pending
+view's value written up its chain only where its cell refers; level-count
+fuel); clauses added this session: `wpar` (a view to write whose parent is a
+view: that parent has one entry, to write), `uni` (an entry's cell and its
+parent's both refer or are both copies), `pone` (pending entries are at one
+level). `Inv::rekin` carries every clause but `sim` and `pone` across any map
+of the entries that keeps all fields but `back` (`Kin`), into
+`s.rekin(f, tl, wl)`; `Inv::unback` is its instance for a write.
+
+**Lemmas ready for the write-back**: `Sel::put_back_path` (writing back what a
+path reads changes nothing), `CSt::up_step`/`up_stop`/`up_nil` (one step of the
+walk), `CSt::up_rekin` (the walk reads no written-back flag), `CSt::up_more`
+(fuel past the level changes nothing), `CSt::up_sim` (the walk agrees with the
+run, from `UpAt`), `Inv::store_rest`, `Value::get_store`.
 
 **Next, in order**:
 
-1. **Write through a holder** (`KHold(o, a)`, `a.writes()`). Two cells:
-   - the holder's cell is `Plain(d)` (an object held by value, no root):
-     as `stage_write_plain`, but the role is a holder, so `Cell::Agrees` is
-     `Value::Reads` (`Value::get(h, Plain(nw), Nil) = Some(nw)`).
-   - `Refer(r)`, `r = root(o)` (from `refs`): the run stores
-     `write_at(r.sels ++ ss, λ _ => vd, old)` into block `r.b`
-     (`Stmt::write_runs_ref`, `Heap::val_store_here`, `bare`). Every other
-     live reference reads as before: another object's in the same block by
-     `apart(o, …)` (`Changes(o)` from the holder's `a.writes()`) widened
-     with `Sel::apart_ext_l/_r`, then `Sel::get_apart`; a view of `o` by
-     the licence (`CSt::write_lic_hold` then `Inv::lic_apart` with
-     `pl = Pl(o, xs)`, `CSt::unsteps_steps` to get `p.steps` back), then
-     `Sel::get_under` with prefix `r.sels`; other blocks by
-     `Heap::val_store_other`. The holder itself reads `write_at(ss, …, R)`
-     by `Sel::write_get`, which is `e2`'s root by `Steps::write_sels`.
-     `frame`: the block is `owned` (lent or new); `grows`, `inheap`,
-     `bare` by `Heap::store_len`, `Heap::obj_store_holes`.
-   - The state after is `s.written(l).unback(l)`: equal views (no entry's
-     level is a holder's: `vents`), different `touched`/`wrote`. `Inv`
-     must be rebuilt for it (§23.10: `unsteps`, `anc_of`, `Parent`, `up`
-     do not convert between the two states); write `Inv::touch` once,
-     with `refok_keep`, `excl_keep`, `parent_keep`, as `Inv::gone` does.
-   - The words regions read are unchanged at `m2`: plain levels' cells are
-     not touched and a plain cell reads without the heap; copy
-     `stage_write_plain`'s `wsame` (via `Sim::lvl_ix` on the new `Sim`).
-2. **Write through a view** (one writing entry `pe`): the heap changes in
-   the root's block at `root(pe.obj).sels ++ unsteps(pe.reg) ++ ss`; the
-   state becomes pending (`unback`), so `Sim` is against
-   `s2.patched(e2)`, the chain written up by `CSt::up`. Ancestors read the
-   new heap, which is what `up` writes into them; needs lemmas on `up`
-   (one step: `Env::set` of the parent at `en.at`) and `put_back`.
-   Entries not related to `l` are apart by `excl`; descendants by the
-   licence (`write_lic_view`, `meets_view`).
-3. **The write-back** (`is_back`): a pending state's stage; `backed(lv)`;
-   the heap does not change, the meaning catches up one ancestor.
-4. Death and Take of a view's root; `Ret`; then item 4 (`Call`, with the
-   defects B and C reported to the coordinator: written slot is the
-   argument where it refers; distinct fresh results).
+1. **`cfit`** (decided by the coordinating session: option (a)): a live entry
+   whose parent's cell is a copy `Plain(d)` has its place fitting `d` at the
+   run's words. Add it to `Inv` and to every builder (as `uni` was: push
+   builders shift variables with `CSt::push_lvl`; `Inv::rekin` carries it;
+   `set_cell` must show it for the written cell, from the licence's apartness
+   of the write's path from each child's place: for a view parent the
+   licence speaks of `parent.reg ++ xs` against `child.reg = parent.reg ++
+   child.at`, so take the decider's verdict on the suffixes by
+   `Steps::apart_prefix` and use `SelApart.fit2`). Opened by `Sim::place` in
+   `Inv::push_view` (a copy view's parent is a copy, `uni`).
+2. **The write-back stage** (`is_back(l, xs, lv)`: `ents(lv) = [ce]`,
+   `ce.par = l`, `Steps::same(ce.at, xs)` so `unsteps(xs) = p.steps`; no
+   licence residuals; the checker allows it while pending only if
+   `ce.back = False`, `writes_back`). The state after is
+   `s.backed(lv).wrote_to(l)`. It is a write through the parent at the
+   child's place of what the child holds. Four cases, split from the start
+   (an undivided stage hits the memory rail):
+   - **referring, nothing pending**: the run stores `B` back (`put_back_path`:
+     the child's reference reads the block at the parent's reference ++ its
+     place), so every reference reads as before (`Value::get_store` with
+     equal values); the meaning's parent becomes `write(at, e(child),
+     e(parent))`, which is `e(parent)` by `put_back_path` again (the child's
+     and parent's runs read the same block). Parent a holder: the state is
+     `s` up to `touched`/`wrote` (`backed` is the identity on a written-back
+     entry; `Inv::touch`). Parent a view: its entry becomes pending; walk from
+     it with `up_sim` at `s` (the child is not an ancestor of the parent, so
+     `UpAt.hv` holds) and finish with `Inv::rekin`.
+   - **referring, pending** (`ce` is the pending entry: `pone` and
+     `writes_back`): before, the patch is `up(s, e, lv)` (`patched`'s `find`
+     gives an entry at `lv`, which is `ce`), which is `up(s, e3, l)` after
+     one `up_step`, `e3` being the meaning's write-back. Parent a holder:
+     that is `e3`, nothing is pending after. Parent a view: the patch after is
+     `up(s3, e3, l, F)`, equal by `up_rekin` and `up_more`. The state after is
+     a `rekin` of `s` (`backed(lv)` then `unback(l)`; fuse the two maps).
+   - **plain chain, either**: the parent's cell is set (`Sel::put` fits by
+     `cfit`); generalise `Inv::set_cell` from `none` to `s.patched(e, m) = e`
+     (a copy's pending patch is the meaning itself), then `Inv::rekin`.
+3. `Death` and `Take` of a view's root, then `Ret`, then the brief's item 3
+   (`Call`, with its two decisions).
 
 **Costs and traps found this session**:
 
-- Re-spelling a checker definition's nested `match` inside an inversion
-  (`and_then_some` lambdas) made the kernel's conversion overflow its
-  stack (abort 134, `--timings` `.open.tsv` named the item). Split the
-  checker function so the inversion names the tail (`CSt::write_last`).
-- A `let` whose value is a `match` (even in a lambda) needs its type or a
-  motive (`as λ _ => T`). Constructors `Plain` need `level2::Plain` in
-  expressions.
-- Before adding a lemma, grep: `Sel::get_fit`, `Sel::get_parts`,
-  `Sel::fit_append`, `CSt::var_in` (a function) already existed.
-- Whole-folder check without the cache: about a minute for `sound.hthr`.
+- One undivided stage (`stage_write_view`) exhausted the 8 GiB rail though
+  every lemma it cited was cheap (the next stages, the call especially, will
+  be larger: split them from the start, statements spelling their objects
+  out, no `let` in a statement); the `--timings` `<stem>.open.tsv` named it.
+- A run killed at the rail prints no `error:` line: read the last line
+  (`ok`) or the `.open.tsv`, never only grep for errors.
+- `heather check --cache` replayed a stale image here and reported
+  "0 declarations kernel-checked … ok" after edits; check without `--cache`
+  (about 50 s for `sound.hthr`).
+- A `let` whose type holds a lambda with `=` in its body needs the equation
+  parenthesised (`λ y => (a = b)`).
+- Lambdas inside `Inv`'s clauses bind `w`, `t`, `k`: a lemma's own parameters
+  named so clash when its body is built by substitution.
+- `scripts/fmt` (the Heather formatter, whitespace only) is what
+  `scripts/fmt --check` gates; never `cargo fmt`.
+- Do not edit `lib/` while `scripts/test` runs: the library gate reads it.
+  This clone has no merge base with `origin/master`, so `--pr` runs every test
+  file (about an hour).
 
 ## Log
 
@@ -110,3 +134,5 @@ write, of a holder and of a view), and `Write` whose root is plain
 - 2026-11-26: `b771b8e` (the `Fresh`, `Take`, `Death` and `View` stages): `scripts/test --pr`: `== suite: 4140 passed, 0 failed, 3 ignored ==`.
 - 2026-11-26: item 3, the write's groundwork: `Sel::Apart` keeps fits (`SelApart`, model law `fits_over`, `Steps::apart_fit`), `CSt::write_last` split out, `Stmt::stage_write_plain` and the lemmas the holder and view writes use (design §23.10).
 - 2026-11-26: `187e2f5` (apartness keeps fits, the plain write): `scripts/test --pr`: `== suite: 4140 passed, 0 failed, 3 ignored ==`. Handoff rewritten.
+- 2026-11-26 (third session): the writes through a holder and through a view (`131aef7`…`fcf1a1c`, split stage `stage_write_view`); proof-side invariant changes: `patched` only along a referring chain, `wpar`, `uni` (design §23.11). `scripts/test --pr` at the whitespace commit after them: `== suite: 4140 passed, 0 failed, 3 ignored ==`.
+- 2026-11-26 (third session, end): `Steps::apart_prefix` and probes, `Inv.pone`, `Inv::rekin` (the flag-change lemmas generalised), `Sel::put_back_path`, `CSt::up_rekin`/`up_more`/`up_stop`; handoff rewritten at the write-back. `scripts/test --pr` at the commit before the handoff: `== suite: 4140 passed, 0 failed, 3 ignored ==`.

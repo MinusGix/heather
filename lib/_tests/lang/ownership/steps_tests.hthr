@@ -77,6 +77,21 @@ theorem difference_found(xr, yr: List<Step>): Steps::apart([SField(3)] ++ Cons(S
     trans(Steps::apart_at_difference([SField(3)], SElem(Lit(0)), SElem(Lit(2)), xr, yr, refl), SElem(Lit(0)).apart_complete(SElem(Lit(2)), refl, refl, refl))
 }
 
+// A common prefix decides nothing, a window then an element under it
+// included: the answer is the suffixes', at a neutral prefix and at a closed
+// one (where the decider evaluates).
+theorem prefix_window_elem(pre: List<Step>, i, k: Atom):
+    Steps::apart(pre ++ [SWindow(Lit(0), Lit(4)), SElem(i)], pre ++ [SWindow(Lit(0), Lit(4)), SElem(k)]) = Steps::apart([SElem(i)], [SElem(k)])
+{
+    trans(Steps::apart_prefix(pre, [SWindow(Lit(0), Lit(4)), SElem(i)], [SWindow(Lit(0), Lit(4)), SElem(k)]),
+        Steps::apart_prefix([SWindow(Lit(0), Lit(4))], [SElem(i)], [SElem(k)]))
+}
+
+theorem prefix_window_elem_closed(): Steps::apart([SField(1), SWindow(Lit(0), Lit(4)), SElem(Lit(1))], [SField(1), SWindow(Lit(0), Lit(4)), SElem(Lit(2))]) = Some(Nil) { refl }
+
+// A control: a different prefix is not walked.
+theorem prefix_differs(): Steps::apart([SWindow(Lit(0), Lit(4)), SElem(Lit(1))], [SWindow(Lit(2), Lit(4)), SElem(Lit(1))]) = None { refl }
+
 // ---------------------------------------------------------------------------
 // The checker's residual is an obligation: `Span(lo, n)` apart from
 // `Span(i, 1)`.

@@ -592,6 +592,16 @@ theorem Steps::apart_at_difference(pre: List<Step>, a, b: Step, xr, yr: List<Ste
     }
 }
 
+// A common prefix decides nothing: the decider walks it, every step being
+// the same as itself, and answers for what follows.
+theorem Steps::apart_prefix(pre, xs, ys: List<Step>): Steps::apart(pre ++ xs, pre ++ ys) = Steps::apart(xs, ys) {
+    match pre {
+        Nil => refl,
+        Cons(c, rest) => j(sym(c.same_self()), λ t _ => (match t { True => Steps::apart(rest ++ xs, rest ++ ys), False => c.apart(c) }) = Steps::apart(xs, ys),
+            Steps::apart_prefix(rest, xs, ys)),
+    }
+}
+
 // Two closed steps whose selections are apart are found apart owing
 // nothing, so (by `Steps::apart_at_difference`) are any two closed lists
 // first differing there.
