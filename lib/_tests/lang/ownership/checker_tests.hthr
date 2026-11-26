@@ -460,7 +460,7 @@ theorem keep_checked(): verdict([keep()], 0) = Some(ODo(Nil, ODo([acc_el(x(), Li
 
 fn plain_list(xs: List<Nat>) → Value(tys()) { Plain(Dyn(nx(), xs)) }
 
-theorem keep_by_value(): Value::ViewIs(tys(), strs(), 0, [plain_list([1])], Nil, nx(), OParam(0), plain_list([9])) { refl }
+theorem keep_by_value(): Value::ViewIs(tys(), strs(), 0, Nil, [plain_list([1])], Nil, nx(), OParam(0), plain_list([9])) { refl }
 
 // A returned view of a read parameter passed by value is a copy: `at` at a
 // plain list answers a plain value, which `Value::ViewIs` accepts (it asked
@@ -474,9 +474,41 @@ theorem not_param_refused(): refusal_in([not_param(OParam(1))], 0) = Some(WOwn) 
 
 theorem not_param_fresh(): refusal_in([not_param(OFresh)], 0) = None { refl }
 
+// One owned object answered as two fresh results: refused (`CSt::fresh_once`).
+// The caller takes each fresh result as an object alone in its block
+// (`Value::FreshApart`, §23.17); this one would have given it two owned
+// objects in one block, and the death of either frees the other's. Two
+// objects made and answered once each: checked.
+fn fresh_twice() → Func {
+    Func(Sig([Param(nx(), ByRead)], [Result(nx(), OFresh), Result(nx(), OFresh)]), seq([Lit(WNat, 2), Lit(WNat, 0), Fresh(nx(), Loc(1), Loc(0))], Ret([Loc(0), Loc(0)])))
+}
+
+theorem fresh_twice_refused(): refusal_in([fresh_twice()], 0) = Some(WOwn) { refl }
+
+fn fresh_two() → Func {
+    Func(Sig([Param(nx(), ByRead)], [Result(nx(), OFresh), Result(nx(), OFresh)]),
+        seq([Lit(WNat, 2), Lit(WNat, 0), Fresh(nx(), Loc(1), Loc(0)), Fresh(nx(), Loc(2), Loc(1))], Ret([Loc(0), Loc(1)])))
+}
+
+theorem fresh_two_checked(): refusal_in([fresh_two()], 0) = None { refl }
+
+// One owned object answered once as owner and once as a view under it:
+// refused. A returned view must be of a parameter (`CSt::returns` asks its
+// one entry's object to be the parameter `OView` names), and a fresh or
+// parameter result cannot be a view at all, so a view into a block the body
+// made has no origin to be answered as. (A take of `x[0]` is a plain copy.)
+fn fresh_and_view(o: Origin) → Func {
+    Func(Sig([Param(nx(), ByRead)], [Result(nx(), OFresh), Result(nx(), o)]),
+        seq([Lit(WNat, 2), Lit(WNat, 0), Fresh(nx(), Loc(1), Loc(0)), View(win(Loc(0), Lit(0), Lit(1)), Reading)], Ret([Loc(1), Loc(0)])))
+}
+
+theorem fresh_and_its_view_refused(): refusal_in([fresh_and_view(OView(0, [SWindow(Lit(0), Lit(1))]))], 0) = Some(WOwn) { refl }
+
+theorem fresh_and_its_view_fresh_refused(): refusal_in([fresh_and_view(OFresh)], 0) = Some(WOwn) { refl }
+
 fn plain_word(n: Nat) → Value(tys()) { Plain(Dyn(nat_s(), n)) }
 
-theorem at_by_value(): Value::ViewIs(tys(), strs(), 0, [plain_list([1, 2]), plain_word(1)], Nil, nx(), OView(0, [SWindow(Var(1), Lit(1))]), plain_list([2])) { refl }
+theorem at_by_value(): Value::ViewIs(tys(), strs(), 0, Nil, [plain_list([1, 2]), plain_word(1)], Nil, nx(), OView(0, [SWindow(Var(1), Lit(1))]), plain_list([2])) { refl }
 
 // The view lies at `Span(k, 1)` in the caller's words, so the write at `j`
 // owes `k + 1 <= j ∨ j + 1 <= k`. Locals at the end: [a, 9, t].
@@ -1074,9 +1106,10 @@ theorem calls_wprim_bodied(): verdict([wprim(), calls_wprim()], 1).is_some() = T
 
 // Two written parameters, one lent on to a callee to write: checked. At two
 // fields of one block (which `Lendable` allows) the callee's frame by block
-// said nothing of the other field, the block being lent; the frame by place
-// (`Heap::Frame`, §23.14) says the field apart from what was lent reads as
-// before, which the caller's read of `b.y` after the call needs.
+// said nothing of the other field, the block being lent; the frame
+// (`Heap::Frame`, the lens equation, §23.18) gives that a field apart from what
+// was lent reads as before (`Heap::frame_apart`), which the caller's read of
+// `b.y` after the call needs.
 fn lends_one() → Func {
     Func(Sig([Param(pt_s(), ByWrite), Param(pt_s(), ByWrite)], Nil),
         seq([Call(0, [Arg(0)], 1), Write(whole(Arg(0)), Loc(0)), Death(whole(Loc(0))), Read(Place(Arg(1), [SField(1)]))], Ret([Arg(0), Arg(1)])))
@@ -1190,9 +1223,10 @@ fn lend_plain_back() → Func {
 
 theorem lend_plain_back_checked(): verdict([pt_w(), lend_plain_back()], 1).is_some() = True { refl }
 
-// The frame is the lens equation (§18.3): after `x[0]` is lent and written
-// back, `Ret` reads the whole of `x`, which reads only the apart paths and the
-// lent one as before (the frame by place) do not determine.
+// The frame is the lens equation (§18.3, §23.18): after `x[0]` is lent and
+// written back, `Ret` reads the whole of `x`, which the reads at the apart
+// paths and the lent one (the frame by place, §23.14) do not determine; the
+// equation does (`x` after is `x` before with `x[0]` overwritten).
 fn lend_under() → Func {
     Func(Sig([Param(pts_s(), ByWrite)], Nil), seq([View(el(Arg(0), Lit(0)), Writing), Call(0, [Loc(0)], 1), Write(whole(Loc(1)), Loc(0)), Death(whole(Loc(0))),
         Write(el(Arg(0), Lit(0)), Loc(1)), Death(whole(Loc(1)))], Ret([Arg(0)])))

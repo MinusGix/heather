@@ -20,11 +20,13 @@
 //   from its measure on; where it is done, its results read the meaning's,
 //   each referring written parameter's slot is the argument itself (a plain
 //   one's comes back plain) and the meaning's value after fits its value
-//   before (`Value::Written`), the heap outside what was lent is unchanged,
-//   its old blocks are live only where they were and keep having no holes
+//   before (`Value::Written`), the heap after is the heap before with each
+//   reference lent to change overwritten by what it reads after (`Heap::Frame`,
+//   §18.3's lens equation), its old blocks are live only where they were and keep having no holes
 //   (`Heap::Kept`), and each returned view is its parameter's reference
 //   narrowed by the steps its signature names at the call's words
-//   (`Value::Views`, `Ref::narrow`); where an unmeasured run is going, its history is a
+//   (`Value::Views`, `Ref::narrow`), each fresh one a bare block of its own
+//   (`Heap::Bare`, `Value::FreshApart`); where an unmeasured run is going, its history is a
 //   prefix of one the meaning reaches.
 // - **The check's refusals from codes alone** are the checker's own
 //   (`checker.hthr`, one pass): a word primitive or test at a non-word, a
@@ -259,25 +261,53 @@ fn Value::Written(tys: Nat → Type, strs: Strs(tys), vs: List<Value(tys)>, ds: 
     }
 }
 
+// A block live with no holes. **This fragment's clause**: a caller's object
+// is a bare block (`Inv.bare`), so the block of a fresh result the caller
+// takes as its own must be one; the round with holes replaces it, with
+// `Heap::Stays`' no-holes part, by what the caller may read through holes.
+fn Heap::Bare(tys: Nat → Type, h: Heap(tys), b: Nat) → Type { Exists<Obj(tys)>(λ ob => (Heap::obj(tys, h, b) = Some(ob)) ∧ (ob.holes = Nil)) }
+
 // Each result, after, as its origin says: a fresh one is plain or a block
-// this call made (none below the heap's length before it, so no argument
-// reaches it); a parameter's is the argument itself where it refers (one
-// passed by value comes back a plain value, changed or not); a view is the
-// argument's reference narrowed by the steps the signature names (a copy,
-// where the argument was passed by value), read at
-// the call's words: the arguments', then the results'.
-fn Value::ViewIs(tys: Nat → Type, strs: Strs(tys), n: Nat, vs: List<Value(tys)>, ws: List<Ix>, code: Shape, org: Origin, o: Value(tys)) → Type {
+// this call made (none below the heap's length `n` before it, so no argument
+// reaches it), live with no holes in the heap after `h`; a parameter's is the
+// argument itself where it refers (one passed by value comes back a plain
+// value, changed or not); a view is the argument's reference narrowed by the
+// steps the signature names (a copy, where the argument was passed by value),
+// read at the call's words: the arguments', then the results'.
+fn Value::ViewIs(tys: Nat → Type, strs: Strs(tys), n: Nat, h: Heap(tys), vs: List<Value(tys)>, ws: List<Ix>, code: Shape, org: Origin, o: Value(tys)) → Type {
     match org {
         OView(i, xs) => match vs.nth(i) { Some(v) => match v { Refer(r) => o = Refer(r.narrow(ws, xs)), Plain(_) => Value::refers(tys, o) = False }, None => False },
-        OFresh => match o { Plain(_) => True, Refer(r) => (Shape::plain(tys, strs, code) = False) ∧ (n <= r.b) ∧ (r.sels = Nil) },
+        OFresh => match o { Plain(_) => True, Refer(r) => (Shape::plain(tys, strs, code) = False) ∧ ((n <= r.b) ∧ ((r.sels = Nil) ∧ Heap::Bare(tys, h, r.b))) },
         OParam(i) => match vs.nth(i) { Some(v) => match v { Refer(r) => o = Refer(r), Plain(_) => Value::refers(tys, o) = False }, None => False },
     }
 }
 
-fn Value::Views(tys: Nat → Type, strs: Strs(tys), n: Nat, vs: List<Value(tys)>, ws: List<Ix>, rs: List<Result>) → List<Value(tys)> → Type {
+fn Value::Views(tys: Nat → Type, strs: Strs(tys), n: Nat, h: Heap(tys), vs: List<Value(tys)>, ws: List<Ix>, rs: List<Result>) → List<Value(tys)> → Type {
     match rs {
         Nil => λ _ => True,
-        Cons(r, rest) => λ outs => match outs { Nil => False, Cons(o, orest) => Value::ViewIs(tys, strs, n, vs, ws, r.code, r.origin, o) ∧ Value::Views(tys, strs, n, vs, ws, rest, orest) },
+        Cons(r, rest) => λ outs => match outs { Nil => False, Cons(o, orest) => Value::ViewIs(tys, strs, n, h, vs, ws, r.code, r.origin, o) ∧ Value::Views(tys, strs, n, h, vs, ws, rest, orest) },
+    }
+}
+
+// A fresh result's block, where it refers.
+fn Value::fresh_b(tys: Nat → Type, org: Origin, o: Value(tys)) → Option<Nat> {
+    match org { OFresh => match o { Refer(r) => Some(r.b), Plain(_) => None }, OParam(_) => None, OView(_, _) => None }
+}
+
+// No later result is fresh in block `b`.
+fn Value::NotFresh(tys: Nat → Type, b: Nat, rs: List<Result>, outs: List<Value(tys)>) → Type {
+    match rs { Nil => True, Cons(r, rest) => match outs { Nil => True, Cons(o, orest) => ¬(Value::fresh_b(tys, r.origin, o) = Some(b)) ∧ Value::NotFresh(tys, b, rest, orest) } }
+}
+
+// Two fresh results of one call are in different blocks (§23.17): the caller
+// takes each as an object alone in its block (`Inv.own`).
+fn Value::FreshApart(tys: Nat → Type, rs: List<Result>, outs: List<Value(tys)>) → Type {
+    match rs {
+        Nil => True,
+        Cons(r, rest) => match outs {
+            Nil => True,
+            Cons(o, orest) => (match Value::fresh_b(tys, r.origin, o) as λ _ => Type { Some(b) => Value::NotFresh(tys, b, rest, orest), None => True }) ∧ Value::FreshApart(tys, rest, orest),
+        },
     }
 }
 
@@ -285,17 +315,35 @@ fn Value::Views(tys: Nat → Type, strs: Strs(tys), n: Nat, vs: List<Value(tys)>
 // where the path fits (holes are not read: the fragment has none).
 fn Heap::at(tys: Nat → Type, strs: Strs(tys), h: Heap(tys), b: Nat, q: List<Sel>) → Option<Dyn(tys)> { Heap::obj(tys, h, b).and_then(λ o => Sel::get(tys, strs, q, o.val)) }
 
-// The heap after is the heap before at every place nothing lent to change
-// reaches (§18.3, by place): at every block that existed before, every
-// selection path apart from every reference lent to change into that block
-// reads, and fits, as before. A block lent to nothing has nothing to be apart
-// from, so its empty path, its whole object, reads as before; a block lent
-// to change whole (a reference with no selections, as a taken object is) is
-// the callee's, no path being apart from all of it; a block made by the call
-// is not spoken of.
+// One reference's put into block `b` (§18.3's lens): the part it selects in
+// `d` overwritten by what it selects in `a`; nothing where it is into
+// another block.
+fn Sel::put_ref(tys: Nat → Type, strs: Strs(tys), r: Ref, b: Nat, a, d: Dyn(tys)) → Dyn(tys) {
+    match r.b.same(b) { True => Sel::write_at(tys, strs, r.sels, λ _ => Sel::read_at(tys, strs, r.sels, a), d), False => d }
+}
+
+// The references' puts into block `b`, in the list's order. Puts of
+// references apart commute (`Sel::put_ref_comm`), so the order is a
+// spelling, not a choice.
+fn Sel::put_lent(tys: Nat → Type, strs: Strs(tys), rs: List<Ref>, b: Nat, a, d: Dyn(tys)) → Dyn(tys) {
+    match rs { Nil => d, Cons(r, rest) => Sel::put_lent(tys, strs, rest, b, a, Sel::put_ref(tys, strs, r, b, a, d)) }
+}
+
+// The heap after is the heap before with what was lent to change replaced
+// (§18.3's lens equation): at every block live before that nothing was lent
+// to change whole, the block is live after and its value after is its value
+// before with each reference lent to change into it overwritten by what that
+// reference reads after. Every path apart from what was lent reads, and
+// fits, as before (`Heap::frame_apart`), and a block lent to nothing is its
+// value before (`Heap::frame_whole`); without the equation a record kind's
+// fields need not cover its type, and a path under a lent one could not be
+// spoken of (§23.17, `lend_under_checked`). A block lent to change whole (a
+// reference with no selections, as a taken object is) is the callee's; a
+// block made by the call is not spoken of. Only references lent to change
+// count (`Value::lent`): a block lent only to read is unchanged (§23.8).
 fn Heap::Frame(tys: Nat → Type, strs: Strs(tys), before, after: Heap(tys), rs: List<Ref>) → Type {
-    (b: Nat) → b < before.len() → ((r: Ref) → Mem(r, rs) → r.b = b → ¬(r.sels = Nil)) →
-        (q: List<Sel>) → ((r: Ref) → Mem(r, rs) → r.b = b → Sel::Apart(tys, strs, r.sels, q)) → Heap::at(tys, strs, after, b, q) = Heap::at(tys, strs, before, b, q)
+    (b: Nat) → ((r: Ref) → Mem(r, rs) → r.b = b → ¬(r.sels = Nil)) → (ob: Obj(tys)) → Heap::obj(tys, before, b) = Some(ob) →
+        Exists<Obj(tys)>(λ ob2 => (Heap::obj(tys, after, b) = Some(ob2)) ∧ (ob2.val = Sel::put_lent(tys, strs, rs, b, ob2.val, ob.val)))
 }
 
 // The blocks a call leaves beside the ones it was given (§23.17): a block
@@ -341,7 +389,8 @@ fn SafeAt(tys: Nat → Type, p: Prog(tys), g: Nat, fuel: Nat) → Type {
             Value::Written(tys, p.strs, vs, ds, (p.fns(g)).sig.written(), a.results.drop((p.fns(g)).sig.results.len()), (p.w(g, ds)).drop((p.fns(g)).sig.results.len())) ∧
             Heap::Frame(tys, p.strs, h, a.heap, Value::lent(tys, (p.fns(g)).sig.params, vs)) ∧
             Heap::Kept(tys, h, a.heap) ∧
-            Value::Views(tys, p.strs, h.len(), vs, Dyn::ixs(tys, ds ++ p.w(g, ds)), (p.fns(g)).sig.results, a.results)) ∧
+            Value::Views(tys, p.strs, h.len(), a.heap, vs, Dyn::ixs(tys, ds ++ p.w(g, ds)), (p.fns(g)).sig.results, a.results) ∧
+            Value::FreshApart(tys, (p.fns(g)).sig.results, a.results)) ∧
         (match p.need(g) as λ _ => Type { Some(_) => True, None => (io2: Io) → p.run(tys, fuel, g, vs, h, io) = Going(io2) → p.reaches(g, ds, io2.past) })))
 }
 
